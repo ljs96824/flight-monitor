@@ -1,0 +1,7 @@
+subscriptions:
+  - name: "奥兰多暑期行"
+    origin: PVG
+    destination: MCO
+    depart_date: "2026-06-20"
+    target_combo: "AA 128+AA 364"
+    preferred_airline: AA

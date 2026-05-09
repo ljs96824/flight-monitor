@@ -1,0 +1,5 @@
+httpx
+google-search-results
+pyyaml
+python-dotenv
+requests
