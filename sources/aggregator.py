@@ -44,7 +44,7 @@ class FlightAggregator:
                 break
 
         return {
-            "flights": primary.get("flights", []),
+            "flights": self._merge_flights(successful_results),
             "price_insights": price_insights or {},
             "source": primary.get("source"),
             "sources_used": [result.get("source") for result in successful_results],
@@ -54,6 +54,31 @@ class FlightAggregator:
                 result.get("source"): result.get("raw") for result in successful_results
             },
         }
+
+    def _merge_flights(self, results: list[dict]) -> list[dict]:
+        merged_by_combo = {}
+        source_order_by_combo = {}
+
+        for result in results:
+            source = result.get("source")
+            for flight in result.get("flights", []):
+                combo = normalize_combo(flight.get("flight_combo", ""))
+                if not combo:
+                    continue
+
+                data_source = flight.get("data_source") or source
+                if combo not in merged_by_combo:
+                    merged_by_combo[combo] = {**flight, "data_source": data_source}
+                    source_order_by_combo[combo] = []
+
+                if data_source and data_source not in source_order_by_combo[combo]:
+                    source_order_by_combo[combo].append(data_source)
+
+        for combo, sources in source_order_by_combo.items():
+            if sources:
+                merged_by_combo[combo]["data_source"] = "+".join(sources)
+
+        return list(merged_by_combo.values())
 
     def _find_price_anomalies(self, results: list[dict]) -> list[dict]:
         prices_by_combo = {}

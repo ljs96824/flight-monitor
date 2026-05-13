@@ -5,7 +5,104 @@ from __future__ import annotations
 import statistics
 from datetime import date, datetime, time, timedelta
 
-from storage import get_latest_alternatives, get_target_history
+from storage import get_all_history, get_latest_alternatives, get_target_history
+
+
+IATA_CITY_NAMES = {
+    # 中国大陆 / 港澳台
+    "PVG": "上海浦东",
+    "SHA": "上海虹桥",
+    "PEK": "北京首都",
+    "PKX": "北京大兴",
+    "CAN": "广州",
+    "SZX": "深圳",
+    "CTU": "成都双流",
+    "TFU": "成都天府",
+    "CKG": "重庆",
+    "HGH": "杭州",
+    "NKG": "南京",
+    "XIY": "西安",
+    "WUH": "武汉",
+    "XMN": "厦门",
+    "TAO": "青岛",
+    "CSX": "长沙",
+    "KMG": "昆明",
+    "FOC": "福州",
+    "DLC": "大连",
+    "TSN": "天津",
+    "HKG": "香港",
+    "MFM": "澳门",
+    "TPE": "台北桃园",
+    "TSA": "台北松山",
+    # 日本 / 韩国 / 东南亚
+    "NRT": "东京成田",
+    "HND": "东京羽田",
+    "KIX": "大阪关西",
+    "NGO": "名古屋",
+    "FUK": "福冈",
+    "ICN": "首尔仁川",
+    "GMP": "首尔金浦",
+    "SIN": "新加坡",
+    "BKK": "曼谷",
+    "DMK": "曼谷廊曼",
+    "KUL": "吉隆坡",
+    "MNL": "马尼拉",
+    "SGN": "胡志明",
+    "HAN": "河内",
+    "DEL": "德里",
+    # 北美
+    "MCO": "奥兰多",
+    "DFW": "达拉斯",
+    "MIA": "迈阿密",
+    "LAX": "洛杉矶",
+    "SFO": "旧金山",
+    "SEA": "西雅图",
+    "JFK": "纽约肯尼迪",
+    "EWR": "纽约纽瓦克",
+    "LGA": "纽约拉瓜迪亚",
+    "ORD": "芝加哥",
+    "ATL": "亚特兰大",
+    "DTW": "底特律",
+    "MSP": "明尼阿波利斯",
+    "BOS": "波士顿",
+    "IAD": "华盛顿杜勒斯",
+    "DCA": "华盛顿里根",
+    "PHL": "费城",
+    "CLT": "夏洛特",
+    "PHX": "凤凰城",
+    "LAS": "拉斯维加斯",
+    "DEN": "丹佛",
+    "IAH": "休斯敦",
+    "HOU": "休斯敦霍比",
+    "AUS": "奥斯汀",
+    "SAN": "圣迭戈",
+    "SJC": "圣何塞",
+    "PDX": "波特兰",
+    "YYZ": "多伦多",
+    "YVR": "温哥华",
+    "YUL": "蒙特利尔",
+    "YYC": "卡尔加里",
+    # 欧洲 / 中东
+    "LHR": "伦敦希思罗",
+    "LGW": "伦敦盖特威克",
+    "CDG": "巴黎戴高乐",
+    "AMS": "阿姆斯特丹",
+    "FRA": "法兰克福",
+    "MUC": "慕尼黑",
+    "ZRH": "苏黎世",
+    "VIE": "维也纳",
+    "MAD": "马德里",
+    "BCN": "巴塞罗那",
+    "FCO": "罗马",
+    "IST": "伊斯坦布尔",
+    "DOH": "多哈",
+    "DXB": "迪拜",
+    "AUH": "阿布扎比",
+}
+
+
+def city_name(iata_code: str) -> str:
+    return IATA_CITY_NAMES.get(iata_code, iata_code)
 
 
 def _to_float(value) -> float | None:
@@ -167,6 +264,265 @@ def waiting_value(price_history, current_price, days_to_dept: int) -> float:
         return 0
 
     return round(statistics.mean(changes), 2)
+
+
+def get_future_price_changes(
+    price_history, days_to_dept: int, horizon: int = 7
+) -> list[float]:
+    """Return price changes within horizon days for comparable booking windows."""
+    points = _valid_history(price_history)
+    if len(points) < 2:
+        return []
+
+    depart_ts = _depart_timestamp(days_to_dept)
+    horizon_seconds = horizon * 86400
+    changes = []
+
+    for index, (timestamp, price) in enumerate(points[:-1]):
+        days_from_ts = (depart_ts - timestamp) / 86400
+        if abs(days_from_ts - days_to_dept) > 7:
+            continue
+
+        future_points = [
+            (future_ts, future_price)
+            for future_ts, future_price in points[index + 1 :]
+            if 0 < future_ts - timestamp <= horizon_seconds
+        ]
+        if not future_points:
+            continue
+
+        future_ts, future_price = max(future_points, key=lambda item: item[0])
+        changes.append(future_price - price)
+
+    return changes
+
+
+def timing_analysis(price_history, current_price, days_to_dept) -> dict:
+    """买票时机预测"""
+    if _to_float(current_price) is None:
+        return {"confidence": "low", "data_insufficient": True}
+
+    try:
+        days = int(days_to_dept)
+    except (TypeError, ValueError):
+        return {"confidence": "low", "data_insufficient": True}
+
+    future_changes = get_future_price_changes(price_history, days, horizon=7)
+
+    if not future_changes:
+        return {"confidence": "low", "data_insufficient": True}
+
+    drop_cases = [change for change in future_changes if change < -100]
+    rise_cases = [change for change in future_changes if change > 100]
+    stable_cases = [change for change in future_changes if -100 <= change <= 100]
+
+    total = len(future_changes)
+    result = {
+        "drop_probability": round(len(drop_cases) / total * 100),
+        "rise_probability": round(len(rise_cases) / total * 100),
+        "stable_probability": round(len(stable_cases) / total * 100),
+        "avg_drop": round(sum(drop_cases) / len(drop_cases)) if drop_cases else 0,
+        "avg_rise": round(sum(rise_cases) / len(rise_cases)) if rise_cases else 0,
+    }
+
+    urgency = min(10, max(0, (100 - days) / 10))
+    risk = result["rise_probability"] / 100
+    result["buy_score"] = round(risk * 5 + urgency * 0.5, 1)
+
+    return result
+
+
+def weekday_analysis(db_path, route, depart_date) -> dict:
+    """分析不同星期几的价格差异"""
+    _ = db_path
+    history = get_all_history(route, depart_date)
+
+    if len(history) < 14:
+        return {"data_insufficient": True}
+
+    from collections import defaultdict
+
+    weekday_prices = defaultdict(list)
+    for record in history:
+        snapshot_time = record.get("snapshot_time")
+        price = _to_float(record.get("price"))
+        if not snapshot_time or price is None:
+            continue
+
+        try:
+            dt = datetime.fromisoformat(snapshot_time)
+        except ValueError:
+            continue
+
+        weekday_prices[dt.weekday()].append(price)
+
+    if sum(len(prices) for prices in weekday_prices.values()) < 14:
+        return {"data_insufficient": True}
+
+    weekday_names = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+    stats = {}
+    for day, prices in weekday_prices.items():
+        stats[weekday_names[day]] = {
+            "avg": round(sum(prices) / len(prices)),
+            "min": min(prices),
+            "count": len(prices),
+        }
+
+    sorted_days = sorted(stats.items(), key=lambda item: item[1]["avg"])
+    cheapest_day = sorted_days[0][0]
+    today = weekday_names[datetime.now().weekday()]
+
+    return {
+        "weekday_stats": dict(sorted_days),
+        "cheapest_day": cheapest_day,
+        "today": today,
+        "today_is_cheap": today == cheapest_day,
+    }
+
+
+def airline_competition_analysis(
+    flights: list[dict], historical_flights: list[dict] = None
+) -> dict:
+    """航司竞争态势分析"""
+    _ = historical_flights
+    from collections import defaultdict
+
+    airline_prices = defaultdict(list)
+    for flight in flights or []:
+        price = _to_float(flight.get("price"))
+        if price is None:
+            continue
+
+        airline = flight.get("airline_summary") or "未知"
+        airline_prices[airline].append(
+            {
+                "price": price,
+                "combo": flight.get("flight_combo", ""),
+                "duration": flight.get("total_hours"),
+                "stops": flight.get("stops"),
+            }
+        )
+
+    result = {}
+    for airline, options in airline_prices.items():
+        cheapest = min(options, key=lambda item: item["price"])
+        result[airline] = {
+            "cheapest_price": cheapest["price"],
+            "best_option": cheapest["combo"],
+            "duration": cheapest["duration"],
+            "stops": cheapest["stops"],
+            "options_count": len(options),
+            "trend": "unknown",
+        }
+
+    sorted_airlines = sorted(result.items(), key=lambda item: item[1]["cheapest_price"])
+
+    return {
+        "airlines": dict(sorted_airlines),
+        "cheapest_airline": sorted_airlines[0][0] if sorted_airlines else None,
+        "price_spread": (
+            sorted_airlines[-1][1]["cheapest_price"]
+            - sorted_airlines[0][1]["cheapest_price"]
+            if len(sorted_airlines) > 1
+            else 0
+        ),
+    }
+
+
+def comfort_score(flight: dict) -> dict:
+    """计算航班舒适度评分（0-10）"""
+    score = 10.0
+    penalties = []
+    bonuses = []
+
+    stops = int(flight.get("stops") or 0)
+    if stops == 1:
+        score -= 1
+    elif stops == 2:
+        score -= 3
+        penalties.append("需转机2次")
+    elif stops >= 3:
+        score -= 5
+        penalties.append(f"需转机{stops}次")
+
+    for layover in flight.get("layovers", []) or []:
+        wait = int(layover.get("wait_minutes") or 0)
+        city = layover.get("city", "中转地")
+        if wait > 480:
+            score -= 2
+            penalties.append(f"在{city}等待超过8小时，可能需过夜")
+        elif wait > 240:
+            score -= 1
+            penalties.append(f"在{city}等待较长")
+        elif wait < 60:
+            score -= 1.5
+            penalties.append(f"在{city}转机时间仅{wait}分钟，较紧张")
+        else:
+            bonuses.append(f"转机等待时间合理（{wait // 60}小时{wait % 60}分钟）")
+
+    hours = _to_float(flight.get("total_hours")) or 0
+    if hours > 30:
+        score -= 2
+        penalties.append(f"全程{hours:g}小时，耗时较长")
+    elif hours > 24:
+        score -= 1
+        penalties.append("全程超过24小时")
+    elif hours < 20:
+        bonuses.append("全程时间合理")
+
+    segments = flight.get("segments", []) or []
+    if any(segment.get("overnight") for segment in segments if isinstance(segment, dict)):
+        score -= 0.5
+        penalties.append("含过夜航段")
+
+    score = max(0, min(10, round(score, 1)))
+
+    return {
+        "score": score,
+        "level": "推荐" if score >= 7 else "一般" if score >= 5 else "较差",
+        "penalties": penalties,
+        "bonuses": bonuses,
+    }
+
+
+def detect_anomaly(
+    flight: dict, price_insights: dict, all_prices: list[float]
+) -> dict:
+    """检测价格是否异常偏低"""
+    price = _to_float(flight.get("price"))
+    if price is None:
+        return {"is_anomaly": False}
+
+    typical_range = (price_insights or {}).get("typical_price_range", [])
+    if not typical_range or len(typical_range) < 2:
+        return {"is_anomaly": False}
+
+    typical_low = _to_float(typical_range[0])
+    typical_high = _to_float(typical_range[1])
+    if typical_low is None or typical_high is None:
+        return {"is_anomaly": False}
+
+    clean_prices = [_to_float(item) for item in all_prices or []]
+    clean_prices = [item for item in clean_prices if item is not None]
+    avg_price = sum(clean_prices) / len(clean_prices) if clean_prices else typical_high
+
+    if price < typical_low * 0.7:
+        discount_pct = round((1 - price / avg_price) * 100) if avg_price else 0
+        return {
+            "is_anomaly": True,
+            "type": "极端低价",
+            "discount_pct": discount_pct,
+            "message": f"比正常价格低{discount_pct}%，可能是系统错误或限时促销",
+        }
+
+    if price < typical_low:
+        return {
+            "is_anomaly": False,
+            "is_good_deal": True,
+            "message": "低于市场正常价格区间",
+        }
+
+    return {"is_anomaly": False, "is_good_deal": False}
 
 
 def calc_trend(recent_prices: list[float]) -> dict:
@@ -426,3 +782,116 @@ def analyze_combined(
 ) -> dict:
     """Compatibility wrapper used by main.py."""
     return analyze(db, route, depart_date, target_combo, price_insights)
+
+
+def analyze_all_flights(flights: list[dict], price_insights: dict = None) -> dict:
+    """对所有航班方案做多维度分析和排名"""
+    if not flights:
+        return {"error": "no_flights"}
+
+    usable_flights = [
+        flight
+        for flight in flights
+        if flight.get("price") is not None and flight.get("total_duration_min") is not None
+    ]
+    if not usable_flights:
+        return {"error": "no_flights"}
+
+    # 1. 按价格排名
+    by_price = sorted(usable_flights, key=lambda f: f["price"])
+
+    # 2. 按总时长排名
+    by_duration = sorted(usable_flights, key=lambda f: f["total_duration_min"])
+
+    # 3. 按性价比排名（综合得分）
+    prices = [f["price"] for f in usable_flights]
+    durations = [f["total_duration_min"] for f in usable_flights]
+    min_p, max_p = min(prices), max(prices)
+    min_d, max_d = min(durations), max(durations)
+
+    for flight in usable_flights:
+        price_score = (
+            (flight["price"] - min_p) / (max_p - min_p) if max_p > min_p else 0
+        )
+        duration_score = (
+            (flight["total_duration_min"] - min_d) / (max_d - min_d)
+            if max_d > min_d
+            else 0
+        )
+        stops_score = flight["stops"] / 3
+        flight["value_score"] = round(
+            price_score * 0.5 + duration_score * 0.3 + stops_score * 0.2,
+            3,
+        )
+
+    by_value = sorted(usable_flights, key=lambda f: f["value_score"])
+
+    # 4. 筛选推荐方案（最多展示5个）
+    recommendations = []
+
+    recommendations.append(
+        {
+            "tag": "💰 最低价",
+            "flight": by_price[0],
+            "reason": (
+                f"价格最低，节省¥{by_price[1]['price'] - by_price[0]['price']:,.0f}"
+                if len(by_price) > 1
+                else "唯一方案"
+            ),
+        }
+    )
+
+    if by_duration[0]["flight_combo"] != by_price[0]["flight_combo"]:
+        time_diff = by_price[0]["total_duration_min"] - by_duration[0]["total_duration_min"]
+        recommendations.append(
+            {
+                "tag": "⚡ 最快到达",
+                "flight": by_duration[0],
+                "reason": f"比最便宜方案快{time_diff // 60}小时{time_diff % 60}分钟",
+            }
+        )
+
+    if (
+        by_value[0]["flight_combo"] != by_price[0]["flight_combo"]
+        and by_value[0]["flight_combo"] != by_duration[0]["flight_combo"]
+    ):
+        recommendations.append(
+            {
+                "tag": "⭐ 最佳性价比",
+                "flight": by_value[0],
+                "reason": "价格和时长的最优平衡",
+            }
+        )
+
+    min_stops_flight = min(usable_flights, key=lambda f: f["stops"])
+    existing_combos = [r["flight"]["flight_combo"] for r in recommendations]
+    if (
+        min_stops_flight["stops"] < by_price[0]["stops"]
+        and min_stops_flight["flight_combo"] not in existing_combos
+    ):
+        recommendations.append(
+            {
+                "tag": "🛫 最少中转",
+                "flight": min_stops_flight,
+                "reason": f"仅需{min_stops_flight['stops']}次中转",
+            }
+        )
+
+    recommendations = recommendations[:5]
+
+    market_context = {}
+    if price_insights:
+        market_context = {
+            "lowest_market": price_insights.get("lowest_price"),
+            "price_level": price_insights.get("price_level"),
+            "typical_range": price_insights.get("typical_price_range"),
+        }
+
+    return {
+        "total_options": len(usable_flights),
+        "recommendations": recommendations,
+        "all_flights": usable_flights[:10],
+        "price_range": [min(prices), max(prices)],
+        "duration_range": [min(durations), max(durations)],
+        "market_context": market_context,
+    }

@@ -16,10 +16,15 @@ load_dotenv(BASE_DIR / ".env", encoding="utf-8")
 
 import yaml
 
-from analyzer import analyze_combined
-from collector import collect_and_classify, save_raw_response
-from notifier import format_message, health_report, send, should_notify
-from storage import DB_PATH, init_db, save_snapshots
+from analyzer import analyze_all_flights
+from collector import collect_all_flights, save_raw_response
+from notifier import format_comparison_message, send
+from storage import (
+    get_lowest_price_history,
+    get_previous_snapshot_prices,
+    init_db,
+    save_flight_details,
+)
 
 
 # 日志配置
@@ -31,22 +36,7 @@ logging.basicConfig(
     encoding="utf-8",
 )
 
-# 信号记录文件路径
-SIGNALS_PATH = DATA_DIR / "last_signals.json"
 ANALYSIS_LOG = DATA_DIR / "analysis_log.jsonl"
-
-
-def load_last_signals():
-    if SIGNALS_PATH.exists():
-        return json.loads(SIGNALS_PATH.read_text(encoding="utf-8"))
-    return {}
-
-
-def save_last_signals(signals):
-    SIGNALS_PATH.write_text(
-        json.dumps(signals, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
 
 
 def run():
@@ -55,118 +45,53 @@ def run():
     config = yaml.safe_load(
         (BASE_DIR / "config.yaml").read_text(encoding="utf-8")
     )
-    last_signals = load_last_signals()
-    results = []
-    notification_candidate = None
 
     for sub in config["subscriptions"]:
         route = f"{sub['origin']}-{sub['destination']}"
         logging.info(f"开始处理 {route}")
 
         try:
-            # 采集
-            data = collect_and_classify(
+            data = collect_all_flights(
                 sub["origin"],
                 sub["destination"],
                 sub["depart_date"],
-                sub["target_combo"],
             )
 
-            if data is None:
+            if data is None or not data.get("flights"):
                 logging.error(f"{route} 采集返回空")
-                results.append({"route": route, "status": "collect_failed"})
                 continue
 
-            # 存储
-            records = []
-            if data["target"]:
-                records.append(
-                    {
-                        **data["target"],
-                        "is_target": 1,
-                        "route": route,
-                        "depart_date": sub["depart_date"],
-                    }
-                )
-            for alt in data["alternatives"]:
-                records.append(
-                    {
-                        **alt,
-                        "is_target": 0,
-                        "route": route,
-                        "depart_date": sub["depart_date"],
-                    }
-                )
-
-            if records:
-                save_snapshots(records)
-                logging.info(f"{route} 存储{len(records)}条")
-
-            # 保存原始响应
+            save_flight_details(route, sub["depart_date"], data.get("flights", []))
+            previous_prices = get_previous_snapshot_prices(route, sub["depart_date"])
+            lowest_price_history = get_lowest_price_history(
+                route, sub["depart_date"], limit=14
+            )
             save_raw_response(route, sub["depart_date"], data)
+            logging.info(f"{route} 存储{data.get('total_count', 0)}个航班方案")
 
-            # 分析
-            analysis = analyze_combined(
-                str(DB_PATH),
-                route,
-                sub["depart_date"],
-                sub["target_combo"],
-                data.get("price_insights", {}),
+            analysis = analyze_all_flights(
+                data.get("flights", []), data.get("price_insights")
             )
 
-            # 记录分析日志
             log_entry = {**analysis, "logged_at": datetime.now().isoformat()}
             with ANALYSIS_LOG.open("a", encoding="utf-8") as file:
                 file.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
 
-            # 推送判断
-            prev_signal = last_signals.get(route, "none")
-            notify, reason = should_notify(analysis, prev_signal)
-
-            if notify and notification_candidate is None:
-                notification_candidate = {
-                    "route": route,
-                    "analysis": analysis,
-                    "reason": reason,
-                }
-                logging.info(f"{route} 标记为本轮通知: {reason}")
-
-            # 更新信号
-            last_signals[route] = analysis.get("signal", "unknown")
-            results.append(
+            msg = format_comparison_message(
+                analysis,
                 {
-                    "route": route,
-                    "status": "ok",
-                    "price": analysis.get("current_price"),
-                    "current_price": analysis.get("current_price"),
-                    "signal": analysis.get("signal"),
-                    "source": data.get("source"),
-                    "flight_count": data.get("total_results", 0),
-                }
+                    "origin": sub["origin"],
+                    "destination": sub["destination"],
+                    "depart_date": sub["depart_date"],
+                    "previous_prices": previous_prices,
+                    "lowest_price_history": lowest_price_history,
+                },
             )
+            send(msg)
+            logging.info(f"{route} 已推送方案对比表")
 
         except Exception as e:
             logging.error(f"{route} 处理失败: {e}", exc_info=True)
-            results.append({"route": route, "status": f"error: {e}"})
-
-    # 保存信号记录
-    save_last_signals(last_signals)
-
-    run_status = health_report(results)
-    if notification_candidate:
-        msg = format_message(
-            notification_candidate["analysis"],
-            notification_candidate["reason"],
-            run_status,
-        )
-        send(msg)
-        logging.info(
-            f"{notification_candidate['route']} 已发送本轮唯一通知: "
-            f"{notification_candidate['reason']}"
-        )
-    else:
-        print(run_status)
-        logging.info(f"本轮无需通知: {run_status}")
 
     logging.info("本轮执行完成")
 

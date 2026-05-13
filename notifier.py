@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import os
 import re
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
+
+from analyzer import city_name
 
 
 BUY_SIGNALS = {"strong_buy", "buy", "buy_now"}
@@ -442,3 +444,391 @@ def health_report(results: list[dict]) -> str:
     source = current.get("source") or "-"
     flight_count = current.get("flight_count", len(success_results))
     return f"📋 本次采集：{now} | {flight_count}条航班 | 数据源：{source}"
+
+
+SOURCE_LABELS = {
+    "serpapi": "Google Flights（via SerpAPI）",
+    "searchapi": "Google Flights（via SearchAPI）",
+    "serpapi+searchapi": "Google Flights（via SerpAPI + SearchAPI）",
+    "searchapi+serpapi": "Google Flights（via SerpAPI + SearchAPI）",
+}
+
+
+def _source_label(data_source: str | None) -> str:
+    if not data_source:
+        return "Google Flights"
+    return SOURCE_LABELS.get(data_source, "Google Flights")
+
+
+def _source_summary(analysis_result: dict) -> str:
+    sources = []
+
+    for rec in analysis_result.get("recommendations", []):
+        flight = rec.get("flight", {})
+        data_source = flight.get("data_source")
+        if data_source and data_source not in sources:
+            sources.append(data_source)
+
+    for flight in analysis_result.get("all_flights", []):
+        data_source = flight.get("data_source")
+        if data_source and data_source not in sources:
+            sources.append(data_source)
+
+    if not sources:
+        return "Google Flights"
+    if any("+" in source for source in sources):
+        return "Google Flights"
+
+    labels = [_source_label(source) for source in sources]
+    return "、".join(dict.fromkeys(labels))
+
+
+def format_price_change(current_price, previous_price) -> str:
+    """和上一次推送的价格对比"""
+    if previous_price is None:
+        return "📊 首次采集，暂无历史对比"
+
+    diff = current_price - previous_price
+    pct = diff / previous_price * 100
+
+    if abs(diff) < 50:
+        return f"📊 价格基本持平（和上次相比变化¥{abs(diff):,.0f}）"
+    elif diff < 0:
+        return f"📊 比上次便宜了 ¥{abs(diff):,.0f}（↓{abs(pct):.1f}%）🟢"
+    else:
+        return f"📊 比上次贵了 ¥{diff:,.0f}（↑{pct:.1f}%）🔴"
+
+
+def text_price_chart(prices_with_dates: list[tuple], width=20) -> str:
+    """用文字字符画一个迷你价格走势图"""
+    if len(prices_with_dates) < 3:
+        return "📈 数据积累中，3天后可显示走势图"
+
+    prices = [price for _, price in prices_with_dates if price is not None]
+    if len(prices) < 3:
+        return "📈 数据积累中，3天后可显示走势图"
+
+    min_p = min(prices)
+    max_p = max(prices)
+
+    if max_p == min_p:
+        return "📈 " + "━" * width + f" ¥{min_p:,.0f}"
+
+    blocks = " ▁▂▃▄▅▆▇█"
+    recent_points = prices_with_dates[-width:]
+    recent_prices = [price for _, price in recent_points]
+
+    chart = "📈 "
+    for price in recent_prices:
+        level = int((price - min_p) / (max_p - min_p) * 8)
+        level = min(8, max(0, level))
+        chart += blocks[level]
+
+    chart_width = min(width, len(recent_prices))
+    chart += f"\n   ¥{min_p:,.0f}"
+    chart += " " * max(1, chart_width - 8)
+    chart += f"¥{max_p:,.0f}"
+
+    first_date = recent_points[0][0][:10] if recent_points else ""
+    last_date = recent_points[-1][0][:10] if recent_points else ""
+    chart += f"\n   {first_date}  →  {last_date}"
+
+    return chart
+
+
+def _price_change_phrase(label: str, current_price, previous_price) -> str | None:
+    if current_price is None or previous_price is None:
+        return None
+
+    diff = current_price - previous_price
+    if abs(diff) < 50:
+        return f"{label}基本持平"
+    if diff < 0:
+        return f"{label}降了¥{abs(diff):,.0f} 🟢"
+    return f"{label}涨了¥{diff:,.0f} 🔴"
+
+
+def _find_recommendation_flight(recs: list[dict], keyword: str) -> dict | None:
+    for rec in recs:
+        if keyword in str(rec.get("tag", "")):
+            return rec.get("flight")
+    return None
+
+
+def _overall_price_change_summary(analysis_result: dict, previous_prices: dict) -> str:
+    if not previous_prices:
+        return "📊 和上次对比：首次采集，暂无历史对比"
+
+    recs = analysis_result.get("recommendations", [])
+    all_flights = analysis_result.get("all_flights", [])
+    cheapest = _find_recommendation_flight(recs, "最低价")
+    fastest = _find_recommendation_flight(recs, "最快")
+
+    if cheapest is None and all_flights:
+        cheapest = min(all_flights, key=lambda flight: flight.get("price") or float("inf"))
+    if fastest is None and all_flights:
+        fastest = min(
+            all_flights,
+            key=lambda flight: flight.get("total_duration_min") or float("inf"),
+        )
+
+    parts = []
+    if cheapest:
+        combo = cheapest.get("flight_combo")
+        parts.append(
+            _price_change_phrase(
+                "最低价", cheapest.get("price"), previous_prices.get(combo)
+            )
+        )
+    if fastest:
+        combo = fastest.get("flight_combo")
+        parts.append(
+            _price_change_phrase(
+                "最快方案", fastest.get("price"), previous_prices.get(combo)
+            )
+        )
+
+    parts = [part for part in parts if part]
+    if not parts:
+        return "📊 和上次对比：暂无可匹配的历史方案"
+    return f"📊 和上次对比：{'，'.join(parts)}"
+
+
+def generate_booking_links(flight: dict, depart_date: str) -> str:
+    """生成各平台的搜索链接"""
+    segments = flight.get("segments") or []
+    if not segments:
+        return ""
+
+    origin = segments[0].get("dep_airport", "")
+    dest = segments[-1].get("arr_airport", "")
+    if not origin or not dest:
+        return ""
+
+    ctrip = (
+        f"https://flights.ctrip.com/online/list/oneway-{origin}-{dest}"
+        f"?depdate={depart_date}"
+    )
+    fliggy = (
+        "https://www.fliggy.com/flight/international-search"
+        f"?from={origin}&to={dest}&depDate={depart_date}"
+    )
+    google = (
+        "https://www.google.com/travel/flights"
+        f"?q=flights+from+{origin}+to+{dest}+on+{depart_date}"
+    )
+
+    airline_sites = {
+        "美航": "https://www.aa.com",
+        "American Airlines": "https://www.aa.com",
+        "加航": "https://www.aircanada.com",
+        "Air Canada": "https://www.aircanada.com",
+        "联合": "https://www.united.com",
+        "United": "https://www.united.com",
+        "达美": "https://www.delta.com",
+        "Delta": "https://www.delta.com",
+    }
+    airline_name = segments[0].get("airline", "")
+    airline_url = airline_sites.get(airline_name, "")
+
+    links = "🔗 去购买\n"
+    links += f"• 携程：{ctrip}\n"
+    links += f"• 飞猪：{fliggy}\n"
+    if airline_url:
+        links += f"• {airline_name}官网：{airline_url}\n"
+    links += f"• Google Flights：{google}\n"
+
+    return links
+
+
+def generate_warnings(flight: dict) -> list[str]:
+    """检测航班方案的潜在问题"""
+    warnings = []
+
+    for layover in flight.get("layovers", []) or []:
+        wait_minutes = layover.get("wait_minutes", 0) or 0
+        if wait_minutes > 480:
+            warnings.append(
+                f"⚠️ 在{layover.get('city', '中转地')}转机需等待{wait_minutes // 60}小时，"
+                "可能需要在机场过夜或额外订酒店"
+            )
+
+    for segment in flight.get("segments", []) or []:
+        dep_time = segment.get("dep_time", "")
+        if " " not in dep_time:
+            continue
+
+        time_part = dep_time.split(" ")[1]
+        try:
+            hour = int(time_part.split(":")[0])
+        except (TypeError, ValueError):
+            continue
+
+        if 0 <= hour < 6:
+            warnings.append(
+                f"⚠️ {segment.get('flight_no', '')}是凌晨航班"
+                f"（{time_part}起飞），注意交通安排"
+            )
+
+    for layover in flight.get("layovers", []) or []:
+        wait_minutes = layover.get("wait_minutes", 999) or 999
+        if 0 < wait_minutes < 75:
+            warnings.append(
+                f"⚠️ 在{layover.get('city', '中转地')}转机时间仅{wait_minutes}分钟，"
+                "如果前段航班延误可能赶不上，建议确认是否联程票"
+            )
+
+    segments = flight.get("segments", []) or []
+    if segments:
+        dep_date = (segments[0].get("dep_time", "") or "")[:10]
+        arr_date = (segments[-1].get("arr_time", "") or "")[:10]
+        if dep_date and arr_date and dep_date != arr_date:
+            warnings.append(f"ℹ️ 到达日期为{arr_date}（非出发当天），注意安排接机和住宿")
+
+    return warnings
+
+
+def _days_to_depart(route_info: dict) -> int | None:
+    days = route_info.get("days_to_dept")
+    if days is not None:
+        try:
+            return int(days)
+        except (TypeError, ValueError):
+            return None
+
+    depart_date = route_info.get("depart_date")
+    if not depart_date:
+        return None
+
+    try:
+        return (date.fromisoformat(depart_date) - date.today()).days
+    except ValueError:
+        return None
+
+
+def format_summary_advice(analysis, days_to_dept) -> str:
+    """一句话总结建议"""
+    market = analysis.get("market_context", {})
+    level = market.get("price_level", "typical")
+    cheapest = analysis["price_range"][0]
+
+    if level == "low" and days_to_dept > 14:
+        return (
+            "💬 总结：当前整体处于低价期，"
+            f"最低¥{cheapest:,}是不错的价格。"
+            "如果行程确定建议抓住机会，低价期通常不会持续太久。"
+        )
+    elif level == "low" and days_to_dept <= 14:
+        return (
+            "💬 总结：低价期+临近出发，"
+            "强烈建议尽快购买。"
+        )
+    elif level == "typical" and days_to_dept > 30:
+        return (
+            "💬 总结：当前价格正常，不着急的话可以再观察一两周。"
+            "我会持续监控，有好价格第一时间通知你。"
+        )
+    elif level == "typical" and days_to_dept <= 30:
+        return (
+            "💬 总结：价格正常，距出发不到一个月了。"
+            "如果看到合适的方案可以考虑入手，再往后价格上涨概率增大。"
+        )
+    elif level == "high":
+        return (
+            "💬 总结：当前价格偏高。"
+            f"如果不急，建议等价格回落到¥{market.get('typical_range', [0, 0])[0]:,}以下再考虑。"
+        )
+    else:
+        return "💬 总结：我会持续关注这条航线的价格变化。"
+
+
+def format_comparison_message(analysis_result: dict, route_info: dict) -> str:
+    """生成多方案对比推送消息"""
+    recs = analysis_result["recommendations"]
+    market = analysis_result.get("market_context", {})
+
+    msg = f"✈️ {city_name(route_info['origin'])} → {city_name(route_info['destination'])}\n"
+    msg += f"📅 {route_info['depart_date']} | 共找到{analysis_result['total_options']}个方案\n"
+    msg += _overall_price_change_summary(
+        analysis_result, route_info.get("previous_prices") or {}
+    )
+    msg += "\n"
+
+    if market.get("price_level"):
+        level_text = {"low": "低价期 🟢", "typical": "正常水平", "high": "偏贵 🔴"}
+        msg += f"📊 当前市场：{level_text.get(market['price_level'], market['price_level'])}"
+        if market.get("typical_range"):
+            msg += f"（通常¥{market['typical_range'][0]:,}-¥{market['typical_range'][1]:,}）"
+        msg += "\n"
+
+    msg += "\n"
+    msg += "━━━ 深度分析 ━━━\n"
+    msg += "📈 最低价走势（近14天）\n"
+    chart = text_price_chart(route_info.get("lowest_price_history") or [], width=14)
+    msg += chart.removeprefix("📈 ")
+    msg += "\n\n"
+    msg += "━━━ 推荐方案 ━━━\n\n"
+
+    for rec in recs:
+        flight = rec["flight"]
+        msg += f"{rec['tag']}\n"
+        msg += f"💰 ¥{flight['price']:,}\n"
+        msg += f"🛫 {flight['route_summary']}\n"
+        msg += f"⏱️ 全程{flight['total_hours']}小时"
+
+        if flight["stops"] == 0:
+            msg += " · 直飞\n"
+        else:
+            msg += f" · 转机{flight['stops']}次\n"
+
+        for index, segment in enumerate(flight["segments"]):
+            dep_time = (
+                segment["dep_time"].split(" ")[1]
+                if " " in segment["dep_time"]
+                else segment["dep_time"]
+            )
+            arr_time = (
+                segment["arr_time"].split(" ")[1]
+                if " " in segment["arr_time"]
+                else segment["arr_time"]
+            )
+            msg += f"  ✈ {segment['flight_no']} {segment['airline']}\n"
+            msg += f"    {city_name(segment['dep_airport'])} {dep_time}"
+            msg += f" → {city_name(segment['arr_airport'])} {arr_time}\n"
+
+            if index < len(flight.get("layovers", [])):
+                layover = flight["layovers"][index]
+                wait_h = layover["wait_minutes"] // 60
+                wait_m = layover["wait_minutes"] % 60
+                msg += (
+                    f"    ⏳ 在{city_name(layover['airport'])}转机 "
+                    f"等待{wait_h}小时{wait_m}分钟\n"
+                )
+
+        msg += f"  💡 {rec['reason']}\n"
+        msg += f"  📎 数据来源：{_source_label(flight.get('data_source'))}\n"
+        warnings = generate_warnings(flight)
+        if warnings:
+            msg += "  ⚠️ 注意事项：\n"
+            for warning in warnings:
+                msg += f"  • {warning}\n"
+        booking_links = generate_booking_links(flight, route_info["depart_date"])
+        if booking_links:
+            msg += booking_links
+        msg += "\n"
+
+    prices = analysis_result["price_range"]
+    msg += "━━━━━━━━━━━━━━━\n"
+    msg += f"价格区间：¥{prices[0]:,} - ¥{prices[1]:,}\n"
+    msg += (
+        f"📋 采集时间：{datetime.now().strftime('%Y-%m-%d %H:%M')} | "
+        f"数据源：{_source_summary(analysis_result)}\n"
+    )
+    days_to_dept = _days_to_depart(route_info)
+    if days_to_dept is not None:
+        msg += f"{format_summary_advice(analysis_result, days_to_dept)}\n"
+    msg += "\n---\n"
+    msg += "以上基于历史价格数据分析，仅供参考。\n"
+    msg += "实际购买请以航司或OTA官网价格为准。"
+
+    return msg
