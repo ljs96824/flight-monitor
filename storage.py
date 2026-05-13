@@ -21,6 +21,7 @@ SNAPSHOT_COLUMNS = [
     "snapshot_time",
     "days_before_dept",
     "is_target",
+    "data_source",
 ]
 
 
@@ -52,10 +53,19 @@ def init_db() -> None:
                 depart_date TEXT,
                 snapshot_time TEXT,
                 days_before_dept INTEGER,
-                is_target INTEGER
+                is_target INTEGER,
+                data_source TEXT
             )
             """
         )
+        columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(price_snapshots)")
+        }
+        if "data_source" not in columns:
+            connection.execute(
+                "ALTER TABLE price_snapshots ADD COLUMN data_source TEXT"
+            )
 
 
 def save_snapshots(records: list[dict]) -> None:

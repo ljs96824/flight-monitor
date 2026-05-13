@@ -14,6 +14,7 @@ pip install -r requirements.txt
 
 ```env
 SERPAPI_KEY=你的SerpAPI key
+SEARCHAPI_KEY=你的SearchAPI key
 PUSHPLUS_TOKEN=你的PushPlus token
 ```
 
@@ -37,6 +38,7 @@ python check.py
 
 ```text
 SERPAPI_KEY
+SEARCHAPI_KEY
 PUSHPLUS_TOKEN
 ```
 
