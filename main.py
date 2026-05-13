@@ -57,6 +57,7 @@ def run():
     )
     last_signals = load_last_signals()
     results = []
+    notification_candidate = None
 
     for sub in config["subscriptions"]:
         route = f"{sub['origin']}-{sub['destination']}"
@@ -122,10 +123,13 @@ def run():
             prev_signal = last_signals.get(route, "none")
             notify, reason = should_notify(analysis, prev_signal)
 
-            if notify:
-                msg = format_message(analysis, reason)
-                send(msg)
-                logging.info(f"{route} 推送通知: {reason}")
+            if notify and notification_candidate is None:
+                notification_candidate = {
+                    "route": route,
+                    "analysis": analysis,
+                    "reason": reason,
+                }
+                logging.info(f"{route} 标记为本轮通知: {reason}")
 
             # 更新信号
             last_signals[route] = analysis.get("signal", "unknown")
@@ -136,6 +140,8 @@ def run():
                     "price": analysis.get("current_price"),
                     "current_price": analysis.get("current_price"),
                     "signal": analysis.get("signal"),
+                    "source": data.get("source"),
+                    "flight_count": data.get("total_results", 0),
                 }
             )
 
@@ -146,11 +152,21 @@ def run():
     # 保存信号记录
     save_last_signals(last_signals)
 
-    # 发送健康报告
-    try:
-        health_report(results)
-    except Exception as e:
-        logging.error(f"健康报告发送失败: {e}")
+    run_status = health_report(results)
+    if notification_candidate:
+        msg = format_message(
+            notification_candidate["analysis"],
+            notification_candidate["reason"],
+            run_status,
+        )
+        send(msg)
+        logging.info(
+            f"{notification_candidate['route']} 已发送本轮唯一通知: "
+            f"{notification_candidate['reason']}"
+        )
+    else:
+        print(run_status)
+        logging.info(f"本轮无需通知: {run_status}")
 
     logging.info("本轮执行完成")
 

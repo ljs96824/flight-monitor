@@ -30,7 +30,7 @@ def should_notify(analysis: dict, prev_signal: str | None) -> tuple[bool, str | 
     return False, None
 
 
-DISCLAIMER = "---\n以上建议基于历史价格数据分析，仅供参考。\n实际购买请以航司或OTA官网价格为准。"
+DISCLAIMER = "以上建议基于历史价格数据分析，仅供参考。\n实际购买请以航司或OTA官网价格为准。"
 
 
 def format_price(price) -> str:
@@ -242,8 +242,12 @@ def _duration_text(hours) -> str:
     return f"{total_minutes // 60}小时{total_minutes % 60}分钟"
 
 
-def _append_disclaimer(message: str) -> str:
-    return f"{message}\n\n{DISCLAIMER}"
+def _append_disclaimer(message: str, run_status: str | None = None) -> str:
+    parts = [message]
+    if run_status:
+        parts.extend(["", run_status])
+    parts.extend(["", "---", DISCLAIMER])
+    return "\n".join(parts)
 
 
 def _advice(trigger_reason: str | None) -> str:
@@ -256,7 +260,7 @@ def _advice(trigger_reason: str | None) -> str:
     return advice_map.get(trigger_reason, "建议：继续观察，等待更明确的价格信号。")
 
 
-def format_buy_message(analysis) -> str:
+def format_buy_message(analysis, run_status: str | None = None) -> str:
     pct = analysis.get("percentile")
     message = "\n".join(
         [
@@ -282,10 +286,10 @@ def format_buy_message(analysis) -> str:
             _risk_description(analysis),
         ]
     )
-    return _append_disclaimer(message)
+    return _append_disclaimer(message, run_status)
 
 
-def format_consider_message(analysis) -> str:
+def format_consider_message(analysis, run_status: str | None = None) -> str:
     message = "\n".join(
         [
             "🟢 你的奥兰多机票价格还不错",
@@ -304,10 +308,10 @@ def format_consider_message(analysis) -> str:
             "还可以再观察几天看看有没有更低的价格。",
         ]
     )
-    return _append_disclaimer(message)
+    return _append_disclaimer(message, run_status)
 
 
-def format_milestone_message(analysis, days) -> str:
+def format_milestone_message(analysis, days, run_status: str | None = None) -> str:
     min_date = _min_date(analysis)
     if days == 30:
         advice = (
@@ -338,10 +342,10 @@ def format_milestone_message(analysis, days) -> str:
             advice,
         ]
     )
-    return _append_disclaimer(message)
+    return _append_disclaimer(message, run_status)
 
 
-def format_alternative_message(analysis) -> str:
+def format_alternative_message(analysis, run_status: str | None = None) -> str:
     alt = analysis.get("cheapest_alt") or {}
     target_price = analysis.get("current_price")
     alt_price = alt.get("price")
@@ -371,21 +375,25 @@ def format_alternative_message(analysis) -> str:
             comparison_note,
         ]
     )
-    return _append_disclaimer(message)
+    return _append_disclaimer(message, run_status)
 
 
-def format_message(analysis: dict, trigger_reason: str | None) -> str:
+def format_message(
+    analysis: dict, trigger_reason: str | None, run_status: str | None = None
+) -> str:
     """Choose one human-friendly notification template."""
     if trigger_reason == "cheaper_alt" and analysis.get("cheapest_alt"):
-        return format_alternative_message(analysis)
+        return format_alternative_message(analysis, run_status)
     if trigger_reason == "milestone":
-        return format_milestone_message(analysis, analysis.get("days_to_dept"))
+        return format_milestone_message(
+            analysis, analysis.get("days_to_dept"), run_status
+        )
     signal = analysis.get("signal")
     if signal in {"strong_buy", "buy_now"}:
-        return format_buy_message(analysis)
+        return format_buy_message(analysis, run_status)
     if signal in {"buy", "consider"}:
-        return format_consider_message(analysis)
-    return format_milestone_message(analysis, analysis.get("days_to_dept"))
+        return format_consider_message(analysis, run_status)
+    return format_milestone_message(analysis, analysis.get("days_to_dept"), run_status)
 
 
 def _log_notification(content: str) -> None:
@@ -426,15 +434,11 @@ def send(content: str) -> bool:
     return True
 
 
-def health_report(results: list[dict]) -> bool:
-    """Send a short collection status report."""
+def health_report(results: list[dict]) -> str:
+    """Return a short collection status line."""
     success_results = [result for result in results if result.get("status") == "ok"]
     current = success_results[0] if success_results else {}
-    current_price = current.get("current_price", current.get("price"))
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
-    content = (
-        f"✅ {now} 采集完成：{len(success_results)}条成功\n"
-        f"AA128+AA1336 当前¥{_format_price(current_price)} | "
-        f"信号：{current.get('signal', '-')}"
-    )
-    return send(content)
+    source = current.get("source") or "-"
+    flight_count = current.get("flight_count", len(success_results))
+    return f"📋 本次采集：{now} | {flight_count}条航班 | 数据源：{source}"
