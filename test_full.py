@@ -130,7 +130,9 @@ def _run_all_flights(subscription: dict, route: str) -> None:
     print(f"- 最低价方案: {cheapest.get('flight_combo') or '-'}")
     print(f"- 最低价价格: ¥{cheapest.get('price') if cheapest.get('price') is not None else '-'}")
 
-    analysis = analyze_all_flights(flights, data.get("price_insights"))
+    analysis = analyze_all_flights(
+        flights, data.get("price_insights"), mode=subscription.get("mode", "balanced")
+    )
 
     print("\n分析结果：")
     print(f"- 方案总数: {analysis.get('total_options')}")
@@ -145,6 +147,7 @@ def _run_all_flights(subscription: dict, route: str) -> None:
         "origin": subscription["origin"],
         "destination": subscription["destination"],
         "depart_date": subscription["depart_date"],
+        "mode": subscription.get("mode", "balanced"),
     }
     message = format_comparison_message(analysis, route_info)
     print("\n推送消息：")

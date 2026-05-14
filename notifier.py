@@ -706,6 +706,18 @@ def _days_to_depart(route_info: dict) -> int | None:
         return None
 
 
+MODE_LABELS = {
+    "balanced": "🎯 当前模式：均衡推荐",
+    "budget": "💰 当前模式：省钱优先",
+    "fast": "⚡ 当前模式：速度优先",
+    "comfort": "🛋️ 当前模式：舒适优先",
+}
+
+
+def _mode_label(mode: str | None) -> str:
+    return MODE_LABELS.get(mode or "balanced", MODE_LABELS["balanced"])
+
+
 def format_summary_advice(analysis, days_to_dept) -> str:
     """一句话总结建议"""
     market = analysis.get("market_context", {})
@@ -749,6 +761,8 @@ def format_comparison_message(analysis_result: dict, route_info: dict) -> str:
 
     msg = f"✈️ {city_name(route_info['origin'])} → {city_name(route_info['destination'])}\n"
     msg += f"📅 {route_info['depart_date']} | 共找到{analysis_result['total_options']}个方案\n"
+    msg += _mode_label(route_info.get("mode") or analysis_result.get("mode"))
+    msg += "\n"
     msg += _overall_price_change_summary(
         analysis_result, route_info.get("previous_prices") or {}
     )
@@ -806,6 +820,14 @@ def format_comparison_message(analysis_result: dict, route_info: dict) -> str:
                 )
 
         msg += f"  💡 {rec['reason']}\n"
+        scores = flight.get("scores") or {}
+        if scores.get("total") is not None:
+            msg += f"  ⭐ 综合评分：{scores['total']}/10\n"
+        risk = flight.get("transfer_risk") or {}
+        if risk:
+            msg += f"  {risk.get('label', '✅ 转机安全')}\n"
+            for note in risk.get("notes", []):
+                msg += f"  • {note}\n"
         msg += f"  📎 数据来源：{_source_label(flight.get('data_source'))}\n"
         warnings = generate_warnings(flight)
         if warnings:

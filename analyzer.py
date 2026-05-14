@@ -525,6 +525,141 @@ def detect_anomaly(
     return {"is_anomaly": False, "is_good_deal": False}
 
 
+SCORE_WEIGHTS = {
+    "budget": {"price": 0.6, "duration": 0.15, "stops": 0.1, "layover": 0.15},
+    "fast": {"price": 0.15, "duration": 0.5, "stops": 0.2, "layover": 0.15},
+    "comfort": {"price": 0.15, "duration": 0.2, "stops": 0.3, "layover": 0.35},
+    "balanced": {"price": 0.35, "duration": 0.25, "stops": 0.2, "layover": 0.2},
+}
+
+
+def overall_score(
+    flight: dict, all_prices: list, all_durations: list, mode: str = "balanced"
+) -> dict:
+    """综合评分 0-10"""
+    clean_prices = [_to_float(price) for price in all_prices or []]
+    clean_prices = [price for price in clean_prices if price is not None]
+    clean_durations = [_to_float(duration) for duration in all_durations or []]
+    clean_durations = [
+        duration for duration in clean_durations if duration is not None
+    ]
+
+    price = _to_float(flight.get("price"))
+    duration = _to_float(flight.get("total_duration_min"))
+    if price is None or duration is None or not clean_prices or not clean_durations:
+        return {
+            "total": 0,
+            "price_score": 0,
+            "duration_score": 0,
+            "stops_score": 0,
+            "layover_score": 0,
+        }
+
+    min_p, max_p = min(clean_prices), max(clean_prices)
+    if max_p > min_p:
+        price_score = 10 - (price - min_p) / (max_p - min_p) * 10
+    else:
+        price_score = 7
+
+    min_d, max_d = min(clean_durations), max(clean_durations)
+    if max_d > min_d:
+        duration_score = 10 - (duration - min_d) / (max_d - min_d) * 10
+    else:
+        duration_score = 7
+
+    stops = int(flight.get("stops") or 0)
+    stops_score = {0: 10, 1: 8, 2: 5, 3: 3}.get(stops, 2)
+
+    layover_score = 10
+    for layover in flight.get("layovers", []) or []:
+        wait = layover.get("wait_minutes", 0) or 0
+        if wait > 480:
+            layover_score -= 3
+        elif wait > 240:
+            layover_score -= 1.5
+        elif wait < 60:
+            layover_score -= 2
+    layover_score = max(0, layover_score)
+
+    weights = SCORE_WEIGHTS.get(mode, SCORE_WEIGHTS["balanced"])
+    total = (
+        price_score * weights["price"]
+        + duration_score * weights["duration"]
+        + stops_score * weights["stops"]
+        + layover_score * weights["layover"]
+    )
+
+    return {
+        "total": round(total, 1),
+        "price_score": round(price_score, 1),
+        "duration_score": round(duration_score, 1),
+        "stops_score": round(stops_score, 1),
+        "layover_score": round(layover_score, 1),
+    }
+
+
+def transfer_risk(flight: dict) -> dict:
+    """转机风险评级：green/yellow/red"""
+    if (flight.get("stops") or 0) == 0:
+        return {"level": "green", "label": "✅ 直飞", "notes": []}
+
+    risks = []
+    level = "green"
+
+    def raise_level(new_level: str) -> None:
+        nonlocal level
+        order = {"green": 0, "yellow": 1, "red": 2}
+        if order[new_level] > order[level]:
+            level = new_level
+
+    us_airports = {
+        "JFK",
+        "LAX",
+        "SFO",
+        "ORD",
+        "DFW",
+        "ATL",
+        "MIA",
+        "SEA",
+        "DTW",
+        "IAH",
+        "EWR",
+    }
+
+    for layover in flight.get("layovers", []) or []:
+        wait = layover.get("wait_minutes", 0) or 0
+        city = layover.get("city", "中转地")
+        airport = layover.get("airport", "")
+
+        if wait < 75:
+            risks.append(f"⚠️ {city}转机仅{wait}分钟，国际航班可能不够")
+            raise_level("red")
+        elif wait < 120:
+            risks.append(f"🟡 {city}转机{wait // 60}小时{wait % 60}分钟，需快速通关")
+            raise_level("yellow")
+        elif wait > 600:
+            risks.append(f"🟡 {city}转机超过10小时，需要在机场过夜或外出住宿")
+            raise_level("yellow")
+        elif wait > 360:
+            risks.append(f"🟡 {city}等待较长（{wait // 60}小时），建议了解机场休息设施")
+            raise_level("yellow")
+
+        if airport in us_airports:
+            risks.append(f"ℹ️ 在美国{city}转机需要办理入境手续、提取行李重新托运")
+
+    airlines = {
+        segment.get("airline", "")
+        for segment in flight.get("segments", []) or []
+        if segment.get("airline")
+    }
+    if len(airlines) > 1:
+        risks.append(f"ℹ️ 涉及{len(airlines)}家航司（{'、'.join(sorted(airlines))}），行李可能无法直挂")
+        raise_level("yellow")
+
+    label_map = {"green": "✅ 转机安全", "yellow": "🟡 需注意", "red": "🔴 风险较高"}
+    return {"level": level, "label": label_map[level], "notes": risks}
+
+
 def calc_trend(recent_prices: list[float]) -> dict:
     """Compatibility trend summary used by check.py and notification text."""
     prices = [_to_float(price) for price in recent_prices]
@@ -784,7 +919,9 @@ def analyze_combined(
     return analyze(db, route, depart_date, target_combo, price_insights)
 
 
-def analyze_all_flights(flights: list[dict], price_insights: dict = None) -> dict:
+def analyze_all_flights(
+    flights: list[dict], price_insights: dict = None, mode: str = "balanced"
+) -> dict:
     """对所有航班方案做多维度分析和排名"""
     if not flights:
         return {"error": "no_flights"}
@@ -809,6 +946,8 @@ def analyze_all_flights(flights: list[dict], price_insights: dict = None) -> dic
     min_p, max_p = min(prices), max(prices)
     min_d, max_d = min(durations), max(durations)
 
+    mode = mode if mode in SCORE_WEIGHTS else "balanced"
+
     for flight in usable_flights:
         price_score = (
             (flight["price"] - min_p) / (max_p - min_p) if max_p > min_p else 0
@@ -823,8 +962,13 @@ def analyze_all_flights(flights: list[dict], price_insights: dict = None) -> dic
             price_score * 0.5 + duration_score * 0.3 + stops_score * 0.2,
             3,
         )
+        flight["scores"] = overall_score(flight, prices, durations, mode)
+        flight["transfer_risk"] = transfer_risk(flight)
 
     by_value = sorted(usable_flights, key=lambda f: f["value_score"])
+    by_overall = sorted(
+        usable_flights, key=lambda f: f["scores"]["total"], reverse=True
+    )
 
     # 4. 筛选推荐方案（最多展示5个）
     recommendations = []
@@ -863,6 +1007,14 @@ def analyze_all_flights(flights: list[dict], price_insights: dict = None) -> dic
             }
         )
 
+    recommendations.append(
+        {
+            "tag": "⭐ 综合最优",
+            "flight": by_overall[0],
+            "reason": f"综合评分{by_overall[0]['scores']['total']}/10，最符合当前偏好",
+        }
+    )
+
     min_stops_flight = min(usable_flights, key=lambda f: f["stops"])
     existing_combos = [r["flight"]["flight_combo"] for r in recommendations]
     if (
@@ -894,4 +1046,5 @@ def analyze_all_flights(flights: list[dict], price_insights: dict = None) -> dic
         "price_range": [min(prices), max(prices)],
         "duration_range": [min(durations), max(durations)],
         "market_context": market_context,
+        "mode": mode,
     }

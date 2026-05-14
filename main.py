@@ -70,7 +70,9 @@ def run():
             logging.info(f"{route} 存储{data.get('total_count', 0)}个航班方案")
 
             analysis = analyze_all_flights(
-                data.get("flights", []), data.get("price_insights")
+                data.get("flights", []),
+                data.get("price_insights"),
+                mode=sub.get("mode", "balanced"),
             )
 
             log_entry = {**analysis, "logged_at": datetime.now().isoformat()}
@@ -83,6 +85,7 @@ def run():
                     "origin": sub["origin"],
                     "destination": sub["destination"],
                     "depart_date": sub["depart_date"],
+                    "mode": sub.get("mode", "balanced"),
                     "previous_prices": previous_prices,
                     "lowest_price_history": lowest_price_history,
                 },

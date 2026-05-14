@@ -3,4 +3,5 @@ subscriptions:
     origin: PVG
     destination: MCO
     depart_date: "2026-06-20"
+    mode: "balanced"  # balanced/budget/fast/comfort
     # 不再指定target_combo，采集所有航班方案
