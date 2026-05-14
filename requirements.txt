@@ -3,4 +3,3 @@ google-search-results
 pyyaml
 python-dotenv
 requests
-duffel-api

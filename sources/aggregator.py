@@ -42,31 +42,35 @@ class FlightAggregator:
             try:
                 result = source.fetch(origin, dest, date_str)
             except Exception as exc:
-                errors.append({"source": source.name, "error": str(exc)})
+                error = str(exc)
+                print(f"[{source.name}] 失败：{error}")
+                errors.append({"source": source.name, "error": error})
                 continue
 
             flights = result.get("flights") or []
             if not flights:
+                print(f"[{source.name}] 失败：no flights")
                 errors.append({"source": source.name, "error": "no flights"})
                 continue
 
+            print(f"[{source.name}] 成功，返回{len(flights)}个航班")
             successful_results.append(result)
 
         if not successful_results:
             return None
 
-        primary = successful_results[0]
         price_insights = None
         for result in successful_results:
             if result.get("price_insights"):
                 price_insights = result["price_insights"]
                 break
 
+        sources_used = [result.get("source") for result in successful_results]
         return {
             "flights": self._merge_flights(successful_results),
             "price_insights": price_insights or {},
-            "source": primary.get("source"),
-            "sources_used": [result.get("source") for result in successful_results],
+            "source": "+".join(source for source in sources_used if source),
+            "sources_used": sources_used,
             "source_errors": errors,
             "price_anomalies": self._find_price_anomalies(successful_results),
             "raw_by_source": {
@@ -89,6 +93,17 @@ class FlightAggregator:
                 if combo not in merged_by_combo:
                     merged_by_combo[combo] = {**flight, "data_source": data_source}
                     source_order_by_combo[combo] = []
+                else:
+                    current_price = merged_by_combo[combo].get("price")
+                    new_price = flight.get("price")
+                    if (
+                        new_price is not None
+                        and (
+                            current_price is None
+                            or float(new_price) < float(current_price)
+                        )
+                    ):
+                        merged_by_combo[combo] = {**flight, "data_source": data_source}
 
                 if data_source and data_source not in source_order_by_combo[combo]:
                     source_order_by_combo[combo].append(data_source)

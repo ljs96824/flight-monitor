@@ -1,4 +1,4 @@
-"""Duffel flight offers adapter."""
+"""Duffel flight offers adapter using the REST API directly."""
 
 from __future__ import annotations
 
@@ -6,18 +6,12 @@ import os
 import re
 from datetime import datetime
 
+import httpx
+
 from sources.base import FlightSource
 
-try:
-    from duffel_api import Duffel
-except ImportError:  # pragma: no cover - handled at runtime when source is enabled
-    Duffel = None
 
-
-def _get(obj, key, default=None):
-    if isinstance(obj, dict):
-        return obj.get(key, default)
-    return getattr(obj, key, default)
+DUFFEL_URL = "https://api.duffel.com/air/offer_requests"
 
 
 def _format_time(value) -> str:
@@ -62,29 +56,40 @@ class DuffelSource(FlightSource):
     name = "duffel"
 
     def __init__(self):
-        if Duffel is None:
-            raise RuntimeError("duffel-api is not installed")
-
         token = os.environ.get("DUFFEL_TOKEN")
         if not token:
             raise RuntimeError("DUFFEL_TOKEN is not set")
-
-        self.client = Duffel(access_token=token)
+        self.token = token
 
     def fetch(self, origin, dest, date_str):
-        request_builder = (
-            self.client.offer_requests.create()
-            .slices(
-                [{"origin": origin, "destination": dest, "departure_date": date_str}]
-            )
-            .passengers([{"type": "adult"}])
-        )
-        if hasattr(request_builder, "return_offers"):
-            request_builder = request_builder.return_offers()
-        offer_request = request_builder.execute()
+        payload = {
+            "data": {
+                "slices": [
+                    {
+                        "origin": origin,
+                        "destination": dest,
+                        "departure_date": date_str,
+                    }
+                ],
+                "passengers": [{"type": "adult"}],
+                "cabin_class": "economy",
+                "return_offers": True,
+            }
+        }
+        headers = {
+            "Authorization": f"Bearer {self.token}",
+            "Duffel-Version": "v2",
+            "Content-Type": "application/json",
+        }
 
+        response = httpx.post(DUFFEL_URL, json=payload, headers=headers, timeout=30)
+        print(f"[Duffel] 状态码: {response.status_code}")
+        response.raise_for_status()
+
+        results = response.json()
+        offers = (results.get("data") or {}).get("offers") or []
         flights = []
-        for offer in _get(offer_request, "offers", []) or []:
+        for offer in offers:
             flight = self._parse_offer(offer)
             if flight:
                 flights.append(flight)
@@ -93,41 +98,40 @@ class DuffelSource(FlightSource):
             "flights": sorted(flights, key=lambda item: item["price"]),
             "price_insights": None,
             "source": self.name,
-            "raw": {},
+            "raw": results,
         }
 
-    def _parse_offer(self, offer) -> dict | None:
+    def _parse_offer(self, offer: dict) -> dict | None:
         segments = []
-        slices = _get(offer, "slices", []) or []
+        slices = offer.get("slices") or []
 
         for offer_slice in slices:
-            for segment in _get(offer_slice, "segments", []) or []:
-                carrier = _get(segment, "marketing_carrier")
-                origin = _get(segment, "origin")
-                destination = _get(segment, "destination")
+            fare_brand_name = offer_slice.get("fare_brand_name") or "Economy"
+            for segment in offer_slice.get("segments") or []:
+                carrier = segment.get("marketing_carrier") or {}
+                origin = segment.get("origin") or {}
+                destination = segment.get("destination") or {}
                 flight_no = (
-                    f"{_get(carrier, 'iata_code', '')} "
-                    f"{_get(segment, 'marketing_carrier_flight_number', '')}"
+                    f"{carrier.get('iata_code', '')} "
+                    f"{segment.get('marketing_carrier_flight_number', '')}"
                 ).strip()
-                dep_time = _format_time(_get(segment, "departing_at"))
-                arr_time = _format_time(_get(segment, "arriving_at"))
+                dep_time = _format_time(segment.get("departing_at"))
+                arr_time = _format_time(segment.get("arriving_at"))
 
                 segments.append(
                     {
                         "flight_no": flight_no,
-                        "airline": _get(carrier, "name", ""),
-                        "aircraft": _get(_get(segment, "aircraft"), "name", ""),
-                        "dep_airport": _get(origin, "iata_code", ""),
-                        "dep_city": _get(origin, "city_name", None)
-                        or _get(origin, "name", ""),
+                        "airline": carrier.get("name", ""),
+                        "aircraft": (segment.get("aircraft") or {}).get("name", ""),
+                        "dep_airport": origin.get("iata_code", ""),
+                        "dep_city": origin.get("city_name") or origin.get("name", ""),
                         "dep_time": dep_time,
-                        "arr_airport": _get(destination, "iata_code", ""),
-                        "arr_city": _get(destination, "city_name", None)
-                        or _get(destination, "name", ""),
+                        "arr_airport": destination.get("iata_code", ""),
+                        "arr_city": destination.get("city_name")
+                        or destination.get("name", ""),
                         "arr_time": arr_time,
-                        "duration_min": _duration_minutes(_get(segment, "duration")),
-                        "cabin_class": _get(slices[0], "fare_brand_name", None)
-                        or "Economy",
+                        "duration_min": _duration_minutes(segment.get("duration")),
+                        "cabin_class": fare_brand_name,
                     }
                 )
 
@@ -151,25 +155,25 @@ class DuffelSource(FlightSource):
         total_duration_min = sum(segment.get("duration_min") or 0 for segment in segments)
         total_duration_min += sum(layover.get("wait_minutes") or 0 for layover in layovers)
         airlines = list(
-            dict.fromkeys(segment.get("airline", "") for segment in segments if segment.get("airline"))
+            dict.fromkeys(
+                segment.get("airline", "")
+                for segment in segments
+                if segment.get("airline")
+            )
         )
         flight_nos = [
             segment.get("flight_no", "") for segment in segments if segment.get("flight_no")
         ]
-
+        conditions = offer.get("conditions") or {}
         extra = {
             "baggage": self._baggage_info(slices),
-            "changeable": False,
-            "refundable": False,
+            "changeable": conditions.get("change_before_departure") is not None,
+            "refundable": conditions.get("refund_before_departure") is not None,
         }
-        conditions = _get(offer, "conditions")
-        if conditions:
-            extra["changeable"] = _get(conditions, "change_before_departure") is not None
-            extra["refundable"] = _get(conditions, "refund_before_departure") is not None
 
         return {
-            "price": float(_get(offer, "total_amount")),
-            "currency": _get(offer, "total_currency", ""),
+            "price": float(offer.get("total_amount")),
+            "currency": offer.get("total_currency", ""),
             "segments": segments,
             "layovers": layovers,
             "flight_nos": flight_nos,
@@ -200,16 +204,16 @@ class DuffelSource(FlightSource):
             "data_source": self.name,
         }
 
-    def _baggage_info(self, slices) -> list[dict]:
+    def _baggage_info(self, slices: list[dict]) -> list[dict]:
         baggage = []
         for offer_slice in slices:
-            for segment in _get(offer_slice, "segments", []) or []:
-                for passenger in _get(segment, "passengers", []) or []:
-                    for bag in _get(passenger, "baggages", []) or []:
+            for segment in offer_slice.get("segments") or []:
+                for passenger in segment.get("passengers") or []:
+                    for bag in passenger.get("baggages") or []:
                         baggage.append(
                             {
-                                "type": _get(bag, "type", ""),
-                                "quantity": _get(bag, "quantity", 0),
+                                "type": bag.get("type", ""),
+                                "quantity": bag.get("quantity", 0),
                             }
                         )
         return baggage
