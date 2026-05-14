@@ -3,21 +3,14 @@ import os
 from datetime import datetime
 from pathlib import Path
 
-from sources.aggregator import FlightAggregator, normalize_combo
-from sources.searchapi_source import SearchAPISource
-from sources.serpapi_source import SerpAPISource
+from sources.aggregator import FlightAggregator, build_default_sources, normalize_combo
 
 
 BASE_DIR = Path(__file__).parent
 
 
 def get_aggregator() -> FlightAggregator:
-    sources = []
-    if os.environ.get("SERPAPI_KEY"):
-        sources.append(SerpAPISource())
-    if os.environ.get("SEARCHAPI_KEY"):
-        sources.append(SearchAPISource())
-    return FlightAggregator(sources)
+    return FlightAggregator(build_default_sources())
 
 
 def fetch_flights(origin: str, dest: str, date_str: str) -> dict:
@@ -124,26 +117,145 @@ def parse_flight_detail(flight_data: dict, data_source: str | None = None) -> di
     return result
 
 
+def _normalize_detail_flight(flight: dict, source_name: str | None = None) -> dict:
+    detail = dict(flight)
+    data_source = detail.get("data_source") or detail.get("source") or source_name
+    detail["data_source"] = data_source
+
+    segments = detail.get("segments") or []
+    layovers = detail.get("layovers") or []
+    detail["segments"] = segments
+    detail["layovers"] = layovers
+
+    if "total_duration_min" not in detail:
+        if detail.get("duration_hours") is not None:
+            detail["total_duration_min"] = int(float(detail["duration_hours"]) * 60)
+        else:
+            detail["total_duration_min"] = sum(
+                segment.get("duration_min") or 0 for segment in segments
+            ) + sum(layover.get("wait_minutes") or 0 for layover in layovers)
+
+    detail["total_hours"] = detail.get("total_hours") or round(
+        (detail.get("total_duration_min") or 0) / 60, 1
+    )
+    detail["stops"] = detail.get(
+        "stops", detail.get("stopovers", max(0, len(segments) - 1))
+    )
+    detail["stopovers"] = detail.get("stopovers", detail["stops"])
+
+    if not detail.get("flight_combo"):
+        detail["flight_combo"] = "+".join(
+            segment.get("flight_no", "") for segment in segments if segment.get("flight_no")
+        )
+    if not detail.get("flight_nos"):
+        detail["flight_nos"] = [
+            segment.get("flight_no", "") for segment in segments if segment.get("flight_no")
+        ]
+    if not detail.get("airlines"):
+        detail["airlines"] = list(
+            dict.fromkeys(
+                segment.get("airline", "")
+                for segment in segments
+                if segment.get("airline")
+            )
+        )
+    if not detail.get("airline"):
+        detail["airline"] = detail["airlines"][0] if detail.get("airlines") else ""
+    if not detail.get("airline_summary"):
+        detail["airline_summary"] = " / ".join(detail.get("airlines") or [])
+    if not detail.get("route_summary") and segments:
+        detail["route_summary"] = " → ".join(
+            [segments[0].get("dep_airport", "")]
+            + [segment.get("arr_airport", "") for segment in segments]
+        )
+    if not detail.get("layover_summary"):
+        detail["layover_summary"] = (
+            "、".join(
+                f"{layover.get('city', layover.get('airport', '中转地'))}等"
+                f"{(layover.get('wait_minutes') or 0) // 60}h"
+                f"{(layover.get('wait_minutes') or 0) % 60}m"
+                for layover in layovers
+            )
+            if layovers
+            else "直飞"
+        )
+
+    return detail
+
+
+def _merge_detail_flights(flights: list[dict]) -> list[dict]:
+    merged = {}
+    sources_by_combo = {}
+    for flight in flights:
+        combo = normalize_combo(flight.get("flight_combo", ""))
+        if not combo:
+            continue
+
+        if combo not in merged:
+            merged[combo] = flight
+            sources_by_combo[combo] = []
+
+        data_source = flight.get("data_source")
+        if data_source and data_source not in sources_by_combo[combo]:
+            sources_by_combo[combo].append(data_source)
+
+    for combo, sources in sources_by_combo.items():
+        if sources:
+            merged[combo]["data_source"] = "+".join(sources)
+
+    return list(merged.values())
+
+
 def collect_all_flights(origin, dest, date_str) -> dict:
     """采集所有航班并返回详细解析结果"""
-    raw = fetch_flights(origin, dest, date_str)
+    aggregator = get_aggregator()
+    if not aggregator.sources:
+        raise RuntimeError("请在.env文件中设置SERPAPI_KEY、SEARCHAPI_KEY或DUFFEL_TOKEN")
 
     all_flights = []
-    data_source = raw.get("_data_source")
-    for category in ["best_flights", "other_flights"]:
-        for flight in raw.get(category, []):
-            detail = parse_flight_detail(flight, data_source)
-            if detail["price"] is not None:
+    price_insights = None
+    sources_used = []
+    source_errors = []
+
+    for source in aggregator.sources:
+        try:
+            result = source.fetch(origin, dest, date_str)
+        except Exception as exc:
+            source_errors.append({"source": source.name, "error": str(exc)})
+            continue
+
+        source_name = result.get("source") or source.name
+        sources_used.append(source_name)
+        if price_insights is None and result.get("price_insights"):
+            price_insights = result.get("price_insights")
+
+        raw = result.get("raw") or {}
+        parsed_count = 0
+        for category in ["best_flights", "other_flights"]:
+            for flight in raw.get(category, []) or []:
+                detail = parse_flight_detail(flight, source_name)
+                if detail["price"] is not None:
+                    all_flights.append(detail)
+                    parsed_count += 1
+
+        if parsed_count:
+            continue
+
+        for flight in result.get("flights", []) or []:
+            detail = _normalize_detail_flight(flight, source_name)
+            if detail.get("price") is not None:
                 all_flights.append(detail)
 
-    # 按价格排序
+    all_flights = _merge_detail_flights(all_flights)
     all_flights.sort(key=lambda x: x["price"])
 
     return {
         "flights": all_flights,
-        "price_insights": raw.get("price_insights"),
+        "price_insights": price_insights or {},
         "total_count": len(all_flights),
-        "source": raw.get("_data_source"),
+        "source": "+".join(sources_used) if sources_used else None,
+        "sources_used": sources_used,
+        "source_errors": source_errors,
         "collected_at": datetime.now().isoformat(),
     }
 

@@ -2,11 +2,30 @@
 
 from __future__ import annotations
 
+import os
+
 from sources.base import FlightSource
 
 
 def normalize_combo(combo: str) -> str:
     return combo.replace(" ", "").upper()
+
+
+def build_default_sources() -> list[FlightSource]:
+    sources = []
+    if os.environ.get("SERPAPI_KEY"):
+        from sources.serpapi_source import SerpAPISource
+
+        sources.append(SerpAPISource())
+    if os.environ.get("SEARCHAPI_KEY"):
+        from sources.searchapi_source import SearchAPISource
+
+        sources.append(SearchAPISource())
+    if os.environ.get("DUFFEL_TOKEN"):
+        from sources.duffel_source import DuffelSource
+
+        sources.append(DuffelSource())
+    return sources
 
 
 class FlightAggregator:

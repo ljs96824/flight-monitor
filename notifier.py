@@ -451,13 +451,17 @@ SOURCE_LABELS = {
     "searchapi": "Google Flights（via SearchAPI）",
     "serpapi+searchapi": "Google Flights（via SerpAPI + SearchAPI）",
     "searchapi+serpapi": "Google Flights（via SerpAPI + SearchAPI）",
+    "duffel": "Duffel",
 }
 
 
 def _source_label(data_source: str | None) -> str:
     if not data_source:
         return "Google Flights"
-    return SOURCE_LABELS.get(data_source, "Google Flights")
+    if "+" in data_source:
+        labels = [_source_label(source) for source in data_source.split("+")]
+        return " + ".join(dict.fromkeys(labels))
+    return SOURCE_LABELS.get(data_source, data_source)
 
 
 def _source_summary(analysis_result: dict) -> str:
@@ -475,8 +479,6 @@ def _source_summary(analysis_result: dict) -> str:
             sources.append(data_source)
 
     if not sources:
-        return "Google Flights"
-    if any("+" in source for source in sources):
         return "Google Flights"
 
     labels = [_source_label(source) for source in sources]
@@ -688,6 +690,40 @@ def generate_warnings(flight: dict) -> list[str]:
     return warnings
 
 
+def _format_duffel_extra(flight: dict) -> str:
+    data_source = flight.get("data_source") or ""
+    if "duffel" not in data_source:
+        return ""
+
+    extra = flight.get("extra") or {}
+    baggage = extra.get("baggage") or []
+    checked_quantity = sum(
+        int(item.get("quantity") or 0)
+        for item in baggage
+        if "checked" in str(item.get("type", "")).lower()
+    )
+    carry_on_quantity = sum(
+        int(item.get("quantity") or 0)
+        for item in baggage
+        if "carry" in str(item.get("type", "")).lower()
+    )
+
+    if checked_quantity:
+        baggage_text = f"含{checked_quantity}件托运行李"
+    elif carry_on_quantity:
+        baggage_text = f"含{carry_on_quantity}件随身行李"
+    elif baggage:
+        total_quantity = sum(int(item.get("quantity") or 0) for item in baggage)
+        baggage_text = f"含{total_quantity}件行李"
+    else:
+        baggage_text = "Duffel未返回明确行李额度"
+
+    change_text = "可改签" if extra.get("changeable") else "不可改签"
+    refund_text = "可退票" if extra.get("refundable") else "不可退票"
+
+    return f"  🧳 行李：{baggage_text}\n  🔄 退改：出发前{change_text}，{refund_text}\n"
+
+
 def _days_to_depart(route_info: dict) -> int | None:
     days = route_info.get("days_to_dept")
     if days is not None:
@@ -828,6 +864,9 @@ def format_comparison_message(analysis_result: dict, route_info: dict) -> str:
             msg += f"  {risk.get('label', '✅ 转机安全')}\n"
             for note in risk.get("notes", []):
                 msg += f"  • {note}\n"
+        duffel_extra = _format_duffel_extra(flight)
+        if duffel_extra:
+            msg += duffel_extra
         msg += f"  📎 数据来源：{_source_label(flight.get('data_source'))}\n"
         warnings = generate_warnings(flight)
         if warnings:
