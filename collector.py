@@ -225,8 +225,7 @@ def collect_all_flights(origin, dest, date_str) -> dict:
             source_errors.append({"source": source.name, "error": str(exc)})
             source_stats[source.name] = {
                 "count": 0,
-                "status": "失败",
-                "error": str(exc),
+                "status": f"失败: {str(exc)[:50]}",
             }
             continue
 
@@ -253,7 +252,7 @@ def collect_all_flights(origin, dest, date_str) -> dict:
                 all_flights.append(detail)
 
         source_count = parsed_count or len(result.get("flights", []) or [])
-        source_stats[source_name] = {"count": source_count, "status": "成功"}
+        source_stats[source.name] = {"count": source_count, "status": "成功"}
 
     all_flights = _merge_detail_flights(all_flights)
     all_flights.sort(key=lambda x: x["price"])

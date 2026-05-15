@@ -48,8 +48,7 @@ class FlightAggregator:
                 errors.append({"source": source.name, "error": error})
                 source_stats[source.name] = {
                     "count": 0,
-                    "status": "失败",
-                    "error": error,
+                    "status": f"失败: {error[:50]}",
                 }
                 continue
 
@@ -59,13 +58,12 @@ class FlightAggregator:
                 errors.append({"source": source.name, "error": "no flights"})
                 source_stats[source.name] = {
                     "count": 0,
-                    "status": "失败",
-                    "error": "no flights",
+                    "status": "失败: no flights",
                 }
                 continue
 
             print(f"[{source.name}] 成功，返回{len(flights)}个航班")
-            source_stats[result.get("source") or source.name] = {
+            source_stats[source.name] = {
                 "count": len(flights),
                 "status": "成功",
             }

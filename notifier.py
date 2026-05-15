@@ -499,10 +499,10 @@ def format_source_summary(source_stats):
     for source, name in source_names.items():
         info = source_stats.get(source)
         if info:
-            if info.get("status") == "成功":
+            if info["status"] == "成功":
                 lines.append(f"• {name}：{info.get('count', 0)}个方案 ✅")
             else:
-                lines.append(f"• {name}：采集失败 ❌")
+                lines.append(f"• {name}：{info['status']} ❌")
 
     total = source_stats.get("total_raw", 0)
     dedup = source_stats.get("after_dedup", 0)
