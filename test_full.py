@@ -148,6 +148,7 @@ def _run_all_flights(subscription: dict, route: str) -> None:
         "destination": subscription["destination"],
         "depart_date": subscription["depart_date"],
         "mode": subscription.get("mode", "balanced"),
+        "source_stats": data.get("source_stats", {}),
     }
     message = format_comparison_message(analysis, route_info)
     print("\n推送消息：")

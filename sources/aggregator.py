@@ -37,6 +37,7 @@ class FlightAggregator:
     ) -> dict | None:
         successful_results = []
         errors = []
+        source_stats = {}
 
         for source in self.sources:
             try:
@@ -45,15 +46,29 @@ class FlightAggregator:
                 error = str(exc)
                 print(f"[{source.name}] 失败：{error}")
                 errors.append({"source": source.name, "error": error})
+                source_stats[source.name] = {
+                    "count": 0,
+                    "status": "失败",
+                    "error": error,
+                }
                 continue
 
             flights = result.get("flights") or []
             if not flights:
                 print(f"[{source.name}] 失败：no flights")
                 errors.append({"source": source.name, "error": "no flights"})
+                source_stats[source.name] = {
+                    "count": 0,
+                    "status": "失败",
+                    "error": "no flights",
+                }
                 continue
 
             print(f"[{source.name}] 成功，返回{len(flights)}个航班")
+            source_stats[result.get("source") or source.name] = {
+                "count": len(flights),
+                "status": "成功",
+            }
             successful_results.append(result)
 
         if not successful_results:
@@ -66,12 +81,20 @@ class FlightAggregator:
                 break
 
         sources_used = [result.get("source") for result in successful_results]
+        merged_flights = self._merge_flights(successful_results)
+        source_stats["total_raw"] = sum(
+            info.get("count", 0)
+            for info in source_stats.values()
+            if isinstance(info, dict) and info.get("status") == "成功"
+        )
+        source_stats["after_dedup"] = len(merged_flights)
         return {
-            "flights": self._merge_flights(successful_results),
+            "flights": merged_flights,
             "price_insights": price_insights or {},
             "source": "+".join(source for source in sources_used if source),
             "sources_used": sources_used,
             "source_errors": errors,
+            "source_stats": source_stats,
             "price_anomalies": self._find_price_anomalies(successful_results),
             "raw_by_source": {
                 result.get("source"): result.get("raw") for result in successful_results

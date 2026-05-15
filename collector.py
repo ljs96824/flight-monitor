@@ -216,12 +216,18 @@ def collect_all_flights(origin, dest, date_str) -> dict:
     price_insights = None
     sources_used = []
     source_errors = []
+    source_stats = {}
 
     for source in aggregator.sources:
         try:
             result = source.fetch(origin, dest, date_str)
         except Exception as exc:
             source_errors.append({"source": source.name, "error": str(exc)})
+            source_stats[source.name] = {
+                "count": 0,
+                "status": "失败",
+                "error": str(exc),
+            }
             continue
 
         source_name = result.get("source") or source.name
@@ -246,8 +252,17 @@ def collect_all_flights(origin, dest, date_str) -> dict:
             if detail.get("price") is not None:
                 all_flights.append(detail)
 
+        source_count = parsed_count or len(result.get("flights", []) or [])
+        source_stats[source_name] = {"count": source_count, "status": "成功"}
+
     all_flights = _merge_detail_flights(all_flights)
     all_flights.sort(key=lambda x: x["price"])
+    source_stats["total_raw"] = sum(
+        info.get("count", 0)
+        for info in source_stats.values()
+        if isinstance(info, dict) and info.get("status") == "成功"
+    )
+    source_stats["after_dedup"] = len(all_flights)
 
     return {
         "flights": all_flights,
@@ -256,6 +271,7 @@ def collect_all_flights(origin, dest, date_str) -> dict:
         "source": "+".join(sources_used) if sources_used else None,
         "sources_used": sources_used,
         "source_errors": source_errors,
+        "source_stats": source_stats,
         "collected_at": datetime.now().isoformat(),
     }
 
@@ -325,6 +341,7 @@ def collect_and_classify(
         "source": result.get("source"),
         "sources_used": result.get("sources_used", []),
         "source_errors": result.get("source_errors", []),
+        "source_stats": result.get("source_stats", {}),
         "price_anomalies": result.get("price_anomalies", []),
     }
 

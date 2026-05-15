@@ -88,6 +88,7 @@ def run():
                     "mode": sub.get("mode", "balanced"),
                     "previous_prices": previous_prices,
                     "lowest_price_history": lowest_price_history,
+                    "source_stats": data.get("source_stats", {}),
                 },
             )
             send(msg)
