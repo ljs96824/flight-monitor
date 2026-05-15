@@ -17,8 +17,9 @@ load_dotenv(BASE_DIR / ".env", encoding="utf-8")
 import yaml
 
 from analyzer import analyze_all_flights
-from collector import collect_all_flights, save_raw_response
+from collector import _normalize_detail_flight, save_raw_response
 from notifier import format_comparison_message, send
+from sources.aggregator import FlightAggregator, build_default_sources
 from storage import (
     get_lowest_price_history,
     get_previous_snapshot_prices,
@@ -51,7 +52,8 @@ def run():
         logging.info(f"开始处理 {route}")
 
         try:
-            data = collect_all_flights(
+            agg = FlightAggregator(build_default_sources())
+            data = agg.collect(
                 sub["origin"],
                 sub["destination"],
                 sub["depart_date"],
@@ -61,7 +63,16 @@ def run():
                 logging.error(f"{route} 采集返回空")
                 continue
 
-            save_flight_details(route, sub["depart_date"], data.get("flights", []))
+            flights = [
+                _normalize_detail_flight(
+                    flight, flight.get("data_source") or flight.get("source")
+                )
+                for flight in data.get("flights", [])
+            ]
+            data["flights"] = flights
+            data["total_count"] = len(flights)
+
+            save_flight_details(route, sub["depart_date"], flights)
             previous_prices = get_previous_snapshot_prices(route, sub["depart_date"])
             lowest_price_history = get_lowest_price_history(
                 route, sub["depart_date"], limit=14
@@ -70,7 +81,7 @@ def run():
             logging.info(f"{route} 存储{data.get('total_count', 0)}个航班方案")
 
             analysis = analyze_all_flights(
-                data.get("flights", []),
+                flights,
                 data.get("price_insights"),
                 mode=sub.get("mode", "balanced"),
             )
@@ -90,6 +101,7 @@ def run():
                     "lowest_price_history": lowest_price_history,
                     "source_stats": data.get("source_stats", {}),
                 },
+                source_stats=data.get("source_stats"),
             )
             send(msg)
             logging.info(f"{route} 已推送方案对比表")

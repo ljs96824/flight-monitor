@@ -41,3 +41,17 @@ try:
     print(f"[Duffel] 成功，返回 {len(flights)} 个航班")
 except Exception as e:
     print(f"[Duffel] 失败：{e}")
+
+from sources.aggregator import FlightAggregator, build_default_sources
+
+agg = FlightAggregator(build_default_sources())
+result = agg.collect("PVG", "MCO", "2026-06-20")
+print("\n=== source_stats 实际内容 ===")
+import json
+
+if result is None:
+    print("{}")
+    print("sources_used: N/A")
+else:
+    print(json.dumps(result.get("source_stats", {}), ensure_ascii=False, indent=2))
+    print(f"sources_used: {result.get('sources_used', 'N/A')}")

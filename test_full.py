@@ -11,8 +11,9 @@ import yaml
 from dotenv import load_dotenv
 
 from analyzer import analyze, analyze_all_flights
-from collector import collect_all_flights, collect_and_classify
+from collector import _normalize_detail_flight, collect_and_classify
 from notifier import format_comparison_message, format_message
+from sources.aggregator import FlightAggregator, build_default_sources
 from storage import DB_PATH, init_db, save_flight_details, save_snapshots
 
 
@@ -110,7 +111,8 @@ def _run_single_flight(subscription: dict, route: str, target_combo: str) -> Non
 def _run_all_flights(subscription: dict, route: str) -> None:
     print("开始完整流程测试：全航线方案对比模式\n")
 
-    data = collect_all_flights(
+    agg = FlightAggregator(build_default_sources())
+    data = agg.collect(
         subscription["origin"],
         subscription["destination"],
         subscription["depart_date"],
@@ -120,7 +122,12 @@ def _run_all_flights(subscription: dict, route: str) -> None:
         print("采集失败：没有返回可用航班方案")
         return
 
-    flights = data.get("flights", [])
+    flights = [
+        _normalize_detail_flight(flight, flight.get("data_source") or flight.get("source"))
+        for flight in data.get("flights", [])
+    ]
+    data["flights"] = flights
+    data["total_count"] = len(flights)
     save_flight_details(route, subscription["depart_date"], flights)
 
     cheapest = flights[0] if flights else {}
@@ -150,7 +157,10 @@ def _run_all_flights(subscription: dict, route: str) -> None:
         "mode": subscription.get("mode", "balanced"),
         "source_stats": data.get("source_stats", {}),
     }
-    message = format_comparison_message(analysis, route_info)
+    print(f"DEBUG source_stats: {data.get('source_stats', 'NOT FOUND')}")
+    message = format_comparison_message(
+        analysis, route_info, source_stats=data.get("source_stats")
+    )
     print("\n推送消息：")
     print(message)
 

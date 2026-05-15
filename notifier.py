@@ -489,24 +489,33 @@ def format_source_summary(source_stats):
     if not source_stats:
         return ""
 
-    lines = ["📡 数据源汇总"]
-    source_names = {
+    display_names = {
         "serpapi": "SerpAPI（Google Flights）",
         "searchapi": "SearchAPI（Google Flights）",
         "duffel": "Duffel（航司直连）",
+        "SerpAPISource": "SerpAPI（Google Flights）",
+        "SearchAPISource": "SearchAPI（Google Flights）",
+        "DuffelSource": "Duffel（航司直连）",
     }
 
-    for source, name in source_names.items():
-        info = source_stats.get(source)
-        if info:
-            if info["status"] == "成功":
-                lines.append(f"• {name}：{info.get('count', 0)}个方案 ✅")
-            else:
-                lines.append(f"• {name}：{info['status']} ❌")
+    lines = ["📡 数据源汇总"]
+
+    for key, value in source_stats.items():
+        if key in ("total_raw", "after_dedup"):
+            continue
+        if not isinstance(value, dict):
+            continue
+
+        name = display_names.get(key, key)
+        if value.get("status") == "成功":
+            lines.append(f"• {name}：{value['count']}个方案 ✅")
+        else:
+            lines.append(f"• {name}：采集失败 ❌")
 
     total = source_stats.get("total_raw", 0)
     dedup = source_stats.get("after_dedup", 0)
-    lines.append(f"• 合计采集{total}个 → 去重后{dedup}个方案")
+    if total > 0:
+        lines.append(f"• 合计采集{total}个 → 去重后{dedup}个方案")
 
     return "\n".join(lines)
 
@@ -816,7 +825,9 @@ def format_summary_advice(analysis, days_to_dept) -> str:
         return "💬 总结：我会持续关注这条航线的价格变化。"
 
 
-def format_comparison_message(analysis_result: dict, route_info: dict) -> str:
+def format_comparison_message(
+    analysis_result: dict, route_info: dict, source_stats=None
+) -> str:
     """生成多方案对比推送消息"""
     recs = analysis_result["recommendations"]
     market = analysis_result.get("market_context", {})
@@ -908,7 +919,9 @@ def format_comparison_message(analysis_result: dict, route_info: dict) -> str:
     msg += "━━━━━━━━━━━━━━━\n"
     msg += f"价格区间：¥{prices[0]:,} - ¥{prices[1]:,}\n"
     source_summary = format_source_summary(
-        route_info.get("source_stats") or analysis_result.get("source_stats")
+        source_stats
+        or route_info.get("source_stats")
+        or analysis_result.get("source_stats")
     )
     if source_summary:
         msg += f"{source_summary}\n"

@@ -33,70 +33,106 @@ class FlightAggregator:
         self.sources = sources
 
     def collect(
-        self, origin: str, dest: str, date_str: str, target_combo: str
+        self, origin: str, dest: str, date_str: str, target_combo: str | None = None
     ) -> dict | None:
-        successful_results = []
-        errors = []
         source_stats = {}
+        all_flights = []
+        successful_results = []
+        source_errors = []
+        price_insights = None
+        raw_by_source = {}
 
         for source in self.sources:
+            source_name = getattr(source, "name", type(source).__name__)
             try:
                 result = source.fetch(origin, dest, date_str)
+                flights = result.get("flights", []) or []
+
+                for flight in flights:
+                    if not flight.get("source"):
+                        flight["source"] = source_name
+                    if not flight.get("data_source"):
+                        flight["data_source"] = source_name
+
+                source_stats[source_name] = {
+                    "count": len(flights),
+                    "status": "成功",
+                }
+                all_flights.extend(flights)
+                successful_results.append(
+                    {
+                        **result,
+                        "source": source_name,
+                        "flights": flights,
+                    }
+                )
+                raw_by_source[source_name] = result.get("raw")
+                print(f"[{source_name}] 成功，返回 {len(flights)} 个方案")
+
+                if not price_insights and result.get("price_insights"):
+                    price_insights = result["price_insights"]
+
             except Exception as exc:
                 error = str(exc)
-                print(f"[{source.name}] 失败：{error}")
-                errors.append({"source": source.name, "error": error})
-                source_stats[source.name] = {
+                source_stats[source_name] = {
                     "count": 0,
-                    "status": f"失败: {error[:50]}",
+                    "status": "失败",
                 }
-                continue
+                source_errors.append({"source": source_name, "error": error})
+                print(f"[{source_name}] 失败：{error}")
 
-            flights = result.get("flights") or []
-            if not flights:
-                print(f"[{source.name}] 失败：no flights")
-                errors.append({"source": source.name, "error": "no flights"})
-                source_stats[source.name] = {
-                    "count": 0,
-                    "status": "失败: no flights",
-                }
-                continue
-
-            print(f"[{source.name}] 成功，返回{len(flights)}个航班")
-            source_stats[source.name] = {
-                "count": len(flights),
-                "status": "成功",
-            }
-            successful_results.append(result)
-
-        if not successful_results:
+        if not all_flights:
+            source_stats["total_raw"] = 0
+            source_stats["after_dedup"] = 0
             return None
 
-        price_insights = None
-        for result in successful_results:
-            if result.get("price_insights"):
-                price_insights = result["price_insights"]
-                break
+        total_raw = len(all_flights)
+        seen = {}
+        sources_by_combo = {}
+        for flight in all_flights:
+            combo = flight.get("flight_combo", "")
+            if not combo:
+                continue
 
-        sources_used = [result.get("source") for result in successful_results]
-        merged_flights = self._merge_flights(successful_results)
-        source_stats["total_raw"] = sum(
-            info.get("count", 0)
-            for info in source_stats.values()
-            if isinstance(info, dict) and info.get("status") == "成功"
+            normalized_combo = normalize_combo(combo)
+            source_name = flight.get("data_source") or flight.get("source")
+            sources_by_combo.setdefault(normalized_combo, [])
+            if source_name and source_name not in sources_by_combo[normalized_combo]:
+                sources_by_combo[normalized_combo].append(source_name)
+
+            if normalized_combo not in seen or flight.get("price", 99999) < seen[
+                normalized_combo
+            ].get("price", 99999):
+                seen[normalized_combo] = flight
+
+        unique_flights = list(seen.values())
+        for flight in unique_flights:
+            normalized_combo = normalize_combo(flight.get("flight_combo", ""))
+            sources = sources_by_combo.get(normalized_combo, [])
+            if sources:
+                flight["data_source"] = "+".join(sources)
+
+        unique_flights = sorted(
+            unique_flights, key=lambda flight: flight.get("price", 99999)
         )
-        source_stats["after_dedup"] = len(merged_flights)
+
+        source_stats["total_raw"] = total_raw
+        source_stats["after_dedup"] = len(unique_flights)
+        sources_used = [
+            key
+            for key, value in source_stats.items()
+            if isinstance(value, dict) and value.get("status") == "成功"
+        ]
+
         return {
-            "flights": merged_flights,
+            "flights": unique_flights,
             "price_insights": price_insights or {},
-            "source": "+".join(source for source in sources_used if source),
-            "sources_used": sources_used,
-            "source_errors": errors,
+            "source": "+".join(sources_used),
             "source_stats": source_stats,
+            "sources_used": "+".join(sources_used),
+            "source_errors": source_errors,
             "price_anomalies": self._find_price_anomalies(successful_results),
-            "raw_by_source": {
-                result.get("source"): result.get("raw") for result in successful_results
-            },
+            "raw_by_source": raw_by_source,
         }
 
     def _merge_flights(self, results: list[dict]) -> list[dict]:
