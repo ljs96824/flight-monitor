@@ -525,6 +525,91 @@ def detect_anomaly(
     return {"is_anomaly": False, "is_good_deal": False}
 
 
+def generate_sparkline(prices: list, width: int = 14) -> str:
+    """用Unicode方块字符生成迷你趋势图。"""
+    if not prices or len(prices) < 2:
+        return ""
+
+    clean_prices = [_to_float(price) for price in prices]
+    clean_prices = [price for price in clean_prices if price is not None and price > 0]
+    if len(clean_prices) < 2:
+        return ""
+
+    blocks = "▁▂▃▄▅▆▇█"
+
+    if len(clean_prices) > width:
+        step = len(clean_prices) / width
+        sampled = [clean_prices[int(index * step)] for index in range(width)]
+    else:
+        sampled = clean_prices
+
+    min_p = min(sampled)
+    max_p = max(sampled)
+
+    if max_p == min_p:
+        return blocks[3] * len(sampled)
+
+    sparkline = ""
+    for price in sampled:
+        level = int((price - min_p) / (max_p - min_p) * 7)
+        level = max(0, min(7, level))
+        sparkline += blocks[level]
+
+    return sparkline
+
+
+def generate_trend_summary(price_history_data, current_price) -> dict:
+    """生成趋势摘要。"""
+    if not price_history_data:
+        return {"available": False}
+
+    if isinstance(price_history_data[0], (list, tuple)):
+        prices = [_to_float(price) for _, price in price_history_data]
+    else:
+        prices = [_to_float(price) for price in price_history_data]
+    prices = [price for price in prices if price is not None and price > 0]
+
+    if len(prices) < 3:
+        return {"available": False}
+
+    sparkline = generate_sparkline(prices)
+    min_price = min(prices)
+    max_price = max(prices)
+    avg_price = sum(prices) / len(prices)
+
+    recent = prices[-5:] if len(prices) >= 5 else prices
+    if recent[-1] > recent[0] * 1.03:
+        recent_trend = "📈 近期上涨中"
+    elif recent[-1] < recent[0] * 0.97:
+        recent_trend = "📉 近期下降中"
+    else:
+        recent_trend = "➡️ 近期平稳"
+
+    current = _to_float(current_price)
+    if current is None:
+        current = prices[-1]
+
+    if current <= min_price * 1.05:
+        position = "接近历史最低 🟢"
+    elif current >= max_price * 0.95:
+        position = "接近历史最高 🔴"
+    elif current < avg_price:
+        position = "低于平均水平 🟡"
+    else:
+        position = "高于平均水平 🟠"
+
+    return {
+        "available": True,
+        "sparkline": sparkline,
+        "min_price": min_price,
+        "max_price": max_price,
+        "avg_price": round(avg_price),
+        "current_position": position,
+        "recent_trend": recent_trend,
+        "data_points": len(prices),
+    }
+
+
 SCORE_WEIGHTS = {
     "budget": {"price": 0.6, "duration": 0.15, "stops": 0.1, "layover": 0.15},
     "fast": {"price": 0.15, "duration": 0.5, "stops": 0.2, "layover": 0.15},
@@ -1046,5 +1131,7 @@ def analyze_all_flights(
         "price_range": [min(prices), max(prices)],
         "duration_range": [min(durations), max(durations)],
         "market_context": market_context,
+        "price_insights": price_insights,
+        "current_min_price": min(prices),
         "mode": mode,
     }
