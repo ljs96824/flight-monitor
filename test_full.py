@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 
 from analyzer import analyze, analyze_all_flights
 from collector import _normalize_detail_flight, collect_and_classify
-from notifier import format_comparison_message, format_message
+from notifier import format_html_message, format_message
 from sources.aggregator import FlightAggregator, build_default_sources
 from storage import DB_PATH, init_db, save_flight_details, save_snapshots
 
@@ -158,7 +158,7 @@ def _run_all_flights(subscription: dict, route: str) -> None:
         "source_stats": data.get("source_stats", {}),
     }
     print(f"DEBUG source_stats: {data.get('source_stats', 'NOT FOUND')}")
-    message = format_comparison_message(
+    message = format_html_message(
         analysis, route_info, source_stats=data.get("source_stats")
     )
     print("\n推送消息：")

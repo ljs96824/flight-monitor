@@ -18,7 +18,7 @@ import yaml
 
 from analyzer import analyze_all_flights
 from collector import _normalize_detail_flight, save_raw_response
-from notifier import format_comparison_message, send
+from notifier import format_html_message, send
 from sources.aggregator import FlightAggregator, build_default_sources
 from storage import (
     get_lowest_price_history,
@@ -90,7 +90,7 @@ def run():
             with ANALYSIS_LOG.open("a", encoding="utf-8") as file:
                 file.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
 
-            msg = format_comparison_message(
+            msg = format_html_message(
                 analysis,
                 {
                     "origin": sub["origin"],
