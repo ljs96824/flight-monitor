@@ -1111,6 +1111,47 @@ def format_baggage(extra):
     return lines
 
 
+def format_seat(extra):
+    seat = extra.get("seat_detail", {})
+
+    if not seat:
+        return ["💺 舱位：经济舱", "🪑 选座：请查询航司官网确认"]
+
+    # 舱位
+    cabin_names = {
+        "economy": "经济舱",
+        "premium_economy": "超级经济舱",
+        "business": "商务舱",
+        "first": "头等舱",
+    }
+    cabin = cabin_names.get(seat.get("cabin_class", ""), seat.get("cabin_class", ""))
+    cabin_marketing = seat.get("cabin_class_name", "")
+
+    lines = []
+    if cabin_marketing:
+        lines.append(f"💺 舱位：{cabin}（{cabin_marketing}）")
+    else:
+        lines.append(f"💺 舱位：{cabin}")
+
+    # 选座
+    if seat.get("seat_selectable"):
+        if seat.get("seat_free"):
+            lines.append("🪑 选座：可免费选座 ✅")
+        elif seat.get("seat_price"):
+            price = seat["seat_price"]
+            currency = seat.get("seat_currency", "CNY")
+            if currency == "CNY":
+                lines.append(f"🪑 选座：需付费 ¥{price:.0f}起")
+            else:
+                lines.append(f"🪑 选座：需付费 {currency} {price:.0f}起")
+        else:
+            lines.append("🪑 选座：可选座（费用详询航司）")
+    else:
+        lines.append("🪑 选座：暂无选座服务或值机时选择")
+
+    return lines
+
+
 def format_html_message(analysis_result, route_info, source_stats=None):
     """生成HTML格式的推送消息"""
     recs = analysis_result.get("recommendations", [])
@@ -1174,6 +1215,8 @@ def format_html_message(analysis_result, route_info, source_stats=None):
         extra = f.get("extra", {})
         for baggage_line in format_baggage(extra):
             lines.append(baggage_line)
+        for seat_line in format_seat(extra):
+            lines.append(seat_line)
         if extra.get("changeable") or extra.get("refundable"):
             change_text = "可改签" if extra.get("changeable") else "不可改签"
             refund_text = "可退票" if extra.get("refundable") else "不可退票"

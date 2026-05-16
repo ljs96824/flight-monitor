@@ -168,6 +168,7 @@ class DuffelSource(FlightSource):
         extra = {
             "baggage": self._baggage_info(slices),
             "baggage_detail": self._baggage_detail(slices),
+            "seat_detail": self._seat_detail(offer),
             "changeable": conditions.get("change_before_departure") is not None,
             "refundable": conditions.get("refund_before_departure") is not None,
         }
@@ -268,3 +269,37 @@ class DuffelSource(FlightSource):
         if unit == "lb":
             return round(weight * 0.453592)
         return weight
+
+    def _seat_detail(self, offer: dict) -> dict:
+        seat_info = {
+            "cabin_class": "economy",
+            "seat_selectable": False,
+            "seat_free": False,
+            "seat_price": None,
+            "seat_currency": None,
+        }
+
+        for offer_slice in offer.get("slices") or []:
+            for segment in offer_slice.get("segments") or []:
+                passengers = segment.get("passengers") or [{}]
+                passenger = passengers[0] if passengers else {}
+                cabin = passenger.get("cabin_class", "economy")
+                cabin_name = passenger.get("cabin_class_marketing_name", "")
+                seat_info["cabin_class"] = cabin
+                if cabin_name:
+                    seat_info["cabin_class_name"] = cabin_name
+
+        for service in offer.get("available_services") or []:
+            if service.get("type") != "seat":
+                continue
+
+            seat_info["seat_selectable"] = True
+            amount = service.get("total_amount")
+            if amount:
+                seat_info["seat_price"] = float(amount)
+                seat_info["seat_currency"] = service.get("total_currency", "CNY")
+                seat_info["seat_free"] = float(amount) == 0
+            else:
+                seat_info["seat_free"] = True
+
+        return seat_info
