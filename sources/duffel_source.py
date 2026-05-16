@@ -167,6 +167,7 @@ class DuffelSource(FlightSource):
         conditions = offer.get("conditions") or {}
         extra = {
             "baggage": self._baggage_info(slices),
+            "baggage_detail": self._baggage_detail(slices),
             "changeable": conditions.get("change_before_departure") is not None,
             "refundable": conditions.get("refund_before_departure") is not None,
         }
@@ -214,6 +215,56 @@ class DuffelSource(FlightSource):
                             {
                                 "type": bag.get("type", ""),
                                 "quantity": bag.get("quantity", 0),
+                                "weight": bag.get("weight"),
+                                "weight_unit": bag.get("weight_unit"),
                             }
                         )
         return baggage
+
+    def _baggage_detail(self, slices: list[dict]) -> dict:
+        baggage_info = {
+            "checked": {
+                "quantity": 0,
+                "weight_kg": None,
+                "is_free": False,
+            },
+            "carry_on": {
+                "quantity": 0,
+                "weight_kg": None,
+                "is_free": False,
+            },
+        }
+
+        for offer_slice in slices:
+            for segment in offer_slice.get("segments") or []:
+                for passenger in segment.get("passengers") or []:
+                    for bag in passenger.get("baggages") or []:
+                        bag_type = bag.get("type", "")
+                        quantity = bag.get("quantity", 0) or 0
+
+                        if bag_type == "checked" and quantity > 0:
+                            baggage_info["checked"]["quantity"] = quantity
+                            baggage_info["checked"]["is_free"] = True
+                            weight_kg = self._weight_kg(bag)
+                            if weight_kg is not None:
+                                baggage_info["checked"]["weight_kg"] = weight_kg
+
+                        elif bag_type == "carry_on" and quantity > 0:
+                            baggage_info["carry_on"]["quantity"] = quantity
+                            baggage_info["carry_on"]["is_free"] = True
+                            weight_kg = self._weight_kg(bag)
+                            if weight_kg is not None:
+                                baggage_info["carry_on"]["weight_kg"] = weight_kg
+
+        return baggage_info
+
+    @staticmethod
+    def _weight_kg(bag: dict):
+        weight = bag.get("weight")
+        if weight is None:
+            return None
+
+        unit = bag.get("weight_unit", "kg")
+        if unit == "lb":
+            return round(weight * 0.453592)
+        return weight

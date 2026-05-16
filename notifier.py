@@ -1077,6 +1077,40 @@ def _format_html_baggage(extra: dict) -> str:
     return "🧳 已返回行李信息<br>"
 
 
+def format_baggage(extra):
+    lines = []
+    bag = extra.get("baggage_detail", {})
+
+    checked = bag.get("checked", {})
+    carry_on = bag.get("carry_on", {})
+
+    if checked.get("quantity", 0) > 0:
+        text = f"🧳 托运行李：免费{checked['quantity']}件"
+        if checked.get("weight_kg"):
+            text += f"（每件≤{checked['weight_kg']}kg）"
+        else:
+            text += "（重量以航司规定为准）"
+        lines.append(text)
+    else:
+        lines.append("🧳 托运行李：不含免费托运，需另购")
+
+    if carry_on.get("quantity", 0) > 0:
+        text = f"👜 手提行李：免费{carry_on['quantity']}件"
+        if carry_on.get("weight_kg"):
+            text += f"（每件≤{carry_on['weight_kg']}kg）"
+        lines.append(text)
+
+    # 如果没有任何行李数据（非Duffel数据源）
+    if not bag:
+        lines = []
+        if extra.get("baggage"):
+            lines.append("🧳 行李：含托运行李（详情以航司规定为准）")
+        else:
+            lines.append("🧳 行李：请查询航司官网确认托运额度")
+
+    return lines
+
+
 def format_html_message(analysis_result, route_info, source_stats=None):
     """生成HTML格式的推送消息"""
     recs = analysis_result.get("recommendations", [])
@@ -1138,11 +1172,11 @@ def format_html_message(analysis_result, route_info, source_stats=None):
 
         # 行李退改
         extra = f.get("extra", {})
-        if extra.get("baggage") or extra.get("changeable") or extra.get("refundable"):
-            bag_text = "含1件托运" if extra.get("baggage") else "无免费托运"
+        for baggage_line in format_baggage(extra):
+            lines.append(baggage_line)
+        if extra.get("changeable") or extra.get("refundable"):
             change_text = "可改签" if extra.get("changeable") else "不可改签"
             refund_text = "可退票" if extra.get("refundable") else "不可退票"
-            lines.append(f"🧳 行李：{bag_text}")
             lines.append(f"🔄 退改：{change_text} · {refund_text}")
 
         lines.append(f"📎 来源：{f.get('source', f.get('data_source', ''))}")
