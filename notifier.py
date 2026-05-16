@@ -973,7 +973,18 @@ def _duffel_extra_lines(flight: dict) -> list[str]:
 
 
 def _clean_warning(warning: str) -> str:
-    return re.sub(r"^[⚠️ℹ️✅🟡🔴\s]+", "", str(warning)).strip()
+    text = re.sub(r"^[⚠️ℹ️✅🟡🔴\s]+", "", str(warning)).strip()
+    text = re.sub(
+        r"^在(.+?)转机需等待(\d+)小时，可能需要在机场过夜或额外订酒店$",
+        r"\1转机等待\2小时，可能需要过夜或订酒店",
+        text,
+    )
+    text = re.sub(
+        r"^到达日期为\d{4}-\d{2}-\d{2}（非出发当天），注意安排接机和住宿$",
+        "到达日期为次日（非出发当天）",
+        text,
+    )
+    return text
 
 
 def _summary_text(analysis_result: dict, days_to_dept: int | None) -> str:
@@ -1005,15 +1016,6 @@ def format_comparison_message(
     market_line = _market_line(market)
     if market_line:
         lines.append(market_line)
-
-    previous_prices = route_info.get("previous_prices") or {}
-    if previous_prices:
-        lines.extend(
-            [
-                "",
-                _overall_price_change_summary(analysis_result, previous_prices),
-            ]
-        )
 
     lines.extend(["", "━━━ 推荐方案 ━━━", ""])
 
