@@ -1014,6 +1014,35 @@ def _summary_text(analysis_result: dict, days_to_dept: int | None) -> str:
     return summary.replace("。我", "。\n我")
 
 
+def _plain_price_position(position: str) -> str:
+    text = str(position or "").strip()
+    for marker in ["🟢", "🔴", "🟡", "🟠"]:
+        text = text.replace(marker, "")
+    return text.strip()
+
+
+def _short_price_position(position: str) -> str:
+    text = _plain_price_position(position)
+    if "低于平均" in text:
+        return "低于平均"
+    if "高于平均" in text:
+        return "高于平均"
+    if "历史最低" in text:
+        return "接近最低"
+    if "历史最高" in text:
+        return "接近最高"
+    return text or "位置未知"
+
+
+def _plain_recent_trend(recent_trend: str) -> str:
+    text = str(recent_trend or "").strip()
+    for prefix in ["📈 近期", "📉 近期", "➡️ 近期"]:
+        if text.startswith(prefix):
+            text = text.replace(prefix, "", 1)
+            break
+    return text or "暂无趋势"
+
+
 def get_tag_color(tag):
     if "最低价" in str(tag):
         return "#34a853"
@@ -1203,15 +1232,23 @@ def format_html_message(
     )
 
     if trend.get("available"):
+        display_min = min(trend["min_price"], current_min) if current_min else trend["min_price"]
+        display_max = max(trend["max_price"], current_min) if current_min else trend["max_price"]
         lines.append("<b>📈 价格走势（近60天）</b>")
         lines.append("")
-        lines.append(f"{trend['sparkline']}")
+        lines.append(f"┌ 最高 ¥{display_max:,.0f}")
+        lines.append("│")
+        lines.append(
+            f"│   ● 当前 ¥{current_min:,.0f}（{_short_price_position(trend['current_position'])}）"
+        )
+        lines.append("│")
+        lines.append(f"└ 最低 ¥{display_min:,.0f}")
         lines.append("")
-        lines.append(f"📉 最低：¥{trend['min_price']:,.0f}")
-        lines.append(f"📈 最高：¥{trend['max_price']:,.0f}")
+        lines.append(f"📉 最低：¥{display_min:,.0f}")
+        lines.append(f"📈 最高：¥{display_max:,.0f}")
         lines.append(f"📊 平均：¥{trend['avg_price']:,.0f}")
-        lines.append(f"📍 当前：{trend['current_position']}")
-        lines.append(f"📶 走势：{trend['recent_trend']}")
+        lines.append(f"📍 当前位置：{_plain_price_position(trend['current_position'])}")
+        lines.append(f"📶 近期走势：{_plain_recent_trend(trend['recent_trend'])}")
         lines.append("")
         lines.append("━━━━━━━━━━━━━━━━")
     else:
