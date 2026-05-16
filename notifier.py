@@ -898,6 +898,25 @@ def _airline_display(name: str | None) -> str:
     return mapping.get(name or "", name or "")
 
 
+def _airline_full_display(name: str | None) -> str:
+    if not name:
+        return ""
+
+    short_name = _airline_display(name)
+    if short_name and short_name != name:
+        return f"{short_name} {name}"
+    return name
+
+
+def _airlines_from_segments(segments: list[dict]) -> list[str]:
+    airlines = []
+    for segment in segments:
+        airline = _airline_full_display(segment.get("airline", ""))
+        if airline and airline not in airlines:
+            airlines.append(airline)
+    return airlines
+
+
 def _plan_title(index: int, tag: str) -> str:
     names = ["一", "二", "三", "四", "五"]
     plan_no = names[index] if index < len(names) else str(index + 1)
@@ -1178,7 +1197,10 @@ def format_html_message(analysis_result, route_info, source_stats=None):
         lines.append("")
         lines.append(f"<b>{rec['tag']}</b>")
         lines.append("")
+        segments = f.get("segments", [])
+        airline_text = " / ".join(_airlines_from_segments(segments))
         lines.append(f"💵 价格：¥{f['price']:,.0f}")
+        lines.append(f"🏢 航司：{airline_text}")
         lines.append(f"✈️ 航线：{f.get('route_summary','')}")
         lines.append(f"⏱️ 全程：{f.get('total_hours','')}小时")
         stops = f.get('stops', 0)
@@ -1187,7 +1209,7 @@ def format_html_message(analysis_result, route_info, source_stats=None):
         lines.append("")
 
         # 各航段
-        for j, seg in enumerate(f.get("segments", [])):
+        for j, seg in enumerate(segments):
             dep_time = str(seg.get("dep_time",""))
             if " " in dep_time:
                 dep_time = dep_time.split(" ")[-1]
@@ -1195,7 +1217,7 @@ def format_html_message(analysis_result, route_info, source_stats=None):
             if " " in arr_time:
                 arr_time = arr_time.split(" ")[-1]
 
-            lines.append(f"✈ 第{j+1}段：{seg.get('flight_no','')} {seg.get('airline','')}")
+            lines.append(f"✈ 第{j+1}段：{seg.get('flight_no','')}（{_airline_full_display(seg.get('airline',''))}）")
             lines.append(f"　　{city_name(seg.get('dep_airport',''))} {dep_time}")
             lines.append(f"　　→ {city_name(seg.get('arr_airport',''))} {arr_time}")
 
