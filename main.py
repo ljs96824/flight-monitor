@@ -91,8 +91,8 @@ def run():
                 file.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
 
             msg = format_html_message(
-                analysis,
-                {
+                analysis_result=analysis,
+                route_info={
                     "origin": sub["origin"],
                     "destination": sub["destination"],
                     "depart_date": sub["depart_date"],
@@ -102,6 +102,7 @@ def run():
                     "source_stats": data.get("source_stats", {}),
                 },
                 source_stats=data.get("source_stats"),
+                price_insights=data.get("price_insights"),
             )
             send(msg)
             logging.info(f"{route} 已推送方案对比表")

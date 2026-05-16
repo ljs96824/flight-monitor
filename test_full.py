@@ -159,7 +159,10 @@ def _run_all_flights(subscription: dict, route: str) -> None:
     }
     print(f"DEBUG source_stats: {data.get('source_stats', 'NOT FOUND')}")
     message = format_html_message(
-        analysis, route_info, source_stats=data.get("source_stats")
+        analysis_result=analysis,
+        route_info=route_info,
+        source_stats=data.get("source_stats"),
+        price_insights=data.get("price_insights"),
     )
     print("\n推送消息：")
     print(message)

@@ -1171,7 +1171,9 @@ def format_seat(extra):
     return lines
 
 
-def format_html_message(analysis_result, route_info, source_stats=None):
+def format_html_message(
+    analysis_result, route_info, source_stats=None, price_insights=None
+):
     """生成HTML格式的推送消息"""
     recs = analysis_result.get("recommendations", [])
     market = analysis_result.get("market_context", {})
@@ -1189,25 +1191,27 @@ def format_html_message(analysis_result, route_info, source_stats=None):
     lines.append("")
     lines.append("━━━━━━━━━━━━━━━━")
 
-    # 从 analysis_result 或 price_insights 获取趋势数据
-    price_history = None
-    pi = analysis_result.get("price_insights") or {}
-    if pi.get("price_history"):
-        price_history = pi["price_history"]
-
-    trend = generate_trend_summary(price_history, analysis_result.get("current_min_price", 0))
+    # 从显式传入的 price_insights 获取趋势数据
+    current_min = (
+        analysis_result.get("price_range", [0])[0]
+        if analysis_result.get("price_range")
+        else 0
+    )
+    trend = generate_trend_summary(
+        price_insights.get("price_history") if price_insights else None,
+        current_min,
+    )
 
     if trend.get("available"):
-        lines.append("<b>📈 价格走势</b>")
+        lines.append("<b>📈 价格走势（近60天）</b>")
         lines.append("")
-        lines.append(f"趋势图：{trend['sparkline']}")
+        lines.append(f"{trend['sparkline']}")
         lines.append("")
-        lines.append(f"最低价：¥{trend['min_price']:,.0f}")
-        lines.append(f"最高价：¥{trend['max_price']:,.0f}")
-        lines.append(f"平均价：¥{trend['avg_price']:,.0f}")
-        lines.append(f"当前：{trend['current_position']}")
-        lines.append(f"走势：{trend['recent_trend']}")
-        lines.append(f"数据点：{trend['data_points']}个")
+        lines.append(f"📉 最低：¥{trend['min_price']:,.0f}")
+        lines.append(f"📈 最高：¥{trend['max_price']:,.0f}")
+        lines.append(f"📊 平均：¥{trend['avg_price']:,.0f}")
+        lines.append(f"📍 当前：{trend['current_position']}")
+        lines.append(f"📶 走势：{trend['recent_trend']}")
         lines.append("")
         lines.append("━━━━━━━━━━━━━━━━")
     else:
