@@ -673,26 +673,32 @@ def generate_booking_links(flight: dict, depart_date: str) -> str:
     )
 
     airline_sites = {
-        "美航": "https://www.aa.com",
-        "American Airlines": "https://www.aa.com",
-        "加航": "https://www.aircanada.com",
-        "Air Canada": "https://www.aircanada.com",
-        "联合": "https://www.united.com",
-        "United": "https://www.united.com",
-        "达美": "https://www.delta.com",
-        "Delta": "https://www.delta.com",
+        "美航": ("美航官网", "https://www.aa.com"),
+        "American Airlines": ("美航官网", "https://www.aa.com"),
+        "加航": ("加航官网", "https://www.aircanada.com"),
+        "Air Canada": ("加航官网", "https://www.aircanada.com"),
+        "联合": ("联合官网", "https://www.united.com"),
+        "United": ("联合官网", "https://www.united.com"),
+        "达美": ("达美官网", "https://www.delta.com"),
+        "Delta": ("达美官网", "https://www.delta.com"),
     }
     airline_name = segments[0].get("airline", "")
-    airline_url = airline_sites.get(airline_name, "")
+    airline_site = airline_sites.get(airline_name)
 
-    links = "🔗 去购买\n"
-    links += f"• 携程：{ctrip}\n"
-    links += f"• 飞猪：{fliggy}\n"
-    if airline_url:
-        links += f"• {airline_name}官网：{airline_url}\n"
-    links += f"• Google Flights：{google}\n"
+    entries = [
+        ("① 携程", ctrip),
+        ("② 飞猪", fliggy),
+        ("③ Google Flights", google),
+    ]
+    if airline_site:
+        airline_label, airline_url = airline_site
+        entries.append((f"④ {airline_label}", airline_url))
 
-    return links
+    lines = ["🔗 去购买", ""]
+    for label, url in entries:
+        lines.extend([label, "", url, ""])
+
+    return "\n".join(lines)
 
 
 def generate_warnings(flight: dict) -> list[str]:
