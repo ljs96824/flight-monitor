@@ -30,5 +30,6 @@ jobs:
           SERPAPI_KEY: ${{ secrets.SERPAPI_KEY }}
           SEARCHAPI_KEY: ${{ secrets.SEARCHAPI_KEY }}
           DUFFEL_TOKEN: ${{ secrets.DUFFEL_TOKEN }}
+          PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
           WECOM_WEBHOOK: ${{ secrets.WECOM_WEBHOOK }}
         run: python main.py

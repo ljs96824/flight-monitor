@@ -7,6 +7,8 @@ import re
 from datetime import date, datetime
 from pathlib import Path
 
+import httpx
+
 from analyzer import city_name
 
 
@@ -408,32 +410,47 @@ def _log_notification(content: str) -> None:
         file.write(entry)
 
 
-def send(content: str) -> bool:
-    """Send notification content through PushPlus."""
-    if not os.environ.get("WECOM_WEBHOOK"):
-        print(content)
-        _log_notification(content)
+def send(content: str, title: str = "航班监控通知") -> bool:
+    """发送推送通知，优先PushPlus，备选企业微信。"""
+    pushplus_token = os.environ.get("PUSHPLUS_TOKEN", "")
+    if pushplus_token:
+        try:
+            resp = httpx.post(
+                "https://www.pushplus.plus/send",
+                json={
+                    "token": pushplus_token,
+                    "title": title,
+                    "content": content,
+                    "template": "markdown",
+                },
+                timeout=15,
+            )
+            result = resp.json()
+            if result.get("code") == 200:
+                print("PushPlus推送成功")
+                return True
+            print(f"PushPlus推送失败: {result.get('msg', '未知错误')}")
+            return False
+        except Exception as exc:
+            print(f"PushPlus推送异常: {exc}")
+            return False
 
-    token = os.environ.get("PUSHPLUS_TOKEN")
-    if not token:
-        return False
+    webhook = os.environ.get("WECOM_WEBHOOK", "")
+    if webhook:
+        try:
+            resp = httpx.post(
+                webhook,
+                json={"msgtype": "markdown", "markdown": {"content": content}},
+                timeout=15,
+            )
+            return resp.status_code == 200
+        except Exception as exc:
+            print(f"企业微信推送异常: {exc}")
+            return False
 
-    payload = {
-        "token": token,
-        "title": "航班监控通知",
-        "content": content,
-    }
-
-    try:
-        import requests
-
-        response = requests.post("http://www.pushplus.plus/send", json=payload, timeout=10)
-        response.raise_for_status()
-    except Exception as exc:
-        print(f"推送失败: {exc}")
-        return False
-
-    return True
+    print("推送未配置，消息仅在终端显示：")
+    print(content)
+    return False
 
 
 def health_report(results: list[dict]) -> str:
