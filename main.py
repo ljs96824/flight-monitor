@@ -84,6 +84,7 @@ def run():
                 flights,
                 data.get("price_insights"),
                 mode=sub.get("mode", "balanced"),
+                priorities=sub.get("priorities"),
             )
 
             log_entry = {**analysis, "logged_at": datetime.now().isoformat()}
@@ -97,6 +98,7 @@ def run():
                     "destination": sub["destination"],
                     "depart_date": sub["depart_date"],
                     "mode": sub.get("mode", "balanced"),
+                    "priorities": sub.get("priorities"),
                     "previous_prices": previous_prices,
                     "lowest_price_history": lowest_price_history,
                     "source_stats": data.get("source_stats", {}),

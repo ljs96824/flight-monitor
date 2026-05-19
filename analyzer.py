@@ -610,6 +610,56 @@ def generate_trend_summary(price_history_data, current_price) -> dict:
     }
 
 
+def compare_flights(flight_a: dict, flight_b: dict) -> dict:
+    """生成两个方案之间的直接对比"""
+    price_diff = flight_a["price"] - flight_b["price"]
+    time_diff = flight_a["total_duration_min"] - flight_b["total_duration_min"]
+    stops_diff = flight_a["stops"] - flight_b["stops"]
+
+    a_pros = []
+    a_cons = []
+
+    if price_diff < 0:
+        a_pros.append(f"便宜 ¥{abs(price_diff):,.0f}")
+    elif price_diff > 0:
+        a_cons.append(f"贵 ¥{price_diff:,.0f}")
+
+    if time_diff < 0:
+        hours = abs(time_diff) // 60
+        mins = abs(time_diff) % 60
+        a_pros.append(f"快{hours}小时{mins}分钟")
+    elif time_diff > 0:
+        hours = time_diff // 60
+        mins = time_diff % 60
+        a_cons.append(f"慢{hours}小时{mins}分钟")
+
+    if stops_diff < 0:
+        a_pros.append(f"少转{abs(stops_diff)}次机")
+    elif stops_diff > 0:
+        a_cons.append(f"多转{stops_diff}次机")
+
+    a_max_wait = max(
+        (layover.get("wait_minutes", 0) for layover in flight_a.get("layovers", [])),
+        default=0,
+    )
+    b_max_wait = max(
+        (layover.get("wait_minutes", 0) for layover in flight_b.get("layovers", [])),
+        default=0,
+    )
+
+    if a_max_wait > 480 and b_max_wait <= 480:
+        a_cons.append("需要在机场过夜")
+    if b_max_wait > 480 and a_max_wait <= 480:
+        a_pros.append("不需要在机场过夜")
+
+    return {
+        "a_pros": a_pros,
+        "a_cons": a_cons,
+        "price_diff": price_diff,
+        "time_diff_min": time_diff,
+    }
+
+
 SCORE_WEIGHTS = {
     "budget": {"price": 0.6, "duration": 0.15, "stops": 0.1, "layover": 0.15},
     "fast": {"price": 0.15, "duration": 0.5, "stops": 0.2, "layover": 0.15},
@@ -1004,8 +1054,103 @@ def analyze_combined(
     return analyze(db, route, depart_date, target_combo, price_insights)
 
 
+def _normalize_priorities(priorities) -> dict:
+    if not priorities:
+        return {}
+    if isinstance(priorities, dict):
+        return priorities
+
+    result = {}
+    if isinstance(priorities, list):
+        for item in priorities:
+            if isinstance(item, dict):
+                result.update(item)
+    return result
+
+
+def _flight_hours(flight: dict) -> float:
+    if flight.get("total_hours") is not None:
+        return float(flight.get("total_hours") or 0)
+    return float(flight.get("total_duration_min") or 0) / 60
+
+
+def _max_layover_minutes(flight: dict) -> int:
+    return max(
+        (int(layover.get("wait_minutes") or 0) for layover in flight.get("layovers", [])),
+        default=0,
+    )
+
+
+def _format_hours(minutes: int) -> str:
+    hours = minutes // 60
+    mins = minutes % 60
+    if mins:
+        return f"{hours}小时{mins}分钟"
+    return f"{hours}小时"
+
+
+def _priority_violations(flight: dict, priorities: dict) -> list[str]:
+    violations = []
+    price = _to_float(flight.get("price")) or 0
+    total_minutes = int(flight.get("total_duration_min") or 0)
+    stops = int(flight.get("stops") or 0)
+    max_wait = _max_layover_minutes(flight)
+
+    budget = priorities.get("budget")
+    if budget is not None and price > float(budget):
+        violations.append(f"超出预算¥{price - float(budget):,.0f}")
+
+    max_hours = priorities.get("max_hours")
+    if max_hours is not None and total_minutes > int(float(max_hours) * 60):
+        over_minutes = total_minutes - int(float(max_hours) * 60)
+        violations.append(
+            f"需要{_format_hours(total_minutes)}（超出时间限制{_format_hours(over_minutes)}）"
+        )
+
+    max_stops = priorities.get("max_stops")
+    if max_stops is not None and stops > int(max_stops):
+        violations.append(f"需要转机{stops}次（超出转机限制）")
+
+    if priorities.get("no_overnight") and max_wait > 480:
+        violations.append("有过夜转机")
+
+    return violations
+
+
+def _priority_boundary_notes(flight: dict, priorities: dict) -> list[str]:
+    notes = []
+    price = _to_float(flight.get("price")) or 0
+    total_minutes = int(flight.get("total_duration_min") or 0)
+    stops = int(flight.get("stops") or 0)
+    max_wait = _max_layover_minutes(flight)
+
+    budget = priorities.get("budget")
+    if budget is not None:
+        budget = float(budget)
+        if budget * 0.95 <= price <= budget:
+            notes.append("预算接近上限")
+
+    max_hours = priorities.get("max_hours")
+    if max_hours is not None:
+        limit_minutes = int(float(max_hours) * 60)
+        if limit_minutes - 60 <= total_minutes <= limit_minutes:
+            notes.append("时间接近上限")
+
+    max_stops = priorities.get("max_stops")
+    if max_stops is not None and stops == int(max_stops):
+        notes.append("转机次数刚好到上限")
+
+    if priorities.get("no_overnight") and 360 <= max_wait <= 480:
+        notes.append("转机等待较长但不过夜")
+
+    return notes
+
+
 def analyze_all_flights(
-    flights: list[dict], price_insights: dict = None, mode: str = "balanced"
+    flights: list[dict],
+    price_insights: dict = None,
+    mode: str = "balanced",
+    priorities=None,
 ) -> dict:
     """对所有航班方案做多维度分析和排名"""
     if not flights:
@@ -1050,71 +1195,75 @@ def analyze_all_flights(
         flight["scores"] = overall_score(flight, prices, durations, mode)
         flight["transfer_risk"] = transfer_risk(flight)
 
-    by_value = sorted(usable_flights, key=lambda f: f["value_score"])
-    by_overall = sorted(
-        usable_flights, key=lambda f: f["scores"]["total"], reverse=True
-    )
+    priority_config = _normalize_priorities(priorities)
+    qualified_flights = []
+    reference_flights = []
+    if priority_config:
+        for flight in by_price:
+            violations = _priority_violations(flight, priority_config)
+            boundary_notes = _priority_boundary_notes(flight, priority_config)
+            flight["priority_violations"] = violations
+            flight["priority_boundary_notes"] = boundary_notes
+            if violations:
+                reference_flights.append(flight)
+            else:
+                qualified_flights.append(flight)
 
-    # 4. 筛选推荐方案（最多展示5个）
-    recommendations = []
+    # 4. 按使用场景筛选推荐方案
+    fastest_duration = by_duration[0]["total_duration_min"]
 
-    recommendations.append(
-        {
-            "tag": "💰 最低价",
-            "flight": by_price[0],
-            "reason": (
-                f"价格最低，节省¥{by_price[1]['price'] - by_price[0]['price']:,.0f}"
-                if len(by_price) > 1
-                else "唯一方案"
+    def comfortable_layovers(flight: dict) -> bool:
+        layovers = flight.get("layovers") or []
+        if not layovers:
+            return False
+        return all(
+            90 <= int(layover.get("wait_minutes") or 0) <= 240
+            for layover in layovers
+        )
+
+    comfortable_candidates = [
+        flight
+        for flight in usable_flights
+        if comfortable_layovers(flight)
+        and flight["total_duration_min"] <= fastest_duration * 1.5
+    ]
+    if comfortable_candidates:
+        most_comfortable = min(comfortable_candidates, key=lambda f: f["price"])
+    else:
+        most_comfortable = min(
+            usable_flights,
+            key=lambda f: (
+                max(
+                    (layover.get("wait_minutes", 0) for layover in f.get("layovers", [])),
+                    default=0,
+                )
+                > 480,
+                f["stops"],
+                f["total_duration_min"],
+                f["price"],
             ),
-        }
-    )
-
-    if by_duration[0]["flight_combo"] != by_price[0]["flight_combo"]:
-        time_diff = by_price[0]["total_duration_min"] - by_duration[0]["total_duration_min"]
-        recommendations.append(
-            {
-                "tag": "⚡ 最快到达",
-                "flight": by_duration[0],
-                "reason": f"比最便宜方案快{time_diff // 60}小时{time_diff % 60}分钟",
-            }
         )
 
-    if (
-        by_value[0]["flight_combo"] != by_price[0]["flight_combo"]
-        and by_value[0]["flight_combo"] != by_duration[0]["flight_combo"]
-    ):
-        recommendations.append(
-            {
-                "tag": "⭐ 最佳性价比",
-                "flight": by_value[0],
-                "reason": "价格和时长的最优平衡",
-            }
-        )
-
-    recommendations.append(
+    recommendations = [
         {
-            "tag": "⭐ 综合最优",
-            "flight": by_overall[0],
-            "reason": f"综合评分{by_overall[0]['scores']['total']}/10，最符合当前偏好",
-        }
-    )
-
-    min_stops_flight = min(usable_flights, key=lambda f: f["stops"])
-    existing_combos = [r["flight"]["flight_combo"] for r in recommendations]
-    if (
-        min_stops_flight["stops"] < by_price[0]["stops"]
-        and min_stops_flight["flight_combo"] not in existing_combos
-    ):
-        recommendations.append(
-            {
-                "tag": "🛫 最少中转",
-                "flight": min_stops_flight,
-                "reason": f"仅需{min_stops_flight['stops']}次中转",
-            }
-        )
-
-    recommendations = recommendations[:5]
+            "tag": "💰 预算有限选这个",
+            "desc": "价格最低，但路上时间较长",
+            "reason": "价格最低，但路上时间较长",
+            "flight": by_price[0],
+        },
+        {
+            "tag": "⏱️ 赶时间选这个",
+            "desc": "到达最快，价格稍高",
+            "reason": "到达最快，价格稍高",
+            "flight": by_duration[0],
+        },
+        {
+            "tag": "🛋️ 怕折腾选这个",
+            "desc": "转机最轻松，不用在机场过夜",
+            "reason": "转机最轻松，不用在机场过夜",
+            "flight": most_comfortable,
+        },
+    ]
 
     market_context = {}
     if price_insights:
@@ -1134,4 +1283,7 @@ def analyze_all_flights(
         "price_insights": price_insights,
         "current_min_price": min(prices),
         "mode": mode,
+        "priorities": priority_config,
+        "qualified_flights": qualified_flights,
+        "reference_flights": reference_flights,
     }

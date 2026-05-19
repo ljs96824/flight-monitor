@@ -138,7 +138,10 @@ def _run_all_flights(subscription: dict, route: str) -> None:
     print(f"- 最低价价格: ¥{cheapest.get('price') if cheapest.get('price') is not None else '-'}")
 
     analysis = analyze_all_flights(
-        flights, data.get("price_insights"), mode=subscription.get("mode", "balanced")
+        flights,
+        data.get("price_insights"),
+        mode=subscription.get("mode", "balanced"),
+        priorities=subscription.get("priorities"),
     )
 
     print("\n分析结果：")
@@ -155,6 +158,7 @@ def _run_all_flights(subscription: dict, route: str) -> None:
         "destination": subscription["destination"],
         "depart_date": subscription["depart_date"],
         "mode": subscription.get("mode", "balanced"),
+        "priorities": subscription.get("priorities"),
         "source_stats": data.get("source_stats", {}),
     }
     print(f"DEBUG source_stats: {data.get('source_stats', 'NOT FOUND')}")

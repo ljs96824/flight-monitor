@@ -34,7 +34,7 @@ def should_notify(analysis: dict, prev_signal: str | None) -> tuple[bool, str | 
     return False, None
 
 
-DISCLAIMER = "以上建议基于历史价格数据分析，仅供参考。\n实际购买请以航司或OTA官网价格为准。"
+DISCLAIMER = "以上内容基于历史价格数据分析，仅供参考。\n实际购买请以航司或OTA官网价格为准。"
 
 
 def format_price(price) -> str:
@@ -256,12 +256,12 @@ def _append_disclaimer(message: str, run_status: str | None = None) -> str:
 
 def _advice(trigger_reason: str | None) -> str:
     advice_map = {
-        "signal_upgrade": "建议：买入信号升级，优先检查目标航班并准备下单。",
-        "milestone": "建议：进入关键观察节点，复查价格和替代方案。",
-        "new_low": "建议：目标航班刷新历史低价，可以重点考虑。",
-        "cheaper_alt": "建议：替代方案明显更便宜，建议比较中转和总时长。",
+        "signal_upgrade": "如果行程已经确定：买入信号升级，可以优先检查目标航班并准备下单。",
+        "milestone": "如果今天要复盘：这是关键观察节点，可以复查价格和替代方案。",
+        "new_low": "如果目标航班符合行程：当前刷新历史低价，可以重点比较预算和退改条件。",
+        "cheaper_alt": "如果时间安排灵活：替代方案明显更便宜，可以比较中转和总时长。",
     }
-    return advice_map.get(trigger_reason, "建议：继续观察，等待更明确的价格信号。")
+    return advice_map.get(trigger_reason, "如果价格还不够明确：可以继续观察价格信号。")
 
 
 def format_buy_message(analysis, run_status: str | None = None) -> str:
@@ -283,7 +283,7 @@ def format_buy_message(analysis, run_status: str | None = None) -> str:
             "📈 价格趋势",
             _trend_description(analysis),
             "",
-            "💡 我的建议：现在入手",
+            "💡 如果行程确定：现在入手",
             _reason_description(analysis),
             "",
             "⚡ 如果继续等",
@@ -325,9 +325,9 @@ def format_milestone_message(analysis, days, run_status: str | None = None) -> s
     elif days == 21:
         advice = "进入了通常的最佳购买窗口，值得密切关注。"
     elif days == 14:
-        advice = "时间开始紧张了。除非价格明显在下降，否则建议在未来一周内做决定。"
+        advice = "时间开始紧张了。如果价格没有明显下降，那么未来一周内做决定会更稳。"
     elif days == 7:
-        advice = "最后一周了。如果价格能接受，建议今天就买。出发前几天涨价的概率很高。"
+        advice = "最后一周了。如果价格能接受，那么今天确定会更稳。出发前几天涨价的概率很高。"
     else:
         advice = "今天是一个适合复盘价格的位置，我会继续盯着。"
 
@@ -737,7 +737,7 @@ def generate_warnings(flight: dict) -> list[str]:
         if 0 < wait_minutes < 75:
             warnings.append(
                 f"⚠️ 在{layover.get('city', '中转地')}转机时间仅{wait_minutes}分钟，"
-                "如果前段航班延误可能赶不上，建议确认是否联程票"
+                "如果前段航班延误可能赶不上，需要确认是否联程票"
             )
 
     segments = flight.get("segments", []) or []
@@ -815,7 +815,7 @@ def _mode_label(mode: str | None) -> str:
 
 
 def format_summary_advice(analysis, days_to_dept) -> str:
-    """一句话总结建议"""
+    """一句话总结情况"""
     market = analysis.get("market_context", {})
     level = market.get("price_level", "typical")
     cheapest = analysis["price_range"][0]
@@ -824,12 +824,12 @@ def format_summary_advice(analysis, days_to_dept) -> str:
         return (
             "💬 总结：当前整体处于低价期，"
             f"最低¥{cheapest:,}是不错的价格。"
-            "如果行程确定建议抓住机会，低价期通常不会持续太久。"
+            "如果行程确定，那么可以抓住低价期；低价期通常不会持续太久。"
         )
     elif level == "low" and days_to_dept <= 14:
         return (
             "💬 总结：低价期+临近出发，"
-            "强烈建议尽快购买。"
+            "如果行程确定，那么尽快购买会更稳。"
         )
     elif level == "typical" and days_to_dept > 30:
         return (
@@ -844,7 +844,7 @@ def format_summary_advice(analysis, days_to_dept) -> str:
     elif level == "high":
         return (
             "💬 总结：当前价格偏高。"
-            f"如果不急，建议等价格回落到¥{market.get('typical_range', [0, 0])[0]:,}以下再考虑。"
+            f"如果不急，那么等价格回落到¥{market.get('typical_range', [0, 0])[0]:,}以下再考虑。"
         )
     else:
         return "💬 总结：我会持续关注这条航线的价格变化。"
@@ -1200,6 +1200,65 @@ def format_seat(extra):
     return lines
 
 
+def generate_neutral_summary(analysis, trend):
+    """生成中性的情况说明，不做购买指令"""
+    lines = []
+
+    min_price = analysis.get("price_range", [0, 0])[0]
+    avg_price = trend.get("avg_price", 0) if trend else 0
+    days = analysis.get("days_to_dept", 0)
+    recent = trend.get("recent_trend", "") if trend else ""
+
+    # 价格事实
+    if avg_price and min_price:
+        if min_price < avg_price:
+            lines.append(f"当前最低价¥{min_price:,.0f}，低于近60天平均价¥{avg_price:,.0f}。")
+        else:
+            lines.append(f"当前最低价¥{min_price:,.0f}，高于近60天平均价¥{avg_price:,.0f}。")
+
+    # 趋势事实
+    if "上涨" in recent:
+        lines.append("近期价格呈上涨趋势。")
+    elif "下降" in recent:
+        lines.append("近期价格在下降。")
+    else:
+        lines.append("近期价格较为平稳。")
+
+    lines.append("")
+
+    # 条件句式
+    if days > 30:
+        lines.append(f"如果行程灵活：距出发还有{days}天，可以持续观察价格变化。")
+        lines.append("如果行程确定：当前价格若在预算范围内，那么也可以考虑入手。")
+    elif days > 14:
+        lines.append(f"距出发{days}天，通常出发前2-3周价格开始上涨。")
+        lines.append("如果看到合适价格，那么不要犹豫太久。")
+    else:
+        lines.append(f"距出发仅{days}天，越往后价格上涨概率越大。")
+        lines.append("如果价格在预算范围内，那么尽早确定比较稳妥。")
+
+    return lines
+
+
+def _priority_summary_text(priorities: dict) -> str:
+    parts = []
+    if priorities.get("budget") is not None:
+        parts.append(f"预算{float(priorities['budget']):,.0f}内".replace(",", ""))
+    if priorities.get("max_hours") is not None:
+        parts.append(f"{priorities['max_hours']}小时内")
+    if priorities.get("max_stops") is not None:
+        parts.append(f"{priorities['max_stops']}次中转以内")
+    if priorities.get("no_overnight"):
+        parts.append("不过夜转机")
+    return "、".join(parts)
+
+
+def _reference_flight_line(index: int, flight: dict) -> str:
+    violations = flight.get("priority_violations") or []
+    reason = "；".join(violations) if violations else "不符合部分条件"
+    return f"方案{index}：¥{flight.get('price', 0):,.0f} 但{reason}"
+
+
 def format_html_message(
     analysis_result, route_info, source_stats=None, price_insights=None
 ):
@@ -1258,6 +1317,19 @@ def format_html_message(
         lines.append("")
         lines.append("━━━━━━━━━━━━━━━━")
 
+    priorities = analysis_result.get("priorities") or {}
+    qualified_flights = analysis_result.get("qualified_flights") or []
+    reference_flights = analysis_result.get("reference_flights") or []
+    if priorities:
+        lines.append("")
+        lines.append(f"✅ 符合你的条件（{_priority_summary_text(priorities)}）")
+        lines.append(f"共有{len(qualified_flights)}个方案满足：")
+        lines.append("")
+        recs = [
+            {"tag": f"方案{index}", "flight": flight}
+            for index, flight in enumerate(qualified_flights, start=1)
+        ]
+
     # 每个推荐方案
     for i, rec in enumerate(recs):
         f = rec["flight"]
@@ -1275,6 +1347,9 @@ def format_html_message(
         stops = f.get('stops', 0)
         lines.append(f"🔄 转机：{'直飞' if stops == 0 else f'{stops}次'}")
         lines.append(f"⭐ 评分：{scores.get('total','N/A')}/10")
+        boundary_notes = f.get("priority_boundary_notes") or []
+        if boundary_notes:
+            lines.append(f"⚠️ 边界：{' / '.join(boundary_notes)}")
         lines.append("")
 
         # 各航段
@@ -1342,6 +1417,20 @@ def format_html_message(
 
         lines.append("━━━━━━━━━━━━━━━━")
 
+    if priorities:
+        lines.append("")
+        lines.append("❌ <b>不符合但值得了解</b>")
+        lines.append("以下方案超出了你的某些条件，但可能有参考价值：")
+        lines.append("")
+        if reference_flights:
+            start_index = len(qualified_flights) + 1
+            for index, flight in enumerate(reference_flights[:5], start=start_index):
+                lines.append(_reference_flight_line(index, flight))
+        else:
+            lines.append("暂无超出条件但可参考的方案。")
+        lines.append("")
+        lines.append("━━━━━━━━━━━━━━━━")
+
     # 底部汇总
     prices = analysis_result.get("price_range", [0, 0])
     lines.append("")
@@ -1362,7 +1451,8 @@ def format_html_message(
     from datetime import datetime
     lines.append(f"🕐 采集时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}")
     lines.append("")
-    lines.append(f"💬 {analysis_result.get('summary', '持续监控中')}")
+    lines.append("💬 情况说明")
+    lines.extend(generate_neutral_summary(analysis_result, trend))
     lines.append("")
     lines.append("━━━━━━━━━━━━━━━━")
     lines.append("以上基于历史价格数据分析，仅供参考。")
@@ -1482,7 +1572,7 @@ def format_comparison_message(
             _summary_text(analysis_result, days_to_dept),
             "",
             "━━━━━━━━━━━━━━━━━━━━",
-            "以上建议基于历史价格数据分析，仅供参考。",
+            "以上内容基于历史价格数据分析，仅供参考。",
             "实际购买请以航司或OTA官网价格为准。",
         ]
     )
