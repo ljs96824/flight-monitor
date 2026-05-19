@@ -5,8 +5,30 @@ import httpx
 from sources.base import FlightSource
 
 
+AIRPORT_QUERY_FALLBACKS = {
+    "PVG": ["Shanghai Pudong", "Shanghai"],
+    "MCO": ["Orlando International", "Orlando"],
+    "NRT": ["Tokyo Narita", "Tokyo"],
+    "HND": ["Tokyo Haneda", "Tokyo"],
+    "DFW": ["Dallas Fort Worth", "Dallas"],
+    "LAX": ["Los Angeles"],
+    "SFO": ["San Francisco"],
+    "JFK": ["New York John F Kennedy", "New York"],
+    "YYZ": ["Toronto Pearson", "Toronto"],
+}
+
+
 class SkyscannerSource(FlightSource):
     name = "skyscanner"
+    KNOWN_AIRPORTS = {
+        "PVG": "128667077",
+        "MCO": "95674009",
+        "SHA": "128669004",
+        "DFW": "95673635",
+        "LAX": "95673429",
+        "JFK": "95565058",
+        "NRT": "95673382",
+    }
 
     def __init__(self):
         self.api_key = os.environ.get("RAPIDAPI_KEY", "")
@@ -155,17 +177,54 @@ class SkyscannerSource(FlightSource):
 
     def _get_airport_id(self, iata_code):
         """查询机场的entityId。"""
-        try:
-            resp = httpx.get(
-                f"{self.base_url}/flights/searchAirport",
-                headers=self.headers,
-                params={"query": iata_code},
-                timeout=10,
-            )
-            if resp.status_code == 200:
+        if iata_code in self.KNOWN_AIRPORTS:
+            return self.KNOWN_AIRPORTS[iata_code]
+
+        if not self.api_key:
+            print(f"[skyscanner] RAPIDAPI_KEY 未设置，跳过机场查询")
+            return None
+
+        queries = [iata_code] + AIRPORT_QUERY_FALLBACKS.get(iata_code, [])
+        for query in queries:
+            try:
+                resp = httpx.get(
+                    f"{self.base_url}/flights/searchAirport",
+                    headers=self.headers,
+                    params={"query": query, "locale": "en-US"},
+                    timeout=10,
+                )
+                if resp.status_code != 200:
+                    print(f"[skyscanner] 机场查询 '{query}' 状态码: {resp.status_code}")
+                    continue
+
                 data = resp.json().get("data", [])
-                if data:
-                    return data[0].get("entityId", "")
-        except Exception:
-            pass
+                if not data:
+                    print(f"[skyscanner] 机场查询 '{query}' 返回空数据")
+                    continue
+
+                print(f"[skyscanner] 机场查询 '{query}' 返回 {len(data)} 条")
+
+                # 精确匹配 skyId
+                for item in data:
+                    navigation = item.get("navigation", {})
+                    flight_params = navigation.get("relevantFlightParams", {})
+                    if flight_params.get("skyId") == iata_code:
+                        entity_id = flight_params.get("entityId", "")
+                        print(f"[skyscanner] {iata_code} 精确匹配: entityId={entity_id}")
+                        return entity_id
+
+                # fallback: 第一个 AIRPORT 类型
+                for item in data:
+                    navigation = item.get("navigation", {})
+                    if navigation.get("entityType") == "AIRPORT":
+                        entity_id = navigation.get("entityId", "")
+                        print(f"[skyscanner] {iata_code} AIRPORT fallback: entityId={entity_id}")
+                        return entity_id
+
+                # 最终 fallback: 第一条数据
+                entity_id = data[0].get("navigation", {}).get("entityId", "")
+                print(f"[skyscanner] {iata_code} 首条 fallback: entityId={entity_id}")
+                return entity_id
+            except Exception as exc:
+                print(f"[skyscanner] 机场查询异常 '{query}': {exc}")
         return None
