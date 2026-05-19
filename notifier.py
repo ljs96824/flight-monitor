@@ -1200,23 +1200,57 @@ def format_seat(extra):
     return lines
 
 
-def generate_neutral_summary(analysis, trend):
-    """生成中性的情况说明，不做购买指令"""
+def _estimate_drop_probability(price_history, current_price) -> int | None:
+    """估算接近当前价格时，下一次记录继续下降的比例。"""
+    if not price_history or not current_price:
+        return None
+
+    prices = []
+    for item in price_history:
+        if isinstance(item, (list, tuple)) and len(item) >= 2:
+            price = item[1]
+        else:
+            price = item
+        if price and price > 0:
+            prices.append(float(price))
+
+    if len(prices) < 6:
+        return None
+
+    similar_changes = []
+    tolerance = current_price * 0.1
+    for index, price in enumerate(prices[:-1]):
+        if abs(price - current_price) <= tolerance:
+            similar_changes.append(prices[index + 1] - price)
+
+    if len(similar_changes) < 3:
+        similar_changes = [prices[index + 1] - price for index, price in enumerate(prices[:-1])]
+
+    if not similar_changes:
+        return None
+
+    drops = [change for change in similar_changes if change < -100]
+    return round(len(drops) / len(similar_changes) * 100)
+
+
+def generate_neutral_summary(analysis, trend, price_insights=None):
+    """生成客观的市场情况说明，不做购买指令。"""
     lines = []
 
     min_price = analysis.get("price_range", [0, 0])[0]
     avg_price = trend.get("avg_price", 0) if trend else 0
-    days = analysis.get("days_to_dept", 0)
     recent = trend.get("recent_trend", "") if trend else ""
+    position = trend.get("current_position", "") if trend else ""
 
-    # 价格事实
     if avg_price and min_price:
         if min_price < avg_price:
             lines.append(f"当前最低价¥{min_price:,.0f}，低于近60天平均价¥{avg_price:,.0f}。")
         else:
             lines.append(f"当前最低价¥{min_price:,.0f}，高于近60天平均价¥{avg_price:,.0f}。")
 
-    # 趋势事实
+    if position:
+        lines.append(f"当前价格处于近60天的{_plain_price_position(position)}。")
+
     if "上涨" in recent:
         lines.append("近期价格呈上涨趋势。")
     elif "下降" in recent:
@@ -1224,18 +1258,14 @@ def generate_neutral_summary(analysis, trend):
     else:
         lines.append("近期价格较为平稳。")
 
-    lines.append("")
-
-    # 条件句式
-    if days > 30:
-        lines.append(f"如果行程灵活：距出发还有{days}天，可以持续观察价格变化。")
-        lines.append("如果行程确定：当前价格若在预算范围内，那么也可以考虑入手。")
-    elif days > 14:
-        lines.append(f"距出发{days}天，通常出发前2-3周价格开始上涨。")
-        lines.append("如果看到合适价格，那么不要犹豫太久。")
+    drop_probability = _estimate_drop_probability(
+        price_insights.get("price_history") if price_insights else None,
+        min_price,
+    )
+    if drop_probability is not None:
+        lines.append(f"历史上类似时间点/价格水平的记录中，下一次价格继续下降的比例约{drop_probability}%。")
     else:
-        lines.append(f"距出发仅{days}天，越往后价格上涨概率越大。")
-        lines.append("如果价格在预算范围内，那么尽早确定比较稳妥。")
+        lines.append("历史价格样本不足，暂时无法估算后续下降比例。")
 
     return lines
 
@@ -1259,11 +1289,87 @@ def _reference_flight_line(index: int, flight: dict) -> str:
     return f"方案{index}：¥{flight.get('price', 0):,.0f} 但{reason}"
 
 
+def _option_label(index: int) -> str:
+    letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    if index < len(letters):
+        return f"方案{letters[index]}"
+    return f"方案{index + 1}"
+
+
+def generate_pros_cons(flight, all_flights):
+    pros = []
+    cons = []
+
+    usable_flights = [f for f in all_flights if f.get("price") is not None]
+    if not usable_flights:
+        return pros, cons
+
+    prices = [f["price"] for f in usable_flights]
+    durations = [f["total_duration_min"] for f in usable_flights]
+    sorted_prices = sorted(prices)
+    sorted_durations = sorted(durations)
+    lower_index = min(len(sorted_prices) - 1, len(sorted_prices) // 3)
+
+    # 价格
+    if flight["price"] == min(prices):
+        pros.append("所有方案中价格最低")
+    elif flight["price"] <= sorted_prices[lower_index]:
+        pros.append("价格较低")
+    else:
+        diff = flight["price"] - min(prices)
+        cons.append(f"比最低价贵¥{diff:,.0f}")
+
+    # 时长
+    if flight["total_duration_min"] == min(durations):
+        pros.append("耗时最短")
+    elif flight["total_duration_min"] <= sorted_durations[lower_index]:
+        pros.append("耗时较短")
+    else:
+        diff_h = (flight["total_duration_min"] - min(durations)) // 60
+        cons.append(f"比最快方案慢{diff_h}小时")
+
+    # 转机
+    if flight["stops"] == 0:
+        pros.append("直飞，无需转机")
+    elif flight["stops"] == 1:
+        for lay in flight.get("layovers", []):
+            wait = lay.get("wait_minutes", 0)
+            if wait < 180:
+                pros.append("转机等待时间短，紧凑高效")
+            elif wait > 480:
+                cons.append(f"转机等待{wait // 60}小时，可能需过夜")
+    elif flight["stops"] >= 2:
+        cons.append(f"需转机{flight['stops']}次")
+
+    # 退改
+    extra = flight.get("extra", {})
+    if extra.get("refundable") and extra.get("changeable"):
+        pros.append("可退可改，灵活度高")
+    elif not extra.get("refundable"):
+        cons.append("不可退票")
+
+    # 单一航司
+    airlines = set()
+    for seg in flight.get("segments", []):
+        airline = seg.get("airline", "")
+        if airline:
+            airlines.add(airline)
+    if len(airlines) == 1:
+        pros.append("全程同一航司，行李直挂有保障")
+    elif len(airlines) > 1:
+        cons.append(f"涉及{len(airlines)}家航司，行李可能无法直挂")
+
+    return pros, cons
+
+
 def format_html_message(
     analysis_result, route_info, source_stats=None, price_insights=None
 ):
     """生成HTML格式的推送消息"""
     recs = analysis_result.get("recommendations", [])
+    all_flights = analysis_result.get("all_flights") or [
+        rec.get("flight") for rec in recs if rec.get("flight")
+    ]
     market = analysis_result.get("market_context", {})
     days = analysis_result.get("days_to_dept", "")
 
@@ -1274,7 +1380,7 @@ def format_html_message(
     lines.append("")
     lines.append(f"📅 出发日期：{route_info.get('depart_date','')}")
     lines.append(f"⏳ 距出发：{days}天")
-    lines.append(f"🎯 模式：{route_info.get('mode','均衡推荐')}")
+    lines.append("📌 展示方式：信息对比")
     lines.append(f"📊 市场：{format_market_level(market)}")
     lines.append("")
     lines.append("━━━━━━━━━━━━━━━━")
@@ -1326,17 +1432,18 @@ def format_html_message(
         lines.append(f"共有{len(qualified_flights)}个方案满足：")
         lines.append("")
         recs = [
-            {"tag": f"方案{index}", "flight": flight}
-            for index, flight in enumerate(qualified_flights, start=1)
+            {"flight": flight}
+            for flight in qualified_flights
         ]
+        all_flights = qualified_flights + reference_flights
 
-    # 每个推荐方案
+    # 每个方案
     for i, rec in enumerate(recs):
         f = rec["flight"]
-        scores = f.get("scores", {})
+        pros, cons = generate_pros_cons(f, all_flights)
 
         lines.append("")
-        lines.append(f"<b>{rec['tag']}</b>")
+        lines.append(f"<b>{_option_label(i)}</b>")
         lines.append("")
         segments = f.get("segments", [])
         airline_text = " / ".join(_airlines_from_segments(segments))
@@ -1346,7 +1453,8 @@ def format_html_message(
         lines.append(f"⏱️ 全程：{f.get('total_hours','')}小时")
         stops = f.get('stops', 0)
         lines.append(f"🔄 转机：{'直飞' if stops == 0 else f'{stops}次'}")
-        lines.append(f"⭐ 评分：{scores.get('total','N/A')}/10")
+        lines.append(f"👍 优点：{'；'.join(pros) if pros else '暂无明显优势'}")
+        lines.append(f"👎 缺点：{'；'.join(cons) if cons else '暂无明显短板'}")
         boundary_notes = f.get("priority_boundary_notes") or []
         if boundary_notes:
             lines.append(f"⚠️ 边界：{' / '.join(boundary_notes)}")
@@ -1452,7 +1560,7 @@ def format_html_message(
     lines.append(f"🕐 采集时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}")
     lines.append("")
     lines.append("💬 情况说明")
-    lines.extend(generate_neutral_summary(analysis_result, trend))
+    lines.extend(generate_neutral_summary(analysis_result, trend, price_insights))
     lines.append("")
     lines.append("━━━━━━━━━━━━━━━━")
     lines.append("以上基于历史价格数据分析，仅供参考。")
