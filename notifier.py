@@ -467,6 +467,7 @@ SOURCE_LABELS = {
     "serpapi": "Google Flights（via SerpAPI）",
     "searchapi": "Google Flights（via SearchAPI）",
     "travelpayouts": "Travelpayouts（Aviasales）",
+    "skyscanner": "Skyscanner（via RapidAPI）",
     "serpapi+searchapi": "Google Flights（via SerpAPI + SearchAPI）",
     "searchapi+serpapi": "Google Flights（via SerpAPI + SearchAPI）",
     "duffel": "Duffel",
@@ -511,10 +512,12 @@ def format_source_summary(source_stats):
         "serpapi": "SerpAPI（Google Flights）",
         "searchapi": "SearchAPI（Google Flights）",
         "travelpayouts": "Travelpayouts（Aviasales）",
+        "skyscanner": "Skyscanner（via RapidAPI）",
         "duffel": "Duffel（航司直连）",
         "SerpAPISource": "SerpAPI（Google Flights）",
         "SearchAPISource": "SearchAPI（Google Flights）",
         "TravelpayoutsSource": "Travelpayouts（Aviasales）",
+        "SkyscannerSource": "Skyscanner（via RapidAPI）",
         "DuffelSource": "Duffel（航司直连）",
     }
 
@@ -1530,6 +1533,7 @@ def format_html_message(
         "serpapi": "SerpAPI",
         "searchapi": "SearchAPI",
         "travelpayouts": "Travelpayouts（Aviasales）",
+        "skyscanner": "Skyscanner（via RapidAPI）",
         "duffel": "Duffel",
     }
     if source_stats:
