@@ -29,6 +29,7 @@ jobs:
         env:
           SERPAPI_KEY: ${{ secrets.SERPAPI_KEY }}
           SEARCHAPI_KEY: ${{ secrets.SEARCHAPI_KEY }}
+          TRAVELPAYOUTS_TOKEN: ${{ secrets.TRAVELPAYOUTS_TOKEN }}
           DUFFEL_TOKEN: ${{ secrets.DUFFEL_TOKEN }}
           PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
           WECOM_WEBHOOK: ${{ secrets.WECOM_WEBHOOK }}

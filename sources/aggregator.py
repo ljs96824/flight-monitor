@@ -23,6 +23,10 @@ def build_default_sources() -> tuple[list[FlightSource], list[FlightSource]]:
         from sources.searchapi_source import SearchAPISource
 
         search_sources.append(SearchAPISource())
+    if os.environ.get("TRAVELPAYOUTS_TOKEN"):
+        from sources.travelpayouts_source import TravelpayoutsSource
+
+        search_sources.append(TravelpayoutsSource())
     if os.environ.get("DUFFEL_TOKEN"):
         from sources.duffel_source import DuffelSource
 

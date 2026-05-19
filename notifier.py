@@ -466,6 +466,7 @@ def health_report(results: list[dict]) -> str:
 SOURCE_LABELS = {
     "serpapi": "Google Flights（via SerpAPI）",
     "searchapi": "Google Flights（via SearchAPI）",
+    "travelpayouts": "Travelpayouts（Aviasales）",
     "serpapi+searchapi": "Google Flights（via SerpAPI + SearchAPI）",
     "searchapi+serpapi": "Google Flights（via SerpAPI + SearchAPI）",
     "duffel": "Duffel",
@@ -509,16 +510,18 @@ def format_source_summary(source_stats):
     display_names = {
         "serpapi": "SerpAPI（Google Flights）",
         "searchapi": "SearchAPI（Google Flights）",
+        "travelpayouts": "Travelpayouts（Aviasales）",
         "duffel": "Duffel（航司直连）",
         "SerpAPISource": "SerpAPI（Google Flights）",
         "SearchAPISource": "SearchAPI（Google Flights）",
+        "TravelpayoutsSource": "Travelpayouts（Aviasales）",
         "DuffelSource": "Duffel（航司直连）",
     }
 
     lines = ["📡 数据源汇总"]
 
     for key, value in source_stats.items():
-        if key in ("total_raw", "after_dedup"):
+        if key in ("total_raw", "after_dedup", "enriched_count"):
             continue
         if not isinstance(value, dict):
             continue
@@ -1426,6 +1429,8 @@ def format_html_message(
     for i, f in enumerate(display_flights):
         segments = f.get("segments", [])
         airline_text = " / ".join(_airlines_from_segments(segments))
+        if not airline_text:
+            airline_text = f.get("airline_summary") or " / ".join(f.get("airlines") or [])
         stops = f.get("stops", 0)
 
         lines.append("")
@@ -1437,6 +1442,10 @@ def format_html_message(
         lines.append(f"⏱️ 全程：{f.get('total_hours','')}小时")
         lines.append(f"🔄 转机：{'直飞' if stops == 0 else f'{stops}次'}")
         lines.append("")
+
+        if not segments:
+            lines.append("详细航段请查询航司官网")
+            lines.append("")
 
         for j, seg in enumerate(segments):
             dep_time = str(seg.get("dep_time",""))
@@ -1517,7 +1526,12 @@ def format_html_message(
     lines.append("")
 
     lines.append("📡 数据源汇总")
-    source_display = {"serpapi": "SerpAPI", "searchapi": "SearchAPI", "duffel": "Duffel"}
+    source_display = {
+        "serpapi": "SerpAPI",
+        "searchapi": "SearchAPI",
+        "travelpayouts": "Travelpayouts（Aviasales）",
+        "duffel": "Duffel",
+    }
     if source_stats:
         for key, name in source_display.items():
             info = source_stats.get(key)
