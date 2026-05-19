@@ -10,17 +10,18 @@ BASE_DIR = Path(__file__).parent
 
 
 def get_aggregator() -> FlightAggregator:
-    return FlightAggregator(build_default_sources())
+    search_sources, enrichment_sources = build_default_sources()
+    return FlightAggregator(search_sources, enrichment_sources)
 
 
 def fetch_flights(origin: str, dest: str, date_str: str) -> dict:
     """Fetch raw Google Flights response from the first available source."""
     aggregator = get_aggregator()
-    if not aggregator.sources:
+    if not aggregator.search_sources:
         raise RuntimeError("请在.env文件中设置SERPAPI_KEY或SEARCHAPI_KEY")
 
     last_error = None
-    for source in aggregator.sources:
+    for source in aggregator.search_sources:
         try:
             result = source.fetch(origin, dest, date_str)
         except Exception as exc:
@@ -209,68 +210,35 @@ def _merge_detail_flights(flights: list[dict]) -> list[dict]:
 def collect_all_flights(origin, dest, date_str) -> dict:
     """采集所有航班并返回详细解析结果"""
     aggregator = get_aggregator()
-    if not aggregator.sources:
-        raise RuntimeError("请在.env文件中设置SERPAPI_KEY、SEARCHAPI_KEY或DUFFEL_TOKEN")
+    if not aggregator.search_sources:
+        raise RuntimeError("请在.env文件中设置SERPAPI_KEY或SEARCHAPI_KEY")
 
-    all_flights = []
-    price_insights = None
-    sources_used = []
-    source_errors = []
-    source_stats = {}
+    result = aggregator.collect(origin, dest, date_str)
+    if result is None:
+        return {
+            "flights": [],
+            "price_insights": {},
+            "total_count": 0,
+            "source": None,
+            "sources_used": "",
+            "source_errors": [],
+            "source_stats": {},
+            "collected_at": datetime.now().isoformat(),
+        }
 
-    for source in aggregator.sources:
-        try:
-            result = source.fetch(origin, dest, date_str)
-        except Exception as exc:
-            source_errors.append({"source": source.name, "error": str(exc)})
-            source_stats[source.name] = {
-                "count": 0,
-                "status": f"失败: {str(exc)[:50]}",
-            }
-            continue
-
-        source_name = result.get("source") or source.name
-        sources_used.append(source_name)
-        if price_insights is None and result.get("price_insights"):
-            price_insights = result.get("price_insights")
-
-        raw = result.get("raw") or {}
-        parsed_count = 0
-        for category in ["best_flights", "other_flights"]:
-            for flight in raw.get(category, []) or []:
-                detail = parse_flight_detail(flight, source_name)
-                if detail["price"] is not None:
-                    all_flights.append(detail)
-                    parsed_count += 1
-
-        if parsed_count:
-            continue
-
-        for flight in result.get("flights", []) or []:
-            detail = _normalize_detail_flight(flight, source_name)
-            if detail.get("price") is not None:
-                all_flights.append(detail)
-
-        source_count = parsed_count or len(result.get("flights", []) or [])
-        source_stats[source.name] = {"count": source_count, "status": "成功"}
-
-    all_flights = _merge_detail_flights(all_flights)
-    all_flights.sort(key=lambda x: x["price"])
-    source_stats["total_raw"] = sum(
-        info.get("count", 0)
-        for info in source_stats.values()
-        if isinstance(info, dict) and info.get("status") == "成功"
-    )
-    source_stats["after_dedup"] = len(all_flights)
+    all_flights = [
+        _normalize_detail_flight(flight, flight.get("data_source") or flight.get("source"))
+        for flight in result.get("flights", []) or []
+    ]
 
     return {
         "flights": all_flights,
-        "price_insights": price_insights or {},
+        "price_insights": result.get("price_insights") or {},
         "total_count": len(all_flights),
-        "source": "+".join(sources_used) if sources_used else None,
-        "sources_used": sources_used,
-        "source_errors": source_errors,
-        "source_stats": source_stats,
+        "source": result.get("source"),
+        "sources_used": result.get("sources_used"),
+        "source_errors": result.get("source_errors", []),
+        "source_stats": result.get("source_stats", {}),
         "collected_at": datetime.now().isoformat(),
     }
 
@@ -283,7 +251,7 @@ def collect_and_classify(
     内部通过聚合器支持多个Google Flights数据源。
     """
     aggregator = get_aggregator()
-    if not aggregator.sources:
+    if not aggregator.search_sources:
         print("采集失败: 请在.env文件中设置SERPAPI_KEY或SEARCHAPI_KEY")
         return None
 

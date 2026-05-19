@@ -1463,14 +1463,20 @@ def format_html_message(
             lines.append("")
 
         extra = f.get("extra", {})
-        for baggage_line in format_baggage(extra):
-            lines.append(baggage_line)
-        for seat_line in format_seat(extra):
-            lines.append(seat_line)
-        if extra.get("changeable") or extra.get("refundable"):
+        if f.get("has_baggage_info"):
+            for baggage_line in format_baggage(extra):
+                lines.append(baggage_line)
+            for seat_line in format_seat(extra):
+                lines.append(seat_line)
             change_text = "可改签" if extra.get("changeable") else "不可改签"
             refund_text = "可退票" if extra.get("refundable") else "不可退票"
             lines.append(f"🔄 退改：{change_text} · {refund_text}")
+            lines.append("（数据来源：Duffel航司直连）")
+        else:
+            lines.append("🧳 行李：请查询航司官网")
+            for seat_line in format_seat(extra):
+                lines.append(seat_line)
+            lines.append("🔄 退改：请查询航司官网")
 
         lines.append(f"📎 来源：{_source_label(f.get('data_source') or f.get('source'))}")
         lines.append("")
@@ -1516,8 +1522,13 @@ def format_html_message(
         for key, name in source_display.items():
             info = source_stats.get(key)
             if info and isinstance(info, dict):
-                if info.get("status") == "成功":
-                    lines.append(f"　- {name}：{info['count']}个方案")
+                status = info.get("status", "")
+                if key == "duffel" and "成功" in status:
+                    lines.append(
+                        f"　- {name}：行李退改信息补充（匹配到{source_stats.get('enriched_count', 0)}个方案）"
+                    )
+                elif "成功" in status:
+                    lines.append(f"　- {name}：{info['count']}个方案 ✅")
                 else:
                     lines.append(f"　- {name}：采集失败")
         lines.append(f"　- 合计{source_stats.get('total_raw',0)}个 → 去重后{source_stats.get('after_dedup',0)}个")

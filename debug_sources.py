@@ -44,7 +44,8 @@ except Exception as e:
 
 from sources.aggregator import FlightAggregator, build_default_sources
 
-agg = FlightAggregator(build_default_sources())
+search_sources, enrichment_sources = build_default_sources()
+agg = FlightAggregator(search_sources, enrichment_sources)
 result = agg.collect("PVG", "MCO", "2026-06-20")
 print("\n=== source_stats 实际内容 ===")
 import json

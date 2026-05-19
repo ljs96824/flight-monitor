@@ -111,7 +111,8 @@ def _run_single_flight(subscription: dict, route: str, target_combo: str) -> Non
 def _run_all_flights(subscription: dict, route: str) -> None:
     print("开始完整流程测试：全航线方案对比模式\n")
 
-    agg = FlightAggregator(build_default_sources())
+    search_sources, enrichment_sources = build_default_sources()
+    agg = FlightAggregator(search_sources, enrichment_sources)
     data = agg.collect(
         subscription["origin"],
         subscription["destination"],

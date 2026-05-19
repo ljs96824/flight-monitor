@@ -11,26 +11,33 @@ def normalize_combo(combo: str) -> str:
     return combo.replace(" ", "").upper()
 
 
-def build_default_sources() -> list[FlightSource]:
-    sources = []
+def build_default_sources() -> tuple[list[FlightSource], list[FlightSource]]:
+    """分别构建搜索源和补充源。"""
+    search_sources = []
+    enrichment_sources = []
     if os.environ.get("SERPAPI_KEY"):
         from sources.serpapi_source import SerpAPISource
 
-        sources.append(SerpAPISource())
+        search_sources.append(SerpAPISource())
     if os.environ.get("SEARCHAPI_KEY"):
         from sources.searchapi_source import SearchAPISource
 
-        sources.append(SearchAPISource())
+        search_sources.append(SearchAPISource())
     if os.environ.get("DUFFEL_TOKEN"):
         from sources.duffel_source import DuffelSource
 
-        sources.append(DuffelSource())
-    return sources
+        enrichment_sources.append(DuffelSource())
+    return search_sources, enrichment_sources
 
 
 class FlightAggregator:
-    def __init__(self, sources: list[FlightSource]):
-        self.sources = sources
+    def __init__(
+        self,
+        search_sources: list[FlightSource],
+        enrichment_sources: list[FlightSource] | None = None,
+    ):
+        self.search_sources = search_sources
+        self.enrichment_sources = enrichment_sources or []
 
     def collect(
         self, origin: str, dest: str, date_str: str, target_combo: str | None = None
@@ -42,7 +49,7 @@ class FlightAggregator:
         price_insights = None
         raw_by_source = {}
 
-        for source in self.sources:
+        for source in self.search_sources:
             source_name = getattr(source, "name", type(source).__name__)
             try:
                 result = source.fetch(origin, dest, date_str)
@@ -81,11 +88,6 @@ class FlightAggregator:
                 source_errors.append({"source": source_name, "error": error})
                 print(f"[{source_name}] 失败：{error}")
 
-        if not all_flights:
-            source_stats["total_raw"] = 0
-            source_stats["after_dedup"] = 0
-            return None
-
         total_raw = len(all_flights)
         seen = {}
         sources_by_combo = {}
@@ -116,12 +118,57 @@ class FlightAggregator:
             unique_flights, key=lambda flight: flight.get("price", 99999)
         )
 
+        enrichment_data = {}
+        for source in self.enrichment_sources:
+            source_name = getattr(source, "name", type(source).__name__)
+            try:
+                result = source.fetch(origin, dest, date_str)
+                enrichment_flights = result.get("flights", []) or []
+                source_stats[source_name] = {
+                    "count": len(enrichment_flights),
+                    "status": "成功（仅用于行李退改信息）",
+                }
+                print(
+                    f"[{source_name}] 成功，返回 {len(enrichment_flights)} 个行李退改候选"
+                )
+
+                for flight in enrichment_flights:
+                    combo = normalize_combo(flight.get("flight_combo", ""))
+                    if combo and flight.get("extra"):
+                        enrichment_data[combo] = flight["extra"]
+
+            except Exception as exc:
+                error = str(exc)
+                source_stats[source_name] = {
+                    "count": 0,
+                    "status": "失败（行李退改信息不可用）",
+                }
+                source_errors.append({"source": source_name, "error": error})
+                print(f"[{source_name}] 失败：{error}")
+
+        enriched_count = 0
+        for flight in unique_flights:
+            combo = normalize_combo(flight.get("flight_combo", ""))
+            if combo in enrichment_data:
+                extra = flight.get("extra") or {}
+                extra.update(enrichment_data[combo])
+                flight["extra"] = extra
+                flight["has_baggage_info"] = True
+                enriched_count += 1
+            else:
+                flight["has_baggage_info"] = False
+
         source_stats["total_raw"] = total_raw
         source_stats["after_dedup"] = len(unique_flights)
+        source_stats["enriched_count"] = enriched_count
+
+        if not unique_flights:
+            return None
+
         sources_used = [
             key
             for key, value in source_stats.items()
-            if isinstance(value, dict) and value.get("status") == "成功"
+            if isinstance(value, dict) and "成功" in value.get("status", "")
         ]
 
         return {

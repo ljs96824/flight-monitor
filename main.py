@@ -52,7 +52,8 @@ def run():
         logging.info(f"开始处理 {route}")
 
         try:
-            agg = FlightAggregator(build_default_sources())
+            search_sources, enrichment_sources = build_default_sources()
+            agg = FlightAggregator(search_sources, enrichment_sources)
             data = agg.collect(
                 sub["origin"],
                 sub["destination"],
