@@ -1365,27 +1365,22 @@ def generate_pros_cons(flight, all_flights):
 def format_html_message(
     analysis_result, route_info, source_stats=None, price_insights=None
 ):
-    """生成HTML格式的推送消息"""
+    """生成纯客观数据HTML消息。"""
     recs = analysis_result.get("recommendations", [])
     all_flights = analysis_result.get("all_flights") or [
         rec.get("flight") for rec in recs if rec.get("flight")
     ]
-    market = analysis_result.get("market_context", {})
     days = analysis_result.get("days_to_dept", "")
 
     lines = []
 
-    # 标题区
     lines.append(f"<b>✈️ {city_name(route_info.get('origin',''))} → {city_name(route_info.get('destination',''))}</b>")
     lines.append("")
     lines.append(f"📅 出发日期：{route_info.get('depart_date','')}")
     lines.append(f"⏳ 距出发：{days}天")
-    lines.append("📌 展示方式：信息对比")
-    lines.append(f"📊 市场：{format_market_level(market)}")
     lines.append("")
     lines.append("━━━━━━━━━━━━━━━━")
 
-    # 从显式传入的 price_insights 获取趋势数据
     current_min = (
         analysis_result.get("price_range", [0])[0]
         if analysis_result.get("price_range")
@@ -1395,72 +1390,54 @@ def format_html_message(
         price_insights.get("price_history") if price_insights else None,
         current_min,
     )
-
+    current_prices = [
+        flight.get("price")
+        for flight in all_flights
+        if flight and flight.get("price") is not None
+    ]
     if trend.get("available"):
-        display_min = min(trend["min_price"], current_min) if current_min else trend["min_price"]
-        display_max = max(trend["max_price"], current_min) if current_min else trend["max_price"]
-        lines.append("<b>📈 价格走势（近60天）</b>")
-        lines.append("")
-        lines.append(f"┌ 最高 ¥{display_max:,.0f}")
-        lines.append("│")
-        lines.append(
-            f"│   ● 当前 ¥{current_min:,.0f}（{_short_price_position(trend['current_position'])}）"
-        )
-        lines.append("│")
-        lines.append(f"└ 最低 ¥{display_min:,.0f}")
-        lines.append("")
-        lines.append(f"📉 最低：¥{display_min:,.0f}")
-        lines.append(f"📈 最高：¥{display_max:,.0f}")
-        lines.append(f"📊 平均：¥{trend['avg_price']:,.0f}")
-        lines.append(f"📍 当前位置：{_plain_price_position(trend['current_position'])}")
-        lines.append(f"📶 近期走势：{_plain_recent_trend(trend['recent_trend'])}")
-        lines.append("")
-        lines.append("━━━━━━━━━━━━━━━━")
+        high_price = max(trend["max_price"], current_min) if current_min else trend["max_price"]
+        low_price = min(trend["min_price"], current_min) if current_min else trend["min_price"]
+        avg_price = trend["avg_price"]
+    elif current_prices:
+        high_price = max(current_prices)
+        low_price = min(current_prices)
+        avg_price = round(sum(current_prices) / len(current_prices))
+        current_min = current_min or low_price
     else:
-        lines.append("<b>📈 价格走势</b>")
-        lines.append("")
-        lines.append("数据积累中，3天后可显示趋势图")
-        lines.append("")
-        lines.append("━━━━━━━━━━━━━━━━")
+        high_price = low_price = avg_price = current_min = 0
 
-    priorities = analysis_result.get("priorities") or {}
+    lines.append("<b>📈 价格走势（近60天）</b>")
+    lines.append("")
+    lines.append(f"最高：¥{high_price:,.0f}")
+    lines.append(f"最低：¥{low_price:,.0f}")
+    lines.append(f"平均：¥{avg_price:,.0f}")
+    lines.append(f"当前最低价：¥{current_min:,.0f}")
+    lines.append("")
+    lines.append("━━━━━━━━━━━━━━━━")
+
     qualified_flights = analysis_result.get("qualified_flights") or []
-    reference_flights = analysis_result.get("reference_flights") or []
-    if priorities:
-        lines.append("")
-        lines.append(f"✅ 符合你的条件（{_priority_summary_text(priorities)}）")
-        lines.append(f"共有{len(qualified_flights)}个方案满足：")
-        lines.append("")
-        recs = [
-            {"flight": flight}
-            for flight in qualified_flights
-        ]
-        all_flights = qualified_flights + reference_flights
+    display_flights = qualified_flights or all_flights
+    display_flights = sorted(
+        [flight for flight in display_flights if flight],
+        key=lambda flight: flight.get("price") or float("inf"),
+    )
 
-    # 每个方案
-    for i, rec in enumerate(recs):
-        f = rec["flight"]
-        pros, cons = generate_pros_cons(f, all_flights)
+    for i, f in enumerate(display_flights):
+        segments = f.get("segments", [])
+        airline_text = " / ".join(_airlines_from_segments(segments))
+        stops = f.get("stops", 0)
 
         lines.append("")
         lines.append(f"<b>{_option_label(i)}</b>")
         lines.append("")
-        segments = f.get("segments", [])
-        airline_text = " / ".join(_airlines_from_segments(segments))
-        lines.append(f"💵 价格：¥{f['price']:,.0f}")
-        lines.append(f"🏢 航司：{airline_text}")
-        lines.append(f"✈️ 航线：{f.get('route_summary','')}")
+        lines.append(f"💵 ¥{f['price']:,.0f}")
+        lines.append(f"🏢 {airline_text}")
+        lines.append(f"✈️ {f.get('route_summary','')}")
         lines.append(f"⏱️ 全程：{f.get('total_hours','')}小时")
-        stops = f.get('stops', 0)
         lines.append(f"🔄 转机：{'直飞' if stops == 0 else f'{stops}次'}")
-        lines.append(f"👍 优点：{'；'.join(pros) if pros else '暂无明显优势'}")
-        lines.append(f"👎 缺点：{'；'.join(cons) if cons else '暂无明显短板'}")
-        boundary_notes = f.get("priority_boundary_notes") or []
-        if boundary_notes:
-            lines.append(f"⚠️ 边界：{' / '.join(boundary_notes)}")
         lines.append("")
 
-        # 各航段
         for j, seg in enumerate(segments):
             dep_time = str(seg.get("dep_time",""))
             if " " in dep_time:
@@ -1470,22 +1447,21 @@ def format_html_message(
                 arr_time = arr_time.split(" ")[-1]
 
             lines.append(f"✈ 第{j+1}段：{seg.get('flight_no','')}（{_airline_full_display(seg.get('airline',''))}）")
-            lines.append(f"　　{city_name(seg.get('dep_airport',''))} {dep_time}")
-            lines.append(f"　　→ {city_name(seg.get('arr_airport',''))} {arr_time}")
+            lines.append(
+                f"　　{city_name(seg.get('dep_airport',''))} {dep_time} → "
+                f"{city_name(seg.get('arr_airport',''))} {arr_time}"
+            )
 
-            # 转机等待
             if j < len(f.get("layovers", [])):
                 lay = f["layovers"][j]
                 wait = lay.get("wait_minutes", 0)
-                lines.append(f"　　⏳ 转机等待：{wait//60}小时{wait%60}分钟")
-                if wait > 600:
-                    lines.append(f"　　🟡 注意：可能需要过夜")
-                elif wait < 90:
-                    lines.append(f"　　🟡 注意：时间较紧，需快速通关")
+                airport = lay.get("airport", "")
+                city = city_name(airport) if airport else lay.get("city", "")
+                lines.append("")
+                lines.append(f"　　⏳ {city}转机：等待{wait//60}小时{wait%60}分钟")
 
             lines.append("")
 
-        # 行李退改
         extra = f.get("extra", {})
         for baggage_line in format_baggage(extra):
             lines.append(baggage_line)
@@ -1496,75 +1472,63 @@ def format_html_message(
             refund_text = "可退票" if extra.get("refundable") else "不可退票"
             lines.append(f"🔄 退改：{change_text} · {refund_text}")
 
-        lines.append(f"📎 来源：{f.get('source', f.get('data_source', ''))}")
+        lines.append(f"📎 来源：{_source_label(f.get('data_source') or f.get('source'))}")
         lines.append("")
 
-        # 购买链接
-        lines.append("🔗 <b>购买链接</b>")
+        lines.append("🔗 购买链接")
         lines.append("")
 
         origin = route_info.get("origin", "")
         dest = route_info.get("destination", "")
         date = route_info.get("depart_date", "")
 
-        lines.append(f'① <a href="https://flights.ctrip.com/online/list/oneway-{origin}-{dest}?depdate={date}">携程</a>')
-        lines.append("")
-        lines.append(f'② <a href="https://www.fliggy.com/flight/international-search?from={origin}&to={dest}&depDate={date}">飞猪</a>')
-        lines.append("")
-        lines.append(f'③ <a href="https://www.google.com/travel/flights?q=flights+from+{origin}+to+{dest}+on+{date}">Google Flights</a>')
-        lines.append("")
-
-        # 航司官网
+        links = [
+            ("携程", f"https://flights.ctrip.com/online/list/oneway-{origin}-{dest}?depdate={date}"),
+            ("飞猪", f"https://www.fliggy.com/flight/international-search?from={origin}&to={dest}&depDate={date}"),
+        ]
         airline_str = " ".join(str(a) for a in f.get("airlines", []))
         if "美航" in airline_str or "American" in airline_str or "AA" in str(f.get("flight_combo","")):
-            lines.append(f'④ <a href="https://www.aa.com">美航官网</a>')
-            lines.append("")
+            links.append(("美航官网", "https://www.aa.com"))
         elif "加航" in airline_str or "Air Canada" in airline_str:
-            lines.append(f'④ <a href="https://www.aircanada.com">加航官网</a>')
+            links.append(("加航官网", "https://www.aircanada.com"))
+        links.append((
+            "Google Flights",
+            f"https://www.google.com/travel/flights?q=flights+from+{origin}+to+{dest}+on+{date}",
+        ))
+
+        for link_index, (name, url) in enumerate(links, start=1):
+            number_labels = ["①", "②", "③", "④", "⑤", "⑥"]
+            number = number_labels[link_index - 1] if link_index <= len(number_labels) else str(link_index)
+            lines.append(f"{number} {name}")
+            lines.append(url)
             lines.append("")
 
         lines.append("━━━━━━━━━━━━━━━━")
 
-    if priorities:
-        lines.append("")
-        lines.append("❌ <b>不符合但值得了解</b>")
-        lines.append("以下方案超出了你的某些条件，但可能有参考价值：")
-        lines.append("")
-        if reference_flights:
-            start_index = len(qualified_flights) + 1
-            for index, flight in enumerate(reference_flights[:5], start=start_index):
-                lines.append(_reference_flight_line(index, flight))
-        else:
-            lines.append("暂无超出条件但可参考的方案。")
-        lines.append("")
-        lines.append("━━━━━━━━━━━━━━━━")
-
-    # 底部汇总
     prices = analysis_result.get("price_range", [0, 0])
     lines.append("")
     lines.append(f"📊 价格区间：¥{prices[0]:,.0f} - ¥{prices[1]:,.0f}")
     lines.append("")
 
-    # 数据源
-    lines.append("📡 <b>数据源汇总</b>")
-    source_display = {"serpapi": "SerpAPI", "searchapi": "SearchAPI", "duffel": "Duffel（航司直连）"}
+    lines.append("📡 数据源汇总")
+    source_display = {"serpapi": "SerpAPI", "searchapi": "SearchAPI", "duffel": "Duffel"}
     if source_stats:
         for key, name in source_display.items():
             info = source_stats.get(key)
-            if info and isinstance(info, dict) and info.get("status") == "成功":
-                lines.append(f"　• {name}：{info['count']}个方案 ✅")
-        lines.append(f"　• 合计{source_stats.get('total_raw',0)}个 → 去重后{source_stats.get('after_dedup',0)}个")
-    lines.append("")
+            if info and isinstance(info, dict):
+                if info.get("status") == "成功":
+                    lines.append(f"　- {name}：{info['count']}个方案")
+                else:
+                    lines.append(f"　- {name}：采集失败")
+        lines.append(f"　- 合计{source_stats.get('total_raw',0)}个 → 去重后{source_stats.get('after_dedup',0)}个")
+        lines.append("")
 
     from datetime import datetime
     lines.append(f"🕐 采集时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}")
     lines.append("")
-    lines.append("💬 情况说明")
-    lines.extend(generate_neutral_summary(analysis_result, trend, price_insights))
-    lines.append("")
     lines.append("━━━━━━━━━━━━━━━━")
-    lines.append("以上基于历史价格数据分析，仅供参考。")
-    lines.append("实际购买请以航司或OTA官网价格为准。")
+    lines.append("以上数据来自第三方API，仅供参考。")
+    lines.append("实际价格请以航司或OTA官网为准。")
 
     return "<br>".join(lines)
 
