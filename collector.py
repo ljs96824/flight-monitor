@@ -37,10 +37,36 @@ def fetch_flights(origin: str, dest: str, date_str: str) -> dict:
 
 def calc_layover_minutes(arr_time_str, dep_time_str) -> int:
     """计算两个时间字符串之间的分钟数"""
-    fmt = "%Y-%m-%d %H:%M"
+    def parse_time(value):
+        text = str(value or "").strip()
+        if not text:
+            return None
+
+        for fmt in ["%Y-%m-%d %H:%M"]:
+            try:
+                return datetime.strptime(text, fmt)
+            except ValueError:
+                pass
+
+        try:
+            return datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            pass
+
+        for fmt in ["%Y-%m-%dT%H:%M:%S"]:
+            try:
+                return datetime.strptime(text, fmt)
+            except ValueError:
+                pass
+
+        return None
+
+    arr = parse_time(arr_time_str)
+    dep = parse_time(dep_time_str)
+    if not arr or not dep:
+        return 0
+
     try:
-        arr = datetime.strptime(arr_time_str, fmt)
-        dep = datetime.strptime(dep_time_str, fmt)
         diff = (dep - arr).total_seconds() / 60
         return max(0, int(diff))
     except Exception:
@@ -127,6 +153,18 @@ def _normalize_detail_flight(flight: dict, source_name: str | None = None) -> di
     layovers = detail.get("layovers") or []
     detail["segments"] = segments
     detail["layovers"] = layovers
+
+    for index, layover in enumerate(layovers):
+        if index >= len(segments) - 1:
+            break
+        if layover.get("wait_minutes"):
+            continue
+
+        arr_time = segments[index].get("arr_time")
+        next_dep_time = segments[index + 1].get("dep_time")
+        recalculated = calc_layover_minutes(arr_time, next_dep_time)
+        if recalculated > 0:
+            layover["wait_minutes"] = recalculated
 
     if "total_duration_min" not in detail:
         if detail.get("duration_hours") is not None:
