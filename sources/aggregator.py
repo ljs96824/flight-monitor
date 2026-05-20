@@ -37,14 +37,6 @@ def build_default_sources() -> tuple[list[FlightSource], list[FlightSource]]:
         from sources.searchapi_source import SearchAPISource
 
         search_sources.append(SearchAPISource())
-    if os.environ.get("TRAVELPAYOUTS_TOKEN"):
-        from sources.travelpayouts_source import TravelpayoutsSource
-
-        search_sources.append(TravelpayoutsSource())
-    if os.environ.get("RAPIDAPI_KEY"):
-        from sources.skyscanner_source import SkyscannerSource
-
-        search_sources.append(SkyscannerSource())
     if os.environ.get("DUFFEL_TOKEN"):
         from sources.duffel_source import DuffelSource
 
@@ -81,6 +73,7 @@ class FlightAggregator:
             source_name = getattr(source, "name", type(source).__name__)
             source_count = 0
             source_succeeded = False
+            cabin_counts = {}
             for cabin_class in cabin_classes:
                 try:
                     result = source.fetch(origin, dest, date_str, cabin_class)
@@ -94,6 +87,7 @@ class FlightAggregator:
                         flight["cabin_class"] = flight.get("cabin_class") or cabin_class
 
                     source_count += len(flights)
+                    cabin_counts[cabin_class] = len(flights)
                     source_succeeded = True
                     all_flights.extend(flights)
                     successful_results.append(
@@ -120,6 +114,7 @@ class FlightAggregator:
 
             source_stats[source_name] = {
                 "count": source_count,
+                "cabin_counts": cabin_counts,
                 "status": "成功" if source_succeeded else "失败",
             }
 
@@ -158,11 +153,13 @@ class FlightAggregator:
             source_name = getattr(source, "name", type(source).__name__)
             enrichment_count = 0
             enrichment_succeeded = False
+            cabin_counts = {}
             for cabin_class in cabin_classes:
                 try:
                     result = source.fetch(origin, dest, date_str, cabin_class)
                     enrichment_flights = result.get("flights", []) or []
                     enrichment_count += len(enrichment_flights)
+                    cabin_counts[cabin_class] = len(enrichment_flights)
                     enrichment_succeeded = True
                     print(
                         f"[{source_name}] {cabin_class} 成功，返回 {len(enrichment_flights)} 个行李退改候选"
@@ -183,6 +180,7 @@ class FlightAggregator:
 
             source_stats[source_name] = {
                 "count": enrichment_count,
+                "cabin_counts": cabin_counts,
                 "status": (
                     "成功（仅用于行李退改信息）"
                     if enrichment_succeeded
@@ -204,6 +202,14 @@ class FlightAggregator:
 
         source_stats["total_raw"] = total_raw
         source_stats["after_dedup"] = len(unique_flights)
+        source_stats["after_dedup_by_cabin"] = {
+            cabin_class: sum(
+                1
+                for flight in unique_flights
+                if (flight.get("cabin_class") or "economy") == cabin_class
+            )
+            for cabin_class in cabin_classes
+        }
         source_stats["enriched_count"] = enriched_count
 
         if not unique_flights:

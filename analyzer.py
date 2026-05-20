@@ -1287,11 +1287,37 @@ def analyze_all_flights(
         ]
         display_flights.extend(sorted(cabin_flights, key=lambda f: f["price"])[:10])
 
+    economy_flights = [
+        flight
+        for flight in usable_flights
+        if (flight.get("cabin_class") or "economy") == "economy"
+    ]
+    business_flights = [
+        flight
+        for flight in usable_flights
+        if (flight.get("cabin_class") or "economy") == "business"
+    ]
+    economy_recommendations, business_recommendation = select_recommendations(
+        economy_flights, business_flights
+    )
+    cabin_price_ranges = {}
+    for cabin_class in cabin_order:
+        cabin_prices = [
+            flight["price"]
+            for flight in usable_flights
+            if (flight.get("cabin_class") or "economy") == cabin_class
+        ]
+        if cabin_prices:
+            cabin_price_ranges[cabin_class] = [min(cabin_prices), max(cabin_prices)]
+
     return {
         "total_options": len(usable_flights),
         "recommendations": recommendations,
+        "economy_recommendations": economy_recommendations,
+        "business_recommendation": business_recommendation,
         "all_flights": display_flights,
         "price_range": [min(prices), max(prices)],
+        "cabin_price_ranges": cabin_price_ranges,
         "duration_range": [min(durations), max(durations)],
         "market_context": market_context,
         "price_insights": price_insights,
@@ -1301,3 +1327,23 @@ def analyze_all_flights(
         "qualified_flights": qualified_flights,
         "reference_flights": reference_flights,
     }
+
+
+def select_recommendations(economy_flights, business_flights):
+    """筛选推送方案：经济舱最多4个 + 商务舱1个。"""
+    eco_recs = []
+    seen_routes = set()
+
+    for flight in sorted(economy_flights, key=lambda item: item.get("price", 99999)):
+        route = flight.get("route_summary", "")
+        if route not in seen_routes and len(eco_recs) < 4:
+            eco_recs.append(flight)
+            seen_routes.add(route)
+
+    business_rec = None
+    if business_flights:
+        business_rec = min(
+            business_flights, key=lambda item: item.get("price", 99999)
+        )
+
+    return eco_recs, business_rec
