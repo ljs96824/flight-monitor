@@ -809,7 +809,7 @@ def _days_to_depart(route_info: dict) -> int | None:
 
 
 MODE_LABELS = {
-    "balanced": "🎯 当前模式：均衡推荐",
+    "balanced": "🎯 当前模式：均衡排序",
     "budget": "💰 当前模式：省钱优先",
     "fast": "⚡ 当前模式：速度优先",
     "comfort": "🛋️ 当前模式：舒适优先",
@@ -928,7 +928,7 @@ def _plan_title(index: int, tag: str) -> str:
     plan_no = names[index] if index < len(names) else str(index + 1)
     parts = str(tag or "方案").split(maxsplit=1)
     icon = parts[0] if parts else "⭐"
-    label = parts[1] if len(parts) > 1 else str(tag or "推荐")
+    label = parts[1] if len(parts) > 1 else str(tag or "方案")
     return f"{icon} 方案{plan_no}：{label}"
 
 
@@ -1063,12 +1063,22 @@ def get_tag_color(tag):
 
 def _mode_text(mode: str | None) -> str:
     mapping = {
-        "balanced": "均衡推荐",
+        "balanced": "均衡排序",
         "budget": "省钱优先",
         "fast": "速度优先",
         "comfort": "舒适优先",
     }
-    return mapping.get(mode or "balanced", mode or "均衡推荐")
+    return mapping.get(mode or "balanced", mode or "均衡排序")
+
+
+def _sort_rule_text(mode: str | None) -> str:
+    mapping = {
+        "balanced": "📋 当前排序：综合考虑价格、时长、转机（可在配置中修改）",
+        "budget": "📋 当前排序：价格从低到高（可在配置中修改）",
+        "fast": "📋 当前排序：总时长从短到长（可在配置中修改）",
+        "comfort": "📋 当前排序：转机次数少、等待时间短优先（可在配置中修改）",
+    }
+    return mapping.get(mode or "balanced", mapping["balanced"])
 
 
 def format_market_level(market: dict) -> str:
@@ -1646,7 +1656,81 @@ def _compact_booking_links(flight: dict, route_info: dict) -> list[tuple[str, st
     return links[:3]
 
 
-def _append_compact_flight(lines: list[str], flight: dict, label: str, route_info: dict) -> None:
+def generate_context(flight, all_flights):
+    """生成方案的取舍说明和适合人群"""
+    price = flight.get("price", 0)
+    hours = flight.get("total_hours", 0)
+    stops = flight.get("stops", 0)
+    prices = [f.get("price", 0) for f in all_flights]
+    min_price = min(prices) if prices else 0
+
+    tradeoffs = []
+    if price == min_price:
+        tradeoffs.append("价格最低")
+    elif price <= min_price * 1.1:
+        tradeoffs.append("价格接近最低")
+    else:
+        tradeoffs.append(f"比最低价贵¥{price - min_price:,.0f}")
+
+    if hours <= 20:
+        tradeoffs.append("耗时较短")
+    elif hours >= 28:
+        tradeoffs.append("耗时较长")
+
+    if stops == 0:
+        tradeoffs.append("直飞省心")
+    elif stops == 1:
+        for lay in flight.get("layovers", []):
+            wait = lay.get("wait_minutes", 0)
+            if wait > 480:
+                tradeoffs.append("转机需过夜")
+            elif wait < 90:
+                tradeoffs.append("转机时间紧")
+            else:
+                tradeoffs.append("转机时间适中")
+
+    extra = flight.get("extra", {})
+    if extra.get("refundable"):
+        tradeoffs.append("可退票")
+
+    tradeoff_text = " · ".join(tradeoffs)
+
+    suitable = []
+    not_suitable = []
+
+    if price == min_price:
+        suitable.append("预算有限")
+    if hours <= 20 and stops <= 1:
+        suitable.append("时间紧凑的出行")
+    if stops == 0:
+        suitable.append("带老人小孩")
+        suitable.append("第一次出国")
+    if extra.get("refundable") and extra.get("changeable"):
+        suitable.append("行程未完全确定")
+
+    if hours >= 28:
+        not_suitable.append("体力较差")
+    if stops >= 2:
+        not_suitable.append("带小孩出行")
+    for lay in flight.get("layovers", []):
+        if lay.get("wait_minutes", 0) > 480:
+            not_suitable.append("不想在机场过夜")
+    if not extra.get("refundable"):
+        not_suitable.append("行程可能变动")
+
+    suit_text = "、".join(suitable[:3]) if suitable else "一般出行"
+    not_suit_text = "、".join(not_suitable[:2]) if not_suitable else ""
+
+    return tradeoff_text, suit_text, not_suit_text
+
+
+def _append_compact_flight(
+    lines: list[str],
+    flight: dict,
+    label: str,
+    route_info: dict,
+    all_flights: list[dict],
+) -> None:
     segments = flight.get("segments") or []
     airline_text = " / ".join(_airlines_from_segments(segments))
     if not airline_text:
@@ -1668,6 +1752,12 @@ def _append_compact_flight(lines: list[str], flight: dict, label: str, route_inf
     lines.append(_compact_baggage_line(flight))
     lines.append(_compact_refund_line(flight))
     lines.append(f"📎 来源：{_compact_source_label(flight)}")
+    lines.append("")
+    tradeoff_text, suit_text, not_suit_text = generate_context(flight, all_flights)
+    lines.append(f"📋 {tradeoff_text}")
+    lines.append(f"👤 适合：{suit_text}")
+    if not_suit_text:
+        lines.append(f"⚠️ 不太适合：{not_suit_text}")
     lines.append("")
     lines.append("🔗 购买")
     for index, (name, url) in enumerate(_compact_booking_links(flight, route_info), start=1):
@@ -1758,17 +1848,23 @@ def format_html_message(
         lines.append(f"<b>✈️ {city_name(route_info.get('origin',''))} → {city_name(route_info.get('destination',''))}</b>")
         lines.append(f"📅 出发日期：{route_info.get('depart_date','')}")
         lines.append(f"⏳ 距出发：{days}天")
+        lines.append(_sort_rule_text(route_info.get("mode") or analysis_result.get("mode")))
+        lines.append("以下方案按当前排序规则展示，排序不代表推荐。")
         lines.append("")
         lines.append("━━━ 经济舱方案 ━━━")
         lines.append("")
 
         for index, flight in enumerate(economy_recs[:economy_limit]):
-            _append_compact_flight(lines, flight, _option_label(index), route_info)
+            _append_compact_flight(
+                lines, flight, _option_label(index), route_info, all_flights
+            )
 
         if business_rec:
             lines.append("━━━ 商务舱参考 ━━━")
             lines.append("")
-            _append_compact_flight(lines, business_rec, "商务舱最低价", route_info)
+            _append_compact_flight(
+                lines, business_rec, "商务舱最低价", route_info, all_flights
+            )
 
         current_min = (
             analysis_result.get("price_range", [0])[0]
@@ -1816,6 +1912,7 @@ def format_html_message(
         lines.append("━━━━━━━━━━━━━━━━")
         lines.append("以上数据来自第三方API，仅供参考。")
         lines.append("实际价格请以航司或OTA官网为准。")
+        lines.append("以上排序基于当前配置规则，不代表最优选择。请根据您的时间、预算和出行需求自行判断。")
         return "<br>".join(lines)
 
     message = build_message(4)
@@ -1841,12 +1938,14 @@ def format_comparison_message(
     if days_to_dept is not None:
         lines.append(f"⏳ 距出发还有：{days_to_dept}天")
     lines.append(_mode_label(route_info.get("mode") or analysis_result.get("mode")))
+    lines.append(_sort_rule_text(route_info.get("mode") or analysis_result.get("mode")))
+    lines.append("以下方案按当前排序规则展示，排序不代表推荐。")
 
     market_line = _market_line(market)
     if market_line:
         lines.append(market_line)
 
-    lines.extend(["", "━━━ 推荐方案 ━━━", ""])
+    lines.extend(["", "━━━ 符合条件的方案 ━━━", ""])
 
     for index, rec in enumerate(recs):
         flight = rec.get("flight", {})
@@ -1899,7 +1998,7 @@ def format_comparison_message(
 
         scores = flight.get("scores") or {}
         if scores.get("total") is not None:
-            lines.append(f"⭐ 综合评分：{scores['total']} / 10")
+            lines.append(f"⭐ 条件匹配度：{scores['total']} / 10")
 
         lines.extend(_duffel_extra_lines(flight))
         lines.append(f"📎 数据来源：{_source_label(flight.get('data_source'))}")
@@ -1937,6 +2036,7 @@ def format_comparison_message(
             "━━━━━━━━━━━━━━━━━━━━",
             "以上内容基于历史价格数据分析，仅供参考。",
             "实际购买请以航司或OTA官网价格为准。",
+            "以上排序基于当前配置规则，不代表最优选择。请根据您的时间、预算和出行需求自行判断。",
         ]
     )
 

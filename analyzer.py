@@ -1298,7 +1298,7 @@ def analyze_all_flights(
         if (flight.get("cabin_class") or "economy") == "business"
     ]
     economy_recommendations, business_recommendation = select_recommendations(
-        economy_flights, business_flights
+        economy_flights, business_flights, mode
     )
     cabin_price_ranges = {}
     for cabin_class in cabin_order:
@@ -1329,12 +1329,36 @@ def analyze_all_flights(
     }
 
 
-def select_recommendations(economy_flights, business_flights):
+def select_recommendations(economy_flights, business_flights, mode: str = "balanced"):
     """筛选推送方案：经济舱最多4个 + 商务舱1个。"""
+    def max_layover_minutes(flight: dict) -> int:
+        return max(
+            (int(layover.get("wait_minutes") or 0) for layover in flight.get("layovers", [])),
+            default=0,
+        )
+
+    def sort_key(flight: dict):
+        if mode == "budget":
+            return (flight.get("price", 99999), flight.get("total_duration_min", 99999))
+        if mode == "fast":
+            return (flight.get("total_duration_min", 99999), flight.get("price", 99999))
+        if mode == "comfort":
+            return (
+                flight.get("stops", 99),
+                max_layover_minutes(flight),
+                flight.get("total_duration_min", 99999),
+                flight.get("price", 99999),
+            )
+        return (
+            flight.get("value_score", 99999),
+            flight.get("price", 99999),
+            flight.get("total_duration_min", 99999),
+        )
+
     eco_recs = []
     seen_routes = set()
 
-    for flight in sorted(economy_flights, key=lambda item: item.get("price", 99999)):
+    for flight in sorted(economy_flights, key=sort_key):
         route = flight.get("route_summary", "")
         if route not in seen_routes and len(eco_recs) < 4:
             eco_recs.append(flight)
