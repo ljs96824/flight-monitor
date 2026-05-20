@@ -57,7 +57,7 @@ class SearchAPISource(FlightSource):
             raise RuntimeError(results["error"])
 
         return {
-            "flights": parse_google_flights(results, self.name, cabin_class),
+            "flights": parse_google_flights(results, self.name, cabin_class, date_str),
             "price_insights": results.get("price_insights"),
             "source": self.name,
             "raw": results,

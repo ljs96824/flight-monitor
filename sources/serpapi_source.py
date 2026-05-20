@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime
+import re
+from datetime import datetime, time, timedelta
 
 from serpapi import GoogleSearch
 
@@ -38,7 +39,7 @@ class SerpAPISource(FlightSource):
             raise RuntimeError(results["error"])
 
         return {
-            "flights": parse_google_flights(results, self.name, cabin_class),
+            "flights": parse_google_flights(results, self.name, cabin_class, date_str),
             "price_insights": results.get("price_insights"),
             "source": self.name,
             "raw": results,
@@ -56,15 +57,70 @@ def _layover_minutes(arr_time: str, dep_time: str) -> int:
     if not arr_time or not dep_time:
         return 0
     try:
-        arr = datetime.strptime(arr_time, "%Y-%m-%d %H:%M")
-        dep = datetime.strptime(dep_time, "%Y-%m-%d %H:%M")
+        arr = _parse_datetime(arr_time)
+        dep = _parse_datetime(dep_time)
     except ValueError:
+        return 0
+    if not arr or not dep:
         return 0
     return max(0, int((dep - arr).total_seconds() // 60))
 
 
+def _parse_datetime(value: str) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+
+    for fmt in ["%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M:%S"]:
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            pass
+
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        return parsed.replace(tzinfo=None)
+    except ValueError:
+        return None
+
+
+def _normalize_airport_time(
+    value: str,
+    date_str: str | None = None,
+    previous_dt: datetime | None = None,
+) -> tuple[str, datetime | None]:
+    """Keep full datetimes; infer dates for bare HH:MM values in sequence."""
+    text = str(value or "").strip()
+    if not text:
+        return "", None
+
+    parsed = _parse_datetime(text)
+    if parsed:
+        return text, parsed
+
+    if re.fullmatch(r"\d{1,2}:\d{2}(:\d{2})?", text) and date_str:
+        try:
+            base_date = (
+                previous_dt.date()
+                if previous_dt is not None
+                else datetime.fromisoformat(date_str).date()
+            )
+            hour, minute = (int(part) for part in text[:5].split(":"))
+            inferred = datetime.combine(base_date, time(hour, minute))
+            while previous_dt is not None and inferred < previous_dt:
+                inferred += timedelta(days=1)
+            return inferred.strftime("%Y-%m-%d %H:%M"), inferred
+        except ValueError:
+            return text, None
+
+    return text, None
+
+
 def parse_google_flights(
-    results: dict, source_name: str, cabin_class: str = "economy"
+    results: dict,
+    source_name: str,
+    cabin_class: str = "economy",
+    date_str: str | None = None,
 ) -> list[dict]:
     all_flights = []
 
@@ -79,6 +135,7 @@ def parse_google_flights(
             cities = []
             parsed_segments = []
             layovers = []
+            previous_event_dt = None
 
             for index, segment in enumerate(segments):
                 flight_no = segment.get("flight_number", "")
@@ -88,6 +145,20 @@ def parse_google_flights(
 
                 dep_airport = segment.get("departure_airport", {}) or {}
                 arr_airport = segment.get("arrival_airport", {}) or {}
+                dep_time, dep_dt = _normalize_airport_time(
+                    dep_airport.get("time", ""),
+                    date_str,
+                    previous_event_dt,
+                )
+                if dep_dt:
+                    previous_event_dt = dep_dt
+                arr_time, arr_dt = _normalize_airport_time(
+                    arr_airport.get("time", ""),
+                    date_str,
+                    previous_event_dt,
+                )
+                if arr_dt:
+                    previous_event_dt = arr_dt
                 if not cities:
                     cities.append(dep_airport.get("id", ""))
                 cities.append(arr_airport.get("id", ""))
@@ -98,10 +169,10 @@ def parse_google_flights(
                     "aircraft": segment.get("airplane", ""),
                     "dep_airport": dep_airport.get("id", ""),
                     "dep_city": dep_airport.get("name", ""),
-                    "dep_time": dep_airport.get("time", ""),
+                    "dep_time": dep_time,
                     "arr_airport": arr_airport.get("id", ""),
                     "arr_city": arr_airport.get("name", ""),
-                    "arr_time": arr_airport.get("time", ""),
+                    "arr_time": arr_time,
                     "duration_min": segment.get("duration", 0) or 0,
                     "cabin_class": cabin_class,
                 }
@@ -109,13 +180,17 @@ def parse_google_flights(
 
                 if index < len(segments) - 1:
                     next_segment = segments[index + 1]
-                    next_dep = (next_segment.get("departure_airport") or {}).get("time", "")
+                    next_dep, _ = _normalize_airport_time(
+                        (next_segment.get("departure_airport") or {}).get("time", ""),
+                        date_str,
+                        arr_dt or previous_event_dt,
+                    )
                     layovers.append(
                         {
                             "city": arr_airport.get("name", ""),
                             "airport": arr_airport.get("id", ""),
                             "wait_minutes": _layover_minutes(
-                                arr_airport.get("time", ""),
+                                arr_time,
                                 next_dep,
                             ),
                         }
