@@ -7,14 +7,16 @@ import os
 import httpx
 
 from sources.base import FlightSource
-from sources.serpapi_source import parse_google_flights
+from sources.serpapi_source import _google_cabin_code, parse_google_flights
 
 
 class SearchAPISource(FlightSource):
     name = "searchapi"
     url = "https://www.searchapi.io/api/v1/search"
 
-    def fetch(self, origin: str, dest: str, date_str: str) -> dict:
+    def fetch(
+        self, origin: str, dest: str, date_str: str, cabin_class: str = "economy"
+    ) -> dict:
         api_key = os.environ.get("SEARCHAPI_KEY")
         params = {
             "engine": "google_flights",
@@ -29,6 +31,9 @@ class SearchAPISource(FlightSource):
             "sort_by": "price",
             "api_key": api_key,
         }
+        selected_cabin = _google_cabin_code(cabin_class)
+        if selected_cabin:
+            params["selected_cabins"] = selected_cabin
 
         response = httpx.get(self.url, params=params, timeout=30)
         print(f"[SearchAPI] 请求URL: {_redact_url(str(response.request.url))}")
@@ -52,7 +57,7 @@ class SearchAPISource(FlightSource):
             raise RuntimeError(results["error"])
 
         return {
-            "flights": parse_google_flights(results, self.name),
+            "flights": parse_google_flights(results, self.name, cabin_class),
             "price_insights": results.get("price_insights"),
             "source": self.name,
             "raw": results,

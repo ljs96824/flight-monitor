@@ -11,6 +11,20 @@ def normalize_combo(combo: str) -> str:
     return combo.replace(" ", "").upper()
 
 
+def _normalize_cabin_classes(cabin_classes) -> list[str]:
+    if not cabin_classes:
+        return ["economy"]
+    if isinstance(cabin_classes, str):
+        return [cabin_classes]
+    return list(cabin_classes)
+
+
+def _flight_key(flight: dict) -> str:
+    combo = normalize_combo(flight.get("flight_combo", ""))
+    cabin_class = flight.get("cabin_class") or "economy"
+    return f"{combo}::{cabin_class}"
+
+
 def build_default_sources() -> tuple[list[FlightSource], list[FlightSource]]:
     """分别构建搜索源和补充源。"""
     search_sources = []
@@ -48,8 +62,14 @@ class FlightAggregator:
         self.enrichment_sources = enrichment_sources or []
 
     def collect(
-        self, origin: str, dest: str, date_str: str, target_combo: str | None = None
+        self,
+        origin: str,
+        dest: str,
+        date_str: str,
+        target_combo: str | None = None,
+        cabin_classes=None,
     ) -> dict | None:
+        cabin_classes = _normalize_cabin_classes(cabin_classes)
         source_stats = {}
         all_flights = []
         successful_results = []
@@ -59,42 +79,49 @@ class FlightAggregator:
 
         for source in self.search_sources:
             source_name = getattr(source, "name", type(source).__name__)
-            try:
-                result = source.fetch(origin, dest, date_str)
-                flights = result.get("flights", []) or []
+            source_count = 0
+            source_succeeded = False
+            for cabin_class in cabin_classes:
+                try:
+                    result = source.fetch(origin, dest, date_str, cabin_class)
+                    flights = result.get("flights", []) or []
 
-                for flight in flights:
-                    if not flight.get("source"):
-                        flight["source"] = source_name
-                    if not flight.get("data_source"):
-                        flight["data_source"] = source_name
+                    for flight in flights:
+                        if not flight.get("source"):
+                            flight["source"] = source_name
+                        if not flight.get("data_source"):
+                            flight["data_source"] = source_name
+                        flight["cabin_class"] = flight.get("cabin_class") or cabin_class
 
-                source_stats[source_name] = {
-                    "count": len(flights),
-                    "status": "成功",
-                }
-                all_flights.extend(flights)
-                successful_results.append(
-                    {
-                        **result,
-                        "source": source_name,
-                        "flights": flights,
-                    }
-                )
-                raw_by_source[source_name] = result.get("raw")
-                print(f"[{source_name}] 成功，返回 {len(flights)} 个方案")
+                    source_count += len(flights)
+                    source_succeeded = True
+                    all_flights.extend(flights)
+                    successful_results.append(
+                        {
+                            **result,
+                            "source": source_name,
+                            "flights": flights,
+                        }
+                    )
+                    raw_by_source[f"{source_name}:{cabin_class}"] = result.get("raw")
+                    print(
+                        f"[{source_name}] {cabin_class} 成功，返回 {len(flights)} 个方案"
+                    )
 
-                if not price_insights and result.get("price_insights"):
-                    price_insights = result["price_insights"]
+                    if not price_insights and result.get("price_insights"):
+                        price_insights = result["price_insights"]
 
-            except Exception as exc:
-                error = str(exc)
-                source_stats[source_name] = {
-                    "count": 0,
-                    "status": "失败",
-                }
-                source_errors.append({"source": source_name, "error": error})
-                print(f"[{source_name}] 失败：{error}")
+                except Exception as exc:
+                    error = str(exc)
+                    source_errors.append(
+                        {"source": source_name, "cabin_class": cabin_class, "error": error}
+                    )
+                    print(f"[{source_name}] {cabin_class} 失败：{error}")
+
+            source_stats[source_name] = {
+                "count": source_count,
+                "status": "成功" if source_succeeded else "失败",
+            }
 
         total_raw = len(all_flights)
         seen = {}
@@ -104,7 +131,7 @@ class FlightAggregator:
             if not combo:
                 continue
 
-            normalized_combo = normalize_combo(combo)
+            normalized_combo = _flight_key(flight)
             source_name = flight.get("data_source") or flight.get("source")
             sources_by_combo.setdefault(normalized_combo, [])
             if source_name and source_name not in sources_by_combo[normalized_combo]:
@@ -117,7 +144,7 @@ class FlightAggregator:
 
         unique_flights = list(seen.values())
         for flight in unique_flights:
-            normalized_combo = normalize_combo(flight.get("flight_combo", ""))
+            normalized_combo = _flight_key(flight)
             sources = sources_by_combo.get(normalized_combo, [])
             if sources:
                 flight["data_source"] = "+".join(sources)
@@ -129,34 +156,43 @@ class FlightAggregator:
         enrichment_data = {}
         for source in self.enrichment_sources:
             source_name = getattr(source, "name", type(source).__name__)
-            try:
-                result = source.fetch(origin, dest, date_str)
-                enrichment_flights = result.get("flights", []) or []
-                source_stats[source_name] = {
-                    "count": len(enrichment_flights),
-                    "status": "成功（仅用于行李退改信息）",
-                }
-                print(
-                    f"[{source_name}] 成功，返回 {len(enrichment_flights)} 个行李退改候选"
-                )
+            enrichment_count = 0
+            enrichment_succeeded = False
+            for cabin_class in cabin_classes:
+                try:
+                    result = source.fetch(origin, dest, date_str, cabin_class)
+                    enrichment_flights = result.get("flights", []) or []
+                    enrichment_count += len(enrichment_flights)
+                    enrichment_succeeded = True
+                    print(
+                        f"[{source_name}] {cabin_class} 成功，返回 {len(enrichment_flights)} 个行李退改候选"
+                    )
 
-                for flight in enrichment_flights:
-                    combo = normalize_combo(flight.get("flight_combo", ""))
-                    if combo and flight.get("extra"):
-                        enrichment_data[combo] = flight["extra"]
+                    for flight in enrichment_flights:
+                        flight["cabin_class"] = flight.get("cabin_class") or cabin_class
+                        combo = _flight_key(flight)
+                        if combo and flight.get("extra"):
+                            enrichment_data[combo] = flight["extra"]
 
-            except Exception as exc:
-                error = str(exc)
-                source_stats[source_name] = {
-                    "count": 0,
-                    "status": "失败（行李退改信息不可用）",
-                }
-                source_errors.append({"source": source_name, "error": error})
-                print(f"[{source_name}] 失败：{error}")
+                except Exception as exc:
+                    error = str(exc)
+                    source_errors.append(
+                        {"source": source_name, "cabin_class": cabin_class, "error": error}
+                    )
+                    print(f"[{source_name}] {cabin_class} 失败：{error}")
+
+            source_stats[source_name] = {
+                "count": enrichment_count,
+                "status": (
+                    "成功（仅用于行李退改信息）"
+                    if enrichment_succeeded
+                    else "失败（行李退改信息不可用）"
+                ),
+            }
 
         enriched_count = 0
         for flight in unique_flights:
-            combo = normalize_combo(flight.get("flight_combo", ""))
+            combo = _flight_key(flight)
             if combo in enrichment_data:
                 extra = flight.get("extra") or {}
                 extra.update(enrichment_data[combo])

@@ -38,7 +38,7 @@ class SkyscannerSource(FlightSource):
             "X-RapidAPI-Host": "sky-scrapper.p.rapidapi.com",
         }
 
-    def fetch(self, origin, dest, date_str):
+    def fetch(self, origin, dest, date_str, cabin_class: str = "economy"):
         """Sky Scrapper需要先查airport的entityId，再搜航班。"""
         flights = []
 
@@ -59,7 +59,7 @@ class SkyscannerSource(FlightSource):
                     "originEntityId": origin_id,
                     "destinationEntityId": dest_id,
                     "date": date_str,
-                    "cabinClass": "economy",
+                    "cabinClass": cabin_class,
                     "adults": "1",
                     "currency": "CNY",
                     "market": "CN",
@@ -114,6 +114,7 @@ class SkyscannerSource(FlightSource):
                         "arr_city": arrival.get("name", ""),
                         "arr_time": segment.get("arrival", ""),
                         "duration_min": segment.get("durationInMinutes", 0),
+                        "cabin_class": cabin_class,
                     }
                     segments.append(segment_info)
 
@@ -163,6 +164,7 @@ class SkyscannerSource(FlightSource):
                     "layovers": layovers,
                     "source": "skyscanner",
                     "data_source": "skyscanner",
+                    "cabin_class": cabin_class,
                     "extra": {},
                 }
                 flights.append(flight)

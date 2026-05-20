@@ -143,6 +143,7 @@ def _normalize_detail_flight(flight: dict, source_name: str | None = None) -> di
         "stops", detail.get("stopovers", max(0, len(segments) - 1))
     )
     detail["stopovers"] = detail.get("stopovers", detail["stops"])
+    detail["cabin_class"] = detail.get("cabin_class") or "economy"
 
     if not detail.get("flight_combo"):
         detail["flight_combo"] = "+".join(
@@ -207,13 +208,13 @@ def _merge_detail_flights(flights: list[dict]) -> list[dict]:
     return list(merged.values())
 
 
-def collect_all_flights(origin, dest, date_str) -> dict:
+def collect_all_flights(origin, dest, date_str, cabin_classes=None) -> dict:
     """采集所有航班并返回详细解析结果"""
     aggregator = get_aggregator()
     if not aggregator.search_sources:
         raise RuntimeError("请在.env文件中设置SERPAPI_KEY或SEARCHAPI_KEY")
 
-    result = aggregator.collect(origin, dest, date_str)
+    result = aggregator.collect(origin, dest, date_str, cabin_classes=cabin_classes)
     if result is None:
         return {
             "flights": [],
@@ -244,7 +245,11 @@ def collect_all_flights(origin, dest, date_str) -> dict:
 
 
 def collect_and_classify(
-    origin: str, dest: str, date_str: str, target_combo: str
+    origin: str,
+    dest: str,
+    date_str: str,
+    target_combo: str,
+    cabin_classes=None,
 ) -> dict | None:
     """
     采集并分类：目标航班 vs 替代方案。
@@ -255,7 +260,9 @@ def collect_and_classify(
         print("采集失败: 请在.env文件中设置SERPAPI_KEY或SEARCHAPI_KEY")
         return None
 
-    result = aggregator.collect(origin, dest, date_str, target_combo)
+    result = aggregator.collect(
+        origin, dest, date_str, target_combo, cabin_classes=cabin_classes
+    )
     if result is None:
         print(f"未找到任何航班: {origin}→{dest} {date_str}")
         return None

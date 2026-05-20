@@ -58,6 +58,7 @@ def run():
                 sub["origin"],
                 sub["destination"],
                 sub["depart_date"],
+                cabin_classes=sub.get("cabin_classes"),
             )
 
             if data is None or not data.get("flights"):
@@ -98,6 +99,7 @@ def run():
                     "origin": sub["origin"],
                     "destination": sub["destination"],
                     "depart_date": sub["depart_date"],
+                    "cabin_classes": sub.get("cabin_classes"),
                     "mode": sub.get("mode", "balanced"),
                     "priorities": sub.get("priorities"),
                     "previous_prices": previous_prices,

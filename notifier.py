@@ -1206,6 +1206,125 @@ def format_seat(extra):
     return lines
 
 
+def _cabin_label(cabin_class: str | None) -> str:
+    labels = {
+        "economy": "经济舱（Economy）",
+        "premium_economy": "超级经济舱（Premium Economy）",
+        "business": "商务舱（Business）",
+        "first": "头等舱（First）",
+    }
+    return labels.get(cabin_class or "economy", cabin_class or "经济舱")
+
+
+def _cabin_group_title(cabin_class: str | None) -> str:
+    titles = {
+        "economy": "━━━ 经济舱方案 ━━━",
+        "premium_economy": "━━━ 超级经济舱方案 ━━━",
+        "business": "━━━ 商务舱方案 ━━━",
+        "first": "━━━ 头等舱方案 ━━━",
+    }
+    return titles.get(cabin_class or "economy", f"━━━ {_cabin_label(cabin_class)}方案 ━━━")
+
+
+def _ordered_cabin_classes(flights: list[dict], configured=None) -> list[str]:
+    present = []
+    for flight in flights:
+        cabin_class = flight.get("cabin_class") or "economy"
+        if cabin_class not in present:
+            present.append(cabin_class)
+
+    ordered = []
+    configured_classes = configured or []
+    if isinstance(configured_classes, str):
+        configured_classes = [configured_classes]
+    for cabin_class in configured_classes:
+        if cabin_class in present and cabin_class not in ordered:
+            ordered.append(cabin_class)
+    for cabin_class in present:
+        if cabin_class not in ordered:
+            ordered.append(cabin_class)
+    return ordered
+
+
+def _aircraft_summary(flight: dict) -> str:
+    aircrafts = []
+    for segment in flight.get("segments") or []:
+        aircraft = segment.get("aircraft")
+        if aircraft and aircraft not in aircrafts:
+            aircrafts.append(aircraft)
+    return " / ".join(aircrafts) if aircrafts else "请查询航司官网"
+
+
+def _duration_minutes_text(minutes) -> str:
+    minutes = int(minutes or 0)
+    if minutes <= 0:
+        return "请查询航司官网"
+    return f"{minutes // 60}小时{minutes % 60}分钟"
+
+
+def _flight_start_end_text(flight: dict) -> str:
+    segments = flight.get("segments") or []
+    if not segments:
+        return "请查询航司官网"
+    dep_time = _time_only(segments[0].get("dep_time"))
+    arr_time = _time_only(segments[-1].get("arr_time"))
+    if dep_time and arr_time:
+        return f"{dep_time} → 到达：{arr_time}（当地时间）"
+    return "请查询航司官网"
+
+
+def _seat_selection_line(extra: dict) -> str:
+    seat = extra.get("seat_detail") or {}
+    if not seat:
+        return "🪑 选座：请查询航司官网"
+    if seat.get("seat_selectable"):
+        if seat.get("seat_free"):
+            return "🪑 选座：免费"
+        if seat.get("seat_price"):
+            price = float(seat["seat_price"])
+            currency = seat.get("seat_currency", "CNY")
+            if currency == "CNY":
+                return f"🪑 选座：需付费（¥{price:,.0f}起）"
+            return f"🪑 选座：需付费（{currency} {price:,.0f}起）"
+        return "🪑 选座：可选座（费用详询航司）"
+    return "🪑 选座：请查询航司官网"
+
+
+def _refund_change_lines(extra: dict) -> list[str]:
+    refund_change = extra.get("refund_change") or {}
+    changeable = refund_change.get("changeable", extra.get("changeable"))
+    refundable = refund_change.get("refundable", extra.get("refundable"))
+    change_fee = refund_change.get("change_fee")
+
+    if changeable:
+        if change_fee == "免费":
+            change_line = "🔄 改签：出发前免费改签"
+        else:
+            change_line = "🔄 改签：出发前可改签"
+    else:
+        change_line = "🔄 改签：不可改签"
+
+    refund_line = "💰 退票：可退票" if refundable else "💰 退票：不可退票"
+    return [change_line, refund_line]
+
+
+def _service_info_lines(flight: dict) -> list[str]:
+    extra = flight.get("extra") or {}
+    if flight.get("has_baggage_info"):
+        lines = []
+        lines.extend(format_baggage(extra))
+        lines.append(_seat_selection_line(extra))
+        lines.extend(_refund_change_lines(extra))
+        lines.append("📎 服务信息来源：Duffel（航司直连）")
+        return lines
+
+    return [
+        "🧳 行李：请查询航司官网",
+        "🪑 选座：请查询航司官网",
+        "🔄 退改：请查询航司官网",
+    ]
+
+
 def _estimate_drop_probability(price_history, current_price) -> int | None:
     """估算接近当前价格时，下一次记录继续下降的比例。"""
     if not price_history or not current_price:
@@ -1429,99 +1548,112 @@ def format_html_message(
         key=lambda flight: flight.get("price") or float("inf"),
     )
 
-    for i, f in enumerate(display_flights):
-        segments = f.get("segments", [])
-        airline_text = " / ".join(_airlines_from_segments(segments))
-        if not airline_text:
-            airline_text = f.get("airline_summary") or " / ".join(f.get("airlines") or [])
-        stops = f.get("stops", 0)
-
-        lines.append("")
-        lines.append(f"<b>{_option_label(i)}</b>")
-        lines.append("")
-        lines.append(f"💵 ¥{f['price']:,.0f}")
-        lines.append(f"🏢 {airline_text}")
-        lines.append(f"✈️ {f.get('route_summary','')}")
-        lines.append(f"⏱️ 全程：{f.get('total_hours','')}小时")
-        lines.append(f"🔄 转机：{'直飞' if stops == 0 else f'{stops}次'}")
-        lines.append("")
-
-        if not segments:
-            lines.append("详细航段请查询航司官网")
-            lines.append("")
-
-        for j, seg in enumerate(segments):
-            dep_time = str(seg.get("dep_time",""))
-            if " " in dep_time:
-                dep_time = dep_time.split(" ")[-1]
-            arr_time = str(seg.get("arr_time",""))
-            if " " in arr_time:
-                arr_time = arr_time.split(" ")[-1]
-
-            lines.append(f"✈ 第{j+1}段：{seg.get('flight_no','')}（{_airline_full_display(seg.get('airline',''))}）")
-            lines.append(
-                f"　　{city_name(seg.get('dep_airport',''))} {dep_time} → "
-                f"{city_name(seg.get('arr_airport',''))} {arr_time}"
-            )
-
-            if j < len(f.get("layovers", [])):
-                lay = f["layovers"][j]
-                wait = lay.get("wait_minutes", 0)
-                airport = lay.get("airport", "")
-                city = city_name(airport) if airport else lay.get("city", "")
-                lines.append("")
-                lines.append(f"　　⏳ {city}转机：等待{wait//60}小时{wait%60}分钟")
-
-            lines.append("")
-
-        extra = f.get("extra", {})
-        if f.get("has_baggage_info"):
-            for baggage_line in format_baggage(extra):
-                lines.append(baggage_line)
-            for seat_line in format_seat(extra):
-                lines.append(seat_line)
-            change_text = "可改签" if extra.get("changeable") else "不可改签"
-            refund_text = "可退票" if extra.get("refundable") else "不可退票"
-            lines.append(f"🔄 退改：{change_text} · {refund_text}")
-            lines.append("（数据来源：Duffel航司直连）")
-        else:
-            lines.append("🧳 行李：请查询航司官网")
-            for seat_line in format_seat(extra):
-                lines.append(seat_line)
-            lines.append("🔄 退改：请查询航司官网")
-
-        lines.append(f"📎 来源：{_source_label(f.get('data_source') or f.get('source'))}")
-        lines.append("")
-
-        lines.append("🔗 购买链接")
-        lines.append("")
-
-        origin = route_info.get("origin", "")
-        dest = route_info.get("destination", "")
-        date = route_info.get("depart_date", "")
-
-        links = [
-            ("携程", f"https://flights.ctrip.com/online/list/oneway-{origin}-{dest}?depdate={date}"),
-            ("飞猪", f"https://www.fliggy.com/flight/international-search?from={origin}&to={dest}&depDate={date}"),
+    for cabin_class in _ordered_cabin_classes(
+        display_flights, route_info.get("cabin_classes")
+    ):
+        cabin_flights = [
+            flight
+            for flight in display_flights
+            if (flight.get("cabin_class") or "economy") == cabin_class
         ]
-        airline_str = " ".join(str(a) for a in f.get("airlines", []))
-        if "美航" in airline_str or "American" in airline_str or "AA" in str(f.get("flight_combo","")):
-            links.append(("美航官网", "https://www.aa.com"))
-        elif "加航" in airline_str or "Air Canada" in airline_str:
-            links.append(("加航官网", "https://www.aircanada.com"))
-        links.append((
-            "Google Flights",
-            f"https://www.google.com/travel/flights?q=flights+from+{origin}+to+{dest}+on+{date}",
-        ))
+        if not cabin_flights:
+            continue
 
-        for link_index, (name, url) in enumerate(links, start=1):
-            number_labels = ["①", "②", "③", "④", "⑤", "⑥"]
-            number = number_labels[link_index - 1] if link_index <= len(number_labels) else str(link_index)
-            lines.append(f"{number} {name}")
-            lines.append(url)
+        lines.append("")
+        lines.append(f"<b>{_cabin_group_title(cabin_class)}</b>")
+        lines.append("")
+
+        for i, f in enumerate(cabin_flights):
+            segments = f.get("segments", [])
+            airline_text = " / ".join(_airlines_from_segments(segments))
+            if not airline_text:
+                airline_text = f.get("airline_summary") or " / ".join(
+                    f.get("airlines") or []
+                )
+            stops = f.get("stops", 0)
+
+            lines.append(f"<b>{_option_label(i)}</b>")
+            lines.append("")
+            lines.append(f"💵 ¥{f['price']:,.0f}")
+            lines.append(f"🏢 {airline_text}")
+            lines.append(f"💺 {_cabin_label(f.get('cabin_class') or cabin_class)}")
+            lines.append(f"✈️ {f.get('route_summary','')}")
+            lines.append(f"🕐 起飞：{_flight_start_end_text(f)}")
+            lines.append(f"⏱️ 全程：{f.get('total_hours','')}小时")
+            lines.append(f"🔄 转机：{'直飞' if stops == 0 else f'{stops}次'}")
             lines.append("")
 
-        lines.append("━━━━━━━━━━━━━━━━")
+            if not segments:
+                lines.append("详细航段请查询航司官网")
+                lines.append("")
+
+            for j, seg in enumerate(segments):
+                dep_time = _time_only(seg.get("dep_time"))
+                arr_time = _time_only(seg.get("arr_time"))
+                aircraft = seg.get("aircraft") or "请查询航司官网"
+
+                lines.append(
+                    f"✈ 第{j+1}段：{seg.get('flight_no','')}（{_airline_full_display(seg.get('airline',''))}）"
+                )
+                lines.append(f"　　机型：{aircraft}")
+                lines.append(
+                    f"　　出发：{city_name(seg.get('dep_airport',''))} {dep_time}"
+                )
+                lines.append(
+                    f"　　到达：{city_name(seg.get('arr_airport',''))} {arr_time}（当地时间）"
+                )
+                lines.append(
+                    f"　　飞行时间：{_duration_minutes_text(seg.get('duration_min'))}"
+                )
+
+                if j < len(f.get("layovers", [])):
+                    lay = f["layovers"][j]
+                    wait = int(lay.get("wait_minutes", 0) or 0)
+                    airport = lay.get("airport", "")
+                    city = city_name(airport) if airport else lay.get("city", "")
+                    lines.append("")
+                    lines.append(f"　　⏳ {city}转机：等待{wait//60}小时{wait%60}分钟")
+
+                lines.append("")
+
+            lines.append(f"💺 舱位：{_cabin_label(f.get('cabin_class') or cabin_class)}")
+            lines.append(f"✈️ 机型：{_aircraft_summary(f)}")
+            lines.append("")
+            for service_line in _service_info_lines(f):
+                lines.append(service_line)
+
+            lines.append(f"📎 来源：{_source_label(f.get('data_source') or f.get('source'))}")
+            lines.append("")
+
+            lines.append("🔗 购买链接")
+            lines.append("")
+
+            origin = route_info.get("origin", "")
+            dest = route_info.get("destination", "")
+            date = route_info.get("depart_date", "")
+
+            links = [
+                ("携程", f"https://flights.ctrip.com/online/list/oneway-{origin}-{dest}?depdate={date}"),
+                ("飞猪", f"https://www.fliggy.com/flight/international-search?from={origin}&to={dest}&depDate={date}"),
+            ]
+            airline_str = " ".join(str(a) for a in _flight_airlines(f))
+            if "美航" in airline_str or "American" in airline_str or "AA" in str(f.get("flight_combo","")):
+                links.append(("美航官网", "https://www.aa.com"))
+            elif "加航" in airline_str or "Air Canada" in airline_str or "AC" in str(f.get("flight_combo","")):
+                links.append(("加航官网", "https://www.aircanada.com"))
+            links.append((
+                "Google Flights",
+                f"https://www.google.com/travel/flights?q=flights+from+{origin}+to+{dest}+on+{date}",
+            ))
+
+            for link_index, (name, url) in enumerate(links, start=1):
+                number_labels = ["①", "②", "③", "④", "⑤", "⑥"]
+                number = number_labels[link_index - 1] if link_index <= len(number_labels) else str(link_index)
+                lines.append(f"{number} {name}")
+                lines.append(url)
+                lines.append("")
+
+            lines.append("━━━━━━━━━━━━━━━━")
 
     prices = analysis_result.get("price_range", [0, 0])
     lines.append("")

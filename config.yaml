@@ -3,10 +3,6 @@ subscriptions:
     origin: PVG
     destination: MCO
     depart_date: "2026-06-20"
-
-    # 用户自定义关注点（影响展示顺序和高亮）
-    priorities:
-      - budget: 8000        # 预算上限
-      - max_hours: 24        # 可接受的最长时间
-      - max_stops: 1         # 可接受的最多转机次数
-      - no_overnight: true   # 不接受过夜转机
+    cabin_classes:
+      - economy
+      - business

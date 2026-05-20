@@ -12,7 +12,7 @@ class TravelpayoutsSource(FlightSource):
         self.token = os.environ.get("TRAVELPAYOUTS_TOKEN", "")
         self.base_url = "https://api.travelpayouts.com"
 
-    def fetch(self, origin, dest, date_str):
+    def fetch(self, origin, dest, date_str, cabin_class: str = "economy"):
         """
         Travelpayouts Data API 返回缓存的最低价数据。
         date_str格式: "2026-06-20"，需要转为 "2026-06"。
@@ -40,7 +40,7 @@ class TravelpayoutsSource(FlightSource):
                 data = resp.json()
                 if data.get("success") and data.get("data"):
                     for item in data["data"]:
-                        flight = self._parse_price_item(item, origin, dest)
+                        flight = self._parse_price_item(item, origin, dest, cabin_class)
                         if flight["price"] and flight["price"] > 0:
                             flights.append(flight)
 
@@ -65,7 +65,7 @@ class TravelpayoutsSource(FlightSource):
                 if data.get("success") and data.get("data"):
                     dest_data = data["data"].get(dest, {})
                     for item in dest_data.values():
-                        flight = self._parse_price_item(item, origin, dest)
+                        flight = self._parse_price_item(item, origin, dest, cabin_class)
                         if flight["price"] and flight["price"] > 0:
                             flights.append(flight)
 
@@ -87,7 +87,9 @@ class TravelpayoutsSource(FlightSource):
             "source": "travelpayouts",
         }
 
-    def _parse_price_item(self, item: dict, origin: str, dest: str) -> dict:
+    def _parse_price_item(
+        self, item: dict, origin: str, dest: str, cabin_class: str
+    ) -> dict:
         duration = item.get("duration_to", 0) or item.get("duration", 0) or 0
         airline = item.get("airline", "")
         flight_number = item.get("flight_number", "")
@@ -107,5 +109,6 @@ class TravelpayoutsSource(FlightSource):
             "layovers": [],
             "source": "travelpayouts",
             "data_source": "travelpayouts",
+            "cabin_class": cabin_class,
             "extra": {},
         }

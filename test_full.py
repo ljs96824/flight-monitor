@@ -117,6 +117,7 @@ def _run_all_flights(subscription: dict, route: str) -> None:
         subscription["origin"],
         subscription["destination"],
         subscription["depart_date"],
+        cabin_classes=subscription.get("cabin_classes"),
     )
 
     if data is None or not data.get("flights"):
@@ -158,6 +159,7 @@ def _run_all_flights(subscription: dict, route: str) -> None:
         "origin": subscription["origin"],
         "destination": subscription["destination"],
         "depart_date": subscription["depart_date"],
+        "cabin_classes": subscription.get("cabin_classes"),
         "mode": subscription.get("mode", "balanced"),
         "priorities": subscription.get("priorities"),
         "source_stats": data.get("source_stats", {}),

@@ -61,7 +61,7 @@ class DuffelSource(FlightSource):
             raise RuntimeError("DUFFEL_TOKEN is not set")
         self.token = token
 
-    def fetch(self, origin, dest, date_str):
+    def fetch(self, origin, dest, date_str, cabin_class: str = "economy"):
         payload = {
             "data": {
                 "slices": [
@@ -72,7 +72,7 @@ class DuffelSource(FlightSource):
                     }
                 ],
                 "passengers": [{"type": "adult"}],
-                "cabin_class": "economy",
+                "cabin_class": cabin_class,
                 "return_offers": True,
             }
         }
@@ -90,7 +90,7 @@ class DuffelSource(FlightSource):
         offers = (results.get("data") or {}).get("offers") or []
         flights = []
         for offer in offers:
-            flight = self._parse_offer(offer)
+            flight = self._parse_offer(offer, cabin_class)
             if flight:
                 flights.append(flight)
 
@@ -101,7 +101,7 @@ class DuffelSource(FlightSource):
             "raw": results,
         }
 
-    def _parse_offer(self, offer: dict) -> dict | None:
+    def _parse_offer(self, offer: dict, cabin_class: str = "economy") -> dict | None:
         segments = []
         slices = offer.get("slices") or []
 
@@ -165,12 +165,20 @@ class DuffelSource(FlightSource):
             segment.get("flight_no", "") for segment in segments if segment.get("flight_no")
         ]
         conditions = offer.get("conditions") or {}
+        changeable = conditions.get("change_before_departure") is not None
+        refundable = conditions.get("refund_before_departure") is not None
         extra = {
             "baggage": self._baggage_info(slices),
             "baggage_detail": self._baggage_detail(slices),
             "seat_detail": self._seat_detail(offer),
-            "changeable": conditions.get("change_before_departure") is not None,
-            "refundable": conditions.get("refund_before_departure") is not None,
+            "refund_change": {
+                "changeable": changeable,
+                "refundable": refundable,
+                "change_fee": "免费" if changeable else None,
+                "refund_fee": "免费" if refundable else None,
+            },
+            "changeable": changeable,
+            "refundable": refundable,
         }
 
         return {
@@ -204,6 +212,7 @@ class DuffelSource(FlightSource):
             "extra": extra,
             "source": self.name,
             "data_source": self.name,
+            "cabin_class": cabin_class,
         }
 
     def _baggage_info(self, slices: list[dict]) -> list[dict]:

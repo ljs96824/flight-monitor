@@ -1273,10 +1273,24 @@ def analyze_all_flights(
             "typical_range": price_insights.get("typical_price_range"),
         }
 
+    display_flights = []
+    cabin_order = []
+    for flight in usable_flights:
+        cabin_class = flight.get("cabin_class") or "economy"
+        if cabin_class not in cabin_order:
+            cabin_order.append(cabin_class)
+    for cabin_class in cabin_order:
+        cabin_flights = [
+            flight
+            for flight in usable_flights
+            if (flight.get("cabin_class") or "economy") == cabin_class
+        ]
+        display_flights.extend(sorted(cabin_flights, key=lambda f: f["price"])[:10])
+
     return {
         "total_options": len(usable_flights),
         "recommendations": recommendations,
-        "all_flights": usable_flights[:10],
+        "all_flights": display_flights,
         "price_range": [min(prices), max(prices)],
         "duration_range": [min(durations), max(durations)],
         "market_context": market_context,
