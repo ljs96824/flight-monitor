@@ -42,22 +42,18 @@ def calc_layover_minutes(arr_time_str, dep_time_str) -> int:
         if not text:
             return None
 
-        for fmt in ["%Y-%m-%d %H:%M"]:
+        for fmt in ["%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M"]:
             try:
                 return datetime.strptime(text, fmt)
             except ValueError:
                 pass
 
+        # ISO格式（可能带时区），统一转为naive datetime
         try:
-            return datetime.fromisoformat(text.replace("Z", "+00:00"))
-        except ValueError:
+            dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            return dt.replace(tzinfo=None)
+        except (ValueError, TypeError):
             pass
-
-        for fmt in ["%Y-%m-%dT%H:%M:%S"]:
-            try:
-                return datetime.strptime(text, fmt)
-            except ValueError:
-                pass
 
         return None
 
@@ -154,6 +150,21 @@ def _normalize_detail_flight(flight: dict, source_name: str | None = None) -> di
     detail["segments"] = segments
     detail["layovers"] = layovers
 
+    # 如果有多段但没有layover数据，从segments生成
+    if len(segments) > 1 and len(layovers) < len(segments) - 1:
+        layovers = []
+        for index in range(len(segments) - 1):
+            arr_time = segments[index].get("arr_time")
+            next_dep_time = segments[index + 1].get("dep_time")
+            wait = calc_layover_minutes(arr_time, next_dep_time)
+            layovers.append({
+                "city": segments[index].get("arr_city", ""),
+                "airport": segments[index].get("arr_airport", ""),
+                "wait_minutes": wait,
+            })
+        detail["layovers"] = layovers
+
+    # 重新计算已有layover中wait_minutes为0的
     for index, layover in enumerate(layovers):
         if index >= len(segments) - 1:
             break
