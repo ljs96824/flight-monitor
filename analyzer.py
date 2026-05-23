@@ -780,6 +780,106 @@ def calculate_price_references(
     return result
 
 
+def multi_window_analysis(current_price, own_history, google_history, days_to_dept):
+    """多时间窗口纵向分析"""
+    result = {}
+
+    # 窗口一：短期趋势（3-7天）
+    if own_history and len(own_history) >= 4:
+        recent = [
+            record["price"]
+            for record in own_history[-14:]
+            if record.get("price")
+        ]  # 最近7天×每天2次=14条
+        if len(recent) >= 4:
+            split_index = len(recent) // 2
+            first_half = sum(recent[:split_index]) / split_index
+            second_half = sum(recent[split_index:]) / (len(recent) - split_index)
+            change_pct = round((second_half - first_half) / first_half * 100, 1)
+
+            if change_pct > 2:
+                trend = "上涨中"
+            elif change_pct < -2:
+                trend = "下降中"
+            else:
+                trend = "平稳"
+
+            result["short_term"] = {
+                "window": "近3-7天",
+                "trend": trend,
+                "change_pct": change_pct,
+                "high": max(recent),
+                "low": min(recent),
+                "data_points": len(recent),
+            }
+
+    # 窗口二：中期位置（14-30天）
+    if own_history and len(own_history) >= 10:
+        month_prices = [record["price"] for record in own_history if record.get("price")]
+        if month_prices:
+            below = sum(1 for price in month_prices if price < current_price)
+            percentile = round(below / len(month_prices) * 100)
+            avg_price = round(sum(month_prices) / len(month_prices))
+
+            result["mid_term"] = {
+                "window": "你关注以来",
+                "percentile": percentile,
+                "min": min(month_prices),
+                "max": max(month_prices),
+                "avg": avg_price,
+                "data_points": len(month_prices),
+                "vs_min": current_price - min(month_prices),
+                "vs_avg": current_price - avg_price,
+            }
+
+    # 窗口三：长期分位（30-60天，用Google数据）
+    if google_history:
+        if isinstance(google_history[0], (list, tuple)):
+            prices = [price for _, price in google_history if price and price > 0]
+        else:
+            prices = [price for price in google_history if price and price > 0]
+
+        if len(prices) >= 10:
+            below = sum(1 for price in prices if price < current_price)
+            percentile = round(below / len(prices) * 100)
+
+            result["long_term"] = {
+                "window": "近60天历史",
+                "percentile": percentile,
+                "min": min(prices),
+                "max": max(prices),
+                "avg": round(sum(prices) / len(prices)),
+                "data_points": len(prices),
+            }
+
+    return result
+
+
+def nearby_dates_comparison(
+    origin, dest, center_date, fetch_function, days_range=2
+):
+    """查询出发日前后几天的最低价，帮用户发现更便宜的日期"""
+    from datetime import datetime, timedelta
+
+    center = datetime.strptime(center_date, "%Y-%m-%d")
+    results = {}
+
+    for offset in range(-days_range, days_range + 1):
+        check_date = center + timedelta(days=offset)
+        date_str = check_date.strftime("%Y-%m-%d")
+        weekday_names = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+        weekday = weekday_names[check_date.weekday()]
+
+        results[date_str] = {
+            "date": date_str,
+            "weekday": weekday,
+            "offset": offset,
+            "min_price": None,
+        }
+
+    return results
+
+
 def compare_flights(flight_a: dict, flight_b: dict) -> dict:
     """生成两个方案之间的直接对比"""
     price_diff = flight_a["price"] - flight_b["price"]

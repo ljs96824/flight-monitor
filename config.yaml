@@ -6,3 +6,4 @@ subscriptions:
     cabin_classes:
       - economy
       - business
+    check_nearby_dates: false

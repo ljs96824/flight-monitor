@@ -13,6 +13,7 @@ from analyzer import (
     calculate_price_references,
     city_name,
     generate_trend_summary,
+    multi_window_analysis,
     price_position_description,
     waiting_risk_description,
 )
@@ -1932,6 +1933,64 @@ def _append_price_references(
         lines.append("")
 
 
+def _append_multi_window_analysis(lines: list[str], windows: dict | None) -> None:
+    if not windows:
+        return
+
+    sections = []
+
+    short_term = windows.get("short_term")
+    if isinstance(short_term, dict):
+        sections.extend(
+            [
+                f"短期（近7天）：{short_term.get('trend')}（{short_term.get('change_pct')}%）",
+                f"　最高¥{short_term.get('high', 0):,.0f} → 最低¥{short_term.get('low', 0):,.0f}",
+                "",
+            ]
+        )
+
+    mid_term = windows.get("mid_term")
+    if isinstance(mid_term, dict):
+        vs_avg = mid_term.get("vs_avg", 0) or 0
+        avg_direction = "高" if vs_avg >= 0 else "低"
+        vs_min = mid_term.get("vs_min", 0) or 0
+        if vs_min >= 0:
+            min_line = f"　比最低价贵¥{vs_min:,.0f}"
+        else:
+            min_line = f"　比最低价低¥{abs(vs_min):,.0f}"
+        sections.extend(
+            [
+                f"中期（你关注以来）：当前在第{mid_term.get('percentile')}分位",
+                f"　比均价{avg_direction}¥{abs(vs_avg):,.0f}",
+                min_line,
+                "",
+            ]
+        )
+
+    long_term = windows.get("long_term")
+    if isinstance(long_term, dict):
+        percentile = long_term.get("percentile", 0) or 0
+        if percentile >= 50:
+            position_line = f"　当前价格高于历史{percentile}%的记录"
+        else:
+            position_line = f"　当前价格低于历史{100 - percentile}%的记录"
+        sections.extend(
+            [
+                f"长期（近60天）：当前在第{percentile}分位",
+                f"　历史最低¥{long_term.get('min', 0):,.0f} → 最高¥{long_term.get('max', 0):,.0f}",
+                position_line,
+                "",
+            ]
+        )
+
+    if not sections:
+        return
+
+    lines.append("📊 <b>价格分析</b>")
+    lines.append("")
+    lines.extend(sections)
+
+
 def format_html_message(
     analysis_result, route_info, source_stats=None, price_insights=None
 ):
@@ -1970,6 +2029,9 @@ def format_html_message(
         price_refs = calculate_price_references(
             current_min, history, own_history, days or 0, all_flights
         )
+        window_analysis = multi_window_analysis(
+            current_min, own_history, history, days or 0
+        )
 
         if price_pos:
             lines.append("<b>📊 当前价格位置</b>")
@@ -1986,6 +2048,7 @@ def format_html_message(
             lines.append("")
 
         _append_price_references(lines, price_refs, current_min)
+        _append_multi_window_analysis(lines, window_analysis)
 
         if wait_risk:
             lines.append("<b>⏳ 继续等待的风险</b>")
