@@ -18,7 +18,7 @@ key = os.environ.get("SERPAPI_KEY", "")
 print(f"SERPAPI_KEY: {key[:12]}..." if len(key) > 12 else f"SERPAPI_KEY: {key}")
 
 if not key or "填" in key or "your" in key.lower():
-    print("❌ key还是占位符，请去 serpapi.com 注册拿真实key")
+    print("key还是占位符，请去 serpapi.com 注册拿真实key")
     exit(1)
 
 params = {
@@ -32,20 +32,21 @@ params = {
     "api_key": key,
 }
 
-print(f"\n请求参数: {json.dumps(params, indent=2)}")
+safe_params = {**params, "api_key": "***"}
+print(f"\n请求参数: {json.dumps(safe_params, indent=2)}")
 print("正在调用SerpAPI...\n")
 
 search = GoogleSearch(params)
 results = search.get_dict()
 
 # 保存完整响应到文件方便查看
-with (DATA_DIR / "debug_response.json").open("w", encoding="utf-8") as f:
-    json.dump(results, f, ensure_ascii=False, indent=2)
+with (DATA_DIR / "debug_response.json").open("w", encoding="utf-8") as file:
+    json.dump(results, file, ensure_ascii=False, indent=2)
 print("完整响应已保存到 data/debug_response.json")
 
 # 检查是否有错误
 if "error" in results:
-    print(f"❌ API错误: {results['error']}")
+    print(f"API错误: {results['error']}")
     exit(1)
 
 # 检查返回了哪些字段

@@ -6,9 +6,15 @@ import os
 
 from sources.base import FlightSource
 
+OPTIONAL_SOURCE_THRESHOLD = 8
+
 
 def normalize_combo(combo: str) -> str:
     return combo.replace(" ", "").upper()
+
+
+def _redact_api_key(text: str) -> str:
+    return text.split("api_key=")[0] + "api_key=***" if "api_key=" in text else text
 
 
 def _normalize_cabin_classes(cabin_classes) -> list[str]:
@@ -26,21 +32,25 @@ def _flight_key(flight: dict) -> str:
 
 
 def build_default_sources() -> tuple[list[FlightSource], list[FlightSource]]:
-    """分别构建搜索源和补充源。"""
+    """Build search sources and enrichment sources separately."""
     search_sources = []
     enrichment_sources = []
+
     if os.environ.get("SERPAPI_KEY"):
         from sources.serpapi_source import SerpAPISource
 
         search_sources.append(SerpAPISource())
+
     if os.environ.get("SEARCHAPI_KEY"):
         from sources.searchapi_source import SearchAPISource
 
         search_sources.append(SearchAPISource())
+
     if os.environ.get("DUFFEL_TOKEN"):
         from sources.duffel_source import DuffelSource
 
         enrichment_sources.append(DuffelSource())
+
     return search_sources, enrichment_sources
 
 
@@ -71,9 +81,11 @@ class FlightAggregator:
 
         for source in self.search_sources:
             source_name = getattr(source, "name", type(source).__name__)
+            source_optional = len(all_flights) >= OPTIONAL_SOURCE_THRESHOLD
             source_count = 0
             source_succeeded = False
             cabin_counts = {}
+
             for cabin_class in cabin_classes:
                 try:
                     result = source.fetch(origin, dest, date_str, cabin_class)
@@ -106,16 +118,30 @@ class FlightAggregator:
                         price_insights = result["price_insights"]
 
                 except Exception as exc:
-                    error = str(exc)
-                    source_errors.append(
-                        {"source": source_name, "cabin_class": cabin_class, "error": error}
-                    )
-                    print(f"[{source_name}] {cabin_class} 失败：{error}")
+                    error = _redact_api_key(str(exc))
+                    if not source_optional:
+                        source_errors.append(
+                            {
+                                "source": source_name,
+                                "cabin_class": cabin_class,
+                                "error": error,
+                            }
+                        )
+                    status_label = "可选失败" if source_optional else "失败"
+                    print(f"[{source_name}] {cabin_class} {status_label}：{error}")
+
+            if source_succeeded:
+                status = "成功"
+            elif source_optional:
+                status = "可选失败"
+            else:
+                status = "失败"
 
             source_stats[source_name] = {
                 "count": source_count,
                 "cabin_counts": cabin_counts,
-                "status": "成功" if source_succeeded else "失败",
+                "status": status,
+                "optional": source_optional,
             }
 
         total_raw = len(all_flights)
@@ -132,9 +158,8 @@ class FlightAggregator:
             if source_name and source_name not in sources_by_combo[normalized_combo]:
                 sources_by_combo[normalized_combo].append(source_name)
 
-            if normalized_combo not in seen or flight.get("price", 99999) < seen[
-                normalized_combo
-            ].get("price", 99999):
+            current_price = seen.get(normalized_combo, {}).get("price", 99999)
+            if normalized_combo not in seen or flight.get("price", 99999) < current_price:
                 seen[normalized_combo] = flight
 
         unique_flights = list(seen.values())
@@ -154,6 +179,7 @@ class FlightAggregator:
             enrichment_count = 0
             enrichment_succeeded = False
             cabin_counts = {}
+
             for cabin_class in cabin_classes:
                 try:
                     result = source.fetch(origin, dest, date_str, cabin_class)
@@ -162,7 +188,8 @@ class FlightAggregator:
                     cabin_counts[cabin_class] = len(enrichment_flights)
                     enrichment_succeeded = True
                     print(
-                        f"[{source_name}] {cabin_class} 成功，返回 {len(enrichment_flights)} 个行李退改候选"
+                        f"[{source_name}] {cabin_class} 成功，返回 "
+                        f"{len(enrichment_flights)} 个行李退改候选"
                     )
 
                     for flight in enrichment_flights:
@@ -172,7 +199,7 @@ class FlightAggregator:
                             enrichment_data[combo] = flight["extra"]
 
                 except Exception as exc:
-                    error = str(exc)
+                    error = _redact_api_key(str(exc))
                     source_errors.append(
                         {"source": source_name, "cabin_class": cabin_class, "error": error}
                     )

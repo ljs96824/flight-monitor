@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import time
 
 import httpx
 
@@ -40,6 +41,7 @@ class SearchAPISource(FlightSource):
         print(f"[SearchAPI] 状态码: {response.status_code}")
 
         if response.status_code in {400, 401, 403}:
+            time.sleep(2)
             auth_response = httpx.get(
                 self.url,
                 params={key: value for key, value in params.items() if key != "api_key"},
