@@ -1838,29 +1838,15 @@ def _compact_source_summary_lines(source_stats: dict | None) -> list[str]:
         "serpapi": "SerpAPI",
         "searchapi": "SearchAPI",
         "hasdata": "HasData",
+        "travelpayouts": "Travelpayouts",
+        "skyscanner": "Skyscanner",
         "duffel": "Duffel",
     }
-    metadata_keys = {
-        "total_raw",
-        "after_dedup",
-        "after_dedup_by_cabin",
-        "enriched_count",
-    }
-    ordered_keys = [
-        key for key in source_names if key in source_stats
-    ] + [
-        key
-        for key, value in source_stats.items()
-        if key not in source_names
-        and key not in metadata_keys
-        and isinstance(value, dict)
-    ]
 
-    for key in ordered_keys:
-        name = source_names.get(key, key)
-        info = source_stats.get(key)
+    for key, info in source_stats.items():
         if not isinstance(info, dict):
             continue
+        name = source_names.get(key, key)
         count = info.get("count")
         if count is None:
             count = sum((info.get("cabin_counts") or {}).values())

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 
 from sources.base import FlightSource
@@ -67,6 +68,16 @@ def build_default_sources() -> tuple[list[FlightSource], list[FlightSource]]:
         from sources.hasdata_source import HasDataSource
 
         search_sources.append(HasDataSource())
+
+    if os.environ.get("TRAVELPAYOUTS_TOKEN"):
+        from sources.travelpayouts_source import TravelpayoutsSource
+
+        search_sources.append(TravelpayoutsSource())
+
+    if os.environ.get("RAPIDAPI_KEY"):
+        from sources.skyscanner_source import SkyscannerSource
+
+        search_sources.append(SkyscannerSource())
 
     if os.environ.get("DUFFEL_TOKEN"):
         from sources.duffel_source import DuffelSource
@@ -265,6 +276,11 @@ class FlightAggregator:
             for cabin_class in cabin_classes
         }
         source_stats["enriched_count"] = enriched_count
+
+        print(
+            "source_stats: "
+            + json.dumps(source_stats, ensure_ascii=False, indent=2)
+        )
 
         if not unique_flights:
             return None
