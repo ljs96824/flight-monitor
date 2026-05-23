@@ -46,6 +46,11 @@ def build_default_sources() -> tuple[list[FlightSource], list[FlightSource]]:
 
         search_sources.append(SearchAPISource())
 
+    if os.environ.get("HASDATA_KEY"):
+        from sources.hasdata_source import HasDataSource
+
+        search_sources.append(HasDataSource())
+
     if os.environ.get("DUFFEL_TOKEN"):
         from sources.duffel_source import DuffelSource
 
