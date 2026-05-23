@@ -473,6 +473,7 @@ def health_report(results: list[dict]) -> str:
 SOURCE_LABELS = {
     "serpapi": "Google Flights（via SerpAPI）",
     "searchapi": "Google Flights（via SearchAPI）",
+    "hasdata": "Google Flights（via HasData）",
     "travelpayouts": "Travelpayouts（Aviasales）",
     "skyscanner": "Skyscanner（via RapidAPI）",
     "serpapi+searchapi": "Google Flights（via SerpAPI + SearchAPI）",
@@ -1628,6 +1629,8 @@ def _compact_source_label(flight: dict) -> str:
             labels.append("SerpAPI")
         elif source == "searchapi":
             labels.append("SearchAPI")
+        elif source == "hasdata":
+            labels.append("HasData")
         elif source == "duffel":
             labels.append("Duffel")
         elif source:
@@ -1790,7 +1793,7 @@ def _append_compact_flight(
     lines.append("")
     lines.append(_compact_baggage_line(flight))
     lines.append(_compact_refund_line(flight))
-    lines.append(f"📎 来源：{_compact_source_label(flight)}")
+    lines.append(f"📎 数据来源：{_compact_source_label(flight)}")
     lines.append("")
     tradeoff_text, suit_text, not_suit_text = generate_context(flight, all_flights)
     lines.append(f"📋 {tradeoff_text}")

@@ -7,12 +7,6 @@ import os
 from sources.base import FlightSource
 
 OPTIONAL_SOURCE_THRESHOLD = 8
-SOURCE_DISPLAY_NAMES = {
-    "serpapi": "SerpAPI",
-    "searchapi": "SearchAPI",
-    "hasdata": "HasData",
-    "duffel": "Duffel",
-}
 
 
 def normalize_combo(combo: str) -> str:
@@ -23,18 +17,21 @@ def _redact_api_key(text: str) -> str:
     return text.split("api_key=")[0] + "api_key=***" if "api_key=" in text else text
 
 
-def _source_display_name(source: str | None) -> str:
-    if not source:
-        return ""
-    return SOURCE_DISPLAY_NAMES.get(source.lower(), source)
-
-
 def _source_names(value: str | None) -> list[str]:
     return [
-        _source_display_name(source.strip())
+        source.strip().lower()
         for source in str(value or "").split("+")
         if source.strip()
     ]
+
+
+def _append_sources(flight: dict, sources: list[str]) -> None:
+    current_sources = _source_names(flight.get("data_source") or flight.get("source"))
+    for source in sources:
+        if source and source not in current_sources:
+            current_sources.append(source)
+    if current_sources:
+        flight["data_source"] = "+".join(current_sources)
 
 
 def _normalize_cabin_classes(cabin_classes) -> list[str]:
@@ -179,14 +176,18 @@ class FlightAggregator:
 
             normalized_combo = _flight_key(flight)
             source_name = flight.get("data_source") or flight.get("source")
+            new_sources = _source_names(source_name)
             sources_by_combo.setdefault(normalized_combo, [])
-            for source in _source_names(source_name):
+            for source in new_sources:
                 if source not in sources_by_combo[normalized_combo]:
                     sources_by_combo[normalized_combo].append(source)
 
             current_price = seen.get(normalized_combo, {}).get("price", 99999)
+            if normalized_combo in seen:
+                _append_sources(seen[normalized_combo], new_sources)
             if normalized_combo not in seen or flight.get("price", 99999) < current_price:
                 seen[normalized_combo] = flight
+                _append_sources(seen[normalized_combo], sources_by_combo[normalized_combo])
 
         unique_flights = list(seen.values())
         for flight in unique_flights:
