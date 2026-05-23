@@ -1830,38 +1830,40 @@ def _compact_source_summary_lines(source_stats: dict | None) -> list[str]:
     if not source_stats:
         return []
 
-    lines = ["📡 数据源汇总"]
+    lines = ["—— 数据源统计 ——"]
     source_names = {
         "serpapi": "SerpAPI",
         "searchapi": "SearchAPI",
+        "hasdata": "HasData",
         "duffel": "Duffel",
     }
-    for key, name in source_names.items():
+    metadata_keys = {
+        "total_raw",
+        "after_dedup",
+        "after_dedup_by_cabin",
+        "enriched_count",
+    }
+    ordered_keys = [
+        key for key in source_names if key in source_stats
+    ] + [
+        key
+        for key, value in source_stats.items()
+        if key not in source_names
+        and key not in metadata_keys
+        and isinstance(value, dict)
+    ]
+
+    for key in ordered_keys:
+        name = source_names.get(key, key)
         info = source_stats.get(key)
         if not isinstance(info, dict):
             continue
-        status = info.get("status", "")
-        if key == "duffel":
-            if "成功" in status:
-                lines.append("　- Duffel：行李退改信息补充")
-            else:
-                lines.append("　- Duffel：行李退改信息不可用")
-            continue
-        counts = info.get("cabin_counts") or {}
-        economy_count = counts.get("economy", 0)
-        business_count = counts.get("business", 0)
-        if "成功" in status:
-            lines.append(f"　- {name}：经济舱{economy_count}个 + 商务舱{business_count}个")
-        else:
-            lines.append(f"　- {name}：采集失败")
+        count = info.get("count")
+        if count is None:
+            count = sum((info.get("cabin_counts") or {}).values())
+        lines.append(f"{name}: {int(count or 0)}个方案")
 
-    dedup = source_stats.get("after_dedup_by_cabin") or {}
-    if dedup:
-        lines.append(
-            f"　- 合计去重后：经济舱{dedup.get('economy', 0)}个 · 商务舱{dedup.get('business', 0)}个"
-        )
-    else:
-        lines.append(f"　- 合计去重后：{source_stats.get('after_dedup', 0)}个")
+    lines.append(f"去重后共: {source_stats.get('after_dedup', 0)}个方案")
     return lines
 
 
@@ -2112,7 +2114,12 @@ def format_html_message(
         lines.append(f"📊 经济舱价格区间：{_cabin_price_range_text(all_flights, 'economy', analysis_result)}")
         lines.append(f"📊 商务舱价格区间：{_cabin_price_range_text(all_flights, 'business', analysis_result)}")
         lines.append("")
-        lines.extend(_compact_source_summary_lines(source_stats))
+        source_stats_for_message = (
+            source_stats
+            or route_info.get("source_stats")
+            or analysis_result.get("source_stats")
+        )
+        lines.extend(_compact_source_summary_lines(source_stats_for_message))
         lines.append("")
 
         from datetime import datetime
