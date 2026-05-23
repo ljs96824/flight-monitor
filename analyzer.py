@@ -704,6 +704,82 @@ def waiting_risk_description(price_history, current_price, days_to_dept):
     }
 
 
+def calculate_price_references(
+    current_price, price_history, own_history, days_to_dept, current_flights
+):
+    """计算五层历史最低价参考"""
+    result = {}
+
+    if price_history:
+        if isinstance(price_history[0], (list, tuple)):
+            all_prices = [price for _, price in price_history if price and price > 0]
+        else:
+            all_prices = [price for price in price_history if price and price > 0]
+
+        if all_prices:
+            result["absolute_min"] = {
+                "price": min(all_prices),
+                "label": "历史最低（所有条件）",
+                "note": "可能出现在淡季或特殊促销，当前条件下不一定可达",
+            }
+
+    if price_history and isinstance(price_history[0], (list, tuple)):
+        from datetime import datetime
+
+        relevant = []
+        for timestamp, price in price_history:
+            if price and price > 0 and timestamp:
+                try:
+                    hist_days = abs(timestamp - datetime.now().timestamp()) / 86400
+                    if abs(hist_days - days_to_dept) <= 7:
+                        relevant.append(price)
+                except Exception:
+                    pass
+
+        if len(relevant) >= 5:
+            result["conditional_min"] = {
+                "price": min(relevant),
+                "label": f"同条件最低（提前{days_to_dept}天±7天）",
+                "note": "在类似购买时间点下的历史最低",
+                "sample_size": len(relevant),
+            }
+
+    if own_history:
+        recent_prices = [
+            record.get("price", 0)
+            for record in own_history
+            if record.get("price") and record["price"] > 0
+        ]
+        if recent_prices:
+            result["recent_min"] = {
+                "price": min(recent_prices),
+                "label": "近期最低（你关注以来）",
+                "note": f"基于{len(recent_prices)}次采集数据",
+                "sample_size": len(recent_prices),
+            }
+
+    if current_flights:
+        current_prices = [
+            flight.get("price", 0)
+            for flight in current_flights
+            if flight.get("price") and flight["price"] > 0
+        ]
+        if current_prices:
+            result["current_min"] = {
+                "price": min(current_prices),
+                "label": "当前可买最低",
+                "note": "此刻市场上满足条件的最低价",
+            }
+
+    for ref in result.values():
+        diff = current_price - ref["price"]
+        pct = round(diff / ref["price"] * 100, 1) if ref["price"] > 0 else 0
+        ref["diff"] = diff
+        ref["diff_pct"] = pct
+
+    return result
+
+
 def compare_flights(flight_a: dict, flight_b: dict) -> dict:
     """生成两个方案之间的直接对比"""
     price_diff = flight_a["price"] - flight_b["price"]

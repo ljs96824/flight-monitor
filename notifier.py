@@ -10,6 +10,7 @@ from pathlib import Path
 import httpx
 
 from analyzer import (
+    calculate_price_references,
     city_name,
     generate_trend_summary,
     price_position_description,
@@ -1863,6 +1864,74 @@ def _compact_source_summary_lines(source_stats: dict | None) -> list[str]:
     return lines
 
 
+def _normalize_own_history_for_refs(route_info: dict) -> list[dict]:
+    """Normalize stored lowest-price history for price reference calculations."""
+    history = (
+        route_info.get("own_history")
+        or route_info.get("lowest_price_history")
+        or route_info.get("price_history")
+        or []
+    )
+    normalized = []
+    for record in history:
+        if isinstance(record, dict):
+            normalized.append(record)
+        elif isinstance(record, (list, tuple)) and len(record) >= 2:
+            normalized.append({"snapshot_time": record[0], "price": record[1]})
+    return normalized
+
+
+def _format_ref_percent(value) -> str:
+    try:
+        return f"{float(value):g}%"
+    except (TypeError, ValueError):
+        return "0%"
+
+
+def _format_reference_diff(ref: dict) -> str:
+    diff = ref.get("diff", 0) or 0
+    pct = ref.get("diff_pct", 0) or 0
+    if diff > 0:
+        return f"↑ 当前比它贵¥{diff:,.0f}（高{_format_ref_percent(pct)}）"
+    if diff < 0:
+        return f"↓ 当前比它低¥{abs(diff):,.0f}（低{_format_ref_percent(abs(pct))}）"
+    return "= 当前与它持平"
+
+
+def _append_price_references(
+    lines: list[str], references: dict | None, current_min: float
+) -> None:
+    if not references or not current_min:
+        return
+
+    display_order = ["absolute_min", "conditional_min", "recent_min"]
+    available = [
+        (key, references[key])
+        for key in display_order
+        if isinstance(references.get(key), dict)
+        and references[key].get("price") is not None
+    ]
+    if not available:
+        return
+
+    lines.append("<b>📊 价格参考</b>")
+    lines.append("")
+    lines.append(f"当前最低价：¥{current_min:,.0f}")
+    lines.append("")
+
+    for key, ref in available:
+        lines.append(f"{ref.get('label', '参考价格')}：¥{ref['price']:,.0f}")
+        lines.append(f"　　{_format_reference_diff(ref)}")
+        sample_size = ref.get("sample_size")
+        if key == "recent_min" and sample_size:
+            lines.append(f"　　ℹ️ 基于过去两周的{sample_size}次采集")
+        elif sample_size:
+            lines.append(f"　　ℹ️ {ref.get('note', '')}，基于{sample_size}个数据点")
+        elif ref.get("note"):
+            lines.append(f"　　ℹ️ {ref['note']}")
+        lines.append("")
+
+
 def format_html_message(
     analysis_result, route_info, source_stats=None, price_insights=None
 ):
@@ -1897,6 +1966,10 @@ def format_html_message(
         history = price_insights.get("price_history") if price_insights else None
         price_pos = price_position_description(current_min, history)
         wait_risk = waiting_risk_description(history, current_min, days or 0)
+        own_history = _normalize_own_history_for_refs(route_info)
+        price_refs = calculate_price_references(
+            current_min, history, own_history, days or 0, all_flights
+        )
 
         if price_pos:
             lines.append("<b>📊 当前价格位置</b>")
@@ -1911,6 +1984,8 @@ def format_html_message(
             lines.append(f"{price_pos['description']}")
             lines.append(f"数据量：{price_pos['data_points']}个历史价格点")
             lines.append("")
+
+        _append_price_references(lines, price_refs, current_min)
 
         if wait_risk:
             lines.append("<b>⏳ 继续等待的风险</b>")
