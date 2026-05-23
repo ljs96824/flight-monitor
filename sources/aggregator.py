@@ -7,6 +7,12 @@ import os
 from sources.base import FlightSource
 
 OPTIONAL_SOURCE_THRESHOLD = 8
+SOURCE_DISPLAY_NAMES = {
+    "serpapi": "SerpAPI",
+    "searchapi": "SearchAPI",
+    "hasdata": "HasData",
+    "duffel": "Duffel",
+}
 
 
 def normalize_combo(combo: str) -> str:
@@ -15,6 +21,20 @@ def normalize_combo(combo: str) -> str:
 
 def _redact_api_key(text: str) -> str:
     return text.split("api_key=")[0] + "api_key=***" if "api_key=" in text else text
+
+
+def _source_display_name(source: str | None) -> str:
+    if not source:
+        return ""
+    return SOURCE_DISPLAY_NAMES.get(source.lower(), source)
+
+
+def _source_names(value: str | None) -> list[str]:
+    return [
+        _source_display_name(source.strip())
+        for source in str(value or "").split("+")
+        if source.strip()
+    ]
 
 
 def _normalize_cabin_classes(cabin_classes) -> list[str]:
@@ -160,8 +180,9 @@ class FlightAggregator:
             normalized_combo = _flight_key(flight)
             source_name = flight.get("data_source") or flight.get("source")
             sources_by_combo.setdefault(normalized_combo, [])
-            if source_name and source_name not in sources_by_combo[normalized_combo]:
-                sources_by_combo[normalized_combo].append(source_name)
+            for source in _source_names(source_name):
+                if source not in sources_by_combo[normalized_combo]:
+                    sources_by_combo[normalized_combo].append(source)
 
             current_price = seen.get(normalized_combo, {}).get("price", 99999)
             if normalized_combo not in seen or flight.get("price", 99999) < current_price:
@@ -277,7 +298,10 @@ class FlightAggregator:
 
                 data_source = flight.get("data_source") or source
                 if combo not in merged_by_combo:
-                    merged_by_combo[combo] = {**flight, "data_source": data_source}
+                    merged_by_combo[combo] = {
+                        **flight,
+                        "data_source": "+".join(_source_names(data_source)),
+                    }
                     source_order_by_combo[combo] = []
                 else:
                     current_price = merged_by_combo[combo].get("price")
@@ -289,10 +313,14 @@ class FlightAggregator:
                             or float(new_price) < float(current_price)
                         )
                     ):
-                        merged_by_combo[combo] = {**flight, "data_source": data_source}
+                        merged_by_combo[combo] = {
+                            **flight,
+                            "data_source": "+".join(_source_names(data_source)),
+                        }
 
-                if data_source and data_source not in source_order_by_combo[combo]:
-                    source_order_by_combo[combo].append(data_source)
+                for source_name in _source_names(data_source):
+                    if source_name not in source_order_by_combo[combo]:
+                        source_order_by_combo[combo].append(source_name)
 
         for combo, sources in source_order_by_combo.items():
             if sources:
