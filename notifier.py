@@ -9,7 +9,12 @@ from pathlib import Path
 
 import httpx
 
-from analyzer import city_name, generate_trend_summary
+from analyzer import (
+    city_name,
+    generate_trend_summary,
+    price_position_description,
+    waiting_risk_description,
+)
 
 
 BUY_SIGNALS = {"strong_buy", "buy", "buy_now"}
@@ -1690,8 +1695,29 @@ def generate_context(flight, all_flights):
                 tradeoffs.append("转机时间适中")
 
     extra = flight.get("extra", {})
-    if extra.get("refundable"):
+    refundable = bool(extra.get("refundable") or (extra.get("refund_change") or {}).get("refundable"))
+    changeable = bool(extra.get("changeable") or (extra.get("refund_change") or {}).get("changeable"))
+    baggage_detail = extra.get("baggage_detail") or {}
+    checked_baggage = baggage_detail.get("checked") or {}
+    has_free_checked_baggage = checked_baggage.get("is_free") or checked_baggage.get("quantity", 0) > 0
+    segments = flight.get("segments") or []
+    dep_time = _time_only(segments[0].get("dep_time")) if segments else ""
+    dep_hour = None
+    if dep_time and ":" in dep_time:
+        try:
+            dep_hour = int(dep_time.split(":", 1)[0])
+        except ValueError:
+            dep_hour = None
+    airlines = {
+        segment.get("airline", "")
+        for segment in segments
+        if segment.get("airline")
+    }
+
+    if refundable:
         tradeoffs.append("可退票")
+    if dep_hour is not None and (dep_hour >= 22 or dep_hour < 6):
+        tradeoffs.append("红眼航班")
 
     tradeoff_text = " · ".join(tradeoffs)
 
@@ -1702,11 +1728,15 @@ def generate_context(flight, all_flights):
         suitable.append("预算有限")
     if hours <= 20 and stops <= 1:
         suitable.append("时间紧凑的出行")
-    if stops == 0:
+    if refundable and changeable:
+        suitable.append("行程未确定")
+    if stops == 0 and hours < 20:
         suitable.append("带老人小孩")
         suitable.append("第一次出国")
-    if extra.get("refundable") and extra.get("changeable"):
-        suitable.append("行程未完全确定")
+    if has_free_checked_baggage:
+        suitable.append("行李较多")
+    if dep_hour is not None and 8 <= dep_hour <= 14:
+        suitable.append("不想赶早班")
 
     if hours >= 28:
         not_suitable.append("体力较差")
@@ -1715,11 +1745,18 @@ def generate_context(flight, all_flights):
     for lay in flight.get("layovers", []):
         if lay.get("wait_minutes", 0) > 480:
             not_suitable.append("不想在机场过夜")
-    if not extra.get("refundable"):
+        if lay.get("wait_minutes", 0) > 600:
+            not_suitable.append("体力有限")
+            not_suitable.append("带小孩")
+    if not (refundable and changeable):
         not_suitable.append("行程可能变动")
+    if not has_free_checked_baggage:
+        not_suitable.append("行李较多")
+    if len(airlines) > 1:
+        not_suitable.append("第一次出国（行李可能不直挂）")
 
-    suit_text = "、".join(suitable[:3]) if suitable else "一般出行"
-    not_suit_text = "、".join(not_suitable[:2]) if not_suitable else ""
+    suit_text = "、".join(dict.fromkeys(suitable).keys()) if suitable else "一般出行"
+    not_suit_text = "、".join(dict.fromkeys(not_suitable).keys()) if not_suitable else ""
 
     return tradeoff_text, suit_text, not_suit_text
 
@@ -1851,6 +1888,45 @@ def format_html_message(
         lines.append(_sort_rule_text(route_info.get("mode") or analysis_result.get("mode")))
         lines.append("以下方案按当前排序规则展示，排序不代表推荐。")
         lines.append("")
+
+        current_min = (
+            analysis_result.get("price_range", [0])[0]
+            if analysis_result.get("price_range")
+            else 0
+        )
+        history = price_insights.get("price_history") if price_insights else None
+        price_pos = price_position_description(current_min, history)
+        wait_risk = waiting_risk_description(history, current_min, days or 0)
+
+        if price_pos:
+            lines.append("<b>📊 当前价格位置</b>")
+            lines.append("")
+            lines.append(f"当前最低价：¥{current_min:,.0f}")
+            lines.append(f"历史最低：¥{price_pos['min_price']:,.0f}")
+            lines.append(f"历史平均：¥{price_pos['avg_price']:,.0f}")
+            lines.append(f"历史最高：¥{price_pos['max_price']:,.0f}")
+            lines.append(
+                f"当前位置：{price_pos['level']}（第{price_pos['percentile']}分位）"
+            )
+            lines.append(f"{price_pos['description']}")
+            lines.append(f"数据量：{price_pos['data_points']}个历史价格点")
+            lines.append("")
+
+        if wait_risk:
+            lines.append("<b>⏳ 继续等待的风险</b>")
+            lines.append("")
+            lines.append(
+                f"价格上涨概率：{wait_risk['up_probability']}%，平均涨¥{wait_risk['avg_up_amount']:,}"
+            )
+            lines.append(
+                f"价格下降概率：{wait_risk['down_probability']}%，平均降¥{wait_risk['avg_down_amount']:,}"
+            )
+            lines.append(f"距出发：{wait_risk['days_to_dept']}天")
+            lines.append(f"时间判断：{wait_risk['urgency']}")
+            lines.append("")
+            lines.append("━━━━━━━━━━━━━━━━")
+            lines.append("")
+
         lines.append("━━━ 经济舱方案 ━━━")
         lines.append("")
 
@@ -1866,13 +1942,8 @@ def format_html_message(
                 lines, business_rec, "商务舱最低价", route_info, all_flights
             )
 
-        current_min = (
-            analysis_result.get("price_range", [0])[0]
-            if analysis_result.get("price_range")
-            else 0
-        )
         trend = generate_trend_summary(
-            price_insights.get("price_history") if price_insights else None,
+            history,
             current_min,
         )
         current_prices = [

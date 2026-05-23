@@ -610,6 +610,100 @@ def generate_trend_summary(price_history_data, current_price) -> dict:
     }
 
 
+def price_position_description(current_price, price_history):
+    """用历史数据计算当前价格的位置描述"""
+    if not price_history or len(price_history) < 5:
+        return None
+
+    if isinstance(price_history[0], (list, tuple)):
+        prices = [price for _, price in price_history if price and price > 0]
+    else:
+        prices = [price for price in price_history if price and price > 0]
+
+    if not prices:
+        return None
+
+    below = sum(1 for price in prices if price < current_price)
+    percentile = round(below / len(prices) * 100)
+
+    min_p = min(prices)
+    max_p = max(prices)
+    avg_p = round(sum(prices) / len(prices))
+
+    if percentile <= 20:
+        level = "低价区"
+        desc = "当前价格低于历史80%的记录，属于少见的低价"
+    elif percentile <= 40:
+        level = "偏低区"
+        desc = f"当前价格低于历史{100 - percentile}%的记录，低于大多数时候"
+    elif percentile <= 60:
+        level = "正常区"
+        desc = "当前价格处于历史中间水平"
+    elif percentile <= 80:
+        level = "偏高区"
+        desc = f"当前价格高于历史{percentile}%的记录，高于大多数时候"
+    else:
+        level = "高价区"
+        desc = "当前价格高于历史80%的记录，属于偏贵时段"
+
+    return {
+        "percentile": percentile,
+        "level": level,
+        "description": desc,
+        "min_price": min_p,
+        "max_price": max_p,
+        "avg_price": avg_p,
+        "data_points": len(prices),
+    }
+
+
+def waiting_risk_description(price_history, current_price, days_to_dept):
+    """计算继续等待一周的风险收益"""
+    if not price_history or len(price_history) < 10:
+        return None
+
+    if isinstance(price_history[0], (list, tuple)):
+        prices = [price for _, price in price_history if price and price > 0]
+    else:
+        prices = [price for price in price_history if price and price > 0]
+
+    if len(prices) < 10:
+        return None
+
+    changes = []
+    for index in range(1, len(prices)):
+        changes.append(prices[index] - prices[index - 1])
+
+    if not changes:
+        return None
+
+    ups = [change for change in changes if change > 0]
+    downs = [change for change in changes if change < 0]
+
+    up_prob = round(len(ups) / len(changes) * 100)
+    down_prob = round(len(downs) / len(changes) * 100)
+    avg_up = round(sum(ups) / len(ups)) if ups else 0
+    avg_down = round(abs(sum(downs) / len(downs))) if downs else 0
+
+    if days_to_dept <= 7:
+        urgency = "出发在即，等待风险很高"
+    elif days_to_dept <= 14:
+        urgency = "时间较紧，等待空间有限"
+    elif days_to_dept <= 30:
+        urgency = "在最佳购买窗口内"
+    else:
+        urgency = "时间充裕，可以继续观察"
+
+    return {
+        "up_probability": up_prob,
+        "down_probability": down_prob,
+        "avg_up_amount": avg_up,
+        "avg_down_amount": avg_down,
+        "days_to_dept": days_to_dept,
+        "urgency": urgency,
+    }
+
+
 def compare_flights(flight_a: dict, flight_b: dict) -> dict:
     """生成两个方案之间的直接对比"""
     price_diff = flight_a["price"] - flight_b["price"]
