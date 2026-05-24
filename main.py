@@ -44,6 +44,49 @@ logging.basicConfig(
 )
 
 ANALYSIS_LOG = DATA_DIR / "analysis_log.jsonl"
+SUBSCRIPTIONS_PATH = DATA_DIR / "subscriptions.json"
+
+
+def load_file_subscriptions() -> list[dict]:
+    if not SUBSCRIPTIONS_PATH.exists():
+        return []
+    try:
+        subscriptions = json.loads(SUBSCRIPTIONS_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        logging.error(f"subscriptions.json 解析失败: {exc}")
+        return []
+    if not isinstance(subscriptions, list):
+        logging.error("subscriptions.json 格式错误，应为订阅数组")
+        return []
+
+    active = []
+    for item in subscriptions:
+        if not isinstance(item, dict):
+            continue
+        if item.get("status", "active") != "active":
+            continue
+        active.append(
+            {
+                "name": item.get("name") or "网页订阅",
+                "origin": item.get("origin", "").strip().upper(),
+                "destination": item.get("destination", "").strip().upper(),
+                "depart_date": item.get("depart_date", ""),
+                "budget": item.get("budget"),
+                "mode": item.get("mode", "balanced"),
+                "cabin_classes": item.get("cabin_classes"),
+                "priorities": item.get("priorities"),
+            }
+        )
+    return [
+        sub
+        for sub in active
+        if sub.get("origin") and sub.get("destination") and sub.get("depart_date")
+    ]
+
+
+def load_all_subscriptions(config: dict) -> list[dict]:
+    yaml_subscriptions = config.get("subscriptions", []) if config else []
+    return list(yaml_subscriptions) + load_file_subscriptions()
 
 
 def run():
@@ -52,8 +95,9 @@ def run():
     config = yaml.safe_load(
         (BASE_DIR / "config.yaml").read_text(encoding="utf-8")
     )
+    subscriptions = load_all_subscriptions(config)
 
-    for sub in config["subscriptions"]:
+    for sub in subscriptions:
         route = f"{sub['origin']}-{sub['destination']}"
         logging.info(f"开始处理 {route}")
 
@@ -108,6 +152,7 @@ def run():
             )
             price_history = (data.get("price_insights") or {}).get("price_history")
             analysis["days_to_dept"] = days_to_dept
+            analysis["budget"] = sub.get("budget")
             analysis["source_stats"] = data.get("source_stats", {})
             analysis["price_position"] = price_position_description(
                 current_min_price, price_history
@@ -141,6 +186,7 @@ def run():
                     "cabin_classes": sub.get("cabin_classes"),
                     "mode": sub.get("mode", "balanced"),
                     "priorities": sub.get("priorities"),
+                    "budget": sub.get("budget"),
                     "previous_prices": previous_prices,
                     "lowest_price_history": lowest_price_history,
                     "source_stats": data.get("source_stats", {}),

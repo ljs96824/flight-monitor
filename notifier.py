@@ -873,6 +873,16 @@ def _money(value) -> str:
         return f"¥{value}"
 
 
+def _budget_notice(current_min, budget) -> str | None:
+    price = _to_float(current_min)
+    budget_value = _to_float(budget)
+    if price is None or budget_value is None or budget_value <= 0:
+        return None
+    if price <= budget_value:
+        return "✅ 发现符合预算的航班！"
+    return f"当前最低价超出预算¥{price - budget_value:,.0f}，继续监控中"
+
+
 def _time_only(value: str | None) -> str:
     if not value:
         return ""
@@ -2387,6 +2397,13 @@ def format_html_message(
             if analysis_result.get("price_range")
             else 0
         )
+        budget_line = _budget_notice(
+            current_min,
+            route_info.get("budget") or analysis_result.get("budget"),
+        )
+        if budget_line:
+            lines.append(budget_line)
+            lines.append("")
         history = price_insights.get("price_history") if price_insights else None
         price_pos = price_position_description(current_min, history)
         wait_risk = waiting_risk_description(history, current_min, days or 0)
