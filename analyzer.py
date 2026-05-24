@@ -704,6 +704,237 @@ def waiting_risk_description(price_history, current_price, days_to_dept):
     }
 
 
+def _history_prices_for_combo(price_history, combo: str) -> list[float]:
+    """Extract historical prices for one flight combo from flexible history shapes."""
+    if not price_history or not combo:
+        return []
+
+    normalized_combo = combo.replace(" ", "").upper()
+
+    if isinstance(price_history, dict):
+        candidates = (
+            price_history.get(combo)
+            or price_history.get(normalized_combo)
+            or price_history.get("by_flight", {}).get(combo)
+            or price_history.get("by_flight", {}).get(normalized_combo)
+        )
+        if candidates is None:
+            candidates = price_history.get("records") or price_history.get("history")
+    else:
+        candidates = price_history
+
+    prices = []
+    for item in candidates or []:
+        if isinstance(item, dict):
+            item_combo = item.get("flight_combo") or item.get("combo")
+            if item_combo and item_combo.replace(" ", "").upper() != normalized_combo:
+                continue
+            price = _to_float(item.get("price") or item.get("current_min_price"))
+        elif isinstance(item, (list, tuple)):
+            if len(item) >= 3:
+                item_combo = str(item[0])
+                if item_combo.replace(" ", "").upper() != normalized_combo:
+                    continue
+                price = _to_float(item[2])
+            elif len(item) >= 2:
+                price = _to_float(item[1])
+            else:
+                price = None
+        else:
+            price = _to_float(item)
+
+        if price is not None and price > 0:
+            prices.append(price)
+
+    return prices
+
+
+def _source_price_entries(flight: dict) -> list[dict]:
+    entries = (
+        flight.get("source_prices")
+        or flight.get("source_price_details")
+        or flight.get("prices_by_source")
+        or []
+    )
+    if isinstance(entries, dict):
+        return [
+            {"source": source, "price": price}
+            for source, price in entries.items()
+        ]
+    return [entry for entry in entries if isinstance(entry, dict)]
+
+
+def _add_anomaly(anomalies: list[dict], anomaly: dict, seen: set[tuple]) -> None:
+    key = (
+        anomaly.get("flight_combo"),
+        anomaly.get("type"),
+        anomaly.get("severity"),
+        anomaly.get("message"),
+    )
+    if key in seen:
+        return
+    seen.add(key)
+    anomalies.append(anomaly)
+
+
+def detect_price_anomalies(flights, price_history=None):
+    """Detect statistical, historical, source, and time-series price anomalies."""
+    valid_flights = [
+        flight for flight in flights or []
+        if _to_float(flight.get("price")) is not None
+    ]
+    prices = [_to_float(flight.get("price")) for flight in valid_flights]
+    prices = [price for price in prices if price is not None and price > 0]
+
+    anomalies = []
+    seen = set()
+    if not prices:
+        return anomalies
+
+    avg_price = statistics.mean(prices)
+    std_dev = statistics.stdev(prices) if len(prices) >= 2 else 0
+
+    for flight in valid_flights:
+        price = _to_float(flight.get("price"))
+        if price is None or price <= 0:
+            continue
+
+        combo = flight.get("flight_combo", "")
+        z_score = (price - avg_price) / std_dev if std_dev else 0
+
+        if price < avg_price * 0.6 or price > avg_price * 1.5 or abs(z_score) > 2:
+            if price < avg_price * 0.6 or z_score < -2:
+                severity = "alert"
+                anomaly_type = "统计低价异常"
+            elif price > avg_price * 1.5 or z_score > 2:
+                severity = "warning"
+                anomaly_type = "统计高价异常"
+            else:
+                severity = "info"
+                anomaly_type = "统计异常"
+            _add_anomaly(
+                anomalies,
+                {
+                    "type": anomaly_type,
+                    "severity": severity,
+                    "flight_combo": combo,
+                    "price": price,
+                    "z_score": round(z_score, 2),
+                    "message": (
+                        f"{combo or '该方案'} 当前¥{price:,.0f}，"
+                        f"均值¥{avg_price:,.0f}，Z-score={z_score:.2f}"
+                    ),
+                },
+                seen,
+            )
+
+        history_prices = _history_prices_for_combo(price_history, combo)
+        if history_prices:
+            history_min = min(history_prices)
+            if price < history_min * 0.85:
+                _add_anomaly(
+                    anomalies,
+                    {
+                        "type": "疑似bug票价",
+                        "severity": "alert",
+                        "flight_combo": combo,
+                        "price": price,
+                        "reference_price": history_min,
+                        "message": (
+                            f"{combo or '该方案'} 当前¥{price:,.0f}，"
+                            f"低于同航班历史最低¥{history_min:,.0f}超过15%"
+                        ),
+                    },
+                    seen,
+                )
+
+        previous_price = _to_float(flight.get("previous_price"))
+        if previous_price and previous_price > 0:
+            change_pct = (price - previous_price) / previous_price * 100
+            if abs(change_pct) > 30:
+                _add_anomaly(
+                    anomalies,
+                    {
+                        "type": "价格剧烈波动",
+                        "severity": "warning",
+                        "flight_combo": combo,
+                        "price": price,
+                        "previous_price": previous_price,
+                        "change_pct": round(change_pct, 1),
+                        "message": (
+                            f"{combo or '该方案'} 从¥{previous_price:,.0f}"
+                            f"变为¥{price:,.0f}，变化{change_pct:+.1f}%"
+                        ),
+                    },
+                    seen,
+                )
+
+    grouped = {}
+    for flight in valid_flights:
+        combo = (flight.get("flight_combo") or "").replace(" ", "").upper()
+        if not combo:
+            continue
+        grouped.setdefault(combo, [])
+        source_entries = _source_price_entries(flight)
+        if source_entries:
+            for entry in source_entries:
+                source_price = _to_float(entry.get("price"))
+                if source_price is not None and source_price > 0:
+                    grouped[combo].append(
+                        {
+                            "source": entry.get("source") or entry.get("data_source"),
+                            "price": source_price,
+                            "flight_combo": flight.get("flight_combo"),
+                        }
+                    )
+        else:
+            grouped[combo].append(
+                {
+                    "source": flight.get("data_source") or flight.get("source"),
+                    "price": _to_float(flight.get("price")),
+                    "flight_combo": flight.get("flight_combo"),
+                }
+            )
+
+    for entries in grouped.values():
+        entries = [entry for entry in entries if entry.get("price")]
+        if len(entries) < 2:
+            continue
+        min_entry = min(entries, key=lambda item: item["price"])
+        max_entry = max(entries, key=lambda item: item["price"])
+        if min_entry["price"] <= 0:
+            continue
+        diff_pct = (max_entry["price"] - min_entry["price"]) / min_entry["price"] * 100
+        if diff_pct > 20:
+            _add_anomaly(
+                anomalies,
+                {
+                    "type": "来源价格矛盾",
+                    "severity": "warning",
+                    "flight_combo": min_entry.get("flight_combo"),
+                    "min_price": min_entry["price"],
+                    "max_price": max_entry["price"],
+                    "diff_pct": round(diff_pct, 1),
+                    "message": (
+                        f"{min_entry.get('flight_combo') or '同一航班'} 不同来源价差"
+                        f"{diff_pct:.1f}%（¥{min_entry['price']:,.0f} - "
+                        f"¥{max_entry['price']:,.0f}）"
+                    ),
+                    "sources": entries,
+                },
+                seen,
+            )
+
+    severity_order = {"alert": 0, "warning": 1, "info": 2}
+    return sorted(
+        anomalies,
+        key=lambda item: (
+            severity_order.get(item.get("severity"), 9),
+            item.get("flight_combo") or "",
+        ),
+    )
+
+
 def calculate_price_references(
     current_price, price_history, own_history, days_to_dept, current_flights
 ):
@@ -1445,6 +1676,7 @@ def analyze_all_flights(
     durations = [f["total_duration_min"] for f in usable_flights]
     min_p, max_p = min(prices), max(prices)
     min_d, max_d = min(durations), max(durations)
+    price_anomalies = detect_price_anomalies(usable_flights, price_insights)
 
     mode = mode if mode in SCORE_WEIGHTS else "balanced"
 
@@ -1591,6 +1823,7 @@ def analyze_all_flights(
         "duration_range": [min(durations), max(durations)],
         "market_context": market_context,
         "price_insights": price_insights,
+        "price_anomalies": price_anomalies,
         "current_min_price": min(prices),
         "mode": mode,
         "priorities": priority_config,

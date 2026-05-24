@@ -1590,7 +1590,22 @@ def _compact_layover(flight: dict) -> str:
     return "；".join(parts)
 
 
+def _compact_cabin_rule_line(flight: dict) -> str:
+    fare_rules = flight.get("fare_rules") or {}
+    cabin_class = fare_rules.get("cabin_class") or flight.get("cabin_class") or "economy"
+    return f"💺 票规舱位：{_cabin_label(cabin_class)}"
+
+
 def _compact_baggage_line(flight: dict) -> str:
+    fare_rules = flight.get("fare_rules") or {}
+    baggage_rules = fare_rules.get("baggage") or {}
+    checked_pieces = int(baggage_rules.get("checked_pieces") or 0)
+    if checked_pieces > 0:
+        checked_kg = baggage_rules.get("checked_kg")
+        if checked_kg:
+            return f"🧳 托运：免费{checked_pieces}件≤{checked_kg}kg"
+        return f"🧳 托运：免费{checked_pieces}件"
+
     if not flight.get("has_baggage_info"):
         return "🧳 行李：请查询航司官网"
 
@@ -1607,6 +1622,30 @@ def _compact_baggage_line(flight: dict) -> str:
 
 
 def _compact_refund_line(flight: dict) -> str:
+    fare_rules = flight.get("fare_rules") or {}
+    change_rules = fare_rules.get("change") or {}
+    refund_rules = fare_rules.get("refund") or {}
+    has_standard_rules = (
+        change_rules.get("allowed") is not None
+        or refund_rules.get("allowed") is not None
+        or change_rules.get("fee") is not None
+        or refund_rules.get("fee") is not None
+    )
+    if has_standard_rules:
+        if change_rules.get("allowed"):
+            change_fee = change_rules.get("fee")
+            change_text = "免费改签" if change_fee == 0 else "可改签"
+        else:
+            change_text = "不可改签"
+
+        if refund_rules.get("allowed"):
+            refund_fee = refund_rules.get("fee")
+            refund_text = "免费退票" if refund_fee == 0 else "可退票"
+        else:
+            refund_text = "不可退票"
+
+        return f"🔄 退改：{change_text} · {refund_text}"
+
     if not flight.get("has_baggage_info"):
         return "🔄 退改：请查询航司官网"
 
@@ -1791,6 +1830,7 @@ def _append_compact_flight(
     lines.append(f"　机型：{_compact_aircrafts(flight)}")
     lines.append(f"　转机：{_compact_layover(flight)}")
     lines.append("")
+    lines.append(_compact_cabin_rule_line(flight))
     lines.append(_compact_baggage_line(flight))
     lines.append(_compact_refund_line(flight))
     lines.append(f"📎 数据来源：{_compact_source_label(flight)}")
@@ -1854,6 +1894,69 @@ def _compact_source_summary_lines(source_stats: dict | None) -> list[str]:
 
     lines.append(f"去重后共: {source_stats.get('after_dedup', 0)}个方案")
     return lines
+
+
+def _append_price_anomaly_lines(lines: list[str], anomalies: list[dict] | None) -> None:
+    if not anomalies:
+        return
+
+    colors = {
+        "alert": "#d93025",
+        "warning": "#f59e0b",
+        "info": "#1a73e8",
+    }
+    labels = {
+        "alert": "严重",
+        "warning": "注意",
+        "info": "提示",
+    }
+
+    highest = min(
+        anomalies,
+        key=lambda item: {"alert": 0, "warning": 1, "info": 2}.get(
+            item.get("severity"), 9
+        ),
+    )
+    color = colors.get(highest.get("severity"), "#d93025")
+
+    lines.append(f'<font color="{color}"><b>🚨 价格异常提醒</b></font>')
+    lines.append("")
+    for anomaly in anomalies[:6]:
+        severity = anomaly.get("severity", "info")
+        label = labels.get(severity, severity)
+        anomaly_type = anomaly.get("type", "价格异常")
+        message = anomaly.get("message", "")
+        lines.append(
+            f'<font color="{colors.get(severity, "#1a73e8")}">'
+            f"【{label}】{anomaly_type}</font>"
+        )
+        if message:
+            lines.append(f"　{message}")
+    if len(anomalies) > 6:
+        lines.append(f"　还有{len(anomalies) - 6}条异常未展示")
+    lines.append("")
+    lines.append("━━━━━━━━━━━━━━━━")
+    lines.append("")
+
+
+def _append_system_health_lines(lines: list[str], system_health: dict | None) -> None:
+    if not system_health:
+        return
+
+    score = system_health.get("score", 0)
+    level = system_health.get("level", "未知")
+    emoji = system_health.get("emoji", "")
+    warnings = system_health.get("warnings") or []
+
+    lines.append("")
+    lines.append(f"🩺 <b>系统健康度：{emoji} {score}/100（{level}）</b>")
+    lines.append(f"　• 活跃数据源：{system_health.get('active_sources', 0)}个")
+    lines.append(f"　• 去重后方案：{system_health.get('option_count', 0)}个")
+    if warnings:
+        for warning in warnings:
+            lines.append(f"　• ⚠️ {warning}")
+    else:
+        lines.append("　• 未发现系统健康警告")
 
 
 def _normalize_own_history_for_refs(route_info: dict) -> list[dict]:
@@ -2059,6 +2162,10 @@ def format_html_message(
         lines.append("━━━ 经济舱方案 ━━━")
         lines.append("")
 
+        _append_price_anomaly_lines(
+            lines, analysis_result.get("price_anomalies") or []
+        )
+
         for index, flight in enumerate(economy_recs[:economy_limit]):
             _append_compact_flight(
                 lines, flight, _option_label(index), route_info, all_flights
@@ -2118,6 +2225,9 @@ def format_html_message(
             )
             for reason in confidence.get("reasons", []):
                 lines.append(f"　• {reason}")
+        _append_system_health_lines(
+            lines, analysis_result.get("system_health") or {}
+        )
         lines.append("")
 
         from datetime import datetime

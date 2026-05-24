@@ -22,6 +22,7 @@ from analyzer import (
     waiting_risk_description,
 )
 from collector import _normalize_detail_flight, save_raw_response
+from health_check import system_health_check
 from notifier import format_html_message, send
 from sources.aggregator import FlightAggregator, build_default_sources
 from storage import (
@@ -84,6 +85,10 @@ def run():
             lowest_price_history = get_lowest_price_history(
                 route, sub["depart_date"], limit=14
             )
+            for flight in flights:
+                combo = flight.get("flight_combo")
+                if combo and combo in previous_prices:
+                    flight["previous_price"] = previous_prices[combo]
             save_raw_response(route, sub["depart_date"], data)
             logging.info(f"{route} 存储{data.get('total_count', 0)}个航班方案")
 
@@ -117,6 +122,11 @@ def run():
                 price_insights=data.get("price_insights"),
             )
             analysis["confidence"] = signal_record.get("confidence")
+            analysis["system_health"] = system_health_check(
+                source_stats=data.get("source_stats", {}),
+                flights=flights,
+                analysis_result=analysis,
+            )
 
             log_entry = {**analysis, "logged_at": datetime.now().isoformat()}
             with ANALYSIS_LOG.open("a", encoding="utf-8") as file:

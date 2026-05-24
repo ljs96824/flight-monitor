@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 from sources.aggregator import FlightAggregator, build_default_sources, normalize_combo
+from sources.fare_rules import standardize_fare_rules
 
 
 BASE_DIR = Path(__file__).parent
@@ -230,6 +231,10 @@ def _normalize_detail_flight(flight: dict, source_name: str | None = None) -> di
             if layovers
             else "直飞"
         )
+
+    detail["fare_rules"] = standardize_fare_rules(
+        detail.get("extra") or {}, detail.get("flight_combo", "")
+    )
 
     return detail
 
