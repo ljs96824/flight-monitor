@@ -2073,6 +2073,91 @@ def _format_reference_diff(ref: dict) -> str:
     return "= 当前与它持平"
 
 
+def _reference_price(ref: dict | None) -> float | None:
+    if not ref:
+        return None
+    try:
+        return float(ref.get("price"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _price_gap(current_price: float, reference_price: float) -> tuple[float, float]:
+    diff = current_price - reference_price
+    pct = round(diff / reference_price * 100, 1) if reference_price > 0 else 0
+    return diff, pct
+
+
+def _format_absolute_min_line(current_price: float, ref: dict) -> str:
+    ref_price = _reference_price(ref)
+    if ref_price is None:
+        return ""
+
+    diff, pct = _price_gap(current_price, ref_price)
+    if abs(diff) < 1:
+        return "🔥 当前即为历史最低价，值得关注"
+    if diff < 0:
+        return f"🔥 突破历史最低！比历史最低还便宜¥{abs(diff):,.0f}"
+    return (
+        f"比历史最低贵¥{diff:,.0f}（贵{_format_ref_percent(pct)}），"
+        "历史最低可能出现在淡季或特殊促销"
+    )
+
+
+def _format_conditional_min_line(current_price: float, ref: dict) -> str:
+    ref_price = _reference_price(ref)
+    if ref_price is None:
+        return ""
+
+    diff, _ = _price_gap(current_price, ref_price)
+    if abs(diff) < 1:
+        return "当前处于同条件最低水平"
+    if diff < 0:
+        return f"✅ 创同条件新低！比同条件历史最低还便宜¥{abs(diff):,.0f}"
+    return f"比同条件最低贵¥{diff:,.0f}，仍有降价空间"
+
+
+def _format_generic_reference_line(current_price: float, ref: dict) -> str:
+    ref_price = _reference_price(ref)
+    if ref_price is None:
+        return ""
+    diff, pct = _price_gap(current_price, ref_price)
+    if abs(diff) < 1:
+        return "当前与该参考价持平"
+    if diff < 0:
+        return f"比该参考价便宜¥{abs(diff):,.0f}（低{_format_ref_percent(abs(pct))}）"
+    return f"比该参考价贵¥{diff:,.0f}（贵{_format_ref_percent(pct)}）"
+
+
+def _format_reference_line(key: str, ref: dict, current_price: float) -> str:
+    if key == "absolute_min":
+        return _format_absolute_min_line(current_price, ref)
+    if key == "conditional_min":
+        return _format_conditional_min_line(current_price, ref)
+    return _format_generic_reference_line(current_price, ref)
+
+
+def _format_purchase_advice(references: dict, current_price: float) -> str | None:
+    absolute_price = _reference_price(references.get("absolute_min"))
+    conditional_price = _reference_price(references.get("conditional_min"))
+
+    if absolute_price is not None and conditional_price is not None:
+        if current_price <= absolute_price and current_price <= conditional_price:
+            return "⭐ 综合建议：当前是近期好价，建议尽快入手"
+
+    if conditional_price is None or conditional_price <= 0:
+        return None
+
+    diff, pct = _price_gap(current_price, conditional_price)
+    if diff > 0 and pct < 5:
+        return "📊 综合建议：价格接近低点，可以考虑入手"
+    if diff > 0 and pct > 10:
+        return "⏳ 综合建议：价格偏高，建议继续观望"
+    if diff <= 0:
+        return "⭐ 综合建议：当前是近期好价，建议尽快入手"
+    return "📊 综合建议：价格略高于低点，可结合预算和行程确定性判断"
+
+
 def _append_price_references(
     lines: list[str], references: dict | None, current_min: float
 ) -> None:
@@ -2096,14 +2181,21 @@ def _append_price_references(
 
     for key, ref in available:
         lines.append(f"{ref.get('label', '参考价格')}：¥{ref['price']:,.0f}")
-        lines.append(f"　　{_format_reference_diff(ref)}")
+        detail = _format_reference_line(key, ref, current_min)
+        if detail:
+            lines.append(f"　　{detail}")
         sample_size = ref.get("sample_size")
         if key == "recent_min" and sample_size:
             lines.append(f"　　ℹ️ 基于过去两周的{sample_size}次采集")
         elif sample_size:
             lines.append(f"　　ℹ️ {ref.get('note', '')}，基于{sample_size}个数据点")
-        elif ref.get("note"):
+        elif ref.get("note") and key not in {"absolute_min", "conditional_min"}:
             lines.append(f"　　ℹ️ {ref['note']}")
+        lines.append("")
+
+    advice = _format_purchase_advice(references, current_min)
+    if advice:
+        lines.append(advice)
         lines.append("")
 
 
