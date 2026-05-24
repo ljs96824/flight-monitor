@@ -1,7 +1,7 @@
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -16,7 +16,11 @@ load_dotenv(BASE_DIR / ".env", encoding="utf-8")
 
 import yaml
 
-from analyzer import analyze_all_flights
+from analyzer import (
+    analyze_all_flights,
+    price_position_description,
+    waiting_risk_description,
+)
 from collector import _normalize_detail_flight, save_raw_response
 from notifier import format_html_message, send
 from sources.aggregator import FlightAggregator, build_default_sources
@@ -26,6 +30,7 @@ from storage import (
     init_db,
     save_flight_details,
 )
+from tracker import log_signal
 
 
 # 日志配置
@@ -88,6 +93,30 @@ def run():
                 mode=sub.get("mode", "balanced"),
                 priorities=sub.get("priorities"),
             )
+            days_to_dept = (
+                date.fromisoformat(sub["depart_date"]) - date.today()
+            ).days
+            current_min_price = (
+                analysis.get("price_range", [0])[0]
+                if analysis.get("price_range")
+                else 0
+            )
+            price_history = (data.get("price_insights") or {}).get("price_history")
+            analysis["days_to_dept"] = days_to_dept
+            analysis["source_stats"] = data.get("source_stats", {})
+            analysis["price_position"] = price_position_description(
+                current_min_price, price_history
+            )
+            analysis["waiting_risk"] = waiting_risk_description(
+                price_history, current_min_price, days_to_dept
+            )
+            signal_record = log_signal(
+                route=route,
+                depart_date=sub["depart_date"],
+                analysis_result=analysis,
+                price_insights=data.get("price_insights"),
+            )
+            analysis["confidence"] = signal_record.get("confidence")
 
             log_entry = {**analysis, "logged_at": datetime.now().isoformat()}
             with ANALYSIS_LOG.open("a", encoding="utf-8") as file:

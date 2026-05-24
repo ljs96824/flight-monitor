@@ -2109,6 +2109,15 @@ def format_html_message(
             or analysis_result.get("source_stats")
         )
         lines.extend(_compact_source_summary_lines(source_stats_for_message))
+        confidence = analysis_result.get("confidence") or {}
+        if confidence:
+            lines.append("")
+            lines.append(
+                f"📊 <b>数据置信度：{confidence.get('emoji', '')} "
+                f"{confidence.get('level', '未知')}</b>"
+            )
+            for reason in confidence.get("reasons", []):
+                lines.append(f"　• {reason}")
         lines.append("")
 
         from datetime import datetime
