@@ -1896,6 +1896,87 @@ def _compact_source_summary_lines(source_stats: dict | None) -> list[str]:
     return lines
 
 
+def _to_float(value) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _z_score_description(z_score) -> str | None:
+    z_value = _to_float(z_score)
+    if z_value is None:
+        return None
+    if z_value < -2:
+        return "🔥 价格远低于平均水平，可能是捡漏机会"
+    if z_value < -1:
+        return "✅ 价格低于平均水平，性价比不错"
+    if z_value <= 1:
+        return "📊 价格处于正常范围"
+    if z_value <= 2:
+        return "⚠️ 价格高于平均水平"
+    return "❌ 价格远高于平均水平，建议观望"
+
+
+def _extract_average_price(anomaly: dict) -> float | None:
+    for key in ("avg_price", "average_price", "mean_price"):
+        value = _to_float(anomaly.get(key))
+        if value and value > 0:
+            return value
+
+    message = str(anomaly.get("message", ""))
+    match = re.search(r"(?:均值|平均(?:价格)?)¥?([0-9,]+(?:\.\d+)?)", message)
+    if match:
+        return _to_float(match.group(1).replace(",", ""))
+    return None
+
+
+def _format_average_price_gap(price, average_price) -> str | None:
+    price_value = _to_float(price)
+    avg_value = _to_float(average_price)
+    if price_value is None or avg_value is None or avg_value <= 0:
+        return None
+
+    diff_pct = (price_value - avg_value) / avg_value * 100
+    pct_text = f"{abs(diff_pct):.1f}".rstrip("0").rstrip(".")
+    if abs(diff_pct) < 0.5:
+        return "与平均价格基本持平"
+    if diff_pct < 0:
+        return f"比平均价格便宜{pct_text}%"
+    return f"比平均价格贵{pct_text}%"
+
+
+def _sanitize_anomaly_message(message: str) -> str:
+    text = re.sub(r"，?Z-score=[+-]?\d+(?:\.\d+)?", "", message or "")
+    text = re.sub(r"，?偏离均值([+-]?\d+(?:\.\d+)?)%", r"，相对平均价格变化\1%", text)
+    return text.strip("， ")
+
+
+def _plain_anomaly_lines(anomaly: dict) -> list[str]:
+    result = []
+    combo = anomaly.get("flight_combo")
+    price = _to_float(anomaly.get("price"))
+    if combo and price is not None:
+        result.append(f"{combo} 当前¥{price:,.0f}")
+    elif price is not None:
+        result.append(f"当前价格¥{price:,.0f}")
+
+    z_desc = _z_score_description(anomaly.get("z_score"))
+    if z_desc:
+        result.append(z_desc)
+
+    gap = _format_average_price_gap(price, _extract_average_price(anomaly))
+    if gap:
+        result.append(gap)
+
+    if not z_desc and not gap:
+        message = _sanitize_anomaly_message(str(anomaly.get("message", "")))
+        if message:
+            result.append(message)
+
+    return result
+
+
 def _append_price_anomaly_lines(lines: list[str], anomalies: list[dict] | None) -> None:
     if not anomalies:
         return
@@ -1925,13 +2006,12 @@ def _append_price_anomaly_lines(lines: list[str], anomalies: list[dict] | None) 
         severity = anomaly.get("severity", "info")
         label = labels.get(severity, severity)
         anomaly_type = anomaly.get("type", "价格异常")
-        message = anomaly.get("message", "")
         lines.append(
             f'<font color="{colors.get(severity, "#1a73e8")}">'
             f"【{label}】{anomaly_type}</font>"
         )
-        if message:
-            lines.append(f"　{message}")
+        for item in _plain_anomaly_lines(anomaly):
+            lines.append(f"　{item}")
     if len(anomalies) > 6:
         lines.append(f"　还有{len(anomalies) - 6}条异常未展示")
     lines.append("")
