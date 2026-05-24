@@ -1705,6 +1705,7 @@ def _apply_user_preferences(
     direct_only = preferences.get("direct_only", "flexible")
     red_eye = preferences.get("red_eye", "reject")
     need_baggage = preferences.get("need_baggage", "unknown")
+    budget = _to_float(preferences.get("budget"))
 
     direct_flights = [flight for flight in flights if int(flight.get("stops") or 0) == 0]
     non_red_eye_flights = [flight for flight in flights if not _is_red_eye(flight)]
@@ -1719,6 +1720,13 @@ def _apply_user_preferences(
         penalty = 0
         stops = int(flight.get("stops") or 0)
         price = _to_float(flight.get("price")) or 0
+
+        if budget and budget > 0:
+            if price > budget:
+                penalty += 2
+                penalties.append(f"超出预算¥{price - budget:,.0f}")
+            else:
+                notes.append("预算内")
 
         if direct_only == "must" and stops > 0:
             excluded.append({**flight, "exclude_reason": "用户设置必须直飞"})

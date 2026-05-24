@@ -14,8 +14,6 @@ DATA_DIR.mkdir(exist_ok=True)
 # 加载环境变量
 load_dotenv(BASE_DIR / ".env", encoding="utf-8")
 
-import yaml
-
 from analyzer import (
     analyze_all_flights,
     price_position_description,
@@ -92,11 +90,6 @@ def load_file_subscriptions() -> list[dict]:
     ]
 
 
-def load_all_subscriptions(config: dict) -> list[dict]:
-    yaml_subscriptions = config.get("subscriptions", []) if config else []
-    return list(yaml_subscriptions) + load_file_subscriptions()
-
-
 def subscription_preferences(sub: dict) -> dict:
     return {
         "direct_only": sub.get("direct_only", "flexible"),
@@ -162,10 +155,11 @@ def collect_nearby_dates(
 def run():
     # 初始化
     init_db()
-    config = yaml.safe_load(
-        (BASE_DIR / "config.yaml").read_text(encoding="utf-8")
-    )
-    subscriptions = load_all_subscriptions(config)
+    subscriptions = load_file_subscriptions()
+    if not subscriptions:
+        print("暂无订阅，请通过表单添加")
+        logging.info("暂无订阅，请通过表单添加")
+        return
 
     for sub in subscriptions:
         route = f"{sub['origin']}-{sub['destination']}"
