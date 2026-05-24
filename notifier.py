@@ -1872,8 +1872,14 @@ def _cabin_price_range_text(
 def _compact_source_summary_lines(source_stats: dict | None) -> list[str]:
     if not source_stats:
         return []
+    status_line = _compact_source_status_line(source_stats)
+    return ["—— 数据源统计 ——", status_line] if status_line else []
 
-    lines = ["—— 数据源统计 ——"]
+
+def _source_status_parts(source_stats: dict | None) -> list[str]:
+    if not source_stats:
+        return []
+
     source_names = {
         "serpapi": "SerpAPI",
         "searchapi": "SearchAPI",
@@ -1882,18 +1888,82 @@ def _compact_source_summary_lines(source_stats: dict | None) -> list[str]:
         "skyscanner": "Skyscanner",
         "duffel": "Duffel",
     }
-
+    parts = []
     for key, info in source_stats.items():
+        if key in {"total_raw", "after_dedup", "after_dedup_by_cabin", "enriched_count"}:
+            continue
         if not isinstance(info, dict):
             continue
         name = source_names.get(key, key)
+        status = str(info.get("status", ""))
+        ok = "成功" in status or status.lower() == "success"
+        mark = "✅" if ok else "❌"
         count = info.get("count")
         if count is None:
             count = sum((info.get("cabin_counts") or {}).values())
-        lines.append(f"{name}: {int(count or 0)}个方案")
+        parts.append(f"{name} {mark} {int(count or 0)}个")
+    return parts
 
-    lines.append(f"去重后共: {source_stats.get('after_dedup', 0)}个方案")
-    return lines
+
+def _compact_source_status_line(source_stats: dict | None) -> str:
+    parts = _source_status_parts(source_stats)
+    if not parts:
+        return ""
+    return " | ".join(parts) + f" → 去重后{(source_stats or {}).get('after_dedup', 0)}个方案"
+
+
+def _successful_source_count(source_stats: dict | None) -> int:
+    if not source_stats:
+        return 0
+    count = 0
+    for key, info in source_stats.items():
+        if key in {"total_raw", "after_dedup", "after_dedup_by_cabin", "enriched_count"}:
+            continue
+        if not isinstance(info, dict):
+            continue
+        status = str(info.get("status", ""))
+        if "成功" in status or status.lower() == "success":
+            count += 1
+    return count
+
+
+def _evidence_text(price_pos: dict | None, source_stats: dict | None) -> str:
+    parts = []
+    data_points = (price_pos or {}).get("data_points")
+    if data_points:
+        parts.append(f"基于{data_points}次采集")
+    source_count = _successful_source_count(source_stats)
+    if source_count:
+        parts.append(f"{source_count}个数据源交叉验证")
+    return f"（{'、'.join(parts)}）" if parts else ""
+
+
+def _history_prices(price_history) -> list[float]:
+    prices = []
+    for item in price_history or []:
+        if isinstance(item, (list, tuple)) and len(item) >= 2:
+            price = item[1]
+        else:
+            price = item
+        value = _to_float(price)
+        if value and value > 0:
+            prices.append(value)
+    return prices
+
+
+def _trend_arrow_line(price_history, width: int = 4) -> str:
+    prices = _history_prices(price_history)
+    if len(prices) < 2:
+        return ""
+    recent = prices[-width:]
+    if all(recent[i] > recent[i + 1] for i in range(len(recent) - 1)):
+        prefix = "📉"
+    elif all(recent[i] < recent[i + 1] for i in range(len(recent) - 1)):
+        prefix = "📈"
+    else:
+        prefix = "📊"
+    values = " → ".join(f"¥{price:,.0f}" for price in recent)
+    return f"{prefix} {values}"
 
 
 def _to_float(value) -> float | None:
@@ -2137,25 +2207,27 @@ def _format_reference_line(key: str, ref: dict, current_price: float) -> str:
     return _format_generic_reference_line(current_price, ref)
 
 
-def _format_purchase_advice(references: dict, current_price: float) -> str | None:
+def _format_purchase_advice(
+    references: dict, current_price: float, evidence: str = ""
+) -> str | None:
     absolute_price = _reference_price(references.get("absolute_min"))
     conditional_price = _reference_price(references.get("conditional_min"))
 
     if absolute_price is not None and conditional_price is not None:
         if current_price <= absolute_price and current_price <= conditional_price:
-            return "⭐ 综合建议：当前是近期好价，建议尽快入手"
+            return f"⭐ 综合建议：当前是近期好价，建议尽快入手{evidence}"
 
     if conditional_price is None or conditional_price <= 0:
         return None
 
     diff, pct = _price_gap(current_price, conditional_price)
     if diff > 0 and pct < 5:
-        return "📊 综合建议：价格接近低点，可以考虑入手"
+        return f"📊 综合建议：价格接近低点，可以考虑入手{evidence}"
     if diff > 0 and pct > 10:
-        return "⏳ 综合建议：价格偏高，建议继续观望"
+        return f"⏳ 综合建议：价格偏高，建议继续观望{evidence}"
     if diff <= 0:
-        return "⭐ 综合建议：当前是近期好价，建议尽快入手"
-    return "📊 综合建议：价格略高于低点，可结合预算和行程确定性判断"
+        return f"⭐ 综合建议：当前是近期好价，建议尽快入手{evidence}"
+    return f"📊 综合建议：价格略高于低点，可结合预算和行程确定性判断{evidence}"
 
 
 def _percentile_position_text(percentile) -> str:
@@ -2196,7 +2268,7 @@ def _format_min_amount_diff(diff) -> str:
 
 
 def _append_price_references(
-    lines: list[str], references: dict | None, current_min: float
+    lines: list[str], references: dict | None, current_min: float, evidence: str = ""
 ) -> None:
     if not references or not current_min:
         return
@@ -2220,7 +2292,7 @@ def _append_price_references(
         lines.append(f"{ref.get('label', '参考价格')}：¥{ref['price']:,.0f}")
         detail = _format_reference_line(key, ref, current_min)
         if detail:
-            lines.append(f"　　{detail}")
+            lines.append(f"　　{detail}{evidence}")
         sample_size = ref.get("sample_size")
         if key == "recent_min" and sample_size:
             lines.append(f"　　ℹ️ 基于过去两周的{sample_size}次采集")
@@ -2230,7 +2302,7 @@ def _append_price_references(
             lines.append(f"　　ℹ️ {ref['note']}")
         lines.append("")
 
-    advice = _format_purchase_advice(references, current_min)
+    advice = _format_purchase_advice(references, current_min, evidence)
     if advice:
         lines.append(advice)
         lines.append("")
@@ -2325,6 +2397,13 @@ def format_html_message(
         window_analysis = multi_window_analysis(
             current_min, own_history, history, days or 0
         )
+        source_stats_for_message = (
+            source_stats
+            or route_info.get("source_stats")
+            or analysis_result.get("source_stats")
+        )
+        evidence_source = price_pos or {"data_points": len(_history_prices(history))}
+        evidence = _evidence_text(evidence_source, source_stats_for_message)
 
         if price_pos:
             lines.append("<b>📊 当前价格位置</b>")
@@ -2333,11 +2412,13 @@ def format_html_message(
             lines.append(f"历史最低：¥{price_pos['min_price']:,.0f}")
             lines.append(f"历史平均：¥{price_pos['avg_price']:,.0f}")
             lines.append(f"历史最高：¥{price_pos['max_price']:,.0f}")
-            lines.append(f"当前水平：{_percentile_position_text(price_pos.get('percentile'))}")
+            lines.append(
+                f"当前水平：{_percentile_position_text(price_pos.get('percentile'))}{evidence}"
+            )
             lines.append(f"数据量：{price_pos['data_points']}个历史价格点")
             lines.append("")
 
-        _append_price_references(lines, price_refs, current_min)
+        _append_price_references(lines, price_refs, current_min, evidence)
         _append_multi_window_analysis(lines, window_analysis)
 
         if wait_risk:
@@ -2398,6 +2479,9 @@ def format_html_message(
         lines.append("━━━━━━━━━━━━━━━━")
         lines.append("")
         lines.append("📈 价格走势")
+        arrow_line = _trend_arrow_line(history)
+        if arrow_line:
+            lines.append(arrow_line)
         lines.append(f"最高：¥{high_price:,.0f}")
         lines.append(f"最低：¥{low_price:,.0f}")
         lines.append(f"平均：¥{avg_price:,.0f}")
@@ -2406,11 +2490,6 @@ def format_html_message(
         lines.append(f"📊 经济舱价格区间：{_cabin_price_range_text(all_flights, 'economy', analysis_result)}")
         lines.append(f"📊 商务舱价格区间：{_cabin_price_range_text(all_flights, 'business', analysis_result)}")
         lines.append("")
-        source_stats_for_message = (
-            source_stats
-            or route_info.get("source_stats")
-            or analysis_result.get("source_stats")
-        )
         lines.extend(_compact_source_summary_lines(source_stats_for_message))
         confidence = analysis_result.get("confidence") or {}
         if confidence:
@@ -2427,7 +2506,8 @@ def format_html_message(
         lines.append("")
 
         from datetime import datetime
-        lines.append(f"🕐 采集时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}")
+        collected_at = datetime.now().strftime("%Y-%m-%d %H:%M")
+        lines.append(f"数据采集于 {collected_at} | 价格可能随时变动，建议尽快确认")
         lines.append("")
         lines.append("━━━━━━━━━━━━━━━━")
         lines.append("以上数据来自第三方API，仅供参考。")
