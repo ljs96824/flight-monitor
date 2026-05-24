@@ -2158,6 +2158,43 @@ def _format_purchase_advice(references: dict, current_price: float) -> str | Non
     return "📊 综合建议：价格略高于低点，可结合预算和行程确定性判断"
 
 
+def _percentile_position_text(percentile) -> str:
+    pct = _to_float(percentile)
+    if pct is None:
+        return "历史数据还不够多，暂时不好判断高低"
+    if pct <= 0:
+        return "处于最低水平"
+    if pct <= 10:
+        return "处于极低水平（比90%的历史价格都便宜）"
+    if pct <= 25:
+        return "处于较低水平（比75%的历史价格都便宜）"
+    if pct <= 50:
+        return "处于中等偏低水平"
+    if pct <= 75:
+        return "处于中等偏高水平"
+    if pct <= 90:
+        return "处于较高水平（比75%的历史价格都贵）"
+    return "处于极高水平，建议观望"
+
+
+def _format_average_amount_diff(diff) -> str:
+    value = _to_float(diff) or 0
+    if abs(value) < 1:
+        return "　与平均价格基本持平"
+    if value < 0:
+        return f"　比平均价格便宜¥{abs(value):,.0f}"
+    return f"　比平均价格贵¥{value:,.0f}"
+
+
+def _format_min_amount_diff(diff) -> str:
+    value = _to_float(diff) or 0
+    if abs(value) < 1:
+        return "　已经是最低价"
+    if value < 0:
+        return f"　比此前最低价还便宜¥{abs(value):,.0f}"
+    return f"　比最低价贵¥{value:,.0f}"
+
+
 def _append_price_references(
     lines: list[str], references: dict | None, current_min: float
 ) -> None:
@@ -2218,17 +2255,12 @@ def _append_multi_window_analysis(lines: list[str], windows: dict | None) -> Non
     mid_term = windows.get("mid_term")
     if isinstance(mid_term, dict):
         vs_avg = mid_term.get("vs_avg", 0) or 0
-        avg_direction = "高" if vs_avg >= 0 else "低"
         vs_min = mid_term.get("vs_min", 0) or 0
-        if vs_min >= 0:
-            min_line = f"　比最低价贵¥{vs_min:,.0f}"
-        else:
-            min_line = f"　比最低价低¥{abs(vs_min):,.0f}"
         sections.extend(
             [
-                f"中期（你关注以来）：当前在第{mid_term.get('percentile')}分位",
-                f"　比均价{avg_direction}¥{abs(vs_avg):,.0f}",
-                min_line,
+                f"中期（你关注以来）：{_percentile_position_text(mid_term.get('percentile'))}",
+                _format_average_amount_diff(vs_avg),
+                _format_min_amount_diff(vs_min),
                 "",
             ]
         )
@@ -2236,15 +2268,10 @@ def _append_multi_window_analysis(lines: list[str], windows: dict | None) -> Non
     long_term = windows.get("long_term")
     if isinstance(long_term, dict):
         percentile = long_term.get("percentile", 0) or 0
-        if percentile >= 50:
-            position_line = f"　当前价格高于历史{percentile}%的记录"
-        else:
-            position_line = f"　当前价格低于历史{100 - percentile}%的记录"
         sections.extend(
             [
-                f"长期（近60天）：当前在第{percentile}分位",
+                f"长期（近60天）：{_percentile_position_text(percentile)}",
                 f"　历史最低¥{long_term.get('min', 0):,.0f} → 最高¥{long_term.get('max', 0):,.0f}",
-                position_line,
                 "",
             ]
         )
@@ -2306,10 +2333,7 @@ def format_html_message(
             lines.append(f"历史最低：¥{price_pos['min_price']:,.0f}")
             lines.append(f"历史平均：¥{price_pos['avg_price']:,.0f}")
             lines.append(f"历史最高：¥{price_pos['max_price']:,.0f}")
-            lines.append(
-                f"当前位置：{price_pos['level']}（第{price_pos['percentile']}分位）"
-            )
-            lines.append(f"{price_pos['description']}")
+            lines.append(f"当前水平：{_percentile_position_text(price_pos.get('percentile'))}")
             lines.append(f"数据量：{price_pos['data_points']}个历史价格点")
             lines.append("")
 
