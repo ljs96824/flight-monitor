@@ -1647,11 +1647,137 @@ def _priority_boundary_notes(flight: dict, priorities: dict) -> list[str]:
     return notes
 
 
+def _first_departure_hour(flight: dict) -> int | None:
+    segments = flight.get("segments") or []
+    if not segments:
+        return None
+    dep_time = str(segments[0].get("dep_time") or "")
+    text = dep_time.replace("T", " ")
+    if " " in text:
+        text = text.split(" ", 1)[1]
+    try:
+        return int(text[:2])
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_red_eye(flight: dict) -> bool:
+    hour = _first_departure_hour(flight)
+    return hour is not None and (hour >= 23 or hour < 6)
+
+
+def _has_free_checked_baggage(flight: dict) -> bool:
+    fare_rules = flight.get("fare_rules") or {}
+    baggage = fare_rules.get("baggage") or {}
+    if baggage.get("checked_pieces") or baggage.get("checked_kg"):
+        return True
+
+    extra = flight.get("extra") or {}
+    detail = extra.get("baggage_detail") or {}
+    checked = detail.get("checked") or {}
+    if checked.get("quantity", 0) > 0 and checked.get("is_free", False):
+        return True
+
+    return bool(extra.get("baggage"))
+
+
+def _trip_mode(default_mode: str, preferences: dict | None) -> str:
+    trip_type = (preferences or {}).get("trip_type")
+    if trip_type == "business_meeting":
+        return "fast"
+    if trip_type == "tourism":
+        return "budget"
+    if trip_type in {"family_elder", "family_visit"}:
+        return "comfort"
+    return default_mode
+
+
+def _cheapest_price(flights: list[dict]) -> float | None:
+    prices = [_to_float(flight.get("price")) for flight in flights]
+    prices = [price for price in prices if price is not None and price > 0]
+    return min(prices) if prices else None
+
+
+def _apply_user_preferences(
+    flights: list[dict], preferences: dict | None
+) -> tuple[list[dict], list[dict], dict]:
+    preferences = preferences or {}
+    direct_only = preferences.get("direct_only", "flexible")
+    red_eye = preferences.get("red_eye", "reject")
+    need_baggage = preferences.get("need_baggage", "unknown")
+
+    direct_flights = [flight for flight in flights if int(flight.get("stops") or 0) == 0]
+    non_red_eye_flights = [flight for flight in flights if not _is_red_eye(flight)]
+    cheapest_direct = _cheapest_price(direct_flights)
+    cheapest_non_red_eye = _cheapest_price(non_red_eye_flights)
+
+    kept = []
+    excluded = []
+    for flight in flights:
+        notes = list(flight.get("preference_notes") or [])
+        penalties = list(flight.get("preference_penalties") or [])
+        penalty = 0
+        stops = int(flight.get("stops") or 0)
+        price = _to_float(flight.get("price")) or 0
+
+        if direct_only == "must" and stops > 0:
+            excluded.append({**flight, "exclude_reason": "用户设置必须直飞"})
+            continue
+        if direct_only in {"flexible", "cheap_ok"} and stops > 0:
+            penalty += 2 if direct_only == "flexible" else 1
+            if cheapest_direct and price < cheapest_direct:
+                notes.append(f"中转但便宜¥{cheapest_direct - price:,.0f}")
+            else:
+                penalties.append("包含中转")
+
+        if red_eye == "reject" and _is_red_eye(flight):
+            excluded.append({**flight, "exclude_reason": "用户不接受红眼/过早航班"})
+            continue
+        if red_eye in {"accept", "flexible", "cheap_ok"} and _is_red_eye(flight):
+            penalty += 2 if red_eye in {"accept", "flexible"} else 1
+            if cheapest_non_red_eye and price < cheapest_non_red_eye:
+                notes.append(f"红眼但便宜¥{cheapest_non_red_eye - price:,.0f}")
+            else:
+                penalties.append("红眼/过早航班")
+
+        if need_baggage == "required":
+            if _has_free_checked_baggage(flight):
+                notes.append("含免费托运")
+            else:
+                penalty += 3
+                penalties.append("托运行李需官网确认")
+
+        trip_type = preferences.get("trip_type")
+        if trip_type == "business_meeting":
+            penalty += stops
+            if _is_red_eye(flight):
+                penalty += 2
+        elif trip_type == "tourism":
+            penalty += 0
+        elif trip_type == "family_elder":
+            penalty += stops * 2
+            if _max_layover_minutes(flight) > 240:
+                penalty += 2
+
+        flight["preference_notes"] = notes
+        flight["preference_penalties"] = penalties
+        flight["preference_penalty"] = penalty
+        kept.append(flight)
+
+    if not kept:
+        return flights, excluded, {
+            "fallback": True,
+            "message": "偏好条件过严，已临时放宽以展示可参考航班",
+        }
+    return kept, excluded, {"fallback": False}
+
+
 def analyze_all_flights(
     flights: list[dict],
     price_insights: dict = None,
     mode: str = "balanced",
     priorities=None,
+    user_preferences=None,
 ) -> dict:
     """对所有航班方案做多维度分析和排名"""
     if not flights:
@@ -1662,6 +1788,15 @@ def analyze_all_flights(
         for flight in flights
         if flight.get("price") is not None and flight.get("total_duration_min") is not None
     ]
+    if not usable_flights:
+        return {"error": "no_flights"}
+
+    mode = _trip_mode(mode, user_preferences)
+    mode = mode if mode in SCORE_WEIGHTS else "balanced"
+    original_options = len(usable_flights)
+    usable_flights, preference_excluded, preference_summary = _apply_user_preferences(
+        usable_flights, user_preferences
+    )
     if not usable_flights:
         return {"error": "no_flights"}
 
@@ -1677,8 +1812,6 @@ def analyze_all_flights(
     min_p, max_p = min(prices), max(prices)
     min_d, max_d = min(durations), max(durations)
     price_anomalies = detect_price_anomalies(usable_flights, price_insights)
-
-    mode = mode if mode in SCORE_WEIGHTS else "balanced"
 
     for flight in usable_flights:
         price_score = (
@@ -1696,6 +1829,10 @@ def analyze_all_flights(
         )
         flight["scores"] = overall_score(flight, prices, durations, mode)
         flight["transfer_risk"] = transfer_risk(flight)
+        flight["preference_score"] = round(
+            flight["scores"]["total"] - float(flight.get("preference_penalty") or 0),
+            1,
+        )
 
     priority_config = _normalize_priorities(priorities)
     qualified_flights = []
@@ -1814,6 +1951,7 @@ def analyze_all_flights(
 
     return {
         "total_options": len(usable_flights),
+        "total_options_before_preferences": original_options,
         "recommendations": recommendations,
         "economy_recommendations": economy_recommendations,
         "business_recommendation": business_recommendation,
@@ -1829,6 +1967,9 @@ def analyze_all_flights(
         "priorities": priority_config,
         "qualified_flights": qualified_flights,
         "reference_flights": reference_flights,
+        "user_preferences": user_preferences or {},
+        "preference_excluded_count": len(preference_excluded),
+        "preference_summary": preference_summary,
     }
 
 
@@ -1841,18 +1982,29 @@ def select_recommendations(economy_flights, business_flights, mode: str = "balan
         )
 
     def sort_key(flight: dict):
+        preference_penalty = flight.get("preference_penalty", 0) or 0
         if mode == "budget":
-            return (flight.get("price", 99999), flight.get("total_duration_min", 99999))
+            return (
+                preference_penalty,
+                flight.get("price", 99999),
+                flight.get("total_duration_min", 99999),
+            )
         if mode == "fast":
-            return (flight.get("total_duration_min", 99999), flight.get("price", 99999))
+            return (
+                preference_penalty,
+                flight.get("total_duration_min", 99999),
+                flight.get("price", 99999),
+            )
         if mode == "comfort":
             return (
+                preference_penalty,
                 flight.get("stops", 99),
                 max_layover_minutes(flight),
                 flight.get("total_duration_min", 99999),
                 flight.get("price", 99999),
             )
         return (
+            preference_penalty,
             flight.get("value_score", 99999),
             flight.get("price", 99999),
             flight.get("total_duration_min", 99999),

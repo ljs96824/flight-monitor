@@ -883,6 +883,13 @@ def _budget_notice(current_min, budget) -> str | None:
     return f"当前最低价超出预算¥{price - budget_value:,.0f}，继续监控中"
 
 
+def _goals(route_info: dict, analysis_result: dict) -> set[str]:
+    goals = route_info.get("goals") or analysis_result.get("goals") or []
+    if not goals:
+        return {"price_drop_alert", "buy_timing", "best_overall"}
+    return set(goals)
+
+
 def _time_only(value: str | None) -> str:
     if not value:
         return ""
@@ -1844,6 +1851,11 @@ def _append_compact_flight(
     lines.append(_compact_baggage_line(flight))
     lines.append(_compact_refund_line(flight))
     lines.append(f"📎 数据来源：{_compact_source_label(flight)}")
+    preference_notes = (flight.get("preference_notes") or []) + (
+        flight.get("preference_penalties") or []
+    )
+    if preference_notes:
+        lines.append(f"⚙️ 偏好匹配：{'；'.join(dict.fromkeys(preference_notes))}")
     lines.append("")
     tradeoff_text, suit_text, not_suit_text = generate_context(flight, all_flights)
     lines.append(f"📋 {tradeoff_text}")
@@ -1974,6 +1986,94 @@ def _trend_arrow_line(price_history, width: int = 4) -> str:
         prefix = "📊"
     values = " → ".join(f"¥{price:,.0f}" for price in recent)
     return f"{prefix} {values}"
+
+
+def _append_price_drop_alert(
+    lines: list[str], analysis_result: dict, route_info: dict
+) -> None:
+    previous_prices = route_info.get("previous_prices") or {}
+    flights = analysis_result.get("all_flights") or []
+    if not flights:
+        return
+
+    current_prices = [
+        flight.get("price")
+        for flight in flights
+        if flight.get("price") is not None
+    ]
+    if not current_prices:
+        return
+    current_min = min(current_prices)
+    lines.append("<b>🔔 跌价提醒</b>")
+    if not previous_prices:
+        lines.append(f"首次记录当前最低价：¥{current_min:,.0f}")
+        lines.append("")
+        return
+
+    previous_values = [
+        price for price in previous_prices.values() if price is not None
+    ]
+    if not previous_values:
+        lines.append(f"首次记录当前最低价：¥{current_min:,.0f}")
+        lines.append("")
+        return
+
+    previous_min = min(previous_values)
+    diff = current_min - previous_min
+    if diff < 0:
+        lines.append(f"✅ 当前最低价比上次便宜¥{abs(diff):,.0f}")
+    elif diff > 0:
+        lines.append(f"当前最低价比上次贵¥{diff:,.0f}")
+    else:
+        lines.append("当前最低价与上次持平")
+    lines.append("")
+
+
+def _append_nearby_dates(lines: list[str], nearby_dates: list[dict] | None) -> None:
+    if not nearby_dates:
+        return
+
+    lines.append("<b>📅 前后日期价格对比</b>")
+    for item in sorted(nearby_dates, key=lambda value: value.get("date", "")):
+        price = item.get("min_price")
+        price_text = f"¥{price:,.0f}" if price else "暂无价格"
+        offset = item.get("offset", 0)
+        if offset == 0:
+            label = "出发日"
+        elif offset > 0:
+            label = f"+{offset}天"
+        else:
+            label = f"{offset}天"
+        lines.append(f"{item.get('date')}（{label}）：{price_text}")
+    lines.append("")
+
+
+def _append_best_overall_summary(
+    lines: list[str], analysis_result: dict, route_info: dict
+) -> None:
+    flights = analysis_result.get("all_flights") or []
+    if not flights:
+        return
+    ranked = sorted(
+        flights,
+        key=lambda flight: (
+            -(flight.get("preference_score") or (flight.get("scores") or {}).get("total", 0)),
+            flight.get("price", 999999),
+        ),
+    )[:3]
+    if not ranked:
+        return
+
+    lines.append("<b>🏆 综合评分Top3方案</b>")
+    for index, flight in enumerate(ranked, start=1):
+        score = flight.get("preference_score") or (flight.get("scores") or {}).get("total")
+        score_text = f" | 匹配度{score}/10" if score is not None else ""
+        lines.append(
+            f"{index}. ¥{flight.get('price', 0):,.0f} | "
+            f"{flight.get('route_summary', '')} | "
+            f"{flight.get('total_hours', '')}小时{score_text}"
+        )
+    lines.append("")
 
 
 def _to_float(value) -> float | None:
@@ -2397,6 +2497,7 @@ def format_html_message(
             if analysis_result.get("price_range")
             else 0
         )
+        goals = _goals(route_info, analysis_result)
         budget_line = _budget_notice(
             current_min,
             route_info.get("budget") or analysis_result.get("budget"),
@@ -2422,7 +2523,10 @@ def format_html_message(
         evidence_source = price_pos or {"data_points": len(_history_prices(history))}
         evidence = _evidence_text(evidence_source, source_stats_for_message)
 
-        if price_pos:
+        if "price_drop_alert" in goals:
+            _append_price_drop_alert(lines, analysis_result, route_info)
+
+        if "buy_timing" in goals and price_pos:
             lines.append("<b>📊 当前价格位置</b>")
             lines.append("")
             lines.append(f"当前最低价：¥{current_min:,.0f}")
@@ -2435,10 +2539,15 @@ def format_html_message(
             lines.append(f"数据量：{price_pos['data_points']}个历史价格点")
             lines.append("")
 
-        _append_price_references(lines, price_refs, current_min, evidence)
+        if "buy_timing" in goals:
+            _append_price_references(lines, price_refs, current_min, evidence)
         _append_multi_window_analysis(lines, window_analysis)
+        if "cheaper_date" in goals:
+            _append_nearby_dates(
+                lines, route_info.get("nearby_dates") or analysis_result.get("nearby_dates")
+            )
 
-        if wait_risk:
+        if "buy_timing" in goals and wait_risk:
             lines.append("<b>⏳ 继续等待的风险</b>")
             lines.append("")
             lines.append(
@@ -2455,6 +2564,9 @@ def format_html_message(
 
         lines.append("━━━ 经济舱方案 ━━━")
         lines.append("")
+
+        if "best_overall" in goals:
+            _append_best_overall_summary(lines, analysis_result, route_info)
 
         _append_price_anomaly_lines(
             lines, analysis_result.get("price_anomalies") or []

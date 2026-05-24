@@ -1,7 +1,7 @@
 import json
 import logging
 import os
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -72,6 +72,14 @@ def load_file_subscriptions() -> list[dict]:
                 "destination": item.get("destination", "").strip().upper(),
                 "depart_date": item.get("depart_date", ""),
                 "budget": item.get("budget"),
+                "return_date": item.get("return_date"),
+                "round_trip": bool(item.get("round_trip", False)),
+                "date_flexibility": item.get("date_flexibility", 0),
+                "direct_only": item.get("direct_only", "flexible"),
+                "red_eye": item.get("red_eye", "reject"),
+                "need_baggage": item.get("need_baggage", "unknown"),
+                "trip_type": item.get("trip_type", "tourism"),
+                "goals": item.get("goals", []),
                 "mode": item.get("mode", "balanced"),
                 "cabin_classes": item.get("cabin_classes"),
                 "priorities": item.get("priorities"),
@@ -87,6 +95,68 @@ def load_file_subscriptions() -> list[dict]:
 def load_all_subscriptions(config: dict) -> list[dict]:
     yaml_subscriptions = config.get("subscriptions", []) if config else []
     return list(yaml_subscriptions) + load_file_subscriptions()
+
+
+def subscription_preferences(sub: dict) -> dict:
+    return {
+        "direct_only": sub.get("direct_only", "flexible"),
+        "red_eye": sub.get("red_eye", "reject"),
+        "need_baggage": sub.get("need_baggage", "unknown"),
+        "trip_type": sub.get("trip_type", "tourism"),
+        "goals": sub.get("goals", []),
+        "budget": sub.get("budget"),
+        "date_flexibility": sub.get("date_flexibility", 0),
+        "round_trip": sub.get("round_trip", False),
+        "return_date": sub.get("return_date"),
+    }
+
+
+def collect_nearby_dates(
+    aggregator: FlightAggregator,
+    sub: dict,
+    cabin_classes=None,
+) -> list[dict]:
+    try:
+        days_range = int(sub.get("date_flexibility") or 0)
+    except (TypeError, ValueError):
+        days_range = 0
+    if days_range <= 0:
+        return []
+
+    center = date.fromisoformat(sub["depart_date"])
+    results = []
+    for offset in range(-days_range, days_range + 1):
+        check_date = center + timedelta(days=offset)
+        date_str = check_date.isoformat()
+        if date_str == sub["depart_date"]:
+            continue
+        try:
+            data = aggregator.collect(
+                sub["origin"],
+                sub["destination"],
+                date_str,
+                cabin_classes=cabin_classes,
+            )
+            flights = data.get("flights", []) if data else []
+            prices = [
+                flight.get("price")
+                for flight in flights
+                if flight.get("price") is not None
+            ]
+            results.append(
+                {
+                    "date": date_str,
+                    "offset": offset,
+                    "min_price": min(prices) if prices else None,
+                    "count": len(flights),
+                }
+            )
+        except Exception as exc:
+            logging.error(f"{date_str} 相邻日期采集失败: {exc}")
+            results.append(
+                {"date": date_str, "offset": offset, "min_price": None, "count": 0}
+            )
+    return results
 
 
 def run():
@@ -136,11 +206,18 @@ def run():
             save_raw_response(route, sub["depart_date"], data)
             logging.info(f"{route} 存储{data.get('total_count', 0)}个航班方案")
 
+            preferences = subscription_preferences(sub)
+            nearby_dates = collect_nearby_dates(
+                agg,
+                sub,
+                cabin_classes=sub.get("cabin_classes"),
+            )
             analysis = analyze_all_flights(
                 flights,
                 data.get("price_insights"),
                 mode=sub.get("mode", "balanced"),
                 priorities=sub.get("priorities"),
+                user_preferences=preferences,
             )
             days_to_dept = (
                 date.fromisoformat(sub["depart_date"]) - date.today()
@@ -153,6 +230,8 @@ def run():
             price_history = (data.get("price_insights") or {}).get("price_history")
             analysis["days_to_dept"] = days_to_dept
             analysis["budget"] = sub.get("budget")
+            analysis["goals"] = sub.get("goals", [])
+            analysis["nearby_dates"] = nearby_dates
             analysis["source_stats"] = data.get("source_stats", {})
             analysis["price_position"] = price_position_description(
                 current_min_price, price_history
@@ -187,6 +266,15 @@ def run():
                     "mode": sub.get("mode", "balanced"),
                     "priorities": sub.get("priorities"),
                     "budget": sub.get("budget"),
+                    "return_date": sub.get("return_date"),
+                    "round_trip": sub.get("round_trip", False),
+                    "date_flexibility": sub.get("date_flexibility", 0),
+                    "direct_only": sub.get("direct_only", "flexible"),
+                    "red_eye": sub.get("red_eye", "reject"),
+                    "need_baggage": sub.get("need_baggage", "unknown"),
+                    "trip_type": sub.get("trip_type", "tourism"),
+                    "goals": sub.get("goals", []),
+                    "nearby_dates": nearby_dates,
                     "previous_prices": previous_prices,
                     "lowest_price_history": lowest_price_history,
                     "source_stats": data.get("source_stats", {}),
