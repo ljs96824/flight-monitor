@@ -1647,12 +1647,8 @@ def _priority_boundary_notes(flight: dict, priorities: dict) -> list[str]:
     return notes
 
 
-def _first_departure_hour(flight: dict) -> int | None:
-    segments = flight.get("segments") or []
-    if not segments:
-        return None
-    dep_time = str(segments[0].get("dep_time") or "")
-    text = dep_time.replace("T", " ")
+def _hour_from_time(value: str | None) -> int | None:
+    text = str(value or "").replace("T", " ")
     if " " in text:
         text = text.split(" ", 1)[1]
     try:
@@ -1661,9 +1657,55 @@ def _first_departure_hour(flight: dict) -> int | None:
         return None
 
 
+def _first_departure_hour(flight: dict) -> int | None:
+    segments = flight.get("segments") or []
+    if not segments:
+        return None
+    return _hour_from_time(segments[0].get("dep_time"))
+
+
+def _last_arrival_hour(flight: dict) -> int | None:
+    segments = flight.get("segments") or []
+    if not segments:
+        return None
+    return _hour_from_time(segments[-1].get("arr_time"))
+
+
 def _is_red_eye(flight: dict) -> bool:
     hour = _first_departure_hour(flight)
     return hour is not None and (hour >= 23 or hour < 6)
+
+
+def _matches_departure_policy(flight: dict, policy: str) -> bool:
+    hour = _first_departure_hour(flight)
+    if hour is None or policy == "any":
+        return True
+    if policy == "after_06":
+        return hour >= 6
+    if policy == "daytime":
+        return 8 <= hour <= 20
+    if policy == "no_redeye":
+        return not (hour >= 23 or hour < 6)
+    return True
+
+
+def _matches_arrival_policy(flight: dict, policy: str) -> bool:
+    hour = _last_arrival_hour(flight)
+    if hour is None or policy == "any":
+        return True
+    if policy == "no_midnight":
+        return not (0 <= hour < 6)
+    if policy == "daytime_only":
+        return 6 <= hour <= 22
+    return True
+
+
+def _is_daytime_flight(flight: dict) -> bool:
+    dep_hour = _first_departure_hour(flight)
+    arr_hour = _last_arrival_hour(flight)
+    dep_ok = dep_hour is None or 8 <= dep_hour <= 20
+    arr_ok = arr_hour is None or 6 <= arr_hour <= 22
+    return dep_ok and arr_ok
 
 
 def _has_free_checked_baggage(flight: dict) -> bool:
@@ -1702,6 +1744,11 @@ def _has_refund_change_flexibility(flight: dict, required: bool = False) -> bool
 
 
 def _trip_mode(default_mode: str, preferences: dict | None) -> str:
+    price_sensitivity = (preferences or {}).get("price_sensitivity")
+    if price_sensitivity == "max":
+        return "budget"
+    if price_sensitivity == "low":
+        return "comfort"
     trip_type = (preferences or {}).get("trip_type")
     if trip_type == "business_meeting":
         return "fast"
@@ -1725,8 +1772,13 @@ def _apply_user_preferences(
     direct_only = preferences.get("direct_only", "flexible")
     transfer_policy = preferences.get("transfer_policy", "short_ok")
     red_eye = preferences.get("red_eye", "reject")
+    departure_time_policy = preferences.get("departure_time_policy", "any")
+    arrival_time_policy = preferences.get("arrival_time_policy", "any")
     need_baggage = preferences.get("need_baggage", "unknown")
     refund_flexibility = preferences.get("refund_flexibility", "unknown")
+    companions = preferences.get("companions", "solo")
+    price_sensitivity = preferences.get("price_sensitivity", "low")
+    trip_rigidity = preferences.get("trip_rigidity", "confirmed")
     budget = _to_float(preferences.get("budget"))
 
     direct_flights = [flight for flight in flights if int(flight.get("stops") or 0) == 0]
@@ -1742,6 +1794,13 @@ def _apply_user_preferences(
         penalty = 0
         stops = int(flight.get("stops") or 0)
         price = _to_float(flight.get("price")) or 0
+
+        if not _matches_departure_policy(flight, departure_time_policy):
+            excluded.append({**flight, "exclude_reason": "起飞时间不符合订阅偏好"})
+            continue
+        if not _matches_arrival_policy(flight, arrival_time_policy):
+            excluded.append({**flight, "exclude_reason": "到达时间不符合订阅偏好"})
+            continue
 
         if budget and budget > 0:
             if price > budget:
@@ -1799,6 +1858,71 @@ def _apply_user_preferences(
             else:
                 penalty += 4
                 penalties.append("未确认可退改")
+
+        has_family_companion = companions in {"with_elderly", "with_child", "with_elderly_child"}
+        if has_family_companion:
+            airline_text = " ".join(
+                str(segment.get("airline", ""))
+                for segment in flight.get("segments", [])
+                if isinstance(segment, dict)
+            )
+            low_cost_markers = ["Spirit", "Frontier", "Spring", "VietJet", "AirAsia", "Scoot"]
+            if stops == 0:
+                notes.append("适合家庭出行：直飞")
+            else:
+                penalty += max(1, round(stops * 1.3))
+            if _is_daytime_flight(flight):
+                notes.append("适合家庭出行：白天时段")
+            else:
+                penalty += 2
+                penalties.append("家庭出行时段不够友好")
+            total_minutes = int(flight.get("total_duration_min") or 0)
+            if total_minutes and total_minutes <= 20 * 60:
+                notes.append("适合家庭出行：总时长较短")
+            elif total_minutes > 24 * 60:
+                penalty += 2
+                penalties.append("家庭出行总时长偏长")
+            if _has_free_checked_baggage(flight):
+                notes.append("适合家庭出行：含免费托运")
+            else:
+                penalty += 1
+            if _has_refund_change_flexibility(flight):
+                notes.append("适合家庭出行：退改较灵活")
+            else:
+                penalty += 1
+            if _is_red_eye(flight):
+                penalty += 3
+            if _max_layover_minutes(flight) > 360:
+                penalty += 2
+                penalties.append("长中转不适合家庭出行")
+            if any(marker.lower() in airline_text.lower() for marker in low_cost_markers):
+                penalty += 2
+                penalties.append("廉航不适合家庭出行")
+
+        if price_sensitivity == "low":
+            if stops > 0:
+                penalty += 2
+            if _is_red_eye(flight) or _max_layover_minutes(flight) > 360:
+                penalty += 2
+            notes.append("便利稳定优先")
+        elif price_sensitivity == "medium":
+            notes.append("便宜时可接受轻微不便")
+        elif price_sensitivity == "high":
+            if stops > 0 or _is_red_eye(flight):
+                notes.append("便宜但便利性较低")
+        elif price_sensitivity == "max":
+            penalty = max(0, penalty - 2)
+            notes.append("价格优先")
+
+        if trip_rigidity == "confirmed":
+            if _has_refund_change_flexibility(flight):
+                notes.append("行程确定：可尽早锁定")
+            else:
+                notes.append("行程确定：关注价格锁定")
+        elif trip_rigidity == "mostly":
+            notes.append("行程基本确定：可观察1-2天")
+        elif trip_rigidity == "flexible":
+            notes.append("行程灵活：可等待更低价")
 
         trip_type = preferences.get("trip_type")
         if trip_type == "business_meeting":

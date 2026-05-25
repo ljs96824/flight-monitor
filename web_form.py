@@ -79,10 +79,17 @@ TRANSFER_LABELS = {
     "price_first": "价格优先，中转也可以",
 }
 
-RED_EYE_LABELS = {
-    "not_allowed": "不接受红眼航班",
-    "allowed": "可以接受红眼航班",
-    "cheap_ok": "便宜很多可以接受红眼航班",
+DEPARTURE_TIME_LABELS = {
+    "any": "起飞时间不限制",
+    "after_06": "早上06:00后起飞",
+    "daytime": "上午/下午优先（08:00-20:00）",
+    "no_redeye": "不接受23:00-06:00起飞",
+}
+
+ARRIVAL_TIME_LABELS = {
+    "any": "到达时间不限制",
+    "no_midnight": "不接受凌晨到达（00:00-06:00）",
+    "daytime_only": "必须白天到达（06:00-22:00）",
 }
 
 BAGGAGE_LABELS = {
@@ -105,6 +112,26 @@ TRIP_TYPE_LABELS = {
     "student_return": "学生返校",
     "family_elder": "家庭老人同行",
     "other": "其他",
+}
+
+COMPANION_LABELS = {
+    "solo": "仅本人",
+    "with_elderly": "有老人同行",
+    "with_child": "有小孩同行（12岁以下）",
+    "with_elderly_child": "老人和小孩都有",
+}
+
+PRICE_SENSITIVITY_LABELS = {
+    "low": "不愿意牺牲便利性",
+    "medium": "便宜200元左右可以考虑",
+    "high": "便宜500元以上可以接受不方便",
+    "max": "价格优先，只要便宜都可以",
+}
+
+TRIP_RIGIDITY_LABELS = {
+    "confirmed": "非常确定：日期/时间不能改",
+    "mostly": "基本确定：前后一两天可以调",
+    "flexible": "比较灵活：只要便宜可以大幅调整",
 }
 
 PRIMARY_GOAL_LABELS = {
@@ -224,6 +251,13 @@ FORM_TEMPLATE = """
         <label><input type="radio" name="date_flexibility" value="3"> 前后3天</label>
         <label><input type="radio" name="date_flexibility" value="7"> 前后7天</label>
       </div>
+
+      <label>这次行程的确定程度？</label>
+      <div class="choice">
+        <label><input type="radio" name="trip_rigidity" value="confirmed" checked> 非常确定：日期/时间不能改（已订酒店、会议等）</label>
+        <label><input type="radio" name="trip_rigidity" value="mostly"> 基本确定：前后一两天可以调</label>
+        <label><input type="radio" name="trip_rigidity" value="flexible"> 比较灵活：只要便宜可以大幅调整</label>
+      </div>
     </fieldset>
 
     <fieldset>
@@ -245,13 +279,20 @@ FORM_TEMPLATE = """
         <label><input type="radio" name="transfer_policy" value="price_first"> 价格优先，中转也可以</label>
       </div>
 
-      <label>红眼/过早航班</label>
+      <label>可接受起飞时间</label>
       <div class="choice">
-        <label><input type="radio" name="red_eye_policy" value="not_allowed" checked> 不接受</label>
-        <label><input type="radio" name="red_eye_policy" value="allowed"> 可以接受</label>
-        <label><input type="radio" name="red_eye_policy" value="cheap_ok"> 便宜很多可以接受</label>
+        <label><input type="radio" name="departure_time_policy" value="any"> 不限制</label>
+        <label><input type="radio" name="departure_time_policy" value="after_06" checked> 早上06:00后起飞</label>
+        <label><input type="radio" name="departure_time_policy" value="daytime"> 上午/下午优先（08:00-20:00）</label>
+        <label><input type="radio" name="departure_time_policy" value="no_redeye"> 不接受23:00-06:00起飞</label>
       </div>
-      <div class="hint">红眼定义：起飞时间在23:00-06:00之间。</div>
+
+      <label>可接受到达时间</label>
+      <div class="choice">
+        <label><input type="radio" name="arrival_time_policy" value="any" checked> 不限制</label>
+        <label><input type="radio" name="arrival_time_policy" value="no_midnight"> 不接受凌晨到达（00:00-06:00）</label>
+        <label><input type="radio" name="arrival_time_policy" value="daytime_only"> 必须白天到达（06:00-22:00）</label>
+      </div>
 
       <label>是否需要托运行李</label>
       <div class="choice">
@@ -267,6 +308,14 @@ FORM_TEMPLATE = """
         <label><input type="radio" name="refund_flexibility" value="required"> 必须可退改</label>
         <label><input type="radio" name="refund_flexibility" value="unknown"> 不确定</label>
       </div>
+
+      <label>为了便宜，你愿意牺牲便利性吗？</label>
+      <div class="choice">
+        <label><input type="radio" name="price_sensitivity" value="low" checked> 不愿意，方便和稳定更重要</label>
+        <label><input type="radio" name="price_sensitivity" value="medium"> 便宜200元左右可以考虑</label>
+        <label><input type="radio" name="price_sensitivity" value="high"> 便宜500元以上可以接受不方便</label>
+        <label><input type="radio" name="price_sensitivity" value="max"> 价格优先，只要便宜都可以</label>
+      </div>
     </fieldset>
 
     <fieldset>
@@ -281,6 +330,14 @@ FORM_TEMPLATE = """
         <option value="family_elder">家庭老人同行</option>
         <option value="other">其他</option>
       </select>
+
+      <label>同行人员</label>
+      <div class="choice">
+        <label><input type="radio" name="companions" value="solo" checked> 仅本人</label>
+        <label><input type="radio" name="companions" value="with_elderly"> 有老人同行</label>
+        <label><input type="radio" name="companions" value="with_child"> 有小孩同行（12岁以下）</label>
+        <label><input type="radio" name="companions" value="with_elderly_child"> 老人和小孩都有</label>
+      </div>
 
       <label>主目标（必填）</label>
       <div class="choice">
@@ -431,12 +488,16 @@ def build_subscription(form) -> dict:
             "budget": parse_optional_budget(form.get("budget"), budget_mode),
             "budget_mode": budget_mode,
             "transfer_policy": form.get("transfer_policy", "short_ok"),
-            "red_eye_policy": form.get("red_eye_policy", "not_allowed"),
+            "departure_time_policy": form.get("departure_time_policy", "after_06"),
+            "arrival_time_policy": form.get("arrival_time_policy", "any"),
             "baggage": form.get("baggage", "required"),
             "refund_flexibility": form.get("refund_flexibility", "preferred"),
         },
         "soft_preferences": {
             "trip_type": form.get("trip_type", "tourism"),
+            "companions": form.get("companions", "solo"),
+            "price_sensitivity": form.get("price_sensitivity", "low"),
+            "trip_rigidity": form.get("trip_rigidity", "confirmed"),
         },
         "notification_goals": {
             "primary": form.get("primary_goal", "buy_timing"),
@@ -463,11 +524,24 @@ def build_summary(subscription: dict) -> dict:
         "route": f"{city_label(subscription.get('origin'))} → {city_label(subscription.get('destination'))}",
         "constraints": [
             DATE_FLEX_LABELS.get(subscription.get("date_flexibility", 0), "日期弹性未知"),
+            TRIP_RIGIDITY_LABELS.get(
+                subscription.get("soft_preferences", {}).get("trip_rigidity"),
+                "行程刚性未知",
+            ),
             budget_text,
             TRANSFER_LABELS.get(hard.get("transfer_policy"), "中转偏好未知"),
-            RED_EYE_LABELS.get(hard.get("red_eye_policy"), "红眼偏好未知"),
+            DEPARTURE_TIME_LABELS.get(hard.get("departure_time_policy"), "起飞时间偏好未知"),
+            ARRIVAL_TIME_LABELS.get(hard.get("arrival_time_policy"), "到达时间偏好未知"),
             BAGGAGE_LABELS.get(hard.get("baggage"), "行李需求未知"),
             REFUND_LABELS.get(hard.get("refund_flexibility"), "退改签需求未知"),
+            PRICE_SENSITIVITY_LABELS.get(
+                subscription.get("soft_preferences", {}).get("price_sensitivity"),
+                "价格敏感度未知",
+            ),
+            COMPANION_LABELS.get(
+                subscription.get("soft_preferences", {}).get("companions"),
+                "同行人员未知",
+            ),
         ],
         "primary_goal": PRIMARY_GOAL_SUMMARY.get(
             goals.get("primary"), goals.get("primary", "未设置")

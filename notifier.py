@@ -890,6 +890,90 @@ def _goals(route_info: dict, analysis_result: dict) -> set[str]:
     return set(goals)
 
 
+def _preference_value(route_info: dict, analysis_result: dict, key: str, default=None):
+    soft = route_info.get("soft_preferences") or analysis_result.get("soft_preferences") or {}
+    hard = route_info.get("hard_constraints") or analysis_result.get("hard_constraints") or {}
+    user_preferences = analysis_result.get("user_preferences") or {}
+    return (
+        route_info.get(key)
+        or analysis_result.get(key)
+        or user_preferences.get(key)
+        or soft.get(key)
+        or hard.get(key)
+        or default
+    )
+
+
+def _companions_label(value: str) -> str:
+    mapping = {
+        "solo": "仅本人",
+        "with_elderly": "有老人同行",
+        "with_child": "有小孩同行",
+        "with_elderly_child": "老人和小孩都有",
+    }
+    return mapping.get(value or "solo", value or "仅本人")
+
+
+def _price_sensitivity_label(value: str) -> str:
+    mapping = {
+        "low": "便利和稳定优先",
+        "medium": "便宜约200元可接受轻微不便",
+        "high": "便宜500元以上可接受不方便",
+        "max": "价格优先",
+    }
+    return mapping.get(value or "low", value or "便利和稳定优先")
+
+
+def _trip_rigidity_guidance(value: str) -> str:
+    mapping = {
+        "confirmed": "行程很确定：更偏向尽早锁定合适价格。",
+        "mostly": "行程基本确定：可以再观察1-2天，但遇到预算内方案不宜拖太久。",
+        "flexible": "行程比较灵活：可以等更低价，也可以关注前后日期。",
+    }
+    return mapping.get(value or "confirmed", mapping["confirmed"])
+
+
+def _price_sensitivity_flight_note(flight: dict, all_flights: list[dict], sensitivity: str) -> str | None:
+    if not all_flights:
+        return None
+    price = _to_float(flight.get("price")) or 0
+    min_price = min(
+        (_to_float(item.get("price")) for item in all_flights if _to_float(item.get("price"))),
+        default=0,
+    )
+    diff = max(0, price - min_price)
+    stops = int(flight.get("stops") or 0)
+    is_inconvenient = stops > 0 or _max_wait_minutes(flight) > 360 or _is_redeye_for_message(flight)
+    if sensitivity == "low" and not is_inconvenient:
+        return "价格敏感度：保留同等便利条件下的方案"
+    if sensitivity == "medium" and is_inconvenient:
+        return f"价格敏感度：便宜时可考虑，但需接受中转/时段不便"
+    if sensitivity == "high" and is_inconvenient:
+        return f"价格敏感度：比最低价贵¥{diff:,.0f}，重点看省钱和取舍"
+    if sensitivity == "max":
+        return "价格敏感度：价格优先展示"
+    return None
+
+
+def _max_wait_minutes(flight: dict) -> int:
+    return max(
+        (int(layover.get("wait_minutes") or 0) for layover in flight.get("layovers") or []),
+        default=0,
+    )
+
+
+def _is_redeye_for_message(flight: dict) -> bool:
+    segments = flight.get("segments") or []
+    if not segments:
+        return False
+    dep_time = _time_only(segments[0].get("dep_time"))
+    try:
+        hour = int(str(dep_time).split(":", 1)[0])
+    except (TypeError, ValueError):
+        return False
+    return hour >= 23 or hour < 6
+
+
 def _time_only(value: str | None) -> str:
     if not value:
         return ""
@@ -1857,6 +1941,16 @@ def _append_compact_flight(
     if preference_notes:
         lines.append(f"⚙️ 偏好匹配：{'；'.join(dict.fromkeys(preference_notes))}")
     lines.append("")
+    companions = _preference_value(route_info, {}, "companions", "solo")
+    if companions in {"with_elderly", "with_child", "with_elderly_child"}:
+        family_notes = [note for note in preference_notes if "家庭" in str(note)]
+        if family_notes or stops == 0:
+            lines.append(f"👪 适合家庭出行：{_companions_label(companions)}")
+    sensitivity = _preference_value(route_info, {}, "price_sensitivity", "low")
+    sensitivity_note = _price_sensitivity_flight_note(flight, all_flights, sensitivity)
+    if sensitivity_note:
+        lines.append(f"💰 {sensitivity_note}")
+    lines.append("")
     tradeoff_text, suit_text, not_suit_text = generate_context(flight, all_flights)
     lines.append(f"📋 {tradeoff_text}")
     lines.append(f"👤 适合：{suit_text}")
@@ -2490,6 +2584,13 @@ def format_html_message(
         lines.append(f"⏳ 距出发：{days}天")
         lines.append(_sort_rule_text(route_info.get("mode") or analysis_result.get("mode")))
         lines.append("以下方案按当前排序规则展示，排序不代表推荐。")
+        companions = _preference_value(route_info, analysis_result, "companions", "solo")
+        price_sensitivity = _preference_value(route_info, analysis_result, "price_sensitivity", "low")
+        trip_rigidity = _preference_value(route_info, analysis_result, "trip_rigidity", "confirmed")
+        if companions != "solo":
+            lines.append(f"👪 同行人员：{_companions_label(companions)}，优先关注白天、少折腾、行李和退改更稳的方案")
+        lines.append(f"💰 价格敏感度：{_price_sensitivity_label(price_sensitivity)}")
+        lines.append(f"🧭 行程刚性：{_trip_rigidity_guidance(trip_rigidity)}")
         lines.append("")
 
         current_min = (
