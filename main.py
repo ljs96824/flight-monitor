@@ -114,7 +114,19 @@ def _normalize_subscription(item: dict) -> dict:
     soft_preferences = item.get("soft_preferences") or {}
     notification_goals = item.get("notification_goals") or {}
 
-    budget = hard_constraints.get("budget", item.get("budget"))
+    legacy_budget = hard_constraints.get("budget", item.get("budget"))
+    max_budget = hard_constraints.get(
+        "max_budget", item.get("max_budget", legacy_budget)
+    )
+    max_budget_mode = hard_constraints.get(
+        "max_budget_mode",
+        item.get("max_budget_mode", "fixed" if max_budget else "none"),
+    )
+    target_price = soft_preferences.get("target_price", item.get("target_price"))
+    target_price_mode = soft_preferences.get(
+        "target_price_mode",
+        item.get("target_price_mode", "fixed" if target_price else "auto"),
+    )
     transfer_policy = hard_constraints.get(
         "transfer_policy", item.get("transfer_policy", item.get("direct_only"))
     )
@@ -148,11 +160,12 @@ def _normalize_subscription(item: dict) -> dict:
         "origin": item.get("origin", "").strip().upper(),
         "destination": item.get("destination", "").strip().upper(),
         "depart_date": item.get("depart_date", ""),
-        "budget": budget,
-        "budget_mode": hard_constraints.get(
-            "budget_mode",
-            item.get("budget_mode", "fixed" if budget else "unknown"),
-        ),
+        "budget": max_budget,
+        "budget_mode": max_budget_mode,
+        "max_budget": max_budget,
+        "max_budget_mode": max_budget_mode,
+        "target_price": target_price,
+        "target_price_mode": target_price_mode,
         "return_date": item.get("return_date"),
         "round_trip": bool(item.get("round_trip", False)),
         "date_flexibility": item.get("date_flexibility", 0),
@@ -236,6 +249,10 @@ def subscription_preferences(sub: dict) -> dict:
         "goals": sub.get("goals", []),
         "budget": sub.get("budget"),
         "budget_mode": sub.get("budget_mode", "fixed"),
+        "max_budget": sub.get("max_budget"),
+        "max_budget_mode": sub.get("max_budget_mode", "none"),
+        "target_price": sub.get("target_price"),
+        "target_price_mode": sub.get("target_price_mode", "auto"),
         "date_flexibility": sub.get("date_flexibility", 0),
         "round_trip": sub.get("round_trip", False),
         "return_date": sub.get("return_date"),
@@ -515,6 +532,12 @@ def run():
                     "price_sensitivity": sub.get("price_sensitivity", "low"),
                     "trip_rigidity": sub.get("trip_rigidity", "confirmed"),
                     "goals": sub.get("goals", []),
+                    "budget": sub.get("budget"),
+                    "budget_mode": sub.get("budget_mode"),
+                    "max_budget": sub.get("max_budget"),
+                    "max_budget_mode": sub.get("max_budget_mode"),
+                    "target_price": sub.get("target_price"),
+                    "target_price_mode": sub.get("target_price_mode"),
                     "hard_constraints": sub.get("hard_constraints", {}),
                     "soft_preferences": sub.get("soft_preferences", {}),
                     "notification_goals": sub.get("notification_goals", {}),

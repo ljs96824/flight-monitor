@@ -60,23 +60,24 @@ CITY_LABELS = {
 }
 
 DATE_FLEX_LABELS = {
-    0: "不灵活",
-    1: "前后1天",
-    3: "前后3天",
-    7: "前后7天",
+    0: "不能调，就这天",
+    1: "前后1天可以",
+    3: "前后3天都行",
+    7: "前后一周都行",
 }
 
 BUDGET_MODE_LABELS = {
-    "fixed": "目标价¥{budget:,}",
+    "fixed": "输入具体金额",
+    "none": "没有硬上限",
     "unknown": "不确定，帮我判断合理价格",
     "low_zone": "只要进入低价区间就提醒",
 }
 
 TRANSFER_LABELS = {
     "direct_only": "必须直飞",
-    "short_ok": "可以短中转",
-    "cheap_ok": "便宜很多可以中转",
-    "price_first": "价格优先，中转也可以",
+    "short_ok": "可以中转，但总耗时别太长",
+    "cheap_ok": "便宜很多的话可以中转",
+    "price_first": "价格优先，怎么转都行",
 }
 
 DEPARTURE_TIME_LABELS = {
@@ -98,9 +99,9 @@ BAGGAGE_LABELS = {
 }
 
 REFUND_LABELS = {
-    "not_needed": "不需要，确定会出行",
-    "preferred": "最好可以改签",
-    "required": "必须可退改",
+    "not_needed": "不重要，便宜优先",
+    "preferred": "最好能改签日期",
+    "required": "必须能退票或改签",
     "unknown": "不确定",
 }
 
@@ -121,10 +122,10 @@ COMPANION_LABELS = {
 }
 
 PRICE_SENSITIVITY_LABELS = {
-    "low": "不愿意，方便和稳定更重要",
-    "medium": "便宜200元左右可以考虑",
-    "high": "便宜500元以上可以接受不方便",
-    "max": "价格优先，只要便宜都可以",
+    "low": "不接受明显不方便，时间和稳定更重要",
+    "medium": "便宜200元左右，可以接受早晚班",
+    "high": "便宜500元以上，可以接受中转或更长耗时",
+    "max": "价格优先，只要显著便宜都可以看",
 }
 
 AIRLINE_POLICY_LABELS = {
@@ -135,9 +136,9 @@ AIRLINE_POLICY_LABELS = {
 }
 
 TRIP_RIGIDITY_LABELS = {
-    "confirmed": "基本不会变，确定出行",
-    "mostly": "可能小幅调整日期",
-    "flexible": "不太确定，可能改期或取消",
+    "confirmed": "铁定出发，不会变",
+    "mostly": "可能微调日期",
+    "flexible": "不太确定，有可能取消",
 }
 
 PRIMARY_GOAL_LABELS = {
@@ -222,6 +223,21 @@ FORM_TEMPLATE = """
       margin: 10px 0 0 10px;
       padding-left: 12px;
     }
+    .auto-notice {
+      display: none;
+      border: 1px solid #cce1ff;
+      background: #eef6ff;
+      color: #174ea6;
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin: 14px 0;
+      font-size: 14px;
+    }
+    .auto-suggested {
+      color: #174ea6;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
     #summary-card {
       border: 1px solid #c8d6f0;
       border-radius: 8px;
@@ -284,27 +300,43 @@ FORM_TEMPLATE = """
 
       <label>出发日期可以调整吗？</label>
       <div class="choice">
-        <label><input type="radio" name="date_flexibility" value="0" checked> 不灵活</label>
-        <label><input type="radio" name="date_flexibility" value="1"> 前后1天</label>
-        <label><input type="radio" name="date_flexibility" value="3"> 前后3天</label>
-        <label><input type="radio" name="date_flexibility" value="7"> 前后7天</label>
+        <label><input type="radio" name="date_flexibility" value="0" checked> 不能调，就这天</label>
+        <label><input type="radio" name="date_flexibility" value="1"> 前后1天可以</label>
+        <label><input type="radio" name="date_flexibility" value="3"> 前后3天都行</label>
+        <label><input type="radio" name="date_flexibility" value="7"> 前后一周都行</label>
       </div>
       <p class="hint">影响系统搜索范围，选择越灵活越可能找到便宜日期</p>
 
-      <label>预算上限</label>
-      <input id="budget" name="budget" type="number" min="1" step="1" placeholder="例如 8000">
+      <label>同行人员</label>
       <div class="choice">
-        <label><input type="radio" name="budget_mode" value="fixed" checked> 输入具体金额</label>
-        <label><input type="radio" name="budget_mode" value="unknown"> 不确定，帮我判断合理价格</label>
-        <label><input type="radio" name="budget_mode" value="low_zone"> 只要进入低价区间就提醒我</label>
+        <label><input type="radio" name="companions" value="solo" checked> 仅本人</label>
+        <label><input type="radio" name="companions" value="with_elderly"> 有老人同行</label>
+        <label><input type="radio" name="companions" value="with_child"> 有小孩同行（12岁以下）</label>
+        <label><input type="radio" name="companions" value="with_elderly_child"> 老人和小孩都有</label>
+      </div>
+      <div id="auto-preference-notice" class="auto-notice"></div>
+
+      <label>最高能接受的价格（超过就不考虑）</label>
+      <input id="max_budget" name="max_budget" type="number" min="1" step="1" placeholder="例如 8000">
+      <div class="choice">
+        <label><input type="radio" name="max_budget_mode" value="fixed" checked> 输入具体金额</label>
+        <label><input type="radio" name="max_budget_mode" value="none"> 没有硬上限</label>
+      </div>
+
+      <label>理想入手价（到这个价格就值得买）</label>
+      <input id="target_price" name="target_price" type="number" min="1" step="1" placeholder="例如 6000（选填）">
+      <div class="choice">
+        <label><input type="radio" name="target_price_mode" value="fixed" checked> 输入具体金额</label>
+        <label><input type="radio" name="target_price_mode" value="auto"> 不确定，帮我判断合理价格</label>
+        <label><input type="radio" name="target_price_mode" value="low_zone"> 只要进入低价区间就提醒我</label>
       </div>
 
       <label>中转接受程度</label>
       <div class="choice">
         <label><input type="radio" name="transfer_policy" value="direct_only"> 必须直飞</label>
-        <label><input type="radio" name="transfer_policy" value="short_ok" checked> 可以短中转（总时长不能太长）</label>
-        <label><input type="radio" name="transfer_policy" value="cheap_ok"> 便宜很多可以中转</label>
-        <label><input type="radio" name="transfer_policy" value="price_first"> 价格优先，中转也可以</label>
+        <label><input type="radio" name="transfer_policy" value="short_ok" checked> 可以中转，但总耗时别太长</label>
+        <label><input type="radio" name="transfer_policy" value="cheap_ok"> 便宜很多的话可以中转</label>
+        <label><input type="radio" name="transfer_policy" value="price_first"> 价格优先，怎么转都行</label>
       </div>
       <div id="short-transfer-options" class="sub-options">
         <label>最长可接受总行程时间</label>
@@ -347,9 +379,9 @@ FORM_TEMPLATE = """
 
         <label>这次行程是否可能取消或改期？</label>
         <div class="choice">
-          <label><input type="radio" name="trip_rigidity" value="confirmed" checked> 基本不会变，确定出行</label>
-          <label><input type="radio" name="trip_rigidity" value="mostly"> 可能小幅调整日期</label>
-          <label><input type="radio" name="trip_rigidity" value="flexible"> 不太确定，可能改期或取消</label>
+          <label><input type="radio" name="trip_rigidity" value="confirmed" checked> 铁定出发，不会变</label>
+          <label><input type="radio" name="trip_rigidity" value="mostly"> 可能微调日期</label>
+          <label><input type="radio" name="trip_rigidity" value="flexible"> 不太确定，有可能取消</label>
         </div>
         <p class="hint">影响退改签推荐，不确定的行程建议选择可退改机票</p>
 
@@ -360,20 +392,20 @@ FORM_TEMPLATE = """
           <label><input type="radio" name="arrival_time_policy" value="daytime_only"> 必须白天到达（06:00-22:00）</label>
         </div>
 
-        <label>退改签灵活性</label>
+        <label>如果行程变化，你希望机票怎样？</label>
         <div class="choice">
-          <label><input type="radio" name="refund_flexibility" value="not_needed"> 不需要，确定会出行</label>
-          <label><input type="radio" name="refund_flexibility" value="preferred" checked> 最好可以改签</label>
-          <label><input type="radio" name="refund_flexibility" value="required"> 必须可退改</label>
+          <label><input type="radio" name="refund_flexibility" value="not_needed"> 不重要，便宜优先</label>
+          <label><input type="radio" name="refund_flexibility" value="preferred" checked> 最好能改签日期</label>
+          <label><input type="radio" name="refund_flexibility" value="required"> 必须能退票或改签</label>
           <label><input type="radio" name="refund_flexibility" value="unknown"> 不确定</label>
         </div>
 
-        <label>价格敏感度</label>
+        <label>为了便宜，你最多能接受多大不方便？</label>
         <div class="choice">
-          <label><input type="radio" name="price_sensitivity" value="low" checked> 不愿意，方便和稳定更重要</label>
-          <label><input type="radio" name="price_sensitivity" value="medium"> 便宜200元左右可以考虑</label>
-          <label><input type="radio" name="price_sensitivity" value="high"> 便宜500元以上可以接受不方便</label>
-          <label><input type="radio" name="price_sensitivity" value="max"> 价格优先，只要便宜都可以</label>
+          <label><input type="radio" name="price_sensitivity" value="low" checked> 不接受明显不方便，时间和稳定更重要</label>
+          <label><input type="radio" name="price_sensitivity" value="medium"> 便宜200元左右，可以接受早晚班</label>
+          <label><input type="radio" name="price_sensitivity" value="high"> 便宜500元以上，可以接受中转或更长耗时</label>
+          <label><input type="radio" name="price_sensitivity" value="max"> 价格优先，只要显著便宜都可以看</label>
         </div>
 
         <label>航司偏好</label>
@@ -384,14 +416,6 @@ FORM_TEMPLATE = """
           <label><input type="radio" name="airline_policy" value="exclude_airlines"> 有不接受的航司吗？</label>
         </div>
         <input name="exclude_airlines" placeholder="选填，多个航司用逗号分隔，例如 Spirit, Frontier">
-
-        <label>同行人员</label>
-        <div class="choice">
-          <label><input type="radio" name="companions" value="solo" checked> 仅本人</label>
-          <label><input type="radio" name="companions" value="with_elderly"> 有老人同行</label>
-          <label><input type="radio" name="companions" value="with_child"> 有小孩同行（12岁以下）</label>
-          <label><input type="radio" name="companions" value="with_elderly_child"> 老人和小孩都有</label>
-        </div>
 
         <label>附加关注</label>
         <div class="choice">
@@ -427,8 +451,9 @@ FORM_TEMPLATE = """
 
   <script>
     const labels = {
-      dateFlex: {"0": "不灵活", "1": "前后1天", "3": "前后3天", "7": "前后7天"},
-      budgetMode: {"fixed": "目标价", "unknown": "不确定，帮我判断合理价格", "low_zone": "只要进入低价区间就提醒"},
+      dateFlex: {"0": "不能调，就这天", "1": "前后1天可以", "3": "前后3天都行", "7": "前后一周都行"},
+      maxBudgetMode: {"fixed": "最高可接受", "none": "没有硬上限"},
+      targetPriceMode: {"fixed": "理想入手价", "auto": "不确定，帮我判断合理价格", "low_zone": "只要进入低价区间就提醒"},
       transfer: {"direct_only": "必须直飞", "short_ok": "可以短中转", "cheap_ok": "便宜很多可以中转", "price_first": "价格优先，中转也可以"},
       departure: {"any": "不限制", "no_redeye": "不接受红眼凌晨", "daytime": "希望白天出行"},
       baggage: {"required": "必须托运", "not_needed": "不需要托运", "unknown": "不确定"},
@@ -445,8 +470,10 @@ FORM_TEMPLATE = """
     const tripRadios = document.querySelectorAll('input[name="round_trip"]');
     const returnWrap = document.getElementById('return-date-wrap');
     const returnDate = document.getElementById('return_date');
-    const budgetRadios = document.querySelectorAll('input[name="budget_mode"]');
-    const budgetInput = document.getElementById('budget');
+    const maxBudgetRadios = document.querySelectorAll('input[name="max_budget_mode"]');
+    const targetPriceRadios = document.querySelectorAll('input[name="target_price_mode"]');
+    const maxBudgetInput = document.getElementById('max_budget');
+    const targetPriceInput = document.getElementById('target_price');
     const advanced = document.getElementById('advanced-preferences');
     const advancedToggle = document.getElementById('advanced-toggle');
     const previewButton = document.getElementById('preview-button');
@@ -457,6 +484,8 @@ FORM_TEMPLATE = """
     const shortTransferOptions = document.getElementById('short-transfer-options');
     const primaryGoalRadios = document.querySelectorAll('input[name="primary_goal"]');
     const secondaryGoalChecks = document.querySelectorAll('input[name="secondary_goals"]');
+    const companionRadios = document.querySelectorAll('input[name="companions"]');
+    const autoPreferenceNotice = document.getElementById('auto-preference-notice');
 
     function checkedValue(name) {
       const selected = document.querySelector(`input[name="${name}"]:checked`);
@@ -475,7 +504,8 @@ FORM_TEMPLATE = """
     }
 
     function toggleBudgetRequired() {
-      budgetInput.required = checkedValue('budget_mode') === 'fixed';
+      maxBudgetInput.required = false;
+      targetPriceInput.required = false;
     }
 
     function toggleShortTransferOptions() {
@@ -490,6 +520,44 @@ FORM_TEMPLATE = """
       });
     }
 
+    function setRadio(name, value, mark = false) {
+      const input = document.querySelector(`input[name="${name}"][value="${value}"]`);
+      if (!input) return;
+      input.checked = true;
+      if (mark) {
+        input.closest('label')?.classList.add('auto-suggested');
+      }
+    }
+
+    function clearAutoSuggestions() {
+      document.querySelectorAll('.auto-suggested').forEach(item => {
+        item.classList.remove('auto-suggested');
+      });
+      autoPreferenceNotice.style.display = 'none';
+      autoPreferenceNotice.textContent = '';
+    }
+
+    function applyCompanionDefaults() {
+      const companions = checkedValue('companions');
+      clearAutoSuggestions();
+      if (companions === 'solo') {
+        return;
+      }
+
+      setRadio('departure_time_policy', 'no_redeye', true);
+      setRadio('baggage', 'required', true);
+
+      if (companions === 'with_elderly' || companions === 'with_elderly_child') {
+        setRadio('transfer_policy', 'short_ok', true);
+        setRadio('short_transfer_limit', 'extra_3', true);
+        toggleShortTransferOptions();
+        autoPreferenceNotice.textContent = '已根据老人同行自动调整推荐偏好，你仍可手动修改';
+      } else if (companions === 'with_child') {
+        autoPreferenceNotice.textContent = '已根据带小孩出行自动调整推荐偏好，你仍可手动修改';
+      }
+      autoPreferenceNotice.style.display = 'block';
+    }
+
     function addSummaryLine(text) {
       const li = document.createElement('li');
       li.textContent = text;
@@ -500,8 +568,10 @@ FORM_TEMPLATE = """
       summaryList.innerHTML = "";
       const origin = selectedOrigin();
       const destination = form.destination.value.trim().toUpperCase();
-      const budgetMode = checkedValue('budget_mode');
-      const budget = Number(budgetInput.value || 0);
+      const maxBudgetMode = checkedValue('max_budget_mode');
+      const targetPriceMode = checkedValue('target_price_mode');
+      const maxBudget = Number(maxBudgetInput.value || 0);
+      const targetPrice = Number(targetPriceInput.value || 0);
 
       addSummaryLine(`监控航线：${origin} → ${destination}`);
       addSummaryLine(`出发日期：${form.depart_date.value}`);
@@ -509,10 +579,15 @@ FORM_TEMPLATE = """
         addSummaryLine(`返程日期：${returnDate.value}`);
       }
       addSummaryLine(`出发日期可调整：${labels.dateFlex[checkedValue('date_flexibility')]}`);
-      if (budgetMode === 'fixed') {
-        addSummaryLine(`预算策略：目标价¥${budget.toLocaleString('zh-CN')}`);
+      if (maxBudgetMode === 'fixed') {
+        addSummaryLine(`最高可接受：¥${maxBudget.toLocaleString('zh-CN')}`);
       } else {
-        addSummaryLine(`预算策略：${labels.budgetMode[budgetMode]}`);
+        addSummaryLine(`最高可接受：${labels.maxBudgetMode[maxBudgetMode]}`);
+      }
+      if (targetPriceMode === 'fixed') {
+        addSummaryLine(`理想入手价：¥${targetPrice.toLocaleString('zh-CN')}`);
+      } else {
+        addSummaryLine(`理想入手价：${labels.targetPriceMode[targetPriceMode]}`);
       }
       addSummaryLine(`中转策略：${labels.transfer[checkedValue('transfer_policy')]}`);
       if (checkedValue('transfer_policy') === 'short_ok') {
@@ -547,9 +622,11 @@ FORM_TEMPLATE = """
     });
 
     tripRadios.forEach(radio => radio.addEventListener('change', toggleReturnDate));
-    budgetRadios.forEach(radio => radio.addEventListener('change', toggleBudgetRequired));
+    maxBudgetRadios.forEach(radio => radio.addEventListener('change', toggleBudgetRequired));
+    targetPriceRadios.forEach(radio => radio.addEventListener('change', toggleBudgetRequired));
     transferRadios.forEach(radio => radio.addEventListener('change', toggleShortTransferOptions));
     primaryGoalRadios.forEach(radio => radio.addEventListener('change', applyDefaultSecondaryGoals));
+    companionRadios.forEach(radio => radio.addEventListener('change', applyCompanionDefaults));
     toggleReturnDate();
     toggleBudgetRequired();
     toggleShortTransferOptions();
@@ -645,7 +722,15 @@ def parse_int(value: str | None, default: int = 0) -> int:
 def parse_optional_budget(value: str | None, budget_mode: str) -> int | None:
     if budget_mode != "fixed":
         return parse_int(value, 0) or None
-    return parse_int(value, 0)
+    return parse_int(value, 0) or None
+
+
+def infer_max_budget(max_budget: int | None, target_price: int | None) -> int | None:
+    if max_budget:
+        return max_budget
+    if target_price:
+        return round(target_price * 1.5)
+    return None
 
 
 def parse_short_transfer_limit(value: str | None) -> tuple[int | None, int | None]:
@@ -669,7 +754,12 @@ def build_subscription(form) -> dict:
         form.get("origin_manual", "").strip().upper()
         or form.get("origin_select", "").strip().upper()
     )
-    budget_mode = form.get("budget_mode", "fixed")
+    max_budget_mode = form.get("max_budget_mode", "fixed")
+    target_price_mode = form.get("target_price_mode", "fixed")
+    target_price = parse_optional_budget(form.get("target_price"), target_price_mode)
+    max_budget = None
+    if max_budget_mode == "fixed":
+        max_budget = infer_max_budget(parse_int(form.get("max_budget"), 0), target_price)
     max_extra_duration_hours = None
     max_total_duration_hours = None
     if form.get("transfer_policy", "short_ok") == "short_ok":
@@ -687,8 +777,8 @@ def build_subscription(form) -> dict:
             parse_int(form.get("return_date_flexibility"), 0) if round_trip else 0
         ),
         "hard_constraints": {
-            "budget": parse_optional_budget(form.get("budget"), budget_mode),
-            "budget_mode": budget_mode,
+            "max_budget": max_budget,
+            "max_budget_mode": max_budget_mode,
             "transfer_policy": form.get("transfer_policy", "short_ok"),
             "max_extra_duration_hours": max_extra_duration_hours,
             "max_total_duration_hours": max_total_duration_hours,
@@ -708,6 +798,8 @@ def build_subscription(form) -> dict:
             "companions": form.get("companions", "solo"),
             "price_sensitivity": form.get("price_sensitivity", "low"),
             "trip_rigidity": form.get("trip_rigidity", "confirmed"),
+            "target_price": target_price,
+            "target_price_mode": target_price_mode,
         },
         "notification_goals": {
             "primary": form.get("primary_goal", "buy_timing"),
@@ -737,7 +829,7 @@ def build_success_summary(subscription: dict) -> dict:
         exclusions.append("不含免费托运的方案")
     if hard.get("transfer_policy") == "direct_only":
         exclusions.append("需要中转的方案")
-    budget = hard.get("budget")
+    budget = hard.get("max_budget", hard.get("budget"))
     if budget:
         exclusions.append(f"超出¥{budget:,}预算的方案")
 

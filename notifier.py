@@ -883,6 +883,44 @@ def _budget_notice(current_min, budget) -> str | None:
     return f"当前最低价超出预算¥{price - budget_value:,.0f}，继续监控中"
 
 
+
+def _price_scale_lines(current_min, route_info: dict, analysis_result: dict) -> list[str]:
+    price = _to_float(current_min)
+    if price is None:
+        return []
+
+    target = (
+        _to_float(analysis_result.get("target_price_effective"))
+        or _to_float(_preference_value(route_info, analysis_result, "target_price"))
+    )
+    max_budget = (
+        _to_float(analysis_result.get("max_budget"))
+        or _to_float(_preference_value(route_info, analysis_result, "max_budget"))
+        or _to_float(_preference_value(route_info, analysis_result, "budget"))
+    )
+    if target is None and max_budget is None:
+        return []
+
+    lines = ["<b>\U0001f4b0 \u4ef7\u683c\u6807\u5c3a</b>"]
+    if target:
+        lines.append(f"\u7406\u60f3\u5165\u624b\u4ef7\uff1a\u00a5{target:,.0f}")
+        if price <= target:
+            lines.append(f"\u5f53\u524d\u6700\u4f4e\u4ef7\uff1a\u00a5{price:,.0f} \u2705 \u5df2\u8fbe\u6807\uff01")
+            lines.append(
+                f"\U0001f525 \u5f53\u524d\u6700\u4f4e\u4ef7\u00a5{price:,.0f}\uff0c\u5df2\u4f4e\u4e8e\u4f60\u7684\u7406\u60f3\u5165\u624b\u4ef7\u00a5{target:,.0f}\uff01"
+            )
+        else:
+            lines.append(f"\u5f53\u524d\u6700\u4f4e\u4ef7\uff1a\u00a5{price:,.0f}")
+            lines.append(
+                f"\U0001f4ca \u5f53\u524d\u6700\u4f4e\u4ef7\u00a5{price:,.0f}\uff0c\u8ddd\u79bb\u7406\u60f3\u4ef7\u8fd8\u5dee\u00a5{price - target:,.0f}\uff0c\u5efa\u8bae\u7ee7\u7eed\u89c2\u671b"
+            )
+    else:
+        lines.append(f"\u5f53\u524d\u6700\u4f4e\u4ef7\uff1a\u00a5{price:,.0f}")
+    if max_budget:
+        lines.append(f"\u6700\u9ad8\u53ef\u63a5\u53d7\uff1a\u00a5{max_budget:,.0f}")
+    lines.append("")
+    return lines
+
 def _goals(route_info: dict, analysis_result: dict) -> set[str]:
     goals = route_info.get("goals") or analysis_result.get("goals") or []
     if not goals:
@@ -2764,13 +2802,7 @@ def format_html_message(
             else 0
         )
         goals = _goals(route_info, analysis_result)
-        budget_line = _budget_notice(
-            current_min,
-            route_info.get("budget") or analysis_result.get("budget"),
-        )
-        if budget_line:
-            lines.append(budget_line)
-            lines.append("")
+        lines.extend(_price_scale_lines(current_min, route_info, analysis_result))
         if _primary_goal(route_info, analysis_result) == "cheaper_date":
             _append_nearby_dates(
                 lines, route_info.get("nearby_dates") or analysis_result.get("nearby_dates")

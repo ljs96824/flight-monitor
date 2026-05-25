@@ -1831,7 +1831,9 @@ def _apply_user_preferences(
     trip_rigidity = preferences.get("trip_rigidity", "confirmed")
     airline_policy = preferences.get("airline_policy", "any")
     exclude_airlines = preferences.get("exclude_airlines") or []
-    budget = _to_float(preferences.get("budget"))
+    max_budget = _to_float(preferences.get("max_budget"))
+    budget = max_budget if max_budget is not None else _to_float(preferences.get("budget"))
+    target_price = _to_float(preferences.get("target_price"))
     max_extra_duration_hours = _to_float(preferences.get("max_extra_duration_hours"))
     max_total_duration_hours = _to_float(preferences.get("max_total_duration_hours"))
 
@@ -1887,12 +1889,16 @@ def _apply_user_preferences(
                 penalty += 2
                 penalties.append("非全服务航司")
 
+        if max_budget and max_budget > 0 and price > max_budget:
+            excluded.append({**flight, "exclude_reason": "\u8d85\u8fc7\u6700\u9ad8\u53ef\u63a5\u53d7\u4ef7\u683c"})
+            continue
         if budget and budget > 0:
-            if price > budget:
-                penalty += 2
-                penalties.append(f"超出预算¥{price - budget:,.0f}")
+            notes.append("\u6700\u9ad8\u53ef\u63a5\u53d7\u4ef7\u683c\u5185")
+        if target_price and target_price > 0:
+            if price <= target_price:
+                notes.append("\u4f4e\u4e8e\u7406\u60f3\u5165\u624b\u4ef7")
             else:
-                notes.append("预算内")
+                penalties.append(f"\u8ddd\u79bb\u7406\u60f3\u5165\u624b\u4ef7\u00a5{price - target_price:,.0f}")
 
         if direct_only == "must" and stops > 0:
             excluded.append({**flight, "exclude_reason": "用户设置必须直飞"})
@@ -2041,6 +2047,26 @@ def _apply_user_preferences(
         }
     return kept, excluded, {"fallback": False}
 
+
+
+def _extract_history_prices(price_insights: dict | None) -> list[float]:
+    history = (price_insights or {}).get("price_history") or []
+    prices = []
+    for item in history:
+        value = item[1] if isinstance(item, (list, tuple)) and len(item) >= 2 else item
+        price = _to_float(value)
+        if price and price > 0:
+            prices.append(price)
+    return prices
+
+
+def _auto_target_price(price_insights: dict | None, mode: str) -> float | None:
+    prices = sorted(_extract_history_prices(price_insights))
+    if len(prices) < 5:
+        return None
+    percentile = 0.2 if mode == "low_zone" else 0.35
+    index = min(len(prices) - 1, max(0, round((len(prices) - 1) * percentile)))
+    return float(prices[index])
 
 def analyze_all_flights(
     flights: list[dict],
@@ -2221,6 +2247,15 @@ def analyze_all_flights(
         if cabin_prices:
             cabin_price_ranges[cabin_class] = [min(cabin_prices), max(cabin_prices)]
 
+    target_price_mode = (user_preferences or {}).get("target_price_mode", "auto")
+    target_price = _to_float((user_preferences or {}).get("target_price"))
+    target_price_effective = target_price
+    if not target_price_effective and target_price_mode in {"auto", "low_zone"}:
+        target_price_effective = _auto_target_price(price_insights, target_price_mode)
+    max_budget_effective = _to_float((user_preferences or {}).get("max_budget"))
+    if max_budget_effective is None:
+        max_budget_effective = _to_float((user_preferences or {}).get("budget"))
+
     return {
         "total_options": len(usable_flights),
         "total_options_before_preferences": original_options,
@@ -2235,6 +2270,10 @@ def analyze_all_flights(
         "price_insights": price_insights,
         "price_anomalies": price_anomalies,
         "current_min_price": min(prices),
+        "max_budget": max_budget_effective,
+        "target_price": target_price,
+        "target_price_effective": target_price_effective,
+        "target_price_mode": target_price_mode,
         "mode": mode,
         "priorities": priority_config,
         "qualified_flights": qualified_flights,
