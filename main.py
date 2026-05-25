@@ -104,6 +104,152 @@ def subscription_preferences(sub: dict) -> dict:
     }
 
 
+def _map_transfer_policy(policy: str | None) -> str:
+    mapping = {
+        "direct_only": "must",
+        "must": "must",
+        "short_ok": "flexible",
+        "flexible": "flexible",
+        "cheap_ok": "cheap_ok",
+        "price_first": "cheap_ok",
+    }
+    return mapping.get(policy or "", "flexible")
+
+
+def _map_red_eye_policy(policy: str | None) -> str:
+    mapping = {
+        "not_allowed": "reject",
+        "reject": "reject",
+        "allowed": "flexible",
+        "accept": "flexible",
+        "flexible": "flexible",
+        "cheap_ok": "cheap_ok",
+    }
+    return mapping.get(policy or "", "reject")
+
+
+def _normalize_goals(notification_goals: dict | None, legacy_goals) -> list[str]:
+    goal_aliases = {
+        "price_drop_alert": "price_drop_alert",
+        "price_target": "price_drop_alert",
+        "low_price_alert": "price_drop_alert",
+        "buy_timing": "buy_timing",
+        "price_risk_alert": "buy_timing",
+        "cheaper_date": "cheaper_date",
+        "best_overall": "best_overall",
+        "better_same_day": "best_overall",
+    }
+
+    raw_goals = []
+    if isinstance(notification_goals, dict):
+        primary = notification_goals.get("primary")
+        secondary = notification_goals.get("secondary", [])
+        if primary:
+            raw_goals.append(primary)
+        if isinstance(secondary, list):
+            raw_goals.extend(secondary)
+    if isinstance(legacy_goals, list):
+        raw_goals.extend(legacy_goals)
+
+    normalized = []
+    for goal in raw_goals:
+        mapped = goal_aliases.get(goal)
+        if mapped and mapped not in normalized:
+            normalized.append(mapped)
+    return normalized
+
+
+def _normalize_subscription(item: dict) -> dict:
+    hard_constraints = item.get("hard_constraints") or {}
+    soft_preferences = item.get("soft_preferences") or {}
+    notification_goals = item.get("notification_goals") or {}
+
+    budget = hard_constraints.get("budget", item.get("budget"))
+    transfer_policy = hard_constraints.get(
+        "transfer_policy", item.get("transfer_policy", item.get("direct_only"))
+    )
+    red_eye_policy = hard_constraints.get(
+        "red_eye_policy", item.get("red_eye_policy", item.get("red_eye"))
+    )
+    baggage = hard_constraints.get("baggage", item.get("need_baggage", "unknown"))
+    refund_flexibility = hard_constraints.get(
+        "refund_flexibility", item.get("refund_flexibility", "unknown")
+    )
+
+    return {
+        "name": item.get("name") or "网页订阅",
+        "origin": item.get("origin", "").strip().upper(),
+        "destination": item.get("destination", "").strip().upper(),
+        "depart_date": item.get("depart_date", ""),
+        "budget": budget,
+        "budget_mode": hard_constraints.get(
+            "budget_mode",
+            item.get("budget_mode", "fixed" if budget else "unknown"),
+        ),
+        "return_date": item.get("return_date"),
+        "round_trip": bool(item.get("round_trip", False)),
+        "date_flexibility": item.get("date_flexibility", 0),
+        "direct_only": _map_transfer_policy(transfer_policy),
+        "transfer_policy": transfer_policy or "short_ok",
+        "red_eye": _map_red_eye_policy(red_eye_policy),
+        "red_eye_policy": red_eye_policy or "not_allowed",
+        "need_baggage": baggage,
+        "refund_flexibility": refund_flexibility,
+        "trip_type": soft_preferences.get("trip_type", item.get("trip_type", "tourism")),
+        "goals": _normalize_goals(notification_goals, item.get("goals", [])),
+        "notification_goals": notification_goals,
+        "hard_constraints": hard_constraints,
+        "soft_preferences": soft_preferences,
+        "mode": item.get("mode", "balanced"),
+        "cabin_classes": item.get("cabin_classes"),
+        "priorities": item.get("priorities"),
+    }
+
+
+def load_file_subscriptions() -> list[dict]:
+    if not SUBSCRIPTIONS_PATH.exists():
+        return []
+    try:
+        subscriptions = json.loads(SUBSCRIPTIONS_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        logging.error(f"subscriptions.json 解析失败: {exc}")
+        return []
+    if not isinstance(subscriptions, list):
+        logging.error("subscriptions.json 格式错误，应为订阅数组")
+        return []
+
+    active = []
+    for item in subscriptions:
+        if not isinstance(item, dict):
+            continue
+        if item.get("status", "active") != "active":
+            continue
+        active.append(_normalize_subscription(item))
+    return [
+        sub
+        for sub in active
+        if sub.get("origin") and sub.get("destination") and sub.get("depart_date")
+    ]
+
+
+def subscription_preferences(sub: dict) -> dict:
+    return {
+        "direct_only": sub.get("direct_only", "flexible"),
+        "transfer_policy": sub.get("transfer_policy", "short_ok"),
+        "red_eye": sub.get("red_eye", "reject"),
+        "red_eye_policy": sub.get("red_eye_policy", "not_allowed"),
+        "need_baggage": sub.get("need_baggage", "unknown"),
+        "refund_flexibility": sub.get("refund_flexibility", "unknown"),
+        "trip_type": sub.get("trip_type", "tourism"),
+        "goals": sub.get("goals", []),
+        "budget": sub.get("budget"),
+        "budget_mode": sub.get("budget_mode", "fixed"),
+        "date_flexibility": sub.get("date_flexibility", 0),
+        "round_trip": sub.get("round_trip", False),
+        "return_date": sub.get("return_date"),
+    }
+
+
 def collect_nearby_dates(
     aggregator: FlightAggregator,
     sub: dict,
@@ -224,7 +370,9 @@ def run():
             price_history = (data.get("price_insights") or {}).get("price_history")
             analysis["days_to_dept"] = days_to_dept
             analysis["budget"] = sub.get("budget")
+            analysis["budget_mode"] = sub.get("budget_mode", "fixed")
             analysis["goals"] = sub.get("goals", [])
+            analysis["notification_goals"] = sub.get("notification_goals", {})
             analysis["nearby_dates"] = nearby_dates
             analysis["source_stats"] = data.get("source_stats", {})
             analysis["price_position"] = price_position_description(
@@ -260,14 +408,21 @@ def run():
                     "mode": sub.get("mode", "balanced"),
                     "priorities": sub.get("priorities"),
                     "budget": sub.get("budget"),
+                    "budget_mode": sub.get("budget_mode", "fixed"),
                     "return_date": sub.get("return_date"),
                     "round_trip": sub.get("round_trip", False),
                     "date_flexibility": sub.get("date_flexibility", 0),
                     "direct_only": sub.get("direct_only", "flexible"),
+                    "transfer_policy": sub.get("transfer_policy", "short_ok"),
                     "red_eye": sub.get("red_eye", "reject"),
+                    "red_eye_policy": sub.get("red_eye_policy", "not_allowed"),
                     "need_baggage": sub.get("need_baggage", "unknown"),
+                    "refund_flexibility": sub.get("refund_flexibility", "unknown"),
                     "trip_type": sub.get("trip_type", "tourism"),
                     "goals": sub.get("goals", []),
+                    "hard_constraints": sub.get("hard_constraints", {}),
+                    "soft_preferences": sub.get("soft_preferences", {}),
+                    "notification_goals": sub.get("notification_goals", {}),
                     "nearby_dates": nearby_dates,
                     "previous_prices": previous_prices,
                     "lowest_price_history": lowest_price_history,

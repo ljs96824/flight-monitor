@@ -1681,6 +1681,26 @@ def _has_free_checked_baggage(flight: dict) -> bool:
     return bool(extra.get("baggage"))
 
 
+def _has_refund_change_flexibility(flight: dict, required: bool = False) -> bool:
+    fare_rules = flight.get("fare_rules") or {}
+    change = fare_rules.get("change") or {}
+    refund = fare_rules.get("refund") or {}
+    extra = flight.get("extra") or {}
+    refund_change = extra.get("refund_change") or {}
+
+    changeable = bool(
+        change.get("allowed")
+        or refund_change.get("changeable")
+        or extra.get("changeable")
+    )
+    refundable = bool(
+        refund.get("allowed")
+        or refund_change.get("refundable")
+        or extra.get("refundable")
+    )
+    return changeable and refundable if required else changeable
+
+
 def _trip_mode(default_mode: str, preferences: dict | None) -> str:
     trip_type = (preferences or {}).get("trip_type")
     if trip_type == "business_meeting":
@@ -1703,8 +1723,10 @@ def _apply_user_preferences(
 ) -> tuple[list[dict], list[dict], dict]:
     preferences = preferences or {}
     direct_only = preferences.get("direct_only", "flexible")
+    transfer_policy = preferences.get("transfer_policy", "short_ok")
     red_eye = preferences.get("red_eye", "reject")
     need_baggage = preferences.get("need_baggage", "unknown")
+    refund_flexibility = preferences.get("refund_flexibility", "unknown")
     budget = _to_float(preferences.get("budget"))
 
     direct_flights = [flight for flight in flights if int(flight.get("stops") or 0) == 0]
@@ -1738,6 +1760,16 @@ def _apply_user_preferences(
             else:
                 penalties.append("包含中转")
 
+        if transfer_policy == "short_ok" and stops > 0:
+            total_minutes = int(flight.get("total_duration_min") or 0)
+            if total_minutes > 24 * 60:
+                penalty += 2
+                penalties.append("中转总时长偏长")
+            else:
+                notes.append("短中转可接受")
+        elif transfer_policy == "price_first" and stops > 0:
+            notes.append("价格优先，保留中转方案")
+
         if red_eye == "reject" and _is_red_eye(flight):
             excluded.append({**flight, "exclude_reason": "用户不接受红眼/过早航班"})
             continue
@@ -1754,6 +1786,19 @@ def _apply_user_preferences(
             else:
                 penalty += 3
                 penalties.append("托运行李需官网确认")
+
+        if refund_flexibility == "preferred":
+            if _has_refund_change_flexibility(flight):
+                notes.append("退改签较灵活")
+            else:
+                penalty += 1
+                penalties.append("退改签需确认")
+        elif refund_flexibility == "required":
+            if _has_refund_change_flexibility(flight, required=True):
+                notes.append("满足可退改")
+            else:
+                penalty += 4
+                penalties.append("未确认可退改")
 
         trip_type = preferences.get("trip_type")
         if trip_type == "business_meeting":
