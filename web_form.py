@@ -1,4 +1,4 @@
-"""Minimal Flask form for flight monitor subscriptions."""
+"""Flask form for flight monitor subscriptions."""
 
 from __future__ import annotations
 
@@ -60,16 +60,16 @@ CITY_LABELS = {
 }
 
 DATE_FLEX_LABELS = {
-    0: "日期不灵活",
-    1: "前后1天均可",
-    3: "前后3天均可",
-    7: "前后7天均可",
+    0: "不灵活",
+    1: "前后1天",
+    3: "前后3天",
+    7: "前后7天",
 }
 
 BUDGET_MODE_LABELS = {
-    "fixed": "预算上限：¥{budget:,}",
-    "unknown": "预算不确定，系统判断合理价格",
-    "low_zone": "进入低价区间时提醒",
+    "fixed": "目标价¥{budget:,}",
+    "unknown": "不确定，帮我判断合理价格",
+    "low_zone": "只要进入低价区间就提醒",
 }
 
 TRANSFER_LABELS = {
@@ -80,29 +80,28 @@ TRANSFER_LABELS = {
 }
 
 DEPARTURE_TIME_LABELS = {
-    "any": "起飞时间不限制",
-    "after_06": "早上06:00后起飞",
-    "daytime": "上午/下午优先（08:00-20:00）",
-    "no_redeye": "不接受23:00-06:00起飞",
+    "any": "不限制",
+    "no_redeye": "不接受红眼凌晨",
+    "daytime": "希望白天出行",
 }
 
 ARRIVAL_TIME_LABELS = {
-    "any": "到达时间不限制",
-    "no_midnight": "不接受凌晨到达（00:00-06:00）",
-    "daytime_only": "必须白天到达（06:00-22:00）",
+    "any": "不限制",
+    "no_midnight": "不接受凌晨到达",
+    "daytime_only": "必须白天到达",
 }
 
 BAGGAGE_LABELS = {
     "required": "必须托运行李",
     "not_needed": "不需要托运行李",
-    "unknown": "托运行李不确定",
+    "unknown": "不确定",
 }
 
 REFUND_LABELS = {
-    "not_needed": "不需要退改签灵活性",
+    "not_needed": "不需要，确定会出行",
     "preferred": "最好可以改签",
     "required": "必须可退改",
-    "unknown": "退改签需求不确定",
+    "unknown": "不确定",
 }
 
 TRIP_TYPE_LABELS = {
@@ -122,14 +121,14 @@ COMPANION_LABELS = {
 }
 
 PRICE_SENSITIVITY_LABELS = {
-    "low": "不愿意牺牲便利性",
+    "low": "不愿意，方便和稳定更重要",
     "medium": "便宜200元左右可以考虑",
     "high": "便宜500元以上可以接受不方便",
     "max": "价格优先，只要便宜都可以",
 }
 
 AIRLINE_POLICY_LABELS = {
-    "any": "航司不限制",
+    "any": "不限制",
     "prefer_full_service": "偏好全服务航司",
     "no_lcc": "不接受廉航",
     "exclude_airlines": "排除指定航司",
@@ -146,13 +145,6 @@ PRIMARY_GOAL_LABELS = {
     "buy_timing": "判断现在该不该买",
     "cheaper_date": "帮我找更便宜的日期",
     "best_overall": "帮我找最合适航班",
-}
-
-PRIMARY_GOAL_SUMMARY = {
-    "price_drop_alert": "跌到合适价格时提醒",
-    "buy_timing": "判断现在是否值得买",
-    "cheaper_date": "寻找更便宜日期",
-    "best_overall": "寻找最合适航班",
 }
 
 SECONDARY_GOAL_LABELS = {
@@ -173,12 +165,14 @@ FORM_TEMPLATE = """
   <style>
     body {
       font-family: Arial, sans-serif;
-      max-width: 600px;
+      max-width: 640px;
       margin: 24px auto;
-      padding: 0 16px 32px;
+      padding: 0 16px 36px;
       color: #222;
-      line-height: 1.5;
+      line-height: 1.55;
+      background: #fff;
     }
+    h1 { font-size: 26px; margin-bottom: 6px; }
     fieldset {
       border: 1px solid #ddd;
       border-radius: 8px;
@@ -204,6 +198,12 @@ FORM_TEMPLATE = """
       margin-top: 8px;
     }
     .choice input { width: auto; margin: 0; }
+    .hint { color: #666; font-size: 13px; margin-top: 4px; }
+    .secondary-button {
+      background: #f5f7fb;
+      color: #1a73e8;
+      border: 1px solid #c8d6f0;
+    }
     button {
       margin-top: 20px;
       background: #1a73e8;
@@ -212,15 +212,37 @@ FORM_TEMPLATE = """
       font-weight: bold;
       cursor: pointer;
     }
-    .hint { color: #666; font-size: 13px; margin-top: 4px; }
-    #return-date-wrap { display: none; }
+    #return-date-wrap,
+    #advanced-preferences,
+    #summary-card {
+      display: none;
+    }
+    #summary-card {
+      border: 1px solid #c8d6f0;
+      border-radius: 8px;
+      background: #f7f9fc;
+      padding: 16px;
+      margin-top: 20px;
+    }
+    #summary-card h2 { margin-top: 0; font-size: 20px; }
+    #summary-card ul { padding-left: 22px; }
+    .button-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    @media (max-width: 520px) {
+      .button-row { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
   <h1>航班监控订阅</h1>
-  <form method="post" action="{{ url_for('subscribe') }}">
+  <p class="hint">先填基础需求即可；高级偏好可以按需展开。</p>
+
+  <form id="subscription-form" method="post" action="{{ url_for('subscribe') }}">
     <fieldset>
-      <legend>行程信息</legend>
+      <legend>基础问题</legend>
 
       <label for="origin">出发地</label>
       <select id="origin" name="origin_select">
@@ -231,7 +253,7 @@ FORM_TEMPLATE = """
       <input name="origin_manual" placeholder="或手动输入IATA代码，例如 PVG">
 
       <label for="destination">目的地</label>
-      <input id="destination" name="destination" placeholder="例如 MCO 或 Orlando / 奥兰多" required>
+      <input id="destination" name="destination" placeholder="例如 MCO / Orlando / 奥兰多" required>
 
       <label>单程 / 往返</label>
       <div class="choice">
@@ -254,10 +276,6 @@ FORM_TEMPLATE = """
           <label><input type="radio" name="return_date_flexibility" value="7"> 前后7天</label>
         </div>
       </div>
-    </fieldset>
-
-    <fieldset>
-      <legend>行程弹性</legend>
 
       <label>日期灵活度</label>
       <div class="choice">
@@ -266,17 +284,6 @@ FORM_TEMPLATE = """
         <label><input type="radio" name="date_flexibility" value="3"> 前后3天</label>
         <label><input type="radio" name="date_flexibility" value="7"> 前后7天</label>
       </div>
-
-      <label>这次行程的确定程度？</label>
-      <div class="choice">
-        <label><input type="radio" name="trip_rigidity" value="confirmed" checked> 非常确定：日期/时间不能改（已订酒店、会议等）</label>
-        <label><input type="radio" name="trip_rigidity" value="mostly"> 基本确定：前后一两天可以调</label>
-        <label><input type="radio" name="trip_rigidity" value="flexible"> 比较灵活：只要便宜可以大幅调整</label>
-      </div>
-    </fieldset>
-
-    <fieldset>
-      <legend>硬约束和偏好</legend>
 
       <label>预算上限</label>
       <input id="budget" name="budget" type="number" min="1" step="1" placeholder="例如 8000">
@@ -297,16 +304,8 @@ FORM_TEMPLATE = """
       <label>可接受起飞时间</label>
       <div class="choice">
         <label><input type="radio" name="departure_time_policy" value="any"> 不限制</label>
-        <label><input type="radio" name="departure_time_policy" value="after_06" checked> 早上06:00后起飞</label>
-        <label><input type="radio" name="departure_time_policy" value="daytime"> 上午/下午优先（08:00-20:00）</label>
-        <label><input type="radio" name="departure_time_policy" value="no_redeye"> 不接受23:00-06:00起飞</label>
-      </div>
-
-      <label>可接受到达时间</label>
-      <div class="choice">
-        <label><input type="radio" name="arrival_time_policy" value="any" checked> 不限制</label>
-        <label><input type="radio" name="arrival_time_policy" value="no_midnight"> 不接受凌晨到达（00:00-06:00）</label>
-        <label><input type="radio" name="arrival_time_policy" value="daytime_only"> 必须白天到达（06:00-22:00）</label>
+        <label><input type="radio" name="departure_time_policy" value="no_redeye" checked> 不接受红眼凌晨</label>
+        <label><input type="radio" name="departure_time_policy" value="daytime"> 希望白天出行</label>
       </div>
 
       <label>是否需要托运行李</label>
@@ -316,88 +315,194 @@ FORM_TEMPLATE = """
         <label><input type="radio" name="baggage" value="unknown"> 不确定</label>
       </div>
 
-      <label>退改签灵活性</label>
-      <div class="choice">
-        <label><input type="radio" name="refund_flexibility" value="not_needed"> 不需要，确定会出行</label>
-        <label><input type="radio" name="refund_flexibility" value="preferred" checked> 最好可以改签</label>
-        <label><input type="radio" name="refund_flexibility" value="required"> 必须可退改</label>
-        <label><input type="radio" name="refund_flexibility" value="unknown"> 不确定</label>
-      </div>
-
-      <label>为了便宜，你愿意牺牲便利性吗？</label>
-      <div class="choice">
-        <label><input type="radio" name="price_sensitivity" value="low" checked> 不愿意，方便和稳定更重要</label>
-        <label><input type="radio" name="price_sensitivity" value="medium"> 便宜200元左右可以考虑</label>
-        <label><input type="radio" name="price_sensitivity" value="high"> 便宜500元以上可以接受不方便</label>
-        <label><input type="radio" name="price_sensitivity" value="max"> 价格优先，只要便宜都可以</label>
-      </div>
-
-      <label>航司偏好</label>
-      <div class="choice">
-        <label><input type="radio" name="airline_policy" value="any" checked> 不限制</label>
-        <label><input type="radio" name="airline_policy" value="prefer_full_service"> 偏好全服务航司</label>
-        <label><input type="radio" name="airline_policy" value="no_lcc"> 不接受廉航</label>
-        <label><input type="radio" name="airline_policy" value="exclude_airlines"> 有不接受的航司吗？</label>
-      </div>
-      <input name="exclude_airlines" placeholder="选填，多个航司用逗号分隔，例如 Spirit, Frontier">
-    </fieldset>
-
-    <fieldset>
-      <legend>场景和目标</legend>
-
-      <label>出行类型</label>
-      <select name="trip_type">
-        <option value="business_meeting">商务会议</option>
-        <option value="tourism" selected>旅游</option>
-        <option value="family_visit">探亲</option>
-        <option value="student_return">学生返校</option>
-        <option value="family_elder">家庭老人同行</option>
-        <option value="other">其他</option>
-      </select>
-
-      <label>同行人员</label>
-      <div class="choice">
-        <label><input type="radio" name="companions" value="solo" checked> 仅本人</label>
-        <label><input type="radio" name="companions" value="with_elderly"> 有老人同行</label>
-        <label><input type="radio" name="companions" value="with_child"> 有小孩同行（12岁以下）</label>
-        <label><input type="radio" name="companions" value="with_elderly_child"> 老人和小孩都有</label>
-      </div>
-
-      <label>主目标（必填）</label>
+      <label>主目标</label>
       <div class="choice">
         <label><input type="radio" name="primary_goal" value="price_drop_alert" required> 跌到合适价格时提醒我</label>
         <label><input type="radio" name="primary_goal" value="buy_timing" checked required> 判断现在该不该买</label>
         <label><input type="radio" name="primary_goal" value="cheaper_date" required> 帮我找更便宜的日期</label>
         <label><input type="radio" name="primary_goal" value="best_overall" required> 帮我找最合适航班</label>
       </div>
-
-      <label>附加关注（选填）</label>
-      <div class="choice">
-        <label><input type="checkbox" name="secondary_goals" value="low_price_alert"> 异常低价提醒</label>
-        <label><input type="checkbox" name="secondary_goals" value="price_risk_alert"> 涨价风险提醒</label>
-        <label><input type="checkbox" name="secondary_goals" value="cheaper_date"> 前后日期更便宜提醒</label>
-        <label><input type="checkbox" name="secondary_goals" value="better_same_day"> 同日更优方案提醒</label>
-      </div>
     </fieldset>
 
-    <button type="submit">开始监控</button>
+    <button id="advanced-toggle" class="secondary-button" type="button">▼ 展开高级偏好（可选）</button>
+
+    <div id="advanced-preferences">
+      <fieldset>
+        <legend>高级偏好</legend>
+
+        <label>行程确定程度</label>
+        <div class="choice">
+          <label><input type="radio" name="trip_rigidity" value="confirmed" checked> 非常确定：日期/时间不能改</label>
+          <label><input type="radio" name="trip_rigidity" value="mostly"> 基本确定：前后一两天可以调</label>
+          <label><input type="radio" name="trip_rigidity" value="flexible"> 比较灵活：只要便宜可以大幅调整</label>
+        </div>
+
+        <label>可接受到达时间</label>
+        <div class="choice">
+          <label><input type="radio" name="arrival_time_policy" value="any" checked> 不限制</label>
+          <label><input type="radio" name="arrival_time_policy" value="no_midnight"> 不接受凌晨到达（00:00-06:00）</label>
+          <label><input type="radio" name="arrival_time_policy" value="daytime_only"> 必须白天到达（06:00-22:00）</label>
+        </div>
+
+        <label>退改签灵活性</label>
+        <div class="choice">
+          <label><input type="radio" name="refund_flexibility" value="not_needed"> 不需要，确定会出行</label>
+          <label><input type="radio" name="refund_flexibility" value="preferred" checked> 最好可以改签</label>
+          <label><input type="radio" name="refund_flexibility" value="required"> 必须可退改</label>
+          <label><input type="radio" name="refund_flexibility" value="unknown"> 不确定</label>
+        </div>
+
+        <label>价格敏感度</label>
+        <div class="choice">
+          <label><input type="radio" name="price_sensitivity" value="low" checked> 不愿意，方便和稳定更重要</label>
+          <label><input type="radio" name="price_sensitivity" value="medium"> 便宜200元左右可以考虑</label>
+          <label><input type="radio" name="price_sensitivity" value="high"> 便宜500元以上可以接受不方便</label>
+          <label><input type="radio" name="price_sensitivity" value="max"> 价格优先，只要便宜都可以</label>
+        </div>
+
+        <label>航司偏好</label>
+        <div class="choice">
+          <label><input type="radio" name="airline_policy" value="any" checked> 不限制</label>
+          <label><input type="radio" name="airline_policy" value="prefer_full_service"> 偏好全服务航司</label>
+          <label><input type="radio" name="airline_policy" value="no_lcc"> 不接受廉航</label>
+          <label><input type="radio" name="airline_policy" value="exclude_airlines"> 有不接受的航司吗？</label>
+        </div>
+        <input name="exclude_airlines" placeholder="选填，多个航司用逗号分隔，例如 Spirit, Frontier">
+
+        <label>同行人员</label>
+        <div class="choice">
+          <label><input type="radio" name="companions" value="solo" checked> 仅本人</label>
+          <label><input type="radio" name="companions" value="with_elderly"> 有老人同行</label>
+          <label><input type="radio" name="companions" value="with_child"> 有小孩同行（12岁以下）</label>
+          <label><input type="radio" name="companions" value="with_elderly_child"> 老人和小孩都有</label>
+        </div>
+
+        <label>附加关注</label>
+        <div class="choice">
+          <label><input type="checkbox" name="secondary_goals" value="low_price_alert"> 异常低价提醒</label>
+          <label><input type="checkbox" name="secondary_goals" value="price_risk_alert"> 涨价风险提醒</label>
+          <label><input type="checkbox" name="secondary_goals" value="cheaper_date"> 前后日期更便宜提醒</label>
+          <label><input type="checkbox" name="secondary_goals" value="better_same_day"> 同日更优方案提醒</label>
+        </div>
+
+        <label>出行类型</label>
+        <select name="trip_type">
+          <option value="business_meeting">商务会议</option>
+          <option value="tourism" selected>旅游</option>
+          <option value="family_visit">探亲</option>
+          <option value="student_return">学生返校</option>
+          <option value="family_elder">家庭老人同行</option>
+          <option value="other">其他</option>
+        </select>
+      </fieldset>
+    </div>
+
+    <button id="preview-button" type="button">开始监控</button>
+
+    <div id="summary-card">
+      <h2>系统将这样理解你的需求：</h2>
+      <ul id="summary-list"></ul>
+      <div class="button-row">
+        <button type="submit">确认订阅</button>
+        <button id="edit-button" class="secondary-button" type="button">返回修改</button>
+      </div>
+    </div>
   </form>
 
   <script>
+    const labels = {
+      dateFlex: {"0": "不灵活", "1": "前后1天", "3": "前后3天", "7": "前后7天"},
+      budgetMode: {"fixed": "目标价", "unknown": "不确定，帮我判断合理价格", "low_zone": "只要进入低价区间就提醒"},
+      transfer: {"direct_only": "必须直飞", "short_ok": "可以短中转", "cheap_ok": "便宜很多可以中转", "price_first": "价格优先，中转也可以"},
+      departure: {"any": "不限制", "no_redeye": "不接受红眼凌晨", "daytime": "希望白天出行"},
+      baggage: {"required": "必须托运", "not_needed": "不需要托运", "unknown": "不确定"},
+      primary: {"price_drop_alert": "跌到合适价格时提醒我", "buy_timing": "判断现在该不该买", "cheaper_date": "帮我找更便宜的日期", "best_overall": "帮我找最合适航班"}
+    };
+
+    const form = document.getElementById('subscription-form');
     const tripRadios = document.querySelectorAll('input[name="round_trip"]');
     const returnWrap = document.getElementById('return-date-wrap');
+    const returnDate = document.getElementById('return_date');
     const budgetRadios = document.querySelectorAll('input[name="budget_mode"]');
     const budgetInput = document.getElementById('budget');
+    const advanced = document.getElementById('advanced-preferences');
+    const advancedToggle = document.getElementById('advanced-toggle');
+    const previewButton = document.getElementById('preview-button');
+    const summaryCard = document.getElementById('summary-card');
+    const summaryList = document.getElementById('summary-list');
+    const editButton = document.getElementById('edit-button');
+
+    function checkedValue(name) {
+      const selected = document.querySelector(`input[name="${name}"]:checked`);
+      return selected ? selected.value : "";
+    }
+
+    function selectedOrigin() {
+      const manual = form.origin_manual.value.trim().toUpperCase();
+      return manual || form.origin_select.value;
+    }
 
     function toggleReturnDate() {
-      const selected = document.querySelector('input[name="round_trip"]:checked').value;
-      returnWrap.style.display = selected === 'true' ? 'block' : 'none';
+      const isRoundTrip = checkedValue('round_trip') === 'true';
+      returnWrap.style.display = isRoundTrip ? 'block' : 'none';
+      returnDate.required = isRoundTrip;
     }
 
     function toggleBudgetRequired() {
-      const selected = document.querySelector('input[name="budget_mode"]:checked').value;
-      budgetInput.required = selected === 'fixed';
+      budgetInput.required = checkedValue('budget_mode') === 'fixed';
     }
+
+    function addSummaryLine(text) {
+      const li = document.createElement('li');
+      li.textContent = text;
+      summaryList.appendChild(li);
+    }
+
+    function buildSummary() {
+      summaryList.innerHTML = "";
+      const origin = selectedOrigin();
+      const destination = form.destination.value.trim().toUpperCase();
+      const budgetMode = checkedValue('budget_mode');
+      const budget = Number(budgetInput.value || 0);
+
+      addSummaryLine(`监控航线：${origin} → ${destination}`);
+      addSummaryLine(`出发日期：${form.depart_date.value}`);
+      if (checkedValue('round_trip') === 'true') {
+        addSummaryLine(`返程日期：${returnDate.value}`);
+      }
+      addSummaryLine(`日期弹性：${labels.dateFlex[checkedValue('date_flexibility')]}`);
+      if (budgetMode === 'fixed') {
+        addSummaryLine(`预算策略：目标价¥${budget.toLocaleString('zh-CN')}`);
+      } else {
+        addSummaryLine(`预算策略：${labels.budgetMode[budgetMode]}`);
+      }
+      addSummaryLine(`中转策略：${labels.transfer[checkedValue('transfer_policy')]}`);
+      addSummaryLine(`时间要求：${labels.departure[checkedValue('departure_time_policy')]}`);
+      addSummaryLine(`行李：${labels.baggage[checkedValue('baggage')]}`);
+      addSummaryLine(`主目标：${labels.primary[checkedValue('primary_goal')]}`);
+    }
+
+    advancedToggle.addEventListener('click', () => {
+      const expanded = advanced.style.display === 'block';
+      advanced.style.display = expanded ? 'none' : 'block';
+      advancedToggle.textContent = expanded ? '▼ 展开高级偏好（可选）' : '▲ 收起高级偏好';
+    });
+
+    previewButton.addEventListener('click', () => {
+      toggleBudgetRequired();
+      toggleReturnDate();
+      if (!form.reportValidity()) {
+        return;
+      }
+      buildSummary();
+      summaryCard.style.display = 'block';
+      summaryCard.scrollIntoView({behavior: 'smooth', block: 'start'});
+    });
+
+    editButton.addEventListener('click', () => {
+      summaryCard.style.display = 'none';
+      window.scrollTo({top: 0, behavior: 'smooth'});
+    });
 
     tripRadios.forEach(radio => radio.addEventListener('change', toggleReturnDate));
     budgetRadios.forEach(radio => radio.addEventListener('change', toggleBudgetRequired));
@@ -415,28 +520,36 @@ SUCCESS_TEMPLATE = """
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>订阅成功</title>
+  <title>已创建监控</title>
   <style>
-    body { font-family: Arial, sans-serif; max-width: 600px; margin: 32px auto; padding: 0 16px; line-height: 1.7; }
-    .summary { background: #f7f9fc; border-radius: 8px; padding: 16px; }
+    body { font-family: Arial, sans-serif; max-width: 620px; margin: 32px auto; padding: 0 16px; line-height: 1.7; color: #222; }
+    .card { background: #f7f9fc; border: 1px solid #dbe5f6; border-radius: 8px; padding: 18px; }
     ul { padding-left: 22px; }
+    a { display: inline-block; margin-top: 18px; color: #1a73e8; font-weight: bold; }
   </style>
 </head>
 <body>
-  <h1>订阅成功，将通过PushPlus推送监控结果</h1>
-  <div class="summary">
-    <p><b>已开始监控：{{ summary.route }}</b></p>
-    <p><b>核心约束：</b></p>
+  <div class="card">
+    <h1>✅ 已创建监控</h1>
+    <p><b>{{ summary.route }}</b></p>
+
+    <p><b>系统会在以下情况提醒你：</b></p>
     <ul>
-      {% for item in summary.constraints %}
+      {% for item in summary.reminders %}
       <li>{{ item }}</li>
       {% endfor %}
     </ul>
-    <p>系统将重点：{{ summary.primary_goal }}</p>
-    <p>附加关注：{{ summary.secondary_goals }}</p>
-    <p>预计首次推送时间：{{ first_push_time }} 或下一次定时采集完成后</p>
+
+    <p><b>以下方案不会推荐给你：</b></p>
+    <ul>
+      {% for item in summary.exclusions %}
+      <li>{{ item }}</li>
+      {% endfor %}
+    </ul>
+
+    <p><b>预计首次推送：</b>下一次定时采集完成后</p>
   </div>
-  <p><a href="{{ url_for('index') }}">继续添加订阅</a></p>
+  <a href="{{ url_for('index') }}">继续添加订阅</a>
 </body>
 </html>
 """
@@ -515,14 +628,14 @@ def build_subscription(form) -> dict:
             "budget": parse_optional_budget(form.get("budget"), budget_mode),
             "budget_mode": budget_mode,
             "transfer_policy": form.get("transfer_policy", "short_ok"),
-            "departure_time_policy": form.get("departure_time_policy", "after_06"),
+            "departure_time_policy": form.get("departure_time_policy", "no_redeye"),
             "arrival_time_policy": form.get("arrival_time_policy", "any"),
             "baggage": form.get("baggage", "required"),
             "refund_flexibility": form.get("refund_flexibility", "preferred"),
             "airline_policy": form.get("airline_policy", "any"),
             "exclude_airlines": [
                 item.strip()
-                for item in form.get("exclude_airlines", "").replace("?", ",").split(",")
+                for item in form.get("exclude_airlines", "").replace("，", ",").split(",")
                 if item.strip()
             ],
         },
@@ -541,56 +654,33 @@ def build_subscription(form) -> dict:
     }
 
 
-def build_summary(subscription: dict) -> dict:
+def build_success_summary(subscription: dict) -> dict:
     hard = subscription.get("hard_constraints", {})
-    goals = subscription.get("notification_goals", {})
-    budget_mode = hard.get("budget_mode", "fixed")
+    reminders = [
+        "当前价格进入历史低价区间",
+        "判断继续等待的涨价风险变高时",
+        "前后日期出现显著更便宜方案",
+        "出现异常低价或短时放票",
+    ]
+
+    exclusions = ["不满足你时间要求的航班"]
+    departure_policy = hard.get("departure_time_policy")
+    if departure_policy == "no_redeye":
+        exclusions.append("23:00-06:00起飞的红眼航班")
+    elif departure_policy == "daytime":
+        exclusions.append("不符合白天出行要求的航班")
+    if hard.get("baggage") == "required":
+        exclusions.append("不含免费托运的方案")
+    if hard.get("transfer_policy") == "direct_only":
+        exclusions.append("需要中转的方案")
     budget = hard.get("budget")
-    budget_text = BUDGET_MODE_LABELS.get(budget_mode, "预算设置未知").format(
-        budget=budget or 0
-    )
-    secondary = [
-        SECONDARY_GOAL_LABELS.get(goal, goal)
-        for goal in goals.get("secondary", [])
-    ]
-    constraints = [
-        DATE_FLEX_LABELS.get(subscription.get("date_flexibility", 0), "日期弹性未知"),
-        TRIP_RIGIDITY_LABELS.get(
-            subscription.get("soft_preferences", {}).get("trip_rigidity"),
-            "行程刚性未知",
-        ),
-        (
-            DATE_FLEX_LABELS.get(
-                subscription.get("return_date_flexibility", 0),
-                "返程日期弹性未知",
-            )
-            if subscription.get("round_trip")
-            else None
-        ),
-        budget_text,
-        TRANSFER_LABELS.get(hard.get("transfer_policy"), "中转偏好未知"),
-        DEPARTURE_TIME_LABELS.get(hard.get("departure_time_policy"), "起飞时间偏好未知"),
-        ARRIVAL_TIME_LABELS.get(hard.get("arrival_time_policy"), "到达时间偏好未知"),
-        BAGGAGE_LABELS.get(hard.get("baggage"), "行李需求未知"),
-        REFUND_LABELS.get(hard.get("refund_flexibility"), "退改签需求未知"),
-        PRICE_SENSITIVITY_LABELS.get(
-            subscription.get("soft_preferences", {}).get("price_sensitivity"),
-            "价格敏感度未知",
-        ),
-        COMPANION_LABELS.get(
-            subscription.get("soft_preferences", {}).get("companions"),
-            "同行人员未知",
-        ),
-        AIRLINE_POLICY_LABELS.get(hard.get("airline_policy"), "航司偏好未知"),
-    ]
+    if budget:
+        exclusions.append(f"超出¥{budget:,}预算的方案")
 
     return {
         "route": f"{city_label(subscription.get('origin'))} → {city_label(subscription.get('destination'))}",
-        "constraints": [item for item in constraints if item],
-        "primary_goal": PRIMARY_GOAL_SUMMARY.get(
-            goals.get("primary"), goals.get("primary", "未设置")
-        ),
-        "secondary_goals": "、".join(secondary) if secondary else "无",
+        "reminders": reminders,
+        "exclusions": exclusions,
     }
 
 
@@ -616,6 +706,10 @@ def success():
     subscription = subscriptions[index] if subscriptions else {}
     return render_template_string(
         SUCCESS_TEMPLATE,
-        summary=build_summary(subscription) if subscription else {},
+        summary=build_success_summary(subscription) if subscription else {},
         first_push_time=first_push_text(),
     )
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
