@@ -128,6 +128,13 @@ PRICE_SENSITIVITY_LABELS = {
     "max": "价格优先，只要便宜都可以",
 }
 
+AIRLINE_POLICY_LABELS = {
+    "any": "航司不限制",
+    "prefer_full_service": "偏好全服务航司",
+    "no_lcc": "不接受廉航",
+    "exclude_airlines": "排除指定航司",
+}
+
 TRIP_RIGIDITY_LABELS = {
     "confirmed": "非常确定：日期/时间不能改",
     "mostly": "基本确定：前后一两天可以调",
@@ -238,6 +245,14 @@ FORM_TEMPLATE = """
       <div id="return-date-wrap">
         <label for="return_date">返程日期</label>
         <input id="return_date" name="return_date" type="date">
+
+        <label>返程日期灵活度</label>
+        <div class="choice">
+          <label><input type="radio" name="return_date_flexibility" value="0" checked> 不灵活</label>
+          <label><input type="radio" name="return_date_flexibility" value="1"> 前后1天</label>
+          <label><input type="radio" name="return_date_flexibility" value="3"> 前后3天</label>
+          <label><input type="radio" name="return_date_flexibility" value="7"> 前后7天</label>
+        </div>
       </div>
     </fieldset>
 
@@ -316,6 +331,15 @@ FORM_TEMPLATE = """
         <label><input type="radio" name="price_sensitivity" value="high"> 便宜500元以上可以接受不方便</label>
         <label><input type="radio" name="price_sensitivity" value="max"> 价格优先，只要便宜都可以</label>
       </div>
+
+      <label>航司偏好</label>
+      <div class="choice">
+        <label><input type="radio" name="airline_policy" value="any" checked> 不限制</label>
+        <label><input type="radio" name="airline_policy" value="prefer_full_service"> 偏好全服务航司</label>
+        <label><input type="radio" name="airline_policy" value="no_lcc"> 不接受廉航</label>
+        <label><input type="radio" name="airline_policy" value="exclude_airlines"> 有不接受的航司吗？</label>
+      </div>
+      <input name="exclude_airlines" placeholder="选填，多个航司用逗号分隔，例如 Spirit, Frontier">
     </fieldset>
 
     <fieldset>
@@ -484,6 +508,9 @@ def build_subscription(form) -> dict:
         "return_date": form.get("return_date", "").strip() if round_trip else None,
         "round_trip": round_trip,
         "date_flexibility": parse_int(form.get("date_flexibility"), 0),
+        "return_date_flexibility": (
+            parse_int(form.get("return_date_flexibility"), 0) if round_trip else 0
+        ),
         "hard_constraints": {
             "budget": parse_optional_budget(form.get("budget"), budget_mode),
             "budget_mode": budget_mode,
@@ -492,6 +519,12 @@ def build_subscription(form) -> dict:
             "arrival_time_policy": form.get("arrival_time_policy", "any"),
             "baggage": form.get("baggage", "required"),
             "refund_flexibility": form.get("refund_flexibility", "preferred"),
+            "airline_policy": form.get("airline_policy", "any"),
+            "exclude_airlines": [
+                item.strip()
+                for item in form.get("exclude_airlines", "").replace("?", ",").split(",")
+                if item.strip()
+            ],
         },
         "soft_preferences": {
             "trip_type": form.get("trip_type", "tourism"),
@@ -520,29 +553,40 @@ def build_summary(subscription: dict) -> dict:
         SECONDARY_GOAL_LABELS.get(goal, goal)
         for goal in goals.get("secondary", [])
     ]
+    constraints = [
+        DATE_FLEX_LABELS.get(subscription.get("date_flexibility", 0), "日期弹性未知"),
+        TRIP_RIGIDITY_LABELS.get(
+            subscription.get("soft_preferences", {}).get("trip_rigidity"),
+            "行程刚性未知",
+        ),
+        (
+            DATE_FLEX_LABELS.get(
+                subscription.get("return_date_flexibility", 0),
+                "返程日期弹性未知",
+            )
+            if subscription.get("round_trip")
+            else None
+        ),
+        budget_text,
+        TRANSFER_LABELS.get(hard.get("transfer_policy"), "中转偏好未知"),
+        DEPARTURE_TIME_LABELS.get(hard.get("departure_time_policy"), "起飞时间偏好未知"),
+        ARRIVAL_TIME_LABELS.get(hard.get("arrival_time_policy"), "到达时间偏好未知"),
+        BAGGAGE_LABELS.get(hard.get("baggage"), "行李需求未知"),
+        REFUND_LABELS.get(hard.get("refund_flexibility"), "退改签需求未知"),
+        PRICE_SENSITIVITY_LABELS.get(
+            subscription.get("soft_preferences", {}).get("price_sensitivity"),
+            "价格敏感度未知",
+        ),
+        COMPANION_LABELS.get(
+            subscription.get("soft_preferences", {}).get("companions"),
+            "同行人员未知",
+        ),
+        AIRLINE_POLICY_LABELS.get(hard.get("airline_policy"), "航司偏好未知"),
+    ]
+
     return {
         "route": f"{city_label(subscription.get('origin'))} → {city_label(subscription.get('destination'))}",
-        "constraints": [
-            DATE_FLEX_LABELS.get(subscription.get("date_flexibility", 0), "日期弹性未知"),
-            TRIP_RIGIDITY_LABELS.get(
-                subscription.get("soft_preferences", {}).get("trip_rigidity"),
-                "行程刚性未知",
-            ),
-            budget_text,
-            TRANSFER_LABELS.get(hard.get("transfer_policy"), "中转偏好未知"),
-            DEPARTURE_TIME_LABELS.get(hard.get("departure_time_policy"), "起飞时间偏好未知"),
-            ARRIVAL_TIME_LABELS.get(hard.get("arrival_time_policy"), "到达时间偏好未知"),
-            BAGGAGE_LABELS.get(hard.get("baggage"), "行李需求未知"),
-            REFUND_LABELS.get(hard.get("refund_flexibility"), "退改签需求未知"),
-            PRICE_SENSITIVITY_LABELS.get(
-                subscription.get("soft_preferences", {}).get("price_sensitivity"),
-                "价格敏感度未知",
-            ),
-            COMPANION_LABELS.get(
-                subscription.get("soft_preferences", {}).get("companions"),
-                "同行人员未知",
-            ),
-        ],
+        "constraints": [item for item in constraints if item],
         "primary_goal": PRIMARY_GOAL_SUMMARY.get(
             goals.get("primary"), goals.get("primary", "未设置")
         ),

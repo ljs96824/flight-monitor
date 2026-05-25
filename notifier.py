@@ -890,6 +890,15 @@ def _goals(route_info: dict, analysis_result: dict) -> set[str]:
     return set(goals)
 
 
+def _primary_goal(route_info: dict, analysis_result: dict) -> str | None:
+    notification_goals = (
+        route_info.get("notification_goals")
+        or analysis_result.get("notification_goals")
+        or {}
+    )
+    return notification_goals.get("primary") if isinstance(notification_goals, dict) else None
+
+
 def _preference_value(route_info: dict, analysis_result: dict, key: str, default=None):
     soft = route_info.get("soft_preferences") or analysis_result.get("soft_preferences") or {}
     hard = route_info.get("hard_constraints") or analysis_result.get("hard_constraints") or {}
@@ -2127,18 +2136,49 @@ def _append_nearby_dates(lines: list[str], nearby_dates: list[dict] | None) -> N
     if not nearby_dates:
         return
 
+    valid_prices = [
+        item.get("min_price")
+        for item in nearby_dates
+        if item.get("min_price") is not None
+    ]
+    cheapest = min(valid_prices) if valid_prices else None
+    selected = next((item for item in nearby_dates if item.get("selected")), None)
+    selected_price = selected.get("min_price") if selected else None
+    weekday_names = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+
     lines.append("<b>📅 前后日期价格对比</b>")
     for item in sorted(nearby_dates, key=lambda value: value.get("date", "")):
         price = item.get("min_price")
         price_text = f"¥{price:,.0f}" if price else "暂无价格"
-        offset = item.get("offset", 0)
-        if offset == 0:
-            label = "出发日"
+        date_text = item.get("date", "")
+        try:
+            day = date.fromisoformat(date_text)
+            label = f"{day.month}/{day.day}（{weekday_names[day.weekday()]}）"
+        except ValueError:
+            label = date_text
+        markers = []
+        if cheapest is not None and price == cheapest:
+            markers.append("← 最便宜")
+        if item.get("selected"):
+            markers.append("← 你选的日期")
+        suffix = " ".join(markers)
+        lines.append(f"{label}: {price_text} {suffix}".rstrip())
+
+    if cheapest is not None and selected_price is not None and cheapest < selected_price:
+        cheaper_item = next(
+            item for item in nearby_dates if item.get("min_price") == cheapest
+        )
+        offset = cheaper_item.get("offset", 0)
+        if offset < 0:
+            day_text = f"提前{abs(offset)}天"
         elif offset > 0:
-            label = f"+{offset}天"
+            day_text = f"推后{offset}天"
         else:
-            label = f"{offset}天"
-        lines.append(f"{item.get('date')}（{label}）：{price_text}")
+            day_text = "你选的日期"
+        lines.append("")
+        lines.append(
+            f"💡 建议：{day_text}出发可以便宜¥{selected_price - cheapest:,.0f}"
+        )
     lines.append("")
 
 
@@ -2560,6 +2600,86 @@ def _append_multi_window_analysis(lines: list[str], windows: dict | None) -> Non
     lines.extend(sections)
 
 
+def _append_simple_top3(lines: list[str], title: str, flights: list[dict] | None) -> None:
+    flights = flights or []
+    if not flights:
+        return
+    lines.append(f"<b>{title}</b>")
+    for index, flight in enumerate(flights[:3], start=1):
+        lines.append(
+            f"{index}. ¥{flight.get('price', 0):,.0f} | "
+            f"{flight.get('route_summary', '')} | "
+            f"{flight.get('total_hours', '')}小时"
+        )
+    lines.append("")
+
+
+def _append_round_trip_block(lines: list[str], analysis_result: dict, route_info: dict) -> None:
+    """Append round-trip comparison details.
+
+    This definition intentionally normalizes both the current analyzer shape
+    (flight dicts) and older cached shapes (raw prices) before formatting.
+    """
+    if not route_info.get("round_trip") or not analysis_result.get("round_trip_analysis"):
+        return
+
+    round_trip = analysis_result.get("round_trip_analysis") or {}
+    return_analysis = analysis_result.get("return_analysis") or {}
+    outbound_min = round_trip.get("outbound_min")
+    return_min = round_trip.get("return_min")
+    outbound_price = (
+        outbound_min.get("price") if isinstance(outbound_min, dict) else outbound_min
+    )
+    return_price = return_min.get("price") if isinstance(return_min, dict) else return_min
+    total_min = round_trip.get("total_min")
+
+    lines.append("<b>🔁 往返联动</b>")
+    if outbound_price:
+        lines.append(
+            f"去程推荐：{route_info.get('origin')}→{route_info.get('destination')} "
+            f"最低¥{outbound_price:,.0f}"
+        )
+    else:
+        lines.append("去程推荐：暂无价格")
+
+    if return_price:
+        lines.append(
+            f"返程推荐：{route_info.get('destination')}→{route_info.get('origin')} "
+            f"最低¥{return_price:,.0f}"
+        )
+    else:
+        lines.append("返程推荐：暂无价格")
+
+    if outbound_price is not None and return_price is not None and total_min is not None:
+        lines.append(
+            f"往返总价最优组合：¥{outbound_price:,.0f}+¥{return_price:,.0f}=¥{total_min:,.0f}"
+        )
+    if round_trip.get("insight"):
+        lines.append(round_trip["insight"])
+    lines.append("")
+
+    top_combinations = round_trip.get("top_combinations") or []
+    if top_combinations:
+        lines.append("<b>最优往返组合Top3</b>")
+        for index, combo in enumerate(top_combinations[:3], start=1):
+            combo_outbound = combo.get("outbound") or {}
+            combo_return = combo.get("return") or {}
+            combo_outbound_price = combo.get("outbound_price") or combo_outbound.get("price")
+            combo_return_price = combo.get("return_price") or combo_return.get("price")
+            if combo_outbound_price is None or combo_return_price is None:
+                continue
+            lines.append(
+                f"{index}. ¥{combo_outbound_price:,.0f}+"
+                f"¥{combo_return_price:,.0f}=¥{combo['total_price']:,.0f}"
+            )
+        lines.append("")
+
+    _append_simple_top3(lines, "去程Top3", round_trip.get("outbound_top3"))
+    _append_simple_top3(lines, "返程Top3", round_trip.get("return_top3"))
+    if return_analysis.get("nearby_dates"):
+        _append_nearby_dates(lines, return_analysis.get("nearby_dates"))
+
+
 def format_html_message(
     analysis_result, route_info, source_stats=None, price_insights=None
 ):
@@ -2606,6 +2726,11 @@ def format_html_message(
         if budget_line:
             lines.append(budget_line)
             lines.append("")
+        if _primary_goal(route_info, analysis_result) == "cheaper_date":
+            _append_nearby_dates(
+                lines, route_info.get("nearby_dates") or analysis_result.get("nearby_dates")
+            )
+        _append_round_trip_block(lines, analysis_result, route_info)
         history = price_insights.get("price_history") if price_insights else None
         price_pos = price_position_description(current_min, history)
         wait_risk = waiting_risk_description(history, current_min, days or 0)
@@ -2643,7 +2768,7 @@ def format_html_message(
         if "buy_timing" in goals:
             _append_price_references(lines, price_refs, current_min, evidence)
         _append_multi_window_analysis(lines, window_analysis)
-        if "cheaper_date" in goals:
+        if "cheaper_date" in goals and _primary_goal(route_info, analysis_result) != "cheaper_date":
             _append_nearby_dates(
                 lines, route_info.get("nearby_dates") or analysis_result.get("nearby_dates")
             )

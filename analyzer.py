@@ -1168,6 +1168,39 @@ SCORE_WEIGHTS = {
     "balanced": {"price": 0.35, "duration": 0.25, "stops": 0.2, "layover": 0.2},
 }
 
+LCC_AIRLINES = [
+    "Spirit",
+    "Frontier",
+    "春秋航空",
+    "九元航空",
+    "Ryanair",
+    "EasyJet",
+    "AirAsia",
+    "Scoot",
+    "Peach",
+    "Cebu Pacific",
+    "IndiGo",
+    "VietJet",
+]
+
+FULL_SERVICE_AIRLINES = [
+    "Air China",
+    "中国国航",
+    "China Eastern",
+    "东方航空",
+    "China Southern",
+    "南方航空",
+    "United",
+    "Delta",
+    "American",
+    "Air Canada",
+    "Lufthansa",
+    "ANA",
+    "Japan Airlines",
+    "Singapore Airlines",
+    "Cathay Pacific",
+]
+
 
 def overall_score(
     flight: dict, all_prices: list, all_durations: list, mode: str = "balanced"
@@ -1743,6 +1776,23 @@ def _has_refund_change_flexibility(flight: dict, required: bool = False) -> bool
     return changeable and refundable if required else changeable
 
 
+def _airline_text(flight: dict) -> str:
+    names = []
+    for key in ("airline_summary", "airline"):
+        if flight.get(key):
+            names.append(str(flight.get(key)))
+    names.extend(str(name) for name in flight.get("airlines") or [] if name)
+    for segment in flight.get("segments") or []:
+        if isinstance(segment, dict) and segment.get("airline"):
+            names.append(str(segment.get("airline")))
+    return " ".join(names)
+
+
+def _contains_any_airline(flight: dict, airline_names: list[str]) -> bool:
+    text = _airline_text(flight).lower()
+    return any(name.lower() in text for name in airline_names if name)
+
+
 def _trip_mode(default_mode: str, preferences: dict | None) -> str:
     price_sensitivity = (preferences or {}).get("price_sensitivity")
     if price_sensitivity == "max":
@@ -1779,6 +1829,8 @@ def _apply_user_preferences(
     companions = preferences.get("companions", "solo")
     price_sensitivity = preferences.get("price_sensitivity", "low")
     trip_rigidity = preferences.get("trip_rigidity", "confirmed")
+    airline_policy = preferences.get("airline_policy", "any")
+    exclude_airlines = preferences.get("exclude_airlines") or []
     budget = _to_float(preferences.get("budget"))
 
     direct_flights = [flight for flight in flights if int(flight.get("stops") or 0) == 0]
@@ -1801,6 +1853,21 @@ def _apply_user_preferences(
         if not _matches_arrival_policy(flight, arrival_time_policy):
             excluded.append({**flight, "exclude_reason": "到达时间不符合订阅偏好"})
             continue
+        if airline_policy == "no_lcc" and _contains_any_airline(flight, LCC_AIRLINES):
+            excluded.append({**flight, "exclude_reason": "用户不接受廉航"})
+            continue
+        if exclude_airlines and _contains_any_airline(flight, exclude_airlines):
+            excluded.append({**flight, "exclude_reason": "命中用户排除航司"})
+            continue
+        if airline_policy == "prefer_full_service":
+            if _contains_any_airline(flight, FULL_SERVICE_AIRLINES):
+                flight["score_multiplier"] = max(
+                    float(flight.get("score_multiplier") or 1), 1.15
+                )
+                notes.append("偏好全服务航司")
+            elif _contains_any_airline(flight, LCC_AIRLINES):
+                penalty += 2
+                penalties.append("非全服务航司")
 
         if budget and budget > 0:
             if price > budget:
@@ -2006,8 +2073,10 @@ def analyze_all_flights(
         )
         flight["scores"] = overall_score(flight, prices, durations, mode)
         flight["transfer_risk"] = transfer_risk(flight)
+        score_multiplier = float(flight.get("score_multiplier") or 1)
         flight["preference_score"] = round(
-            flight["scores"]["total"] - float(flight.get("preference_penalty") or 0),
+            flight["scores"]["total"] * score_multiplier
+            - float(flight.get("preference_penalty") or 0),
             1,
         )
 
@@ -2147,6 +2216,66 @@ def analyze_all_flights(
         "user_preferences": user_preferences or {},
         "preference_excluded_count": len(preference_excluded),
         "preference_summary": preference_summary,
+    }
+
+
+def _top_flights_for_round_trip(analysis: dict, limit: int = 3) -> list[dict]:
+    flights = analysis.get("economy_recommendations") or analysis.get("all_flights") or []
+    return sorted(
+        [flight for flight in flights if flight.get("price") is not None],
+        key=lambda flight: flight.get("price", 999999),
+    )[:limit]
+
+
+def analyze_round_trip(outbound_analysis: dict, return_analysis: dict) -> dict:
+    """Analyze outbound and return legs together for a round-trip subscription."""
+    outbound_top = _top_flights_for_round_trip(outbound_analysis, 3)
+    return_top = _top_flights_for_round_trip(return_analysis, 3)
+    combinations = []
+
+    for outbound in outbound_top:
+        for return_flight in return_top:
+            outbound_price = _to_float(outbound.get("price"))
+            return_price = _to_float(return_flight.get("price"))
+            if outbound_price is None or return_price is None:
+                continue
+            combinations.append(
+                {
+                    "outbound": outbound,
+                    "return": return_flight,
+                    "outbound_price": outbound_price,
+                    "return_price": return_price,
+                    "total_price": outbound_price + return_price,
+                }
+            )
+
+    combinations.sort(key=lambda item: item["total_price"])
+    outbound_min = outbound_top[0].get("price") if outbound_top else None
+    return_min = return_top[0].get("price") if return_top else None
+    total_min = (
+        outbound_min + return_min
+        if outbound_min is not None and return_min is not None
+        else None
+    )
+
+    insight = None
+    if outbound_min is not None and return_min is not None:
+        total = outbound_min + return_min
+        if outbound_min < return_min * 0.8:
+            insight = f"去程好价但返程偏贵，总价¥{total:,.0f}"
+        elif return_min < outbound_min * 0.8:
+            insight = f"返程好价但去程偏贵，总价¥{total:,.0f}"
+        else:
+            insight = f"去程和返程价格相对均衡，总价¥{total:,.0f}"
+
+    return {
+        "outbound_min": outbound_min,
+        "return_min": return_min,
+        "total_min": total_min,
+        "top_combinations": combinations[:3],
+        "outbound_top3": outbound_top,
+        "return_top3": return_top,
+        "insight": insight,
     }
 
 
