@@ -135,9 +135,9 @@ AIRLINE_POLICY_LABELS = {
 }
 
 TRIP_RIGIDITY_LABELS = {
-    "confirmed": "非常确定：日期/时间不能改",
-    "mostly": "基本确定：前后一两天可以调",
-    "flexible": "比较灵活：只要便宜可以大幅调整",
+    "confirmed": "基本不会变，确定出行",
+    "mostly": "可能小幅调整日期",
+    "flexible": "不太确定，可能改期或取消",
 }
 
 PRIMARY_GOAL_LABELS = {
@@ -217,6 +217,11 @@ FORM_TEMPLATE = """
     #summary-card {
       display: none;
     }
+    .sub-options {
+      border-left: 3px solid #d7e3f7;
+      margin: 10px 0 0 10px;
+      padding-left: 12px;
+    }
     #summary-card {
       border: 1px solid #c8d6f0;
       border-radius: 8px;
@@ -277,13 +282,14 @@ FORM_TEMPLATE = """
         </div>
       </div>
 
-      <label>日期灵活度</label>
+      <label>出发日期可以调整吗？</label>
       <div class="choice">
         <label><input type="radio" name="date_flexibility" value="0" checked> 不灵活</label>
         <label><input type="radio" name="date_flexibility" value="1"> 前后1天</label>
         <label><input type="radio" name="date_flexibility" value="3"> 前后3天</label>
         <label><input type="radio" name="date_flexibility" value="7"> 前后7天</label>
       </div>
+      <p class="hint">影响系统搜索范围，选择越灵活越可能找到便宜日期</p>
 
       <label>预算上限</label>
       <input id="budget" name="budget" type="number" min="1" step="1" placeholder="例如 8000">
@@ -299,6 +305,15 @@ FORM_TEMPLATE = """
         <label><input type="radio" name="transfer_policy" value="short_ok" checked> 可以短中转（总时长不能太长）</label>
         <label><input type="radio" name="transfer_policy" value="cheap_ok"> 便宜很多可以中转</label>
         <label><input type="radio" name="transfer_policy" value="price_first"> 价格优先，中转也可以</label>
+      </div>
+      <div id="short-transfer-options" class="sub-options">
+        <label>最长可接受总行程时间</label>
+        <div class="choice">
+          <label><input type="radio" name="short_transfer_limit" value="extra_3" checked> 不超过直飞时间+3小时</label>
+          <label><input type="radio" name="short_transfer_limit" value="extra_6"> 不超过直飞时间+6小时</label>
+          <label><input type="radio" name="short_transfer_limit" value="total_18"> 不超过18小时</label>
+          <label><input type="radio" name="short_transfer_limit" value="total_24"> 不超过24小时</label>
+        </div>
       </div>
 
       <label>可接受起飞时间</label>
@@ -330,12 +345,13 @@ FORM_TEMPLATE = """
       <fieldset>
         <legend>高级偏好</legend>
 
-        <label>行程确定程度</label>
+        <label>这次行程是否可能取消或改期？</label>
         <div class="choice">
-          <label><input type="radio" name="trip_rigidity" value="confirmed" checked> 非常确定：日期/时间不能改</label>
-          <label><input type="radio" name="trip_rigidity" value="mostly"> 基本确定：前后一两天可以调</label>
-          <label><input type="radio" name="trip_rigidity" value="flexible"> 比较灵活：只要便宜可以大幅调整</label>
+          <label><input type="radio" name="trip_rigidity" value="confirmed" checked> 基本不会变，确定出行</label>
+          <label><input type="radio" name="trip_rigidity" value="mostly"> 可能小幅调整日期</label>
+          <label><input type="radio" name="trip_rigidity" value="flexible"> 不太确定，可能改期或取消</label>
         </div>
+        <p class="hint">影响退改签推荐，不确定的行程建议选择可退改机票</p>
 
         <label>可接受到达时间</label>
         <div class="choice">
@@ -418,6 +434,12 @@ FORM_TEMPLATE = """
       baggage: {"required": "必须托运", "not_needed": "不需要托运", "unknown": "不确定"},
       primary: {"price_drop_alert": "跌到合适价格时提醒我", "buy_timing": "判断现在该不该买", "cheaper_date": "帮我找更便宜的日期", "best_overall": "帮我找最合适航班"}
     };
+    const goalDefaults = {
+      price_drop_alert: ["low_price_alert"],
+      buy_timing: ["price_risk_alert", "low_price_alert"],
+      cheaper_date: ["cheaper_date"],
+      best_overall: ["better_same_day"]
+    };
 
     const form = document.getElementById('subscription-form');
     const tripRadios = document.querySelectorAll('input[name="round_trip"]');
@@ -431,6 +453,10 @@ FORM_TEMPLATE = """
     const summaryCard = document.getElementById('summary-card');
     const summaryList = document.getElementById('summary-list');
     const editButton = document.getElementById('edit-button');
+    const transferRadios = document.querySelectorAll('input[name="transfer_policy"]');
+    const shortTransferOptions = document.getElementById('short-transfer-options');
+    const primaryGoalRadios = document.querySelectorAll('input[name="primary_goal"]');
+    const secondaryGoalChecks = document.querySelectorAll('input[name="secondary_goals"]');
 
     function checkedValue(name) {
       const selected = document.querySelector(`input[name="${name}"]:checked`);
@@ -452,6 +478,18 @@ FORM_TEMPLATE = """
       budgetInput.required = checkedValue('budget_mode') === 'fixed';
     }
 
+    function toggleShortTransferOptions() {
+      shortTransferOptions.style.display =
+        checkedValue('transfer_policy') === 'short_ok' ? 'block' : 'none';
+    }
+
+    function applyDefaultSecondaryGoals() {
+      const defaults = goalDefaults[checkedValue('primary_goal')] || [];
+      secondaryGoalChecks.forEach(check => {
+        check.checked = defaults.includes(check.value);
+      });
+    }
+
     function addSummaryLine(text) {
       const li = document.createElement('li');
       li.textContent = text;
@@ -470,13 +508,17 @@ FORM_TEMPLATE = """
       if (checkedValue('round_trip') === 'true') {
         addSummaryLine(`返程日期：${returnDate.value}`);
       }
-      addSummaryLine(`日期弹性：${labels.dateFlex[checkedValue('date_flexibility')]}`);
+      addSummaryLine(`出发日期可调整：${labels.dateFlex[checkedValue('date_flexibility')]}`);
       if (budgetMode === 'fixed') {
         addSummaryLine(`预算策略：目标价¥${budget.toLocaleString('zh-CN')}`);
       } else {
         addSummaryLine(`预算策略：${labels.budgetMode[budgetMode]}`);
       }
       addSummaryLine(`中转策略：${labels.transfer[checkedValue('transfer_policy')]}`);
+      if (checkedValue('transfer_policy') === 'short_ok') {
+        const limit = document.querySelector('input[name="short_transfer_limit"]:checked');
+        addSummaryLine(`最长总行程时间：${limit ? limit.parentElement.textContent.trim() : '不超过直飞时间+3小时'}`);
+      }
       addSummaryLine(`时间要求：${labels.departure[checkedValue('departure_time_policy')]}`);
       addSummaryLine(`行李：${labels.baggage[checkedValue('baggage')]}`);
       addSummaryLine(`主目标：${labels.primary[checkedValue('primary_goal')]}`);
@@ -506,8 +548,12 @@ FORM_TEMPLATE = """
 
     tripRadios.forEach(radio => radio.addEventListener('change', toggleReturnDate));
     budgetRadios.forEach(radio => radio.addEventListener('change', toggleBudgetRequired));
+    transferRadios.forEach(radio => radio.addEventListener('change', toggleShortTransferOptions));
+    primaryGoalRadios.forEach(radio => radio.addEventListener('change', applyDefaultSecondaryGoals));
     toggleReturnDate();
     toggleBudgetRequired();
+    toggleShortTransferOptions();
+    applyDefaultSecondaryGoals();
   </script>
 </body>
 </html>
@@ -602,6 +648,16 @@ def parse_optional_budget(value: str | None, budget_mode: str) -> int | None:
     return parse_int(value, 0)
 
 
+def parse_short_transfer_limit(value: str | None) -> tuple[int | None, int | None]:
+    if value == "extra_6":
+        return 6, None
+    if value == "total_18":
+        return None, 18
+    if value == "total_24":
+        return None, 24
+    return 3, None
+
+
 def first_push_text() -> str:
     next_time = datetime.now() + timedelta(minutes=10)
     return next_time.strftime("%Y-%m-%d %H:%M")
@@ -614,6 +670,12 @@ def build_subscription(form) -> dict:
         or form.get("origin_select", "").strip().upper()
     )
     budget_mode = form.get("budget_mode", "fixed")
+    max_extra_duration_hours = None
+    max_total_duration_hours = None
+    if form.get("transfer_policy", "short_ok") == "short_ok":
+        max_extra_duration_hours, max_total_duration_hours = parse_short_transfer_limit(
+            form.get("short_transfer_limit")
+        )
     return {
         "origin": origin,
         "destination": normalize_destination(form.get("destination", "")),
@@ -628,6 +690,8 @@ def build_subscription(form) -> dict:
             "budget": parse_optional_budget(form.get("budget"), budget_mode),
             "budget_mode": budget_mode,
             "transfer_policy": form.get("transfer_policy", "short_ok"),
+            "max_extra_duration_hours": max_extra_duration_hours,
+            "max_total_duration_hours": max_total_duration_hours,
             "departure_time_policy": form.get("departure_time_policy", "no_redeye"),
             "arrival_time_policy": form.get("arrival_time_policy", "any"),
             "baggage": form.get("baggage", "required"),

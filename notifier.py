@@ -935,11 +935,53 @@ def _price_sensitivity_label(value: str) -> str:
 
 def _trip_rigidity_guidance(value: str) -> str:
     mapping = {
-        "confirmed": "行程很确定：更偏向尽早锁定合适价格。",
-        "mostly": "行程基本确定：可以再观察1-2天，但遇到预算内方案不宜拖太久。",
-        "flexible": "行程比较灵活：可以等更低价，也可以关注前后日期。",
+        "confirmed": "基本不会变，确定出行。",
+        "mostly": "可能小幅调整日期。",
+        "flexible": "不太确定，可能改期或取消。",
     }
     return mapping.get(value or "confirmed", mapping["confirmed"])
+
+
+def _flight_has_refund_change(flight: dict) -> bool:
+    fare_rules = flight.get("fare_rules") or {}
+    change_rules = fare_rules.get("change") or {}
+    refund_rules = fare_rules.get("refund") or {}
+    extra = flight.get("extra") or {}
+    refund_change = extra.get("refund_change") or {}
+    return bool(
+        change_rules.get("allowed")
+        or refund_rules.get("allowed")
+        or refund_change.get("changeable")
+        or refund_change.get("refundable")
+        or extra.get("changeable")
+        or extra.get("refundable")
+    )
+
+
+def _refund_rigidity_tip(route_info: dict, analysis_result: dict) -> str | None:
+    trip_rigidity = _preference_value(route_info, analysis_result, "trip_rigidity", "confirmed")
+    refund_flexibility = _preference_value(route_info, analysis_result, "refund_flexibility", "unknown")
+    if trip_rigidity == "flexible" and refund_flexibility == "not_needed":
+        return "💡 您的行程存在变动可能，建议关注可退改方案"
+    if trip_rigidity != "confirmed" or refund_flexibility != "required":
+        return None
+
+    flights = analysis_result.get("all_flights") or []
+    flexible_prices = [
+        _to_float(flight.get("price"))
+        for flight in flights
+        if _flight_has_refund_change(flight) and _to_float(flight.get("price"))
+    ]
+    locked_prices = [
+        _to_float(flight.get("price"))
+        for flight in flights
+        if not _flight_has_refund_change(flight) and _to_float(flight.get("price"))
+    ]
+    if flexible_prices and locked_prices:
+        diff = min(flexible_prices) - min(locked_prices)
+        if diff > 0:
+            return f"💡 行程已确定，选择不可退改的票可能更便宜¥{diff:,.0f}"
+    return "💡 行程已确定，选择不可退改的票可能更便宜"
 
 
 def _price_sensitivity_flight_note(flight: dict, all_flights: list[dict], sensitivity: str) -> str | None:
@@ -2711,6 +2753,9 @@ def format_html_message(
             lines.append(f"👪 同行人员：{_companions_label(companions)}，优先关注白天、少折腾、行李和退改更稳的方案")
         lines.append(f"💰 价格敏感度：{_price_sensitivity_label(price_sensitivity)}")
         lines.append(f"🧭 行程刚性：{_trip_rigidity_guidance(trip_rigidity)}")
+        refund_tip = _refund_rigidity_tip(route_info, analysis_result)
+        if refund_tip:
+            lines.append(refund_tip)
         lines.append("")
 
         current_min = (

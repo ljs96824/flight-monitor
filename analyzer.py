@@ -1832,11 +1832,29 @@ def _apply_user_preferences(
     airline_policy = preferences.get("airline_policy", "any")
     exclude_airlines = preferences.get("exclude_airlines") or []
     budget = _to_float(preferences.get("budget"))
+    max_extra_duration_hours = _to_float(preferences.get("max_extra_duration_hours"))
+    max_total_duration_hours = _to_float(preferences.get("max_total_duration_hours"))
 
     direct_flights = [flight for flight in flights if int(flight.get("stops") or 0) == 0]
     non_red_eye_flights = [flight for flight in flights if not _is_red_eye(flight)]
     cheapest_direct = _cheapest_price(direct_flights)
     cheapest_non_red_eye = _cheapest_price(non_red_eye_flights)
+    direct_durations = [
+        int(flight.get("total_duration_min") or 0)
+        for flight in direct_flights
+        if int(flight.get("total_duration_min") or 0) > 0
+    ]
+    all_durations = [
+        int(flight.get("total_duration_min") or 0)
+        for flight in flights
+        if int(flight.get("total_duration_min") or 0) > 0
+    ]
+    duration_baseline = min(direct_durations or all_durations) if all_durations else None
+    duration_limit_minutes = None
+    if max_total_duration_hours:
+        duration_limit_minutes = int(max_total_duration_hours * 60)
+    elif max_extra_duration_hours is not None and duration_baseline:
+        duration_limit_minutes = int(duration_baseline + max_extra_duration_hours * 60)
 
     kept = []
     excluded = []
@@ -1888,6 +1906,14 @@ def _apply_user_preferences(
 
         if transfer_policy == "short_ok" and stops > 0:
             total_minutes = int(flight.get("total_duration_min") or 0)
+            if duration_limit_minutes and total_minutes > duration_limit_minutes:
+                excluded.append(
+                    {
+                        **flight,
+                        "exclude_reason": "超过短中转最长可接受总行程时间",
+                    }
+                )
+                continue
             if total_minutes > 24 * 60:
                 penalty += 2
                 penalties.append("中转总时长偏长")

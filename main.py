@@ -159,6 +159,12 @@ def _normalize_subscription(item: dict) -> dict:
         "return_date_flexibility": item.get("return_date_flexibility", 0),
         "direct_only": _map_transfer_policy(transfer_policy),
         "transfer_policy": transfer_policy or "short_ok",
+        "max_extra_duration_hours": hard_constraints.get(
+            "max_extra_duration_hours", item.get("max_extra_duration_hours")
+        ),
+        "max_total_duration_hours": hard_constraints.get(
+            "max_total_duration_hours", item.get("max_total_duration_hours")
+        ),
         "red_eye": _map_red_eye_policy(red_eye_policy),
         "red_eye_policy": red_eye_policy or "not_allowed",
         "departure_time_policy": departure_time_policy,
@@ -236,6 +242,8 @@ def subscription_preferences(sub: dict) -> dict:
         "return_date_flexibility": sub.get("return_date_flexibility", 0),
         "airline_policy": sub.get("airline_policy", "any"),
         "exclude_airlines": sub.get("exclude_airlines", []),
+        "max_extra_duration_hours": sub.get("max_extra_duration_hours"),
+        "max_total_duration_hours": sub.get("max_total_duration_hours"),
     }
 
 
