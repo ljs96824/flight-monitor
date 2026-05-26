@@ -1340,24 +1340,43 @@ def _flight_airlines(flight: dict) -> list[str]:
     return airlines
 
 
-def generate_booking_links(origin, dest, date, airlines=None):
-    """返回 [(名称, URL)] 列表"""
-    links = [
-        ("携程", f"https://flights.ctrip.com/online/list/oneway-{origin}-{dest}?depdate={date}"),
-        ("飞猪", f"https://www.fliggy.com/flight/international-search?from={origin}&to={dest}&depDate={date}"),
-        ("Google Flights", f"https://www.google.com/travel/flights?q=flights+from+{origin}+to+{dest}+on+{date}"),
-    ]
-    if airlines:
-        airline_str = " ".join(str(airline) for airline in airlines)
-        if "美航" in airline_str or "American" in airline_str or "AA" in airline_str:
-            links.append(("美航官网", "https://www.aa.com"))
-        if "加航" in airline_str or "Air Canada" in airline_str or "AC" in airline_str:
-            links.append(("加航官网", "https://www.aircanada.com"))
-        if "联合" in airline_str or "United" in airline_str or "UA" in airline_str:
-            links.append(("联合官网", "https://www.united.com"))
-        if "达美" in airline_str or "Delta" in airline_str or "DL" in airline_str:
-            links.append(("达美官网", "https://www.delta.com"))
-    return links
+def generate_booking_links(origin, dest, date_str, flight_nos=None, cabin="economy"):
+    """Generate clickable booking links for a one-way flight search."""
+    origin = str(origin or "").upper()
+    dest = str(dest or "").upper()
+    date_str = str(date_str or "")
+    cabin_code = "c" if str(cabin or "").lower() == "business" else "y"
+    trip_class = "C" if str(cabin or "").lower() == "business" else "Y"
+    style = "color:#1a73e8;text-decoration:underline;"
+    links = []
+
+    google_url = (
+        f"https://www.google.com/travel/flights?"
+        f"q=Flights+from+{origin}+to+{dest}+on+{date_str}"
+        f"&curr=CNY&hl=zh-CN"
+    )
+    links.append(f'<a href="{google_url}" style="{style}">Google Flights</a>')
+
+    ctrip_url = (
+        f"https://flights.ctrip.com/online/list/oneway-{origin}-{dest}"
+        f"?depdate={date_str}&cabin={cabin_code}"
+    )
+    links.append(f'<a href="{ctrip_url}" style="{style}">携程</a>')
+
+    feizhu_url = (
+        f"https://www.fliggy.com/flight/international-search?"
+        f"depCity={origin}&arrCity={dest}&depDate={date_str}"
+    )
+    links.append(f'<a href="{feizhu_url}" style="{style}">飞猪</a>')
+
+    trip_url = (
+        f"https://www.trip.com/flights/{origin}-to-{dest}/tickets-"
+        f"{origin.lower()}-{dest.lower()}?dcity={origin}&acity={dest}"
+        f"&ddate={date_str}&class={trip_class}"
+    )
+    links.append(f'<a href="{trip_url}" style="{style}">Trip.com</a>')
+
+    return " | ".join(links)
 
 
 def _format_html_baggage(extra: dict) -> str:
@@ -2834,10 +2853,28 @@ def _month_day_time(value: str | None, fallback_date: str | None = None) -> str:
     return f"{display_date} {time_text}".strip()
 
 
+def _flight_search_date(flight: dict, fallback_date: str | None = None) -> str:
+    segments = flight.get("segments") or []
+    dep_time = str((segments[0] if segments else {}).get("dep_time") or "")
+    if len(dep_time) >= 10:
+        return dep_time[:10]
+    return str(fallback_date or "")
+
+
 def _time_with_timezone(time_text: str, airport_code: str, show_timezone: bool) -> str:
     if not show_timezone:
         return time_text
     return f"{time_text}({get_airport_timezone(airport_code)})"
+
+
+def _booking_link(origin: str, dest: str, date_str: str, label: str) -> str:
+    style = "color:#1a73e8;text-decoration:underline;"
+    url = (
+        f"https://www.google.com/travel/flights?"
+        f"q=Flights+from+{origin}+to+{dest}+on+{date_str}"
+        f"&curr=CNY&hl=zh-CN"
+    )
+    return f'<a href="{url}" style="{style}">{label}</a>'
 
 
 def _round_trip_aircraft_text(flight: dict) -> str:
@@ -2892,13 +2929,28 @@ def format_flight_detail(flight: dict, date_str: str | None = None, label: str |
         )
     arr_time = _time_only(last_segment.get("arr_time")) if segments else ""
     arr_text = _time_with_timezone(arr_time, arr_airport, show_timezone) if arr_time else "时间待确认"
+    search_date = _flight_search_date(flight, date_str)
+    booking_links = (
+        generate_booking_links(
+            dep_airport,
+            arr_airport,
+            search_date,
+            flight_no,
+            flight.get("cabin_class") or "economy",
+        )
+        if dep_airport and arr_airport and search_date
+        else ""
+    )
     prefix = f"{label}: " if label else ""
-    return (
+    detail = (
         f"{prefix}{flight_no} {airline} | {price_text}<br>"
         f"  {dep_text}起飞 → {arr_text}到达 | {_round_trip_stops_text(flight)} "
         f"{_round_trip_duration_text(flight)} | {_flight_slot_label(flight)} | "
         f"机型: {_round_trip_aircraft_text(flight)}"
     )
+    if booking_links:
+        detail += f"<br>  🔗 去购买: {booking_links}"
+    return detail
 
 
 def _round_trip_option_line(index: int, flight: dict, date_str: str | None = None) -> str:
@@ -2931,6 +2983,21 @@ def _append_simple_top3(lines: list[str], title: str, flights: list[dict] | None
     _append_round_trip_recommendations(lines, title, "", "", "", flights, 3)
 
 
+def _round_trip_combo_flight_line(prefix: str, flight: dict, date_str: str | None) -> str:
+    segments = flight.get("segments") or []
+    first_segment = segments[0] if segments else {}
+    last_segment = segments[-1] if segments else {}
+    origin = first_segment.get("dep_airport") or first_segment.get("departure_airport")
+    dest = last_segment.get("arr_airport") or last_segment.get("arrival_airport")
+    search_date = _flight_search_date(flight, date_str)
+    label = "购买去程" if prefix == "去" else "购买返程"
+    link = _booking_link(origin, dest, search_date, label) if origin and dest and search_date else label
+    return (
+        f"  {prefix}: {_compact_flight_numbers(flight)} {_round_trip_airline_text(flight)} "
+        f"{_price_text(flight.get('price'))} | 🔗 {link}"
+    )
+
+
 def _append_round_trip_combo_lines(lines: list[str], combinations: list[dict]) -> None:
     if not combinations:
         return
@@ -2948,10 +3015,10 @@ def _append_round_trip_combo_lines(lines: list[str], combinations: list[dict]) -
         lines.append(f"组合{index}: 总价{total_text}")
         if outbound:
             outbound_date = combo.get("outbound_date") or outbound.get("depart_date")
-            lines.append(f"  去: {format_flight_detail(outbound, outbound_date)}")
+            lines.append(_round_trip_combo_flight_line("去", outbound, outbound_date))
         if return_flight:
             return_date = combo.get("return_date") or return_flight.get("depart_date")
-            lines.append(f"  回: {format_flight_detail(return_flight, return_date)}")
+            lines.append(_round_trip_combo_flight_line("回", return_flight, return_date))
         lines.append("")
 
 
