@@ -6,6 +6,7 @@ import os
 import re
 from datetime import date, datetime
 from pathlib import Path
+from urllib.parse import quote_plus
 
 import httpx
 
@@ -1340,6 +1341,17 @@ def _flight_airlines(flight: dict) -> list[str]:
     return airlines
 
 
+def _clean_flight_numbers(flight_nos) -> tuple[str, str]:
+    if isinstance(flight_nos, str):
+        numbers = re.split(r"[+,/]\s*", flight_nos)
+    else:
+        numbers = [str(item) for item in (flight_nos or [])]
+    numbers = [number.strip() for number in numbers if number and number.strip()]
+    display = " ".join(numbers).strip()
+    compact = "".join(re.sub(r"\s+", "", number) for number in numbers)
+    return display, compact
+
+
 def generate_booking_links(origin, dest, date_str, flight_nos=None, cabin="economy"):
     """Generate clickable booking links for a one-way flight search."""
     origin = str(origin or "").upper()
@@ -1347,32 +1359,40 @@ def generate_booking_links(origin, dest, date_str, flight_nos=None, cabin="econo
     date_str = str(date_str or "")
     cabin_code = "c" if str(cabin or "").lower() == "business" else "y"
     trip_class = "C" if str(cabin or "").lower() == "business" else "Y"
+    flight_no_display, flight_no_clean = _clean_flight_numbers(flight_nos)
     style = "color:#1a73e8;text-decoration:underline;"
     links = []
 
-    google_url = (
-        f"https://www.google.com/travel/flights?"
-        f"q=Flights+from+{origin}+to+{dest}+on+{date_str}"
-        f"&curr=CNY&hl=zh-CN"
+    google_query = " ".join(
+        part for part in [flight_no_display, date_str, origin, "to", dest, "flight"] if part
     )
+    google_url = f"https://www.google.com/search?q={quote_plus(google_query)}"
     links.append(f'<a href="{google_url}" style="{style}">Google Flights</a>')
 
     ctrip_url = (
         f"https://flights.ctrip.com/online/list/oneway-{origin}-{dest}"
-        f"?depdate={date_str}&cabin={cabin_code}"
+        f"?depdate={date_str}&cabin={cabin_code}&flightno={quote_plus(flight_no_clean)}"
     )
     links.append(f'<a href="{ctrip_url}" style="{style}">携程</a>')
 
     feizhu_url = (
         f"https://www.fliggy.com/flight/international-search?"
         f"depCity={origin}&arrCity={dest}&depDate={date_str}"
+        f"&flightNo={quote_plus(flight_no_clean)}"
     )
     links.append(f'<a href="{feizhu_url}" style="{style}">飞猪</a>')
+
+    qunar_url = (
+        f"https://flight.qunar.com/site/oneway_list.htm?"
+        f"searchDepartureAirport={origin}&searchArrivalAirport={dest}"
+        f"&searchDepartureTime={date_str}&flightNo={quote_plus(flight_no_clean)}"
+    )
+    links.append(f'<a href="{qunar_url}" style="{style}">去哪儿</a>')
 
     trip_url = (
         f"https://www.trip.com/flights/{origin}-to-{dest}/tickets-"
         f"{origin.lower()}-{dest.lower()}?dcity={origin}&acity={dest}"
-        f"&ddate={date_str}&class={trip_class}"
+        f"&ddate={date_str}&class={trip_class}&flightno={quote_plus(flight_no_clean)}"
     )
     links.append(f'<a href="{trip_url}" style="{style}">Trip.com</a>')
 
@@ -2861,6 +2881,22 @@ def _flight_search_date(flight: dict, fallback_date: str | None = None) -> str:
     return str(fallback_date or "")
 
 
+def _collected_time_text(flight: dict) -> str:
+    raw_value = (
+        flight.get("collected_at")
+        or flight.get("snapshot_time")
+        or flight.get("fetched_at")
+    )
+    if raw_value:
+        try:
+            return datetime.fromisoformat(str(raw_value).replace("Z", "+00:00")).strftime("%H:%M")
+        except ValueError:
+            time_text = _time_only(str(raw_value))
+            if time_text:
+                return time_text
+    return datetime.now().strftime("%H:%M")
+
+
 def _time_with_timezone(time_text: str, airport_code: str, show_timezone: bool) -> str:
     if not show_timezone:
         return time_text
@@ -2870,10 +2906,25 @@ def _time_with_timezone(time_text: str, airport_code: str, show_timezone: bool) 
 def _booking_link(origin: str, dest: str, date_str: str, label: str) -> str:
     style = "color:#1a73e8;text-decoration:underline;"
     url = (
-        f"https://www.google.com/travel/flights?"
-        f"q=Flights+from+{origin}+to+{dest}+on+{date_str}"
-        f"&curr=CNY&hl=zh-CN"
+        f"https://www.google.com/search?"
+        f"q={quote_plus(' '.join(part for part in [date_str, origin, 'to', dest, 'flight'] if part))}"
     )
+    return f'<a href="{url}" style="{style}">{label}</a>'
+
+
+def _flight_booking_link(flight: dict, date_str: str | None, label: str) -> str:
+    segments = flight.get("segments") or []
+    first_segment = segments[0] if segments else {}
+    last_segment = segments[-1] if segments else {}
+    origin = first_segment.get("dep_airport") or first_segment.get("departure_airport")
+    dest = last_segment.get("arr_airport") or last_segment.get("arrival_airport")
+    search_date = _flight_search_date(flight, date_str)
+    flight_no = _compact_flight_numbers(flight)
+    style = "color:#1a73e8;text-decoration:underline;"
+    query = " ".join(
+        part for part in [flight_no, search_date, origin, "to", dest, "flight"] if part
+    )
+    url = f"https://www.google.com/search?q={quote_plus(query)}"
     return f'<a href="{url}" style="{style}">{label}</a>'
 
 
@@ -2950,6 +3001,7 @@ def format_flight_detail(flight: dict, date_str: str | None = None, label: str |
     )
     if booking_links:
         detail += f"<br>  🔗 去购买: {booking_links}"
+        detail += f"<br>  ⏱ 价格采集于 {_collected_time_text(flight)}，实际价格以购买页为准"
     return detail
 
 
@@ -2984,14 +3036,8 @@ def _append_simple_top3(lines: list[str], title: str, flights: list[dict] | None
 
 
 def _round_trip_combo_flight_line(prefix: str, flight: dict, date_str: str | None) -> str:
-    segments = flight.get("segments") or []
-    first_segment = segments[0] if segments else {}
-    last_segment = segments[-1] if segments else {}
-    origin = first_segment.get("dep_airport") or first_segment.get("departure_airport")
-    dest = last_segment.get("arr_airport") or last_segment.get("arrival_airport")
-    search_date = _flight_search_date(flight, date_str)
     label = "购买去程" if prefix == "去" else "购买返程"
-    link = _booking_link(origin, dest, search_date, label) if origin and dest and search_date else label
+    link = _flight_booking_link(flight, date_str, label)
     return (
         f"  {prefix}: {_compact_flight_numbers(flight)} {_round_trip_airline_text(flight)} "
         f"{_price_text(flight.get('price'))} | 🔗 {link}"
@@ -3370,6 +3416,9 @@ def format_html_message(
         from datetime import datetime
         collected_at = datetime.now().strftime("%Y-%m-%d %H:%M")
         lines.append(f"数据采集于 {collected_at} | 价格可能随时变动，建议尽快确认")
+        lines.append("💡 机票价格实时波动，推荐方案基于采集时数据。")
+        lines.append("点击链接后如价格有变化属于正常现象。")
+        lines.append("如果涨价幅度超过5%，系统会在下次采集时提醒你。")
         lines.append("")
         lines.append("━━━━━━━━━━━━━━━━")
         lines.append("以上数据来自第三方API，仅供参考。")
