@@ -46,6 +46,21 @@ ANALYSIS_LOG = DATA_DIR / "analysis_log.jsonl"
 SUBSCRIPTIONS_PATH = DATA_DIR / "subscriptions.json"
 
 
+def _as_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "1", "yes", "y", "on"}
+    return bool(value)
+
+
+def _valid_price(value) -> bool:
+    try:
+        return float(value) > 0
+    except (TypeError, ValueError):
+        return False
+
+
 def _map_transfer_policy(policy: str | None) -> str:
     mapping = {
         "direct_only": "must",
@@ -113,6 +128,8 @@ def _normalize_subscription(item: dict) -> dict:
     hard_constraints = item.get("hard_constraints") or {}
     soft_preferences = item.get("soft_preferences") or {}
     notification_goals = item.get("notification_goals") or {}
+    return_date = item.get("return_date") or hard_constraints.get("return_date")
+    round_trip = _as_bool(item.get("round_trip", hard_constraints.get("round_trip", False)))
 
     legacy_budget = hard_constraints.get("budget", item.get("budget"))
     max_budget = hard_constraints.get(
@@ -143,6 +160,26 @@ def _normalize_subscription(item: dict) -> dict:
     arrival_time_policy = hard_constraints.get(
         "arrival_time_policy", item.get("arrival_time_policy", "any")
     )
+    preferred_departure_slots = hard_constraints.get(
+        "preferred_departure_slots", item.get("preferred_departure_slots")
+    )
+    preferred_arrival_slots = hard_constraints.get(
+        "preferred_arrival_slots", item.get("preferred_arrival_slots")
+    )
+    departure_slots = hard_constraints.get("departure_slots", item.get("departure_slots"))
+    arrival_slots = hard_constraints.get("arrival_slots", item.get("arrival_slots"))
+    outbound_departure_slots = hard_constraints.get(
+        "outbound_departure_slots", item.get("outbound_departure_slots")
+    )
+    outbound_arrival_slots = hard_constraints.get(
+        "outbound_arrival_slots", item.get("outbound_arrival_slots")
+    )
+    return_departure_slots = hard_constraints.get(
+        "return_departure_slots", item.get("return_departure_slots")
+    )
+    return_arrival_slots = hard_constraints.get(
+        "return_arrival_slots", item.get("return_arrival_slots")
+    )
     baggage = hard_constraints.get("baggage", item.get("need_baggage", "unknown"))
     refund_flexibility = hard_constraints.get(
         "refund_flexibility", item.get("refund_flexibility", "unknown")
@@ -166,8 +203,8 @@ def _normalize_subscription(item: dict) -> dict:
         "max_budget_mode": max_budget_mode,
         "target_price": target_price,
         "target_price_mode": target_price_mode,
-        "return_date": item.get("return_date"),
-        "round_trip": bool(item.get("round_trip", False)),
+        "return_date": return_date,
+        "round_trip": round_trip,
         "date_flexibility": item.get("date_flexibility", 0),
         "return_date_flexibility": item.get("return_date_flexibility", 0),
         "direct_only": _map_transfer_policy(transfer_policy),
@@ -182,6 +219,14 @@ def _normalize_subscription(item: dict) -> dict:
         "red_eye_policy": red_eye_policy or "not_allowed",
         "departure_time_policy": departure_time_policy,
         "arrival_time_policy": arrival_time_policy,
+        "preferred_departure_slots": preferred_departure_slots,
+        "preferred_arrival_slots": preferred_arrival_slots,
+        "departure_slots": departure_slots,
+        "arrival_slots": arrival_slots,
+        "outbound_departure_slots": outbound_departure_slots,
+        "outbound_arrival_slots": outbound_arrival_slots,
+        "return_departure_slots": return_departure_slots,
+        "return_arrival_slots": return_arrival_slots,
         "need_baggage": baggage,
         "refund_flexibility": refund_flexibility,
         "airline_policy": hard_constraints.get(
@@ -204,6 +249,11 @@ def _normalize_subscription(item: dict) -> dict:
         "cabin_classes": item.get("cabin_classes"),
         "priorities": item.get("priorities"),
     }
+
+
+def normalize_subscription(item: dict) -> dict:
+    """Public wrapper used by web_form for immediate single-subscription runs."""
+    return _normalize_subscription(item)
 
 
 def load_file_subscriptions() -> list[dict]:
@@ -240,6 +290,14 @@ def subscription_preferences(sub: dict) -> dict:
         "red_eye_policy": sub.get("red_eye_policy", "not_allowed"),
         "departure_time_policy": sub.get("departure_time_policy", "after_06"),
         "arrival_time_policy": sub.get("arrival_time_policy", "any"),
+        "preferred_departure_slots": sub.get("preferred_departure_slots"),
+        "preferred_arrival_slots": sub.get("preferred_arrival_slots"),
+        "departure_slots": sub.get("departure_slots"),
+        "arrival_slots": sub.get("arrival_slots"),
+        "outbound_departure_slots": sub.get("outbound_departure_slots"),
+        "outbound_arrival_slots": sub.get("outbound_arrival_slots"),
+        "return_departure_slots": sub.get("return_departure_slots"),
+        "return_arrival_slots": sub.get("return_arrival_slots"),
         "need_baggage": sub.get("need_baggage", "unknown"),
         "refund_flexibility": sub.get("refund_flexibility", "unknown"),
         "trip_type": sub.get("trip_type", "tourism"),
@@ -316,7 +374,7 @@ def collect_nearby_dates(
                 prices = [
                     flight.get("price")
                     for flight in flights
-                    if flight.get("price") is not None
+                    if _valid_price(flight.get("price"))
                 ]
                 stage_results.append(
                     {
@@ -348,6 +406,263 @@ def collect_nearby_dates(
             break
     return results
 
+def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
+    """Process one subscription once and send the generated notification."""
+    if ensure_db:
+        init_db()
+
+    route = f"{sub['origin']}-{sub['destination']}"
+    logging.info(f"开始处理 {route}")
+
+    try:
+        search_sources, enrichment_sources = build_default_sources()
+        agg = FlightAggregator(search_sources, enrichment_sources)
+        data = agg.collect(
+            sub["origin"],
+            sub["destination"],
+            sub["depart_date"],
+            cabin_classes=sub.get("cabin_classes"),
+        )
+
+        if data is None or not data.get("flights"):
+            logging.error(f"{route} 采集返回空")
+            return False
+
+        normalized_flights = [
+            _normalize_detail_flight(
+                flight, flight.get("data_source") or flight.get("source")
+            )
+            for flight in data.get("flights", [])
+        ]
+        flights = [
+            flight
+            for flight in normalized_flights
+            if _valid_price(flight.get("price"))
+        ]
+        print(f"[价格检查] 有效价格航班: {len(flights)}/{len(normalized_flights)}")
+        data["flights"] = flights
+        data["total_count"] = len(flights)
+
+        save_flight_details(route, sub["depart_date"], flights)
+        previous_prices = get_previous_snapshot_prices(route, sub["depart_date"])
+        lowest_price_history = get_lowest_price_history(
+            route, sub["depart_date"], limit=14
+        )
+        for flight in flights:
+            combo = flight.get("flight_combo")
+            if combo and combo in previous_prices:
+                flight["previous_price"] = previous_prices[combo]
+        save_raw_response(route, sub["depart_date"], data)
+        logging.info(f"{route} 存储{data.get('total_count', 0)}个航班方案")
+
+        preferences = subscription_preferences(sub)
+        analysis = analyze_all_flights(
+            flights,
+            data.get("price_insights"),
+            mode=sub.get("mode", "balanced"),
+            priorities=sub.get("priorities"),
+            user_preferences=preferences,
+            hard_constraints=sub.get("hard_constraints", {}),
+        )
+        days_to_dept = (date.fromisoformat(sub["depart_date"]) - date.today()).days
+        current_min_price = (
+            analysis.get("price_range", [0])[0] if analysis.get("price_range") else 0
+        )
+        nearby_dates = collect_nearby_dates(
+            agg,
+            sub,
+            cabin_classes=sub.get("cabin_classes"),
+            target_min_price=current_min_price,
+        )
+        price_history = (data.get("price_insights") or {}).get("price_history")
+        analysis["days_to_dept"] = days_to_dept
+        analysis["budget"] = sub.get("budget")
+        analysis["budget_mode"] = sub.get("budget_mode", "fixed")
+        analysis["goals"] = sub.get("goals", [])
+        analysis["notification_goals"] = sub.get("notification_goals", {})
+        analysis["hard_constraints"] = sub.get("hard_constraints", {})
+        analysis["soft_preferences"] = sub.get("soft_preferences", {})
+        analysis["nearby_dates"] = nearby_dates
+        analysis["source_stats"] = data.get("source_stats", {})
+        analysis["price_position"] = price_position_description(
+            current_min_price, price_history
+        )
+        analysis["waiting_risk"] = waiting_risk_description(
+            price_history, current_min_price, days_to_dept
+        )
+
+        raw_round_trip = sub.get("round_trip", False)
+        raw_return_date = sub.get("return_date") or sub.get("hard_constraints", {}).get("return_date")
+        print(f"[往返] round_trip={raw_round_trip}")
+        print(f"[往返] return_date={raw_return_date}")
+        round_trip = _as_bool(raw_round_trip)
+        return_date = raw_return_date
+        return_analysis = None
+
+        if round_trip and return_date:
+            return_route = f"{sub['destination']}-{sub['origin']}"
+            return_origin = sub["destination"]
+            return_dest = sub["origin"]
+            print(f"[往返] 开始采集返程 {return_route} {return_date}")
+            print(f"[DEBUG] 开始采集返程: {return_origin}→{return_dest} {return_date}")
+            return_data = agg.collect(
+                return_origin,
+                return_dest,
+                return_date,
+                cabin_classes=sub.get("cabin_classes"),
+            )
+            normalized_return_flights = [
+                _normalize_detail_flight(
+                    flight, flight.get("data_source") or flight.get("source")
+                )
+                for flight in (return_data or {}).get("flights", [])
+            ]
+            return_flights = [
+                flight
+                for flight in normalized_return_flights
+                if _valid_price(flight.get("price"))
+            ]
+            print(
+                f"[价格检查] 返程有效价格航班: "
+                f"{len(return_flights)}/{len(normalized_return_flights)}"
+            )
+            print(f"[往返] 返程采集结果={len(return_flights)}个航班")
+            print(f"[DEBUG] 返程采集完成: {len(return_flights)}个航班")
+            if return_flights:
+                save_flight_details(return_route, return_date, return_flights)
+                save_raw_response(return_route, return_date, return_data)
+                return_preferences = {
+                    **preferences,
+                    "direction": "return",
+                    "departure_slots": sub.get("return_departure_slots"),
+                    "arrival_slots": sub.get("return_arrival_slots"),
+                    "preferred_departure_slots": sub.get("return_departure_slots"),
+                    "preferred_arrival_slots": sub.get("return_arrival_slots"),
+                }
+                return_constraints = {
+                    **(sub.get("hard_constraints", {}) or {}),
+                    "direction": "return",
+                    "departure_slots": sub.get("return_departure_slots"),
+                    "arrival_slots": sub.get("return_arrival_slots"),
+                    "preferred_departure_slots": sub.get("return_departure_slots"),
+                    "preferred_arrival_slots": sub.get("return_arrival_slots"),
+                }
+                return_analysis = analyze_all_flights(
+                    return_flights,
+                    (return_data or {}).get("price_insights"),
+                    mode=sub.get("mode", "balanced"),
+                    priorities=sub.get("priorities"),
+                    user_preferences=return_preferences,
+                    hard_constraints=return_constraints,
+                )
+                return_min_price = (
+                    return_analysis.get("price_range", [0])[0]
+                    if return_analysis.get("price_range")
+                    else 0
+                )
+                return_sub = {
+                    **sub,
+                    "origin": sub["destination"],
+                    "destination": sub["origin"],
+                    "depart_date": return_date,
+                    "date_flexibility": sub.get("return_date_flexibility", 0),
+                }
+                return_nearby_dates = collect_nearby_dates(
+                    agg,
+                    return_sub,
+                    cabin_classes=sub.get("cabin_classes"),
+                    target_min_price=return_min_price,
+                )
+                return_analysis["days_to_dept"] = (
+                    date.fromisoformat(return_date) - date.today()
+                ).days
+                return_analysis["nearby_dates"] = return_nearby_dates
+                analysis["return_analysis"] = return_analysis
+                analysis["round_trip_analysis"] = analyze_round_trip(
+                    analysis, return_analysis
+                )
+                analysis["round_trip"] = True
+                print("[往返] return_analysis 已传入 format_html_message")
+            else:
+                print("[往返] 返程采集为空，无法生成 return_analysis")
+            print(f"[DEBUG] 返程analysis是否存在: {return_analysis is not None}")
+        elif round_trip:
+            print("[往返] 缺少 return_date，跳过返程采集")
+            print(f"[DEBUG] 返程analysis是否存在: {return_analysis is not None}")
+
+        signal_record = log_signal(
+            route=route,
+            depart_date=sub["depart_date"],
+            analysis_result=analysis,
+            price_insights=data.get("price_insights"),
+        )
+        analysis["confidence"] = signal_record.get("confidence")
+        analysis["system_health"] = system_health_check(
+            source_stats=data.get("source_stats", {}),
+            flights=flights,
+            analysis_result=analysis,
+        )
+
+        log_entry = {**analysis, "logged_at": datetime.now().isoformat()}
+        with ANALYSIS_LOG.open("a", encoding="utf-8") as file:
+            file.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+
+        message_kwargs = {
+            "analysis_result": analysis,
+            "outbound_analysis": analysis,
+            "return_analysis": return_analysis,
+            "route_info": {
+                "origin": sub["origin"],
+                "destination": sub["destination"],
+                "depart_date": sub["depart_date"],
+                "cabin_classes": sub.get("cabin_classes"),
+                "mode": sub.get("mode", "balanced"),
+                "priorities": sub.get("priorities"),
+                "budget": sub.get("budget"),
+                "budget_mode": sub.get("budget_mode"),
+                "return_date": return_date,
+                "return_date_flexibility": sub.get("return_date_flexibility", 0),
+                "round_trip": round_trip,
+                "date_flexibility": sub.get("date_flexibility", 0),
+                "direct_only": sub.get("direct_only", "flexible"),
+                "transfer_policy": sub.get("transfer_policy", "short_ok"),
+                "red_eye": sub.get("red_eye", "reject"),
+                "red_eye_policy": sub.get("red_eye_policy", "not_allowed"),
+                "departure_time_policy": sub.get("departure_time_policy", "after_06"),
+                "arrival_time_policy": sub.get("arrival_time_policy", "any"),
+                "need_baggage": sub.get("need_baggage", "unknown"),
+                "refund_flexibility": sub.get("refund_flexibility", "unknown"),
+                "trip_type": sub.get("trip_type", "tourism"),
+                "companions": sub.get("companions", "solo"),
+                "price_sensitivity": sub.get("price_sensitivity", "low"),
+                "trip_rigidity": sub.get("trip_rigidity", "confirmed"),
+                "goals": sub.get("goals", []),
+                "max_budget": sub.get("max_budget"),
+                "max_budget_mode": sub.get("max_budget_mode"),
+                "target_price": sub.get("target_price"),
+                "target_price_mode": sub.get("target_price_mode"),
+                "hard_constraints": sub.get("hard_constraints", {}),
+                "soft_preferences": sub.get("soft_preferences", {}),
+                "notification_goals": sub.get("notification_goals", {}),
+                "nearby_dates": nearby_dates,
+                "previous_prices": previous_prices,
+                "lowest_price_history": lowest_price_history,
+                "source_stats": data.get("source_stats", {}),
+            },
+            "source_stats": data.get("source_stats"),
+            "price_insights": data.get("price_insights"),
+        }
+        print(f"[DEBUG] 传给notifier的参数keys: {list(message_kwargs.keys())}")
+        msg = format_html_message(**message_kwargs)
+        send(msg)
+        logging.info(f"{route} 已推送方案对比表")
+        return True
+
+    except Exception as e:
+        logging.error(f"{route} 处理失败: {e}", exc_info=True)
+        return False
+
+
 def run():
     # 初始化
     init_db()
@@ -358,202 +673,7 @@ def run():
         return
 
     for sub in subscriptions:
-        route = f"{sub['origin']}-{sub['destination']}"
-        logging.info(f"开始处理 {route}")
-
-        try:
-            search_sources, enrichment_sources = build_default_sources()
-            agg = FlightAggregator(search_sources, enrichment_sources)
-            data = agg.collect(
-                sub["origin"],
-                sub["destination"],
-                sub["depart_date"],
-                cabin_classes=sub.get("cabin_classes"),
-            )
-
-            if data is None or not data.get("flights"):
-                logging.error(f"{route} 采集返回空")
-                continue
-
-            flights = [
-                _normalize_detail_flight(
-                    flight, flight.get("data_source") or flight.get("source")
-                )
-                for flight in data.get("flights", [])
-            ]
-            data["flights"] = flights
-            data["total_count"] = len(flights)
-
-            save_flight_details(route, sub["depart_date"], flights)
-            previous_prices = get_previous_snapshot_prices(route, sub["depart_date"])
-            lowest_price_history = get_lowest_price_history(
-                route, sub["depart_date"], limit=14
-            )
-            for flight in flights:
-                combo = flight.get("flight_combo")
-                if combo and combo in previous_prices:
-                    flight["previous_price"] = previous_prices[combo]
-            save_raw_response(route, sub["depart_date"], data)
-            logging.info(f"{route} 存储{data.get('total_count', 0)}个航班方案")
-
-            preferences = subscription_preferences(sub)
-            analysis = analyze_all_flights(
-                flights,
-                data.get("price_insights"),
-                mode=sub.get("mode", "balanced"),
-                priorities=sub.get("priorities"),
-                user_preferences=preferences,
-            )
-            days_to_dept = (
-                date.fromisoformat(sub["depart_date"]) - date.today()
-            ).days
-            current_min_price = (
-                analysis.get("price_range", [0])[0]
-                if analysis.get("price_range")
-                else 0
-            )
-            nearby_dates = collect_nearby_dates(
-                agg,
-                sub,
-                cabin_classes=sub.get("cabin_classes"),
-                target_min_price=current_min_price,
-            )
-            price_history = (data.get("price_insights") or {}).get("price_history")
-            analysis["days_to_dept"] = days_to_dept
-            analysis["budget"] = sub.get("budget")
-            analysis["budget_mode"] = sub.get("budget_mode", "fixed")
-            analysis["goals"] = sub.get("goals", [])
-            analysis["notification_goals"] = sub.get("notification_goals", {})
-            analysis["hard_constraints"] = sub.get("hard_constraints", {})
-            analysis["soft_preferences"] = sub.get("soft_preferences", {})
-            analysis["nearby_dates"] = nearby_dates
-            analysis["source_stats"] = data.get("source_stats", {})
-            analysis["price_position"] = price_position_description(
-                current_min_price, price_history
-            )
-            analysis["waiting_risk"] = waiting_risk_description(
-                price_history, current_min_price, days_to_dept
-            )
-            return_analysis = None
-            return_nearby_dates = []
-            if sub.get("round_trip") and sub.get("return_date"):
-                return_route = f"{sub['destination']}-{sub['origin']}"
-                return_data = agg.collect(
-                    sub["destination"],
-                    sub["origin"],
-                    sub["return_date"],
-                    cabin_classes=sub.get("cabin_classes"),
-                )
-                return_flights = [
-                    _normalize_detail_flight(
-                        flight, flight.get("data_source") or flight.get("source")
-                    )
-                    for flight in (return_data or {}).get("flights", [])
-                ]
-                if return_flights:
-                    save_flight_details(return_route, sub["return_date"], return_flights)
-                    save_raw_response(return_route, sub["return_date"], return_data)
-                    return_analysis = analyze_all_flights(
-                        return_flights,
-                        (return_data or {}).get("price_insights"),
-                        mode=sub.get("mode", "balanced"),
-                        priorities=sub.get("priorities"),
-                        user_preferences=preferences,
-                    )
-                    return_min_price = (
-                        return_analysis.get("price_range", [0])[0]
-                        if return_analysis.get("price_range")
-                        else 0
-                    )
-                    return_sub = {
-                        **sub,
-                        "origin": sub["destination"],
-                        "destination": sub["origin"],
-                        "depart_date": sub["return_date"],
-                        "date_flexibility": sub.get("return_date_flexibility", 0),
-                    }
-                    return_nearby_dates = collect_nearby_dates(
-                        agg,
-                        return_sub,
-                        cabin_classes=sub.get("cabin_classes"),
-                        target_min_price=return_min_price,
-                    )
-                    return_analysis["days_to_dept"] = (
-                        date.fromisoformat(sub["return_date"]) - date.today()
-                    ).days
-                    return_analysis["nearby_dates"] = return_nearby_dates
-                    analysis["return_analysis"] = return_analysis
-                    analysis["round_trip_analysis"] = analyze_round_trip(
-                        analysis, return_analysis
-                    )
-                    analysis["round_trip"] = True
-            signal_record = log_signal(
-                route=route,
-                depart_date=sub["depart_date"],
-                analysis_result=analysis,
-                price_insights=data.get("price_insights"),
-            )
-            analysis["confidence"] = signal_record.get("confidence")
-            analysis["system_health"] = system_health_check(
-                source_stats=data.get("source_stats", {}),
-                flights=flights,
-                analysis_result=analysis,
-            )
-
-            log_entry = {**analysis, "logged_at": datetime.now().isoformat()}
-            with ANALYSIS_LOG.open("a", encoding="utf-8") as file:
-                file.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
-
-            msg = format_html_message(
-                analysis_result=analysis,
-                route_info={
-                    "origin": sub["origin"],
-                    "destination": sub["destination"],
-                    "depart_date": sub["depart_date"],
-                    "cabin_classes": sub.get("cabin_classes"),
-                    "mode": sub.get("mode", "balanced"),
-                    "priorities": sub.get("priorities"),
-                    "budget": sub.get("budget"),
-                    "budget_mode": sub.get("budget_mode", "fixed"),
-                    "return_date": sub.get("return_date"),
-                    "return_date_flexibility": sub.get("return_date_flexibility", 0),
-                    "round_trip": sub.get("round_trip", False),
-                    "date_flexibility": sub.get("date_flexibility", 0),
-                    "direct_only": sub.get("direct_only", "flexible"),
-                    "transfer_policy": sub.get("transfer_policy", "short_ok"),
-                    "red_eye": sub.get("red_eye", "reject"),
-                    "red_eye_policy": sub.get("red_eye_policy", "not_allowed"),
-                    "departure_time_policy": sub.get("departure_time_policy", "after_06"),
-                    "arrival_time_policy": sub.get("arrival_time_policy", "any"),
-                    "need_baggage": sub.get("need_baggage", "unknown"),
-                    "refund_flexibility": sub.get("refund_flexibility", "unknown"),
-                    "trip_type": sub.get("trip_type", "tourism"),
-                    "companions": sub.get("companions", "solo"),
-                    "price_sensitivity": sub.get("price_sensitivity", "low"),
-                    "trip_rigidity": sub.get("trip_rigidity", "confirmed"),
-                    "goals": sub.get("goals", []),
-                    "budget": sub.get("budget"),
-                    "budget_mode": sub.get("budget_mode"),
-                    "max_budget": sub.get("max_budget"),
-                    "max_budget_mode": sub.get("max_budget_mode"),
-                    "target_price": sub.get("target_price"),
-                    "target_price_mode": sub.get("target_price_mode"),
-                    "hard_constraints": sub.get("hard_constraints", {}),
-                    "soft_preferences": sub.get("soft_preferences", {}),
-                    "notification_goals": sub.get("notification_goals", {}),
-                    "nearby_dates": nearby_dates,
-                    "previous_prices": previous_prices,
-                    "lowest_price_history": lowest_price_history,
-                    "source_stats": data.get("source_stats", {}),
-                },
-                source_stats=data.get("source_stats"),
-                price_insights=data.get("price_insights"),
-            )
-            send(msg)
-            logging.info(f"{route} 已推送方案对比表")
-
-        except Exception as e:
-            logging.error(f"{route} 处理失败: {e}", exc_info=True)
+        process_subscription(sub, ensure_db=False)
 
     logging.info("本轮执行完成")
 

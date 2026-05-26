@@ -10,6 +10,13 @@ from sources.fare_rules import standardize_fare_rules
 BASE_DIR = Path(__file__).parent
 
 
+def _is_valid_price(value) -> bool:
+    try:
+        return float(value) > 0
+    except (TypeError, ValueError):
+        return False
+
+
 def get_aggregator() -> FlightAggregator:
     search_sources, enrichment_sources = build_default_sources()
     return FlightAggregator(search_sources, enrichment_sources)
@@ -281,10 +288,16 @@ def collect_all_flights(origin, dest, date_str, cabin_classes=None) -> dict:
             "collected_at": datetime.now().isoformat(),
         }
 
-    all_flights = [
+    normalized_flights = [
         _normalize_detail_flight(flight, flight.get("data_source") or flight.get("source"))
         for flight in result.get("flights", []) or []
     ]
+    all_flights = [
+        flight
+        for flight in normalized_flights
+        if _is_valid_price(flight.get("price"))
+    ]
+    print(f"[价格检查] 有效价格航班: {len(all_flights)}/{len(normalized_flights)}")
 
     return {
         "flights": all_flights,
@@ -321,7 +334,13 @@ def collect_and_classify(
         print(f"未找到任何航班: {origin}→{dest} {date_str}")
         return None
 
-    all_flights = result.get("flights", [])
+    raw_flights = result.get("flights", [])
+    all_flights = [
+        flight
+        for flight in raw_flights
+        if _is_valid_price(flight.get("price"))
+    ]
+    print(f"[价格检查] 有效价格航班: {len(all_flights)}/{len(raw_flights)}")
     if not all_flights:
         print(f"未找到任何航班: {origin}→{dest} {date_str}")
         return None

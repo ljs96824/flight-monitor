@@ -1704,6 +1704,74 @@ def _last_arrival_hour(flight: dict) -> int | None:
     return _hour_from_time(segments[-1].get("arr_time"))
 
 
+TIME_SLOT_LABELS = {
+    "early_morning": "早班",
+    "morning": "上午",
+    "afternoon": "下午",
+    "evening": "傍晚",
+    "night": "晚班",
+    "redeye": "红眼",
+}
+
+
+def time_slot_from_hour(hour: int | None) -> str | None:
+    if hour is None:
+        return None
+    if 6 <= hour < 9:
+        return "early_morning"
+    if 9 <= hour < 12:
+        return "morning"
+    if 12 <= hour < 17:
+        return "afternoon"
+    if 17 <= hour < 20:
+        return "evening"
+    if 20 <= hour < 23:
+        return "night"
+    return "redeye"
+
+
+def _normalize_time_slots(slots) -> set[str]:
+    if not slots:
+        return set()
+    if isinstance(slots, str):
+        slots = [slots]
+    normalized = set()
+    for slot in slots:
+        value = str(slot or "").strip()
+        if not value:
+            continue
+        normalized.add("afternoon" if value == "noon" else value)
+    return normalized
+
+
+def _matches_time_slots(hour: int | None, slots) -> bool:
+    allowed = _normalize_time_slots(slots)
+    if hour is None or not allowed:
+        return True
+    return time_slot_from_hour(hour) in allowed
+
+
+def _direction_time_slots(preferences: dict, direction: str) -> tuple[object, object]:
+    if direction == "return":
+        dep_slots = preferences.get("return_departure_slots")
+        arr_slots = preferences.get("return_arrival_slots")
+    else:
+        dep_slots = preferences.get("outbound_departure_slots")
+        arr_slots = preferences.get("outbound_arrival_slots")
+
+    dep_slots = (
+        dep_slots
+        or preferences.get("departure_slots")
+        or preferences.get("preferred_departure_slots")
+    )
+    arr_slots = (
+        arr_slots
+        or preferences.get("arrival_slots")
+        or preferences.get("preferred_arrival_slots")
+    )
+    return dep_slots, arr_slots
+
+
 def _is_red_eye(flight: dict) -> bool:
     hour = _first_departure_hour(flight)
     return hour is not None and (hour >= 23 or hour < 6)
@@ -1815,15 +1883,35 @@ def _cheapest_price(flights: list[dict]) -> float | None:
     return min(prices) if prices else None
 
 
+def _stops_count(flight: dict, default: int = 99) -> int:
+    """Return stop count; missing/blank values are treated as unknown, not direct."""
+    value = flight.get("stops", default)
+    if value in (None, ""):
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _apply_user_preferences(
     flights: list[dict], preferences: dict | None
 ) -> tuple[list[dict], list[dict], dict]:
     preferences = preferences or {}
     direct_only = preferences.get("direct_only", "flexible")
     transfer_policy = preferences.get("transfer_policy", "short_ok")
+    direct_required = direct_only in {"must", "direct_only", "must_direct"} or transfer_policy in {
+        "must",
+        "direct_only",
+        "must_direct",
+    }
     red_eye = preferences.get("red_eye", "reject")
     departure_time_policy = preferences.get("departure_time_policy", "any")
     arrival_time_policy = preferences.get("arrival_time_policy", "any")
+    direction = preferences.get("direction", "outbound")
+    preferred_departure_slots, preferred_arrival_slots = _direction_time_slots(
+        preferences, direction
+    )
     need_baggage = preferences.get("need_baggage", "unknown")
     refund_flexibility = preferences.get("refund_flexibility", "unknown")
     companions = preferences.get("companions", "solo")
@@ -1837,7 +1925,7 @@ def _apply_user_preferences(
     max_extra_duration_hours = _to_float(preferences.get("max_extra_duration_hours"))
     max_total_duration_hours = _to_float(preferences.get("max_total_duration_hours"))
 
-    direct_flights = [flight for flight in flights if int(flight.get("stops") or 0) == 0]
+    direct_flights = [flight for flight in flights if _stops_count(flight) == 0]
     non_red_eye_flights = [flight for flight in flights if not _is_red_eye(flight)]
     cheapest_direct = _cheapest_price(direct_flights)
     cheapest_non_red_eye = _cheapest_price(non_red_eye_flights)
@@ -1860,17 +1948,28 @@ def _apply_user_preferences(
 
     kept = []
     excluded = []
+    direct_reference_candidates = []
     for flight in flights:
         notes = list(flight.get("preference_notes") or [])
         penalties = list(flight.get("preference_penalties") or [])
         penalty = 0
-        stops = int(flight.get("stops") or 0)
+        stops = _stops_count(flight)
         price = _to_float(flight.get("price")) or 0
 
-        if not _matches_departure_policy(flight, departure_time_policy):
+        if preferred_departure_slots and not _matches_time_slots(
+            _first_departure_hour(flight), preferred_departure_slots
+        ):
+            excluded.append({**flight, "exclude_reason": "起飞时段不符合订阅偏好"})
+            continue
+        if not preferred_departure_slots and not _matches_departure_policy(flight, departure_time_policy):
             excluded.append({**flight, "exclude_reason": "起飞时间不符合订阅偏好"})
             continue
-        if not _matches_arrival_policy(flight, arrival_time_policy):
+        if preferred_arrival_slots and not _matches_time_slots(
+            _last_arrival_hour(flight), preferred_arrival_slots
+        ):
+            excluded.append({**flight, "exclude_reason": "到达时段不符合订阅偏好"})
+            continue
+        if not preferred_arrival_slots and not _matches_arrival_policy(flight, arrival_time_policy):
             excluded.append({**flight, "exclude_reason": "到达时间不符合订阅偏好"})
             continue
         if airline_policy == "no_lcc" and _contains_any_airline(flight, LCC_AIRLINES):
@@ -1900,8 +1999,10 @@ def _apply_user_preferences(
             else:
                 penalties.append(f"\u8ddd\u79bb\u7406\u60f3\u5165\u624b\u4ef7\u00a5{price - target_price:,.0f}")
 
-        if direct_only == "must" and stops > 0:
-            excluded.append({**flight, "exclude_reason": "用户设置必须直飞"})
+        if direct_required and stops > 0:
+            excluded_flight = {**flight, "exclude_reason": "用户设置必须直飞"}
+            excluded.append(excluded_flight)
+            direct_reference_candidates.append(flight)
             continue
         if direct_only in {"flexible", "cheap_ok"} and stops > 0:
             penalty += 2 if direct_only == "flexible" else 1
@@ -2041,9 +2142,24 @@ def _apply_user_preferences(
         kept.append(flight)
 
     if not kept:
-        return flights, excluded, {
-            "fallback": True,
-            "message": "偏好条件过严，已临时放宽以展示可参考航班",
+        if direct_required and not direct_flights and direct_reference_candidates:
+            reference_flights = [
+                {
+                    **flight,
+                    "preference_reference": True,
+                    "preference_notes": list(flight.get("preference_notes") or [])
+                    + ["未找到直飞航班，以下为中转参考方案"],
+                }
+                for flight in flights
+            ]
+            return reference_flights, excluded, {
+                "fallback": True,
+                "fallback_reason": "no_direct_flights",
+                "message": "未找到直飞航班，以下为中转参考方案",
+            }
+        return [], excluded, {
+            "fallback": False,
+            "message": "没有航班满足当前硬约束",
         }
     return kept, excluded, {"fallback": False}
 
@@ -2074,6 +2190,7 @@ def analyze_all_flights(
     mode: str = "balanced",
     priorities=None,
     user_preferences=None,
+    hard_constraints=None,
 ) -> dict:
     """对所有航班方案做多维度分析和排名"""
     if not flights:
@@ -2082,28 +2199,81 @@ def analyze_all_flights(
     usable_flights = [
         flight
         for flight in flights
-        if flight.get("price") is not None and flight.get("total_duration_min") is not None
+        if (_to_float(flight.get("price")) or 0) > 0
+        and flight.get("total_duration_min") is not None
     ]
     if not usable_flights:
-        return {"error": "no_flights"}
+        return {
+            "error": "no_valid_prices",
+            "total_options": 0,
+            "all_flights": [],
+            "price_range": [],
+            "current_min_price": None,
+            "market_context": {},
+            "price_insights": price_insights,
+        }
 
     mode = _trip_mode(mode, user_preferences)
     mode = mode if mode in SCORE_WEIGHTS else "balanced"
     original_options = len(usable_flights)
-    usable_flights, preference_excluded, preference_summary = _apply_user_preferences(
-        usable_flights, user_preferences
+    if hard_constraints:
+        merged_preferences = {**(user_preferences or {}), **hard_constraints}
+        if "baggage" in hard_constraints and "need_baggage" not in merged_preferences:
+            merged_preferences["need_baggage"] = hard_constraints.get("baggage")
+    else:
+        merged_preferences = user_preferences or {}
+    print(f"[过滤前] {len(usable_flights)}个航班, 约束: {merged_preferences}")
+    for flight in usable_flights:
+        print(
+            f"  航班 {flight.get('flight_combo')}: stops={flight.get('stops')}"
+        )
+
+    transfer_policy = (
+        (hard_constraints or {}).get("transfer_policy")
+        or (hard_constraints or {}).get("direct_only")
+        or merged_preferences.get("transfer_policy")
+        or merged_preferences.get("direct_only")
     )
+    if transfer_policy in ("must", "direct_only", "must_direct"):
+        direct_flights = [
+            flight for flight in usable_flights if _stops_count(flight) == 0
+        ]
+        if direct_flights:
+            usable_flights = direct_flights
+        else:
+            merged_preferences["no_direct_flag"] = True
+
+    usable_flights, preference_excluded, preference_summary = _apply_user_preferences(
+        usable_flights, merged_preferences
+    )
+    print(f"[过滤后] {len(usable_flights)}个航班")
     if not usable_flights:
         return {"error": "no_flights"}
 
     # 1. 按价格排名
-    by_price = sorted(usable_flights, key=lambda f: f["price"])
+    by_price = sorted(usable_flights, key=lambda f: _to_float(f.get("price")) or float("inf"))
 
     # 2. 按总时长排名
     by_duration = sorted(usable_flights, key=lambda f: f["total_duration_min"])
 
     # 3. 按性价比排名（综合得分）
-    prices = [f["price"] for f in usable_flights]
+    valid_prices = [
+        float(f["price"])
+        for f in usable_flights
+        if (_to_float(f.get("price")) or 0) > 0
+    ]
+    lowest_price = min(valid_prices) if valid_prices else None
+    if lowest_price is None:
+        return {
+            "error": "no_valid_prices",
+            "total_options": len(usable_flights),
+            "all_flights": usable_flights,
+            "price_range": [],
+            "current_min_price": None,
+            "market_context": {},
+            "price_insights": price_insights,
+        }
+    prices = valid_prices
     durations = [f["total_duration_min"] for f in usable_flights]
     min_p, max_p = min(prices), max(prices)
     min_d, max_d = min(durations), max(durations)
@@ -2111,14 +2281,14 @@ def analyze_all_flights(
 
     for flight in usable_flights:
         price_score = (
-            (flight["price"] - min_p) / (max_p - min_p) if max_p > min_p else 0
+            ((float(flight["price"]) - min_p) / (max_p - min_p)) if max_p > min_p else 0
         )
         duration_score = (
             (flight["total_duration_min"] - min_d) / (max_d - min_d)
             if max_d > min_d
             else 0
         )
-        stops_score = flight["stops"] / 3
+        stops_score = _stops_count(flight) / 3
         flight["value_score"] = round(
             price_score * 0.5 + duration_score * 0.3 + stops_score * 0.2,
             3,
@@ -2165,7 +2335,10 @@ def analyze_all_flights(
         and flight["total_duration_min"] <= fastest_duration * 1.5
     ]
     if comfortable_candidates:
-        most_comfortable = min(comfortable_candidates, key=lambda f: f["price"])
+        most_comfortable = min(
+            comfortable_candidates,
+            key=lambda f: _to_float(f.get("price")) or float("inf"),
+        )
     else:
         most_comfortable = min(
             usable_flights,
@@ -2175,9 +2348,9 @@ def analyze_all_flights(
                     default=0,
                 )
                 > 480,
-                f["stops"],
+                _stops_count(f),
                 f["total_duration_min"],
-                f["price"],
+                _to_float(f.get("price")) or float("inf"),
             ),
         )
 
@@ -2222,7 +2395,9 @@ def analyze_all_flights(
             for flight in usable_flights
             if (flight.get("cabin_class") or "economy") == cabin_class
         ]
-        display_flights.extend(sorted(cabin_flights, key=lambda f: f["price"])[:10])
+        display_flights.extend(
+            sorted(cabin_flights, key=lambda f: _to_float(f.get("price")) or float("inf"))[:10]
+        )
 
     economy_flights = [
         flight
@@ -2240,21 +2415,22 @@ def analyze_all_flights(
     cabin_price_ranges = {}
     for cabin_class in cabin_order:
         cabin_prices = [
-            flight["price"]
+            float(flight["price"])
             for flight in usable_flights
             if (flight.get("cabin_class") or "economy") == cabin_class
+            and (_to_float(flight.get("price")) or 0) > 0
         ]
         if cabin_prices:
             cabin_price_ranges[cabin_class] = [min(cabin_prices), max(cabin_prices)]
 
-    target_price_mode = (user_preferences or {}).get("target_price_mode", "auto")
-    target_price = _to_float((user_preferences or {}).get("target_price"))
+    target_price_mode = (merged_preferences or {}).get("target_price_mode", "auto")
+    target_price = _to_float((merged_preferences or {}).get("target_price"))
     target_price_effective = target_price
     if not target_price_effective and target_price_mode in {"auto", "low_zone"}:
         target_price_effective = _auto_target_price(price_insights, target_price_mode)
-    max_budget_effective = _to_float((user_preferences or {}).get("max_budget"))
+    max_budget_effective = _to_float((merged_preferences or {}).get("max_budget"))
     if max_budget_effective is None:
-        max_budget_effective = _to_float((user_preferences or {}).get("budget"))
+        max_budget_effective = _to_float((merged_preferences or {}).get("budget"))
 
     return {
         "total_options": len(usable_flights),
@@ -2263,13 +2439,13 @@ def analyze_all_flights(
         "economy_recommendations": economy_recommendations,
         "business_recommendation": business_recommendation,
         "all_flights": display_flights,
-        "price_range": [min(prices), max(prices)],
+        "price_range": [lowest_price, max(prices)],
         "cabin_price_ranges": cabin_price_ranges,
         "duration_range": [min(durations), max(durations)],
         "market_context": market_context,
         "price_insights": price_insights,
         "price_anomalies": price_anomalies,
-        "current_min_price": min(prices),
+        "current_min_price": lowest_price,
         "max_budget": max_budget_effective,
         "target_price": target_price,
         "target_price_effective": target_price_effective,
@@ -2278,7 +2454,7 @@ def analyze_all_flights(
         "priorities": priority_config,
         "qualified_flights": qualified_flights,
         "reference_flights": reference_flights,
-        "user_preferences": user_preferences or {},
+        "user_preferences": merged_preferences,
         "preference_excluded_count": len(preference_excluded),
         "preference_summary": preference_summary,
     }
@@ -2287,8 +2463,8 @@ def analyze_all_flights(
 def _top_flights_for_round_trip(analysis: dict, limit: int = 3) -> list[dict]:
     flights = analysis.get("economy_recommendations") or analysis.get("all_flights") or []
     return sorted(
-        [flight for flight in flights if flight.get("price") is not None],
-        key=lambda flight: flight.get("price", 999999),
+        [flight for flight in flights if (_to_float(flight.get("price")) or 0) > 0],
+        key=lambda flight: _to_float(flight.get("price")) or 999999,
     )[:limit]
 
 
@@ -2302,7 +2478,7 @@ def analyze_round_trip(outbound_analysis: dict, return_analysis: dict) -> dict:
         for return_flight in return_top:
             outbound_price = _to_float(outbound.get("price"))
             return_price = _to_float(return_flight.get("price"))
-            if outbound_price is None or return_price is None:
+            if not outbound_price or outbound_price <= 0 or not return_price or return_price <= 0:
                 continue
             combinations.append(
                 {
@@ -2315,8 +2491,8 @@ def analyze_round_trip(outbound_analysis: dict, return_analysis: dict) -> dict:
             )
 
     combinations.sort(key=lambda item: item["total_price"])
-    outbound_min = outbound_top[0].get("price") if outbound_top else None
-    return_min = return_top[0].get("price") if return_top else None
+    outbound_min = _to_float(outbound_top[0].get("price")) if outbound_top else None
+    return_min = _to_float(return_top[0].get("price")) if return_top else None
     total_min = (
         outbound_min + return_min
         if outbound_min is not None and return_min is not None
@@ -2357,14 +2533,14 @@ def select_recommendations(economy_flights, business_flights, mode: str = "balan
         if mode == "budget":
             return (
                 preference_penalty,
-                flight.get("price", 99999),
+                _to_float(flight.get("price")) or 99999,
                 flight.get("total_duration_min", 99999),
             )
         if mode == "fast":
             return (
                 preference_penalty,
                 flight.get("total_duration_min", 99999),
-                flight.get("price", 99999),
+                _to_float(flight.get("price")) or 99999,
             )
         if mode == "comfort":
             return (
@@ -2372,12 +2548,12 @@ def select_recommendations(economy_flights, business_flights, mode: str = "balan
                 flight.get("stops", 99),
                 max_layover_minutes(flight),
                 flight.get("total_duration_min", 99999),
-                flight.get("price", 99999),
+                _to_float(flight.get("price")) or 99999,
             )
         return (
             preference_penalty,
             flight.get("value_score", 99999),
-            flight.get("price", 99999),
+            _to_float(flight.get("price")) or 99999,
             flight.get("total_duration_min", 99999),
         )
 
@@ -2393,7 +2569,7 @@ def select_recommendations(economy_flights, business_flights, mode: str = "balan
     business_rec = None
     if business_flights:
         business_rec = min(
-            business_flights, key=lambda item: item.get("price", 99999)
+            business_flights, key=lambda item: _to_float(item.get("price")) or 99999
         )
 
     return eco_recs, business_rec

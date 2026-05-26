@@ -35,6 +35,13 @@ def _append_sources(flight: dict, sources: list[str]) -> None:
         flight["data_source"] = "+".join(current_sources)
 
 
+def _valid_price(value) -> bool:
+    try:
+        return float(value) > 0
+    except (TypeError, ValueError):
+        return False
+
+
 def _normalize_cabin_classes(cabin_classes) -> list[str]:
     if not cabin_classes:
         return ["economy"]
@@ -122,7 +129,14 @@ class FlightAggregator:
             for cabin_class in cabin_classes:
                 try:
                     result = source.fetch(origin, dest, date_str, cabin_class)
-                    flights = result.get("flights", []) or []
+                    raw_flights = result.get("flights", []) or []
+                    flights = [
+                        flight for flight in raw_flights if _valid_price(flight.get("price"))
+                    ]
+                    print(
+                        f"[价格检查] {source_name} {cabin_class} 有效价格航班: "
+                        f"{len(flights)}/{len(raw_flights)}"
+                    )
 
                     for flight in flights:
                         if not flight.get("source"):
@@ -181,6 +195,8 @@ class FlightAggregator:
         seen = {}
         sources_by_combo = {}
         for flight in all_flights:
+            if not _valid_price(flight.get("price")):
+                continue
             combo = flight.get("flight_combo", "")
             if not combo:
                 continue
@@ -196,7 +212,7 @@ class FlightAggregator:
             current_price = seen.get(normalized_combo, {}).get("price", 99999)
             if normalized_combo in seen:
                 _append_sources(seen[normalized_combo], new_sources)
-            if normalized_combo not in seen or flight.get("price", 99999) < current_price:
+            if normalized_combo not in seen or float(flight.get("price")) < float(current_price):
                 seen[normalized_combo] = flight
                 _append_sources(seen[normalized_combo], sources_by_combo[normalized_combo])
 
@@ -208,7 +224,7 @@ class FlightAggregator:
                 flight["data_source"] = "+".join(sources)
 
         unique_flights = sorted(
-            unique_flights, key=lambda flight: flight.get("price", 99999)
+            unique_flights, key=lambda flight: float(flight.get("price") or 99999)
         )
 
         enrichment_data = {}
