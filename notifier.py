@@ -11,6 +11,7 @@ from urllib.parse import quote_plus
 import httpx
 
 from airports import get_airport_name, get_airport_timezone
+from channels import CHANNEL_INFO
 from analyzer import (
     calculate_price_references,
     generate_trend_summary,
@@ -884,7 +885,7 @@ def _budget_notice(current_min, budget) -> str | None:
 
 
 
-def _price_scale_lines(current_min, route_info: dict, analysis_result: dict) -> list[str]:
+def _legacy_price_scale_lines(current_min, route_info: dict, analysis_result: dict) -> list[str]:
     price = _to_float(current_min)
     if price is None or price <= 0:
         return ["<b>💰 价格标尺</b>", "当前最低价：暂无有效价格数据", ""]
@@ -1972,6 +1973,44 @@ def _compact_booking_links(flight: dict, route_info: dict) -> list[tuple[str, st
     return links[:3]
 
 
+def _channel_key(name: str, url: str = "") -> str:
+    text = f"{name} {url}".lower()
+    if "google" in text:
+        return "google_flights"
+    if "ctrip" in text or "携程" in name:
+        return "ctrip"
+    if "fliggy" in text or "飞猪" in name:
+        return "fliggy"
+    if "trip.com" in text:
+        return "trip_com"
+    if "aa.com" in text or "aircanada" in text or "united.com" in text or "delta.com" in text or "官网" in name:
+        return "airline_official"
+    return "overseas_ota"
+
+
+def _channel_summary(links: list[tuple[str, str]]) -> str:
+    parts = []
+    for name, url in links:
+        channel = CHANNEL_INFO.get(_channel_key(name, url), CHANNEL_INFO["overseas_ota"])
+        label = channel.get("label", "")
+        if "Google" in name and channel.get("type"):
+            label = "🟢 聚合比价"
+        parts.append(f"{name} {label}".strip())
+    return " | ".join(parts)
+
+
+def _transfer_risk_lines(flight: dict) -> list[str]:
+    risk = flight.get("transfer_risk") or {}
+    if not risk or risk.get("level") in {"none", "无"}:
+        return []
+    lines = [f"中转风险：{risk.get('label', '中转风险待确认')}"]
+    for factor in (risk.get("factors") or risk.get("notes") or [])[:3]:
+        lines.append(f"- {factor}")
+    if (risk.get("factors") or risk.get("notes")):
+        lines.append("💡 建议确认是否为联程票，非联程需自行转机和重新托运行李")
+    return lines
+
+
 def generate_context(flight, all_flights):
     """生成方案的取舍说明和适合人群"""
     price = float(flight.get("price")) if _has_valid_price(flight.get("price")) else 0
@@ -2131,12 +2170,19 @@ def _append_compact_flight(
     lines.append(f"👤 适合：{suit_text}")
     if not_suit_text:
         lines.append(f"⚠️ 不太适合：{not_suit_text}")
+    transfer_lines = _transfer_risk_lines(flight)
+    if transfer_lines:
+        lines.extend(transfer_lines)
     lines.append("")
     lines.append("🔗 购买")
-    for index, (name, url) in enumerate(_compact_booking_links(flight, route_info), start=1):
+    booking_links = _compact_booking_links(flight, route_info)
+    for index, (name, url) in enumerate(booking_links, start=1):
         number_labels = ["①", "②", "③"]
         number = number_labels[index - 1]
         lines.append(f'{number} <a href="{url}">{name}</a>')
+    if booking_links:
+        lines.append(f"购买渠道：{_channel_summary(booking_links)}")
+        lines.append("💡 建议优先通过携程或航司官网购买，售后保障更好")
     lines.append("")
 
 
@@ -3152,12 +3198,16 @@ def format_flight_detail(
     )
     if booking_links:
         detail += f"<br>  🔗 去购买: {booking_links}"
+        detail += "<br>  购买渠道：Google Flights 🟢 聚合比价 | 携程 🟢 高可信 | 飞猪 🟢 高可信 | Trip.com 🟢 高可信"
+        detail += "<br>  💡 建议优先通过携程或航司官网购买，售后保障更好"
     detail += (
         f"<br>  价格采集于 {_collected_time_text(flight)} | "
         f"新鲜度：{_freshness_label(flight)}"
     )
     for advice in _execution_advice_lines(flight, route_info, analysis_result):
         detail += f"<br>  {advice}"
+    for risk_line in _transfer_risk_lines(flight):
+        detail += f"<br>  {risk_line}"
     return detail
 
 
@@ -3369,6 +3419,56 @@ def _append_round_trip_block(
 
     if return_analysis.get("nearby_dates"):
         _append_nearby_dates(lines, return_analysis.get("nearby_dates"))
+
+
+def _price_scale_lines(current_min, route_info: dict, analysis_result: dict) -> list[str]:
+    price = _to_float(current_min)
+    if price is None or price <= 0:
+        return ["<b>💰 价格区间标尺</b>", "当前最低价：暂无有效价格数据", ""]
+
+    target = (
+        _to_float(analysis_result.get("target_price_effective"))
+        or _to_float(_preference_value(route_info, analysis_result, "target_price"))
+    )
+    tolerance = (
+        _to_float(analysis_result.get("price_tolerance"))
+        or _to_float(_preference_value(route_info, analysis_result, "price_tolerance"))
+        or 100
+    )
+    max_budget = (
+        _to_float(analysis_result.get("max_budget"))
+        or _to_float(_preference_value(route_info, analysis_result, "max_budget"))
+        or _to_float(_preference_value(route_info, analysis_result, "budget"))
+    )
+    if target is None and max_budget is None:
+        return []
+
+    lines = ["<b>💰 价格区间标尺</b>"]
+    if target:
+        buy_upper = target + tolerance
+        lines.append(f"¥{target:,.0f} 理想价")
+        lines.append(f"├── ¥{target:,.0f}-{buy_upper:,.0f} 强烈建议买入区 ──┤")
+        if max_budget:
+            lines.append(f"├── ¥{buy_upper:,.0f}-{max_budget:,.0f} 可接受区间 ──┤")
+            lines.append(f"└── ¥{max_budget:,.0f}以上 超预算 ──┘")
+        advice = analysis_result.get("price_band") or {}
+        label = advice.get("label")
+        if not label:
+            if price <= target:
+                label = "低于理想价 🔥"
+            elif price <= buy_upper:
+                label = "在买入区间内 ✅"
+            elif max_budget and price <= max_budget:
+                label = "在可接受区间内 📊"
+            else:
+                label = "超预算 ❌"
+        lines.append(f"当前最低价：¥{price:,.0f} → {label}")
+    else:
+        lines.append(f"当前最低价：¥{price:,.0f}")
+    if max_budget:
+        lines.append(f"最高可接受：¥{max_budget:,.0f}")
+    lines.append("")
+    return lines
 
 
 def format_html_message(

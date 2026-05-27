@@ -1,0 +1,58 @@
+"""Purchase channel metadata used in notifications."""
+
+CHANNEL_INFO = {
+    "google_flights": {
+        "name": "Google Flights",
+        "type": "聚合比价",
+        "reliability": "high",
+        "label": "🟢 高可信",
+        "note": "聚合多个OTA和航司官网价格，跳转后以目标平台为准",
+        "payment": "取决于跳转目标平台",
+        "aftersales": "取决于出票平台",
+    },
+    "ctrip": {
+        "name": "携程",
+        "type": "大型OTA",
+        "reliability": "high",
+        "label": "🟢 高可信",
+        "note": "国内主流平台，售后保障好",
+        "payment": "支付宝/微信/银行卡",
+        "aftersales": "7x24客服",
+    },
+    "trip_com": {
+        "name": "Trip.com",
+        "type": "国际OTA",
+        "reliability": "high",
+        "label": "🟢 高可信",
+        "note": "携程国际版，适合国际航线",
+        "payment": "国际信用卡/支付宝",
+        "aftersales": "多语言客服",
+    },
+    "fliggy": {
+        "name": "飞猪",
+        "type": "大型OTA",
+        "reliability": "high",
+        "label": "🟢 高可信",
+        "note": "阿里系平台，支付宝生态",
+        "payment": "支付宝/花呗",
+        "aftersales": "淘宝体系售后",
+    },
+    "airline_official": {
+        "name": "航司官网",
+        "type": "航司直销",
+        "reliability": "highest",
+        "label": "🟢 最可信",
+        "note": "价格未必最低，但出票最稳定，售后最直接",
+        "payment": "各航司不同",
+        "aftersales": "航司直接负责",
+    },
+    "overseas_ota": {
+        "name": "海外OTA",
+        "type": "海外平台",
+        "reliability": "medium",
+        "label": "🟡 需注意",
+        "note": "可能有支付、语言、售后限制",
+        "payment": "可能需要国际信用卡",
+        "aftersales": "英文客服为主",
+    },
+}

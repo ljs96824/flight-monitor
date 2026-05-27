@@ -368,6 +368,18 @@ FORM_TEMPLATE = """
         <label><input type="radio" name="target_price_mode" value="low_zone"> 只要进入低价区间就提醒我</label>
       </div>
 
+      <label>可接受的价格浮动范围</label>
+      <div class="choice">
+        <label><input type="radio" name="price_tolerance_mode" value="100" checked> 理想价上浮100元以内</label>
+        <label><input type="radio" name="price_tolerance_mode" value="200"> 理想价上浮200元以内</label>
+        <label><input type="radio" name="price_tolerance_mode" value="500"> 理想价上浮500元以内</label>
+        <label>
+          <input type="radio" name="price_tolerance_mode" value="custom">
+          自定义：
+          <input id="price_tolerance_custom" name="price_tolerance_custom" type="number" min="1" step="1" placeholder="元" class="inline-number">
+        </label>
+      </div>
+
       <label>中转接受程度</label>
       <div class="choice">
         <label><input type="radio" name="transfer_policy" value="direct_only"> 必须直飞</label>
@@ -733,6 +745,10 @@ FORM_TEMPLATE = """
       } else {
         addSummaryLine(`理想入手价：${labels.targetPriceMode[targetPriceMode]}`);
       }
+      const toleranceMode = checkedValue('price_tolerance_mode');
+      const toleranceCustom = Number(document.getElementById('price_tolerance_custom').value || 0);
+      const tolerance = toleranceMode === 'custom' ? toleranceCustom : Number(toleranceMode || 100);
+      addSummaryLine(`可接受浮动：理想价上浮¥${tolerance.toLocaleString('zh-CN')}以内`);
       addSummaryLine(`中转策略：${labels.transfer[checkedValue('transfer_policy')]}`);
       if (checkedValue('transfer_policy') === 'short_ok') {
         const limit = document.querySelector('input[name="short_transfer_limit"]:checked');
@@ -895,6 +911,13 @@ def infer_max_budget(max_budget: int | None, target_price: int | None) -> int | 
     return None
 
 
+def parse_price_tolerance(form) -> int:
+    mode = form.get("price_tolerance_mode", "100")
+    if mode == "custom":
+        return parse_int(form.get("price_tolerance_custom"), 100)
+    return parse_int(mode, 100)
+
+
 def parse_short_transfer_limit(value: str | None) -> tuple[int | None, int | None]:
     if value == "extra_6":
         return 6, None
@@ -919,6 +942,7 @@ def build_subscription(form) -> dict:
     max_budget_mode = form.get("max_budget_mode", "fixed")
     target_price_mode = form.get("target_price_mode", "fixed")
     target_price = parse_optional_budget(form.get("target_price"), target_price_mode)
+    price_tolerance = parse_price_tolerance(form)
     max_budget = None
     if max_budget_mode == "fixed":
         max_budget = infer_max_budget(parse_int(form.get("max_budget"), 0), target_price)
@@ -994,6 +1018,8 @@ def build_subscription(form) -> dict:
             "trip_rigidity": form.get("trip_rigidity", "confirmed"),
             "target_price": target_price,
             "target_price_mode": target_price_mode,
+            "price_tolerance": price_tolerance,
+            "max_budget": max_budget,
         },
         "notification_goals": {
             "primary": form.get("primary_goal", "buy_timing"),

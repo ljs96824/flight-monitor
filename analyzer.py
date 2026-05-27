@@ -1329,6 +1329,75 @@ def transfer_risk(flight: dict) -> dict:
     return {"level": level, "label": label_map[level], "notes": risks}
 
 
+def calc_transfer_risk(flight: dict) -> dict:
+    """Evaluate execution risk for transfer-heavy itineraries."""
+    risk_score = 0
+    risk_factors = []
+    segments = flight.get("segments", []) or []
+    layovers = flight.get("layovers", []) or []
+
+    stops = _stops_count(flight, default=0)
+    if stops == 0:
+        return {"level": "none", "label": "直飞", "score": 0, "factors": []}
+    if stops >= 2:
+        risk_score += 30
+        risk_factors.append("多次中转")
+
+    for layover in layovers:
+        wait = layover.get("wait_minutes", 0) or 0
+        if wait < 90:
+            risk_score += 40
+            risk_factors.append(f"中转时间仅{wait}分钟，可能赶不上")
+        elif wait < 120:
+            risk_score += 15
+            risk_factors.append(f"中转时间{wait}分钟，较紧张")
+        elif wait > 480:
+            risk_score += 10
+            risk_factors.append(f"中转等待{wait // 60}小时，较长")
+
+    airlines = list(flight.get("airlines") or [])
+    for segment in segments:
+        airline = segment.get("airline") if isinstance(segment, dict) else ""
+        if airline:
+            airlines.append(airline)
+    unique_airlines = sorted({airline for airline in airlines if airline})
+    if len(unique_airlines) > 1:
+        risk_score += 25
+        risk_factors.append(f"跨航司({'/'.join(unique_airlines)})，可能非联程")
+
+    international_transfer_airports = {
+        "NRT", "HND", "ICN", "TPE", "HKG", "SIN", "BKK", "KUL", "DOH",
+        "DXB", "IST", "AMS", "FRA", "CDG", "LHR",
+    }
+    for layover in layovers:
+        airport = layover.get("airport", "")
+        if airport in international_transfer_airports:
+            risk_score += 15
+            risk_factors.append(f"经{city_name(airport)}中转，请确认是否需要过境签")
+
+    if risk_score >= 50:
+        level = "high"
+        label = "🔴 高风险"
+    elif risk_score >= 25:
+        level = "medium"
+        label = "🟡 中风险"
+    else:
+        level = "low"
+        label = "🟢 低风险"
+
+    return {
+        "level": level,
+        "label": label,
+        "score": risk_score,
+        "factors": risk_factors,
+    }
+
+
+def transfer_risk(flight: dict) -> dict:
+    """Backward-compatible wrapper for the newer transfer execution risk."""
+    return calc_transfer_risk(flight)
+
+
 def calc_trend(recent_prices: list[float]) -> dict:
     """Compatibility trend summary used by check.py and notification text."""
     prices = [_to_float(price) for price in recent_prices]
@@ -1912,7 +1981,7 @@ def _collected_minutes_ago(flight: dict) -> float | None:
 
 def calc_execution_grade(flight: dict, hard_constraints=None) -> dict:
     """Calculate whether a shown option is actionable enough to execute."""
-    _ = hard_constraints
+    hard_constraints = hard_constraints or {}
     score = 100
     reasons = []
 
@@ -1949,6 +2018,13 @@ def calc_execution_grade(flight: dict, hard_constraints=None) -> dict:
         score -= 15
         reasons.append("多次中转，执行风险较高")
 
+    transfer = flight.get("transfer_risk") or calc_transfer_risk(flight)
+    companions = hard_constraints.get("companions")
+    if companions in {"with_elderly", "with_child", "with_elderly_child", "with_both"}:
+        if transfer.get("level") == "high":
+            score = min(score, 39)
+            reasons.append("中转风险高，不适合老人/小孩")
+
     score = max(0, min(100, score))
     if score >= 80:
         grade = "A"
@@ -1961,7 +2037,10 @@ def calc_execution_grade(flight: dict, hard_constraints=None) -> dict:
         grade_label = "⚠️ 仅供参考"
     else:
         grade = "D"
-        grade_label = "❌ 不推荐执行"
+        if "中转风险高，不适合老人/小孩" in reasons:
+            grade_label = "❌ 不推荐（中转风险高，不适合老人/小孩）"
+        else:
+            grade_label = "❌ 不推荐执行"
 
     flight["execution_grade"] = grade
     flight["execution_label"] = grade_label
@@ -2003,6 +2082,9 @@ def _apply_user_preferences(
     max_budget = _to_float(preferences.get("max_budget"))
     budget = max_budget if max_budget is not None else _to_float(preferences.get("budget"))
     target_price = _to_float(preferences.get("target_price"))
+    price_tolerance = _to_float(preferences.get("price_tolerance"))
+    if price_tolerance is None:
+        price_tolerance = 100
     max_extra_duration_hours = _to_float(preferences.get("max_extra_duration_hours"))
     max_total_duration_hours = _to_float(preferences.get("max_total_duration_hours"))
 
@@ -2077,6 +2159,8 @@ def _apply_user_preferences(
         if target_price and target_price > 0:
             if price <= target_price:
                 notes.append("\u4f4e\u4e8e\u7406\u60f3\u5165\u624b\u4ef7")
+            elif price <= target_price + price_tolerance:
+                notes.append("在理想价浮动范围内")
             else:
                 penalties.append(f"\u8ddd\u79bb\u7406\u60f3\u5165\u624b\u4ef7\u00a5{price - target_price:,.0f}")
 
@@ -2264,6 +2348,43 @@ def _auto_target_price(price_insights: dict | None, mode: str) -> float | None:
     percentile = 0.2 if mode == "low_zone" else 0.35
     index = min(len(prices) - 1, max(0, round((len(prices) - 1) * percentile)))
     return float(prices[index])
+
+
+def price_tolerance_advice(
+    price, target_price=None, tolerance=100, max_budget=None
+) -> dict | None:
+    current = _to_float(price)
+    target = _to_float(target_price)
+    tolerance_value = _to_float(tolerance)
+    max_budget_value = _to_float(max_budget)
+    if current is None or current <= 0 or target is None or target <= 0:
+        return None
+    tolerance_value = tolerance_value if tolerance_value is not None else 100
+    buy_upper = target + tolerance_value
+
+    if current <= target:
+        level = "below_target"
+        label = "🔥 低于理想价！强烈建议确认购买"
+    elif current <= buy_upper:
+        level = "within_tolerance"
+        label = "✅ 在可接受浮动范围内，建议购买"
+    elif max_budget_value and current <= max_budget_value:
+        level = "within_budget"
+        label = "📊 高于理想区间，仅刚需建议购买"
+    else:
+        level = "over_budget"
+        label = "❌ 超出最高预算，不推荐"
+
+    return {
+        "level": level,
+        "label": label,
+        "current_price": current,
+        "target_price": target,
+        "tolerance": tolerance_value,
+        "buy_upper": buy_upper,
+        "max_budget": max_budget_value,
+    }
+
 
 def analyze_all_flights(
     flights: list[dict],
@@ -2513,6 +2634,24 @@ def analyze_all_flights(
     max_budget_effective = _to_float((merged_preferences or {}).get("max_budget"))
     if max_budget_effective is None:
         max_budget_effective = _to_float((merged_preferences or {}).get("budget"))
+    price_tolerance = _to_float((merged_preferences or {}).get("price_tolerance"))
+    if price_tolerance is None:
+        price_tolerance = 100
+    price_band = price_tolerance_advice(
+        lowest_price,
+        target_price_effective,
+        price_tolerance,
+        max_budget_effective,
+    )
+    for flight in usable_flights:
+        advice = price_tolerance_advice(
+            flight.get("price"),
+            target_price_effective,
+            price_tolerance,
+            max_budget_effective,
+        )
+        if advice:
+            flight["price_advice"] = advice
 
     return {
         "total_options": len(usable_flights),
@@ -2532,6 +2671,8 @@ def analyze_all_flights(
         "target_price": target_price,
         "target_price_effective": target_price_effective,
         "target_price_mode": target_price_mode,
+        "price_tolerance": price_tolerance,
+        "price_band": price_band,
         "mode": mode,
         "priorities": priority_config,
         "qualified_flights": qualified_flights,
