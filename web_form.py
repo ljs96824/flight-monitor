@@ -18,18 +18,6 @@ load_dotenv(BASE_DIR / ".env", encoding="utf-8")
 
 app = Flask(__name__)
 
-COMMON_ORIGINS = [
-    ("PVG", "上海 PVG / 浦东"),
-    ("SHA", "上海 SHA / 虹桥"),
-    ("PEK", "北京 PEK / 首都"),
-    ("PKX", "北京 PKX / 大兴"),
-    ("CAN", "广州 CAN"),
-    ("SZX", "深圳 SZX"),
-    ("CTU", "成都 CTU"),
-    ("HGH", "杭州 HGH"),
-    ("NKG", "南京 NKG"),
-]
-
 DESTINATION_ALIASES = {
     "ORLANDO": "MCO",
     "奥兰多": "MCO",
@@ -95,6 +83,17 @@ ARRIVAL_TIME_LABELS = {
     "no_midnight": "不接受凌晨到达",
     "daytime_only": "必须白天到达",
 }
+
+COMMON_ORIGINS = [
+    ("上海", "上海（浦东PVG + 虹桥SHA）"),
+    ("北京", "北京（首都PEK + 大兴PKX）"),
+    ("广州", "广州（白云CAN）"),
+    ("深圳", "深圳（宝安SZX）"),
+    ("成都", "成都（天府CTU）"),
+    ("杭州", "杭州（萧山HGH）"),
+    ("南京", "南京（禄口NKG）"),
+    ("OTHER", "其他（手动输入）"),
+]
 
 TIME_SLOT_LABELS = {
     "early_morning": "早班 06:00-09:00",
@@ -363,6 +362,7 @@ FORM_TEMPLATE = """
         {% endfor %}
       </select>
       <input name="origin_manual" placeholder="或手动输入城市名/机场代码，例如上海或PVG">
+      <p id="origin-airport-hint" class="hint"></p>
 
       <label for="destination">目的地</label>
       <input id="destination" name="destination" placeholder="输入城市名（如大阪、东京）或机场代码（如KIX）" required>
@@ -604,6 +604,13 @@ FORM_TEMPLATE = """
         </div>
         <input name="exclude_airlines" placeholder="选填，多个航司用逗号分隔，例如 Spirit, Frontier">
 
+        <label>出发机场偏好（可选）</label>
+        <div class="choice">
+          <label><input type="radio" name="origin_airport_preference" value="all" checked> 不限（搜索所有机场）</label>
+          <label><input type="radio" name="origin_airport_preference" value="PVG"> 只搜浦东PVG</label>
+          <label><input type="radio" name="origin_airport_preference" value="SHA"> 只搜虹桥SHA</label>
+        </div>
+
         <label>附加关注</label>
         <div class="choice">
           <label><input type="checkbox" name="secondary_goals" value="low_price_alert"> 异常低价提醒</label>
@@ -677,6 +684,19 @@ FORM_TEMPLATE = """
     };
 
     const form = document.getElementById('subscription-form');
+    const originSelect = document.getElementById('origin');
+    const originManual = document.querySelector('input[name="origin_manual"]');
+    const originAirportHint = document.getElementById('origin-airport-hint');
+    const originAirportHints = {
+      "上海": "将搜索以下机场出发的航班：浦东PVG、虹桥SHA",
+      "北京": "将搜索以下机场出发的航班：首都PEK、大兴PKX",
+      "广州": "将搜索以下机场出发的航班：白云CAN",
+      "深圳": "将搜索以下机场出发的航班：宝安SZX",
+      "成都": "将搜索以下机场出发的航班：天府CTU",
+      "杭州": "将搜索以下机场出发的航班：萧山HGH",
+      "南京": "将搜索以下机场出发的航班：禄口NKG",
+      "OTHER": "请选择“其他”后在下方手动输入城市名或机场代码"
+    };
     const tripRadios = document.querySelectorAll('input[name="round_trip"]');
     const returnWrap = document.getElementById('return-date-wrap');
     const returnDate = document.getElementById('return_date');
@@ -775,8 +795,24 @@ FORM_TEMPLATE = """
     }
 
     function selectedOrigin() {
-      const manual = form.origin_manual.value.trim().toUpperCase();
-      return manual || form.origin_select.value;
+      const manual = form.origin_manual.value.trim();
+      const selected = form.origin_select.value;
+      if (manual) {
+        return manual;
+      }
+      return selected === 'OTHER' ? '其他' : selected;
+    }
+
+    function updateOriginAirportHint() {
+      if (!originAirportHint) {
+        return;
+      }
+      const manual = originManual.value.trim();
+      if (manual) {
+        originAirportHint.textContent = `将按你手动输入的“${manual}”解析出发机场`;
+        return;
+      }
+      originAirportHint.textContent = originAirportHints[originSelect.value] || "";
     }
 
     function toggleReturnDate() {
@@ -986,6 +1022,8 @@ FORM_TEMPLATE = """
     targetPriceRadios.forEach(radio => radio.addEventListener('change', toggleBudgetRequired));
     maxBudgetInput.addEventListener('input', validatePriceInputs);
     targetPriceInput.addEventListener('input', validatePriceInputs);
+    originSelect.addEventListener('change', updateOriginAirportHint);
+    originManual.addEventListener('input', updateOriginAirportHint);
     transferRadios.forEach(radio => radio.addEventListener('change', toggleShortTransferOptions));
     primaryGoalRadios.forEach(radio => radio.addEventListener('change', () => {
       applyDefaultSecondaryGoals();
@@ -997,6 +1035,7 @@ FORM_TEMPLATE = """
     toggleReturnDate();
     toggleBudgetRequired();
     toggleShortTransferOptions();
+    updateOriginAirportHint();
     advanced.style.display = 'none';
     advancedToggle.textContent = '▼ 展开高级偏好（可选）';
     applyDefaultSecondaryGoals();
@@ -1139,10 +1178,9 @@ def first_push_text() -> str:
 
 def build_subscription(form) -> dict:
     round_trip = parse_bool(form.get("round_trip", "false"))
-    origin_input = (
-        form.get("origin_manual", "").strip().upper()
-        or form.get("origin_select", "").strip().upper()
-    )
+    origin_manual = form.get("origin_manual", "").strip()
+    origin_select = form.get("origin_select", "").strip()
+    origin_input = origin_manual or ("" if origin_select == "OTHER" else origin_select)
     origin_info = resolve_location(origin_input)
     destination_info = resolve_location(normalize_destination(form.get("destination", "")))
     max_budget_mode = form.get("max_budget_mode", "fixed")
@@ -1215,6 +1253,7 @@ def build_subscription(form) -> dict:
             "baggage": form.get("baggage", "required"),
             "refund_flexibility": form.get("refund_flexibility", "preferred"),
             "airline_policy": form.get("airline_policy", "any"),
+            "origin_airport_preference": form.get("origin_airport_preference", "all"),
             "exclude_airlines": [
                 item.strip()
                 for item in form.get("exclude_airlines", "").replace("，", ",").split(",")

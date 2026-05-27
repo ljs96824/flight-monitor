@@ -138,6 +138,13 @@ def _normalize_subscription(item: dict) -> dict:
     destination_airports = (
         item.get("destination_airports") or destination_info["airports"]
     )
+    origin_airport_preference = hard_constraints.get(
+        "origin_airport_preference", item.get("origin_airport_preference", "all")
+    )
+    if origin_airport_preference and origin_airport_preference != "all":
+        preferred_origin = str(origin_airport_preference).strip().upper()
+        if preferred_origin in origin_airports:
+            origin_airports = [preferred_origin]
 
     legacy_budget = hard_constraints.get("budget", item.get("budget"))
     max_budget = hard_constraints.get(
@@ -205,6 +212,7 @@ def _normalize_subscription(item: dict) -> dict:
         "origin": origin_info["value"],
         "origin_type": item.get("origin_type") or origin_info["type"],
         "origin_airports": origin_airports,
+        "origin_airport_preference": origin_airport_preference,
         "destination": destination_info["value"],
         "destination_type": item.get("destination_type") or destination_info["type"],
         "destination_airports": destination_airports,
@@ -331,6 +339,7 @@ def subscription_preferences(sub: dict) -> dict:
         "exclude_airlines": sub.get("exclude_airlines", []),
         "max_extra_duration_hours": sub.get("max_extra_duration_hours"),
         "max_total_duration_hours": sub.get("max_total_duration_hours"),
+        "origin_airport_preference": sub.get("origin_airport_preference", "all"),
     }
 
 
@@ -390,6 +399,15 @@ def collect_for_airport_matrix(
             cabin_classes=cabin_classes,
         )
 
+    combinations = [(origins[0], destinations[0])]
+    combinations.extend((origins[0], dest) for dest in destinations[1:])
+    combinations.extend((origin, destinations[0]) for origin in origins[1:])
+    combinations.extend(
+        (origin, dest)
+        for origin in origins[1:]
+        for dest in destinations[1:]
+    )
+
     merged = {
         "flights": [],
         "price_insights": {},
@@ -400,29 +418,36 @@ def collect_for_airport_matrix(
         "source": "",
     }
     sources_used = []
-    for origin in origins:
-        for destination in destinations:
-            print(f"[城市搜索] 采集 {origin}→{destination} {date_str}")
-            data = aggregator.collect(
-                origin,
-                destination,
-                date_str,
-                cabin_classes=cabin_classes,
+
+    for index, (origin, destination) in enumerate(combinations):
+        current_count = len(_dedupe_flights(merged["flights"]))
+        if index > 0 and current_count >= 5:
+            print(
+                f"[城市搜索] 主机场组合已返回{current_count}个有效方案，跳过低优先级机场组合"
             )
-            if not data:
-                continue
-            for flight in data.get("flights", []):
-                flight["search_origin"] = origin
-                flight["search_destination"] = destination
-            merged["flights"].extend(data.get("flights", []))
-            if not merged["price_insights"] and data.get("price_insights"):
-                merged["price_insights"] = data["price_insights"]
-            _merge_source_stats(merged["source_stats"], data.get("source_stats", {}))
-            merged["source_errors"].extend(data.get("source_errors", []))
-            merged["raw_by_source"].update(data.get("raw_by_source", {}))
-            for source in str(data.get("sources_used") or data.get("source") or "").split("+"):
-                if source and source not in sources_used:
-                    sources_used.append(source)
+            break
+
+        print(f"[城市搜索] 采集 {origin}→{destination} {date_str}")
+        data = aggregator.collect(
+            origin,
+            destination,
+            date_str,
+            cabin_classes=cabin_classes,
+        )
+        if not data:
+            continue
+        for flight in data.get("flights", []):
+            flight["search_origin"] = origin
+            flight["search_destination"] = destination
+        merged["flights"].extend(data.get("flights", []))
+        if not merged["price_insights"] and data.get("price_insights"):
+            merged["price_insights"] = data["price_insights"]
+        _merge_source_stats(merged["source_stats"], data.get("source_stats", {}))
+        merged["source_errors"].extend(data.get("source_errors", []))
+        merged["raw_by_source"].update(data.get("raw_by_source", {}))
+        for source in str(data.get("sources_used") or data.get("source") or "").split("+"):
+            if source and source not in sources_used:
+                sources_used.append(source)
 
     merged["flights"] = _dedupe_flights(merged["flights"])
     merged["total_count"] = len(merged["flights"])
@@ -730,6 +755,7 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
                 "origin": sub["origin"],
                 "origin_type": sub.get("origin_type"),
                 "origin_airports": sub.get("origin_airports"),
+                "origin_airport_preference": sub.get("origin_airport_preference", "all"),
                 "destination": sub["destination"],
                 "destination_type": sub.get("destination_type"),
                 "destination_airports": sub.get("destination_airports"),
