@@ -35,6 +35,24 @@ def _append_sources(flight: dict, sources: list[str]) -> None:
         flight["data_source"] = "+".join(current_sources)
 
 
+def _merge_booking_options(target: dict, source: dict) -> None:
+    options = list(target.get("booking_options") or [])
+    seen = {
+        (option.get("platform"), option.get("url"), option.get("price"))
+        for option in options
+        if isinstance(option, dict)
+    }
+    for option in source.get("booking_options") or []:
+        if not isinstance(option, dict):
+            continue
+        key = (option.get("platform"), option.get("url"), option.get("price"))
+        if key not in seen:
+            seen.add(key)
+            options.append(option)
+    if options:
+        target["booking_options"] = options
+
+
 def _valid_price(value) -> bool:
     try:
         return float(value) > 0
@@ -212,8 +230,12 @@ class FlightAggregator:
             current_price = seen.get(normalized_combo, {}).get("price", 99999)
             if normalized_combo in seen:
                 _append_sources(seen[normalized_combo], new_sources)
+                _merge_booking_options(seen[normalized_combo], flight)
             if normalized_combo not in seen or float(flight.get("price")) < float(current_price):
+                previous = seen.get(normalized_combo)
                 seen[normalized_combo] = flight
+                if previous:
+                    _merge_booking_options(seen[normalized_combo], previous)
                 _append_sources(seen[normalized_combo], sources_by_combo[normalized_combo])
 
         unique_flights = list(seen.values())

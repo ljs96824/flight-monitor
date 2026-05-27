@@ -11,6 +11,22 @@ from serpapi import GoogleSearch
 from sources.base import FlightSource
 
 
+AIRLINE_BOOKING_URLS = {
+    "MU": "https://www.ceair.com",
+    "CA": "https://www.airchina.com.cn",
+    "CZ": "https://www.csair.com",
+    "9C": "https://www.ch.com",
+    "HO": "https://www.juneyaoair.com",
+    "3U": "https://www.sichuanair.com",
+    "NH": "https://www.ana.co.jp/zh/cn/",
+    "JL": "https://www.jal.co.jp/zhcn/",
+    "MM": "https://www.flypeach.com/zh-cn",
+    "AA": "https://www.aa.com",
+    "UA": "https://www.united.com",
+    "DL": "https://zh.delta.com",
+}
+
+
 class SerpAPISource(FlightSource):
     name = "serpapi"
 
@@ -116,6 +132,152 @@ def _normalize_airport_time(
     return text, None
 
 
+def _price_value(value):
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return value if value > 0 else None
+    text = str(value)
+    match = re.search(r"\d+(?:,\d{3})*(?:\.\d+)?", text)
+    if not match:
+        return None
+    try:
+        price = float(match.group(0).replace(",", ""))
+    except ValueError:
+        return None
+    return price if price > 0 else None
+
+
+def _first_airline_code(flight_nos: list[str]) -> str:
+    for flight_no in flight_nos:
+        match = re.match(r"\s*([A-Z0-9]{2})", str(flight_no or "").upper())
+        if match:
+            return match.group(1)
+    return ""
+
+
+def _search_url(platform: str, origin: str, dest: str, date_str: str | None, flight_no: str) -> str:
+    date = str(date_str or "")
+    compact_flight_no = re.sub(r"\s+", "", flight_no or "")
+    if platform == "ctrip":
+        return (
+            f"https://flights.ctrip.com/online/list/oneway-{origin}-{dest}"
+            f"?depdate={date}&cabin=y&flightno={compact_flight_no}"
+        )
+    if platform == "fliggy":
+        return (
+            "https://www.fliggy.com/flight/international-search"
+            f"?depCity={origin}&arrCity={dest}&depDate={date}&flightNo={compact_flight_no}"
+        )
+    return ""
+
+
+def _normalize_booking_option(option: dict, fallback_price) -> dict | None:
+    platform = (
+        option.get("platform")
+        or option.get("name")
+        or option.get("provider")
+        or option.get("booking_site")
+        or option.get("agency")
+        or option.get("merchant")
+    )
+    url = option.get("url") or option.get("link") or option.get("booking_url")
+    price = _price_value(option.get("price") or option.get("total_price"))
+    if price is None and option.get("price") in (0, "0"):
+        price = None
+    if not platform and not url:
+        return None
+    return {
+        "platform": str(platform or "Google Flights"),
+        "price": price,
+        "url": str(url or ""),
+        "verified": bool(price and url),
+        "source": "google_flights",
+    }
+
+
+def _extract_booking_options(
+    flight_data: dict,
+    flight_nos: list[str],
+    price,
+    origin: str,
+    dest: str,
+    date_str: str | None,
+) -> list[dict]:
+    options = []
+    booking_token = flight_data.get("booking_token") or flight_data.get("bookingToken")
+    parsed_price = _price_value(price)
+    if booking_token:
+        options.append(
+            {
+                "platform": "Google Flights 预订",
+                "price": parsed_price,
+                "url": f"https://www.google.com/travel/flights/booking?token={booking_token}",
+                "verified": bool(parsed_price),
+                "source": "booking_token",
+                "direct_booking": True,
+            }
+        )
+
+    raw_options = flight_data.get("booking_options") or flight_data.get("bookingOptions") or []
+    if isinstance(raw_options, dict):
+        raw_options = raw_options.get("options") or raw_options.get("booking_options") or []
+    for option in raw_options if isinstance(raw_options, list) else []:
+        if isinstance(option, dict):
+            normalized = _normalize_booking_option(option, parsed_price)
+            if normalized:
+                options.append(normalized)
+
+    extensions = flight_data.get("extensions") or []
+    for item in extensions:
+        if isinstance(item, dict):
+            normalized = _normalize_booking_option(item, parsed_price)
+            if normalized:
+                options.append(normalized)
+
+    first_flight_no = flight_nos[0] if flight_nos else ""
+    airline_code = _first_airline_code(flight_nos)
+    airline_url = AIRLINE_BOOKING_URLS.get(airline_code)
+    if airline_url:
+        options.append(
+            {
+                "platform": f"{airline_code} 航司官网",
+                "price": None,
+                "url": airline_url,
+                "verified": False,
+                "source": "inferred_airline",
+            }
+        )
+    if origin and dest:
+        options.extend(
+            [
+                {
+                    "platform": "携程搜索",
+                    "price": None,
+                    "url": _search_url("ctrip", origin, dest, date_str, first_flight_no),
+                    "verified": False,
+                    "source": "inferred_ota",
+                },
+                {
+                    "platform": "飞猪搜索",
+                    "price": None,
+                    "url": _search_url("fliggy", origin, dest, date_str, first_flight_no),
+                    "verified": False,
+                    "source": "inferred_ota",
+                },
+            ]
+        )
+
+    deduped = []
+    seen = set()
+    for option in options:
+        key = (option.get("platform"), option.get("url"), option.get("price"))
+        if option.get("url") and key not in seen:
+            seen.add(key)
+            deduped.append(option)
+    return deduped
+
+
 def parse_google_flights(
     results: dict,
     source_name: str,
@@ -197,8 +359,11 @@ def parse_google_flights(
                     )
 
             total_duration_min = flight.get("total_duration") or 0
+            price = flight.get("price")
+            route_origin = cities[0] if cities else ""
+            route_dest = cities[-1] if cities else ""
             parsed = {
-                "price": flight.get("price"),
+                "price": price,
                 "flight_nos": flight_nos,
                 "flight_combo": "+".join(flight_nos),
                 "airlines": list(dict.fromkeys(airlines)),
@@ -223,6 +388,14 @@ def parse_google_flights(
                 ),
                 "cabin_class": cabin_class,
                 "data_source": source_name,
+                "booking_options": _extract_booking_options(
+                    flight,
+                    flight_nos,
+                    price,
+                    route_origin,
+                    route_dest,
+                    date_str,
+                ),
             }
 
             if parsed["price"] is not None:

@@ -680,40 +680,21 @@ def format_booking_links_text(flight: dict, depart_date: str) -> str:
         return ""
 
     _, flight_no_clean = _clean_flight_numbers(flight.get("flight_combo"))
-    ctrip = _ctrip_url(origin, dest, depart_date, "economy", flight_no_clean)
-    fliggy = (
-        "https://www.fliggy.com/flight/international-search"
-        f"?from={origin}&to={dest}&depDate={depart_date}"
+    entries, has_verified_price = _booking_link_entries(
+        origin,
+        dest,
+        depart_date,
+        flight.get("flight_combo"),
+        flight.get("cabin_class") or "economy",
+        flight,
     )
-    google = _google_flights_url(origin, dest, depart_date)
 
-    airline_sites = {
-        "美航": ("美航官网", "https://www.aa.com"),
-        "American Airlines": ("美航官网", "https://www.aa.com"),
-        "加航": ("加航官网", "https://www.aircanada.com"),
-        "Air Canada": ("加航官网", "https://www.aircanada.com"),
-        "联合": ("联合官网", "https://www.united.com"),
-        "United": ("联合官网", "https://www.united.com"),
-        "达美": ("达美官网", "https://www.delta.com"),
-        "Delta": ("达美官网", "https://www.delta.com"),
-    }
-    airline_name = segments[0].get("airline", "")
-    airline_site = airline_sites.get(airline_name)
-
-    entries = [
-        ("携程", ctrip),
-        ("飞猪", fliggy),
-    ]
-    if airline_site:
-        airline_label, airline_url = airline_site
-        entries.append((airline_label, airline_url))
-    entries.append(("Google Flights", google))
-
-    lines = ["🔗 去购买", ""]
+    lines = ["🔗 购买渠道" if has_verified_price else "🔗 可能的购买渠道", ""]
     circled_numbers = ["①", "②", "③", "④", "⑤", "⑥"]
     for index, (label, url) in enumerate(entries):
         prefix = circled_numbers[index] if index < len(circled_numbers) else f"{index + 1}."
         lines.extend([f"{prefix} {label}", url, ""])
+    lines.append(_booking_options_hint(flight))
 
     return "\n".join(lines)
 
@@ -1377,7 +1358,101 @@ def _ctrip_url(origin: str, dest: str, date_str: str, cabin="economy", flight_no
     return url
 
 
-def generate_booking_links(origin, dest, date_str, flight_nos=None, cabin="economy"):
+AIRLINE_BOOKING_URLS = {
+    "MU": ("东航官网", "https://www.ceair.com"),
+    "CA": ("国航官网", "https://www.airchina.com.cn"),
+    "CZ": ("南航官网", "https://www.csair.com"),
+    "9C": ("春秋航空官网", "https://www.ch.com"),
+    "HO": ("吉祥航空官网", "https://www.juneyaoair.com"),
+    "3U": ("川航官网", "https://www.sichuanair.com"),
+    "NH": ("全日空官网", "https://www.ana.co.jp/zh/cn/"),
+    "JL": ("日航官网", "https://www.jal.co.jp/zhcn/"),
+    "MM": ("乐桃官网", "https://www.flypeach.com/zh-cn"),
+    "AA": ("美航官网", "https://www.aa.com"),
+    "UA": ("美联航官网", "https://www.united.com"),
+    "DL": ("达美官网", "https://zh.delta.com"),
+}
+
+
+def _option_price(option: dict):
+    try:
+        price = float(option.get("price") or 0)
+    except (TypeError, ValueError):
+        return None
+    return price if price > 0 else None
+
+
+def _verified_booking_options(flight: dict | None) -> list[dict]:
+    options = []
+    for option in (flight or {}).get("booking_options") or []:
+        if not isinstance(option, dict):
+            continue
+        if option.get("url") and _option_price(option):
+            options.append(option)
+    return sorted(options, key=lambda option: _option_price(option) or 999999)
+
+
+def _airline_code_from_flight_nos(flight_nos=None) -> str:
+    display, _ = _clean_flight_numbers(flight_nos)
+    match = re.match(r"\s*([A-Z0-9]{2})", display.upper())
+    return match.group(1) if match else ""
+
+
+def _possible_booking_links(origin, dest, date_str, flight_nos=None, cabin="economy") -> list[tuple[str, str]]:
+    _, flight_no_clean = _clean_flight_numbers(flight_nos)
+    links = []
+    airline_code = _airline_code_from_flight_nos(flight_nos)
+    airline_site = AIRLINE_BOOKING_URLS.get(airline_code)
+    if airline_site:
+        links.append(airline_site)
+    links.extend(
+        [
+            ("携程搜索", _ctrip_url(origin, dest, date_str, cabin, flight_no_clean)),
+            (
+                "飞猪搜索",
+                "https://www.fliggy.com/flight/international-search?"
+                f"depCity={origin}&arrCity={dest}&depDate={date_str}"
+                f"&flightNo={quote_plus(flight_no_clean)}",
+            ),
+        ]
+    )
+    return links
+
+
+def _booking_link_entries(
+    origin, dest, date_str, flight_nos=None, cabin="economy", flight: dict | None = None
+) -> tuple[list[tuple[str, str]], bool]:
+    verified = _verified_booking_options(flight)
+    if verified:
+        entries = []
+        for option in verified:
+            platform = str(option.get("platform") or "购买渠道")
+            price = _option_price(option)
+            entries.append((f"{platform} {_price_text(price)} 🟢", option["url"]))
+        return entries, True
+
+    fallback = [
+        (f"{name} 🟡", url)
+        for name, url in _possible_booking_links(origin, dest, date_str, flight_nos, cabin)
+        if url
+    ]
+    return fallback, False
+
+
+def _booking_options_hint(flight: dict | None) -> str:
+    verified = _verified_booking_options(flight)
+    if verified:
+        lowest = _option_price(verified[0])
+        platforms = [
+            str(option.get("platform") or "购买渠道")
+            for option in verified
+            if _option_price(option) == lowest
+        ]
+        return f"💡 {'、'.join(platforms)}价格最低"
+    return "⚠️ 价格以各平台实际显示为准"
+
+
+def generate_booking_links(origin, dest, date_str, flight_nos=None, cabin="economy", flight: dict | None = None):
     """Generate clickable booking links for a one-way flight search."""
     origin = str(origin or "").upper()
     dest = str(dest or "").upper()
@@ -1385,12 +1460,16 @@ def generate_booking_links(origin, dest, date_str, flight_nos=None, cabin="econo
     trip_class = "C" if str(cabin or "").lower() == "business" else "Y"
     _, flight_no_clean = _clean_flight_numbers(flight_nos)
     style = "color:#1a73e8;text-decoration:underline;"
-    links = []
-
-    google_url = _google_flights_url(origin, dest, date_str)
-    links.append(f'<a href="{google_url}" style="{style}">Google Flights</a>')
+    entries, has_verified_price = _booking_link_entries(
+        origin, dest, date_str, flight_nos, cabin, flight
+    )
+    if entries:
+        return " | ".join(
+            f'<a href="{url}" style="{style}">{label}</a>' for label, url in entries[:4]
+        )
 
     ctrip_url = _ctrip_url(origin, dest, date_str, cabin, flight_no_clean)
+    links = []
     links.append(f'<a href="{ctrip_url}" style="{style}">携程</a>')
 
     feizhu_url = (
@@ -1968,25 +2047,13 @@ def _compact_booking_links(flight: dict, route_info: dict) -> list[tuple[str, st
     origin = route_info.get("origin", "")
     dest = route_info.get("destination", "")
     depart_date = route_info.get("depart_date", "")
-    _, flight_no_clean = _clean_flight_numbers(flight.get("flight_combo"))
-    links = [
-        ("携程", _ctrip_url(origin, dest, depart_date, flight.get("cabin_class") or "economy", flight_no_clean))
-    ]
-    airline_str = " ".join(str(item) for item in _flight_airlines(flight))
-    combo = str(flight.get("flight_combo", ""))
-    if "美航" in airline_str or "American" in airline_str or "AA" in combo:
-        links.append(("美航官网", "https://www.aa.com"))
-    elif "加航" in airline_str or "Air Canada" in airline_str or "AC" in combo:
-        links.append(("加航官网", "https://www.aircanada.com"))
-    elif "United" in airline_str or "联合" in airline_str or "UA" in combo:
-        links.append(("联合官网", "https://www.united.com"))
-    elif "Delta" in airline_str or "达美" in airline_str or "DL" in combo:
-        links.append(("达美官网", "https://www.delta.com"))
-    links.append(
-        (
-            "Google Flights",
-            _google_flights_url(origin, dest, depart_date),
-        )
+    links, _ = _booking_link_entries(
+        origin,
+        dest,
+        depart_date,
+        flight.get("flight_combo"),
+        flight.get("cabin_class") or "economy",
+        flight,
     )
     return links[:3]
 
@@ -2234,15 +2301,15 @@ def _append_compact_flight(
     if transfer_lines:
         lines.extend(transfer_lines)
     lines.append("")
-    lines.append("🔗 购买")
+    has_verified_booking = bool(_verified_booking_options(flight))
+    lines.append("🔗 购买渠道" if has_verified_booking else "🔗 可能的购买渠道")
     booking_links = _compact_booking_links(flight, route_info)
     for index, (name, url) in enumerate(booking_links, start=1):
         number_labels = ["①", "②", "③"]
         number = number_labels[index - 1]
         lines.append(f'{number} <a href="{url}">{name}</a>')
     if booking_links:
-        lines.append(f"购买渠道：{_channel_summary(booking_links)}")
-        lines.append("💡 建议优先通过携程或航司官网购买，售后保障更好")
+        lines.append(_booking_options_hint(flight))
     lines.append("")
 
 
@@ -3168,7 +3235,18 @@ def _flight_booking_link(flight: dict, date_str: str | None, label: str) -> str:
     dest = last_segment.get("arr_airport") or last_segment.get("arrival_airport")
     search_date = _flight_search_date(flight, date_str)
     style = "color:#1a73e8;text-decoration:underline;"
-    url = _google_flights_url(origin, dest, search_date)
+    verified = _verified_booking_options(flight)
+    if verified:
+        url = verified[0]["url"]
+    else:
+        possible = _possible_booking_links(
+            origin,
+            dest,
+            search_date,
+            flight.get("flight_combo"),
+            flight.get("cabin_class") or "economy",
+        )
+        url = possible[0][1] if possible else _google_flights_url(origin, dest, search_date)
     return f'<a href="{url}" style="{style}">{label}</a>'
 
 
@@ -3238,6 +3316,7 @@ def format_flight_detail(
             search_date,
             flight_no,
             flight.get("cabin_class") or "economy",
+            flight,
         )
         if dep_airport and arr_airport and search_date
         else ""
@@ -3250,9 +3329,9 @@ def format_flight_detail(
         f"机型: {_round_trip_aircraft_text(flight)}"
     )
     if booking_links:
-        detail += f"<br>  🔗 去购买: {booking_links}"
-        detail += "<br>  购买渠道：Google Flights 🟢 聚合比价 | 携程 🟢 高可信 | 飞猪 🟢 高可信 | Trip.com 🟢 高可信"
-        detail += "<br>  💡 建议优先通过携程或航司官网购买，售后保障更好"
+        title = "购买渠道" if _verified_booking_options(flight) else "可能的购买渠道"
+        detail += f"<br>  🔗 {title}: {booking_links}"
+        detail += f"<br>  {_booking_options_hint(flight)}"
     detail += (
         f"<br>  价格采集于 {_collected_time_text(flight)} | "
         f"新鲜度：{_freshness_label(flight)}"
