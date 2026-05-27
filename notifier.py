@@ -73,6 +73,76 @@ def _price_text(price) -> str:
     return format_price(price)
 
 
+def _valid_price_float(value):
+    try:
+        price = float(value)
+    except (TypeError, ValueError):
+        return None
+    return price if price > 0 else None
+
+
+def _source_price_entries_for_display(flight: dict | None) -> list[dict]:
+    entries = (
+        (flight or {}).get("source_price_details")
+        or (flight or {}).get("source_prices")
+        or (flight or {}).get("prices_by_source")
+        or []
+    )
+    if isinstance(entries, dict):
+        entries = [
+            {"source": source, "price": price}
+            for source, price in entries.items()
+        ]
+
+    normalized = []
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        price = _valid_price_float(entry.get("price"))
+        if price is None:
+            continue
+        normalized.append(
+            {
+                "source": entry.get("source") or entry.get("data_source") or "unknown",
+                "price": price,
+            }
+        )
+    return normalized
+
+
+def _flight_price_text(flight: dict) -> str:
+    entries = _source_price_entries_for_display(flight)
+    prices = [entry["price"] for entry in entries]
+    own_price = _valid_price_float(flight.get("price"))
+    if own_price is not None and not prices:
+        prices = [own_price]
+
+    if not prices:
+        return _price_text(flight.get("price"))
+
+    low = min(prices)
+    high = max(prices)
+    if len(set(round(price, 2) for price in prices)) > 1:
+        price_part = f"{_price_text(low)} ~ {_price_text(high)} (多平台报价)"
+    else:
+        price_part = _price_text(low)
+
+    source = _compact_source_label(flight)
+    collected_at = _collected_time_text(flight)
+    return f"{price_part} (来源:{source}, 采集于{collected_at})"
+
+
+def _price_discrepancy_notice(flight: dict) -> str:
+    prices = [entry["price"] for entry in _source_price_entries_for_display(flight)]
+    if len(prices) < 2:
+        return ""
+    low = min(prices)
+    high = max(prices)
+    if low > 0 and (high - low) / low > 0.10:
+        return "⚠️ 各数据源价格差异较大，建议多平台比价"
+    return ""
+
+
 def _format_price(value) -> str:
     return format_price(value).replace("¥", "")
 
@@ -1345,22 +1415,28 @@ def _clean_flight_numbers(flight_nos) -> tuple[str, str]:
     return display, compact
 
 
-def _google_flights_url(origin: str, dest: str, date_str: str) -> str:
-    """Build a Google Flights page URL instead of a generic Google Search URL."""
+def build_google_flights_url(origin, dest, date_str, return_date=None):
+    """Build a Google Flights search URL with a safe Google Search fallback."""
     origin = str(origin or "").upper()
     dest = str(dest or "").upper()
     date_str = str(date_str or "")
-    origin_city = get_airport_city_en(origin)
-    dest_city = get_airport_city_en(dest)
-    query = " ".join(
-        part
-        for part in ["flights", "from", origin_city, "to", dest_city, "on", date_str]
-        if part
-    )
-    return (
-        "https://www.google.com/travel/flights/search"
-        f"?q={quote_plus(query)}&curr=CNY&hl=zh-CN"
-    )
+    params = [
+        f"departure_id={quote_plus(origin)}",
+        f"arrival_id={quote_plus(dest)}",
+        f"outbound_date={quote_plus(date_str)}",
+        "type=2",
+        "curr=CNY",
+        "hl=zh-CN",
+    ]
+    if return_date:
+        params[3] = "type=1"
+        params.append(f"return_date={quote_plus(str(return_date))}")
+    return "https://www.google.com/travel/flights/search?" + "&".join(params)
+
+
+def _google_flights_url(origin: str, dest: str, date_str: str) -> str:
+    """Build a direct Google Flights search URL."""
+    return build_google_flights_url(origin, dest, date_str)
 
 
 def _ctrip_url(origin: str, dest: str, date_str: str, cabin="economy", flight_no: str = "") -> str:
@@ -1370,7 +1446,7 @@ def _ctrip_url(origin: str, dest: str, date_str: str, cabin="economy", flight_no
     date_str = str(date_str or "")
     origin_city = get_airport_city(origin)
     dest_city = get_airport_city(dest)
-    cabin_code = "c" if str(cabin or "").lower() == "business" else "y"
+    cabin_code = "c" if str(cabin or "").lower() == "business" else "y_s"
     url = (
         f"https://flights.ctrip.com/online/list/oneway-{origin_city}-{dest_city}"
         f"?depdate={date_str}&cabin={cabin_code}"
@@ -1424,22 +1500,20 @@ def _possible_booking_links(origin, dest, date_str, flight_nos=None, cabin="econ
     _, flight_no_clean = _clean_flight_numbers(flight_nos)
     origin_city = get_airport_city(origin)
     dest_city = get_airport_city(dest)
-    links = []
+    links = [
+        ("携程搜索", _ctrip_url(origin, dest, date_str, cabin, flight_no_clean)),
+        (
+            "飞猪搜索",
+            "https://www.fliggy.com/flight/international-search?"
+            f"depCity={origin_city}&arrCity={dest_city}&depDate={date_str}"
+            f"&flightNo={quote_plus(flight_no_clean)}",
+        ),
+    ]
     airline_code = _airline_code_from_flight_nos(flight_nos)
     airline_site = AIRLINE_BOOKING_URLS.get(airline_code)
     if airline_site:
         links.append(airline_site)
-    links.extend(
-        [
-            ("携程搜索", _ctrip_url(origin, dest, date_str, cabin, flight_no_clean)),
-            (
-                "飞猪搜索",
-                "https://www.fliggy.com/flight/international-search?"
-                f"depCity={origin_city}&arrCity={dest_city}&depDate={date_str}"
-                f"&flightNo={quote_plus(flight_no_clean)}",
-            ),
-        ]
-    )
+    links.append(("Google Flights", _google_flights_url(origin, dest, date_str)))
     return links
 
 
@@ -1473,7 +1547,7 @@ def _booking_options_hint(flight: dict | None) -> str:
             if _option_price(option) == lowest
         ]
         return f"💡 {'、'.join(platforms)}价格最低"
-    return "⚠️ 价格以各平台实际显示为准"
+    return "⚠️ 显示价格为采集时数据，点击后以平台实际价格为准"
 
 
 def generate_booking_links(origin, dest, date_str, flight_nos=None, cabin="economy", flight: dict | None = None):
@@ -2070,9 +2144,20 @@ def _compact_source_label(flight: dict) -> str:
 
 
 def _compact_booking_links(flight: dict, route_info: dict) -> list[tuple[str, str]]:
-    origin = route_info.get("origin", "")
-    dest = route_info.get("destination", "")
-    depart_date = route_info.get("depart_date", "")
+    segments = flight.get("segments") or []
+    first_segment = segments[0] if segments else {}
+    last_segment = segments[-1] if segments else {}
+    origin = (
+        first_segment.get("dep_airport")
+        or first_segment.get("departure_airport")
+        or route_info.get("origin", "")
+    )
+    dest = (
+        last_segment.get("arr_airport")
+        or last_segment.get("arrival_airport")
+        or route_info.get("destination", "")
+    )
+    depart_date = _flight_search_date(flight, route_info.get("depart_date", ""))
     links, _ = _booking_link_entries(
         origin,
         dest,
@@ -2281,7 +2366,7 @@ def _append_compact_flight(
     stops = int(flight.get("stops") or max(len(segments) - 1, 0))
 
     lines.append(f"<b>{label}</b>")
-    lines.append(f"💵 {_price_text(flight.get('price'))}")
+    lines.append(f"💵 {_flight_price_text(flight)}")
     lines.append(f"🏢 {airline_text or '请查询航司官网'}")
     if (flight.get("cabin_class") or "economy") == "business":
         lines.append(f"💺 {_cabin_label('business')}")
@@ -2297,6 +2382,9 @@ def _append_compact_flight(
     lines.append(_compact_baggage_line(flight))
     lines.append(_compact_refund_line(flight))
     lines.append(f"📎 数据来源：{_compact_source_label(flight)}")
+    discrepancy_notice = _price_discrepancy_notice(flight)
+    if discrepancy_notice:
+        lines.append(discrepancy_notice)
     preference_notes = (flight.get("preference_notes") or []) + (
         flight.get("preference_penalties") or []
     )
@@ -2336,6 +2424,7 @@ def _append_compact_flight(
         lines.append(f'{number} <a href="{url}">{name}</a>')
     if booking_links:
         lines.append(_booking_options_hint(flight))
+        lines.append("💡 建议优先通过携程或飞猪购买，售后保障更好")
     lines.append("")
 
 
@@ -3308,7 +3397,7 @@ def format_flight_detail(
     """统一格式化往返方案详情，去程和返程共用。"""
     flight_no = _compact_flight_numbers(flight)
     airline = _round_trip_airline_text(flight)
-    price_text = _price_text(flight.get("price"))
+    price_text = _flight_price_text(flight)
     segments = flight.get("segments") or []
     first_segment = segments[0] if segments else {}
     last_segment = segments[-1] if segments else {}
@@ -3358,6 +3447,10 @@ def format_flight_detail(
         title = "购买渠道" if _verified_booking_options(flight) else "可能的购买渠道"
         detail += f"<br>  🔗 {title}: {booking_links}"
         detail += f"<br>  {_booking_options_hint(flight)}"
+        detail += "<br>  💡 建议优先通过携程或飞猪购买，售后保障更好"
+    discrepancy_notice = _price_discrepancy_notice(flight)
+    if discrepancy_notice:
+        detail += f"<br>  {discrepancy_notice}"
     detail += (
         f"<br>  价格采集于 {_collected_time_text(flight)} | "
         f"新鲜度：{_freshness_label(flight)}"
