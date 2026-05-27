@@ -1979,68 +1979,210 @@ def _collected_minutes_ago(flight: dict) -> float | None:
     return max(0, (now - collected_at).total_seconds() / 60)
 
 
+def verify_fare_rules(flight, hard_constraints):
+    issues = []
+    matches = []
+    hard_constraints = hard_constraints or {}
+
+    baggage_req = hard_constraints.get("baggage", "unknown")
+    fare_rules = flight.get("fare_rules", {}) or {}
+    baggage_info = fare_rules.get("baggage", {}) or {}
+    checked_kg = baggage_info.get("checked_kg", 0) or 0
+    checked_pieces = baggage_info.get("checked_pieces", 0) or 0
+
+    if baggage_req == "required":
+        if checked_pieces > 0 or checked_kg > 0:
+            matches.append(f"✅ 含托运行李 {checked_kg}kg/{checked_pieces}件")
+        elif fare_rules:
+            issues.append("⚠️ 不含免费托运行李，需额外购买")
+        else:
+            issues.append("❓ 托运行李信息未确认，购买前请核实")
+
+    refund_pref = hard_constraints.get("refund_flexibility", "unknown")
+    refund_info = fare_rules.get("refund", {}) or {}
+    change_info = fare_rules.get("change", {}) or {}
+
+    if refund_pref == "must_refundable":
+        if refund_info.get("allowed"):
+            fee = refund_info.get("fee", "未知")
+            matches.append(f"✅ 可退票（手续费: {fee}）")
+        elif refund_info:
+            issues.append("⚠️ 该票不可退，与你的要求不符")
+        else:
+            issues.append("❓ 退票规则未确认，购买前请核实")
+
+    if refund_pref in ("preferred", "must_refundable"):
+        if change_info.get("allowed"):
+            matches.append("✅ 可改签")
+        elif change_info:
+            issues.append("⚠️ 该票不可改签")
+        else:
+            issues.append("❓ 改签规则未确认")
+
+    cabin = flight.get("cabin_class", "economy")
+    if cabin in ("basic_economy", "light"):
+        issues.append("⚠️ 基础经济舱/轻选舱，可能不含行李、不可选座、不可退改")
+
+    airlines = flight.get("airlines", []) or []
+    if flight.get("stops", 0) > 0:
+        if len(set(airlines)) > 1:
+            issues.append("⚠️ 跨航司中转，可能为非联程票，需确认")
+        else:
+            matches.append("✅ 同航司中转，大概率联程票")
+
+    if not issues:
+        match_level = "full"
+        match_label = "🟢 票规完全匹配"
+    elif len(issues) <= len(matches):
+        match_level = "partial"
+        match_label = "🟡 票规部分匹配"
+    else:
+        match_level = "mismatch"
+        match_label = "🔴 票规需确认"
+
+    return {
+        "level": match_level,
+        "label": match_label,
+        "matches": matches,
+        "issues": issues,
+    }
+
+
+def estimate_availability(flight, collected_at=None):
+    status = "unknown"
+    label = "❓ 未验证"
+
+    age_minutes = _collected_minutes_ago(
+        {**flight, "collected_at": collected_at or flight.get("collected_at")}
+    )
+    if age_minutes is None:
+        age_minutes = 9999
+
+    sources = flight.get("data_source", "") or flight.get("source", "")
+    source_count = len([source for source in str(sources).split("+") if source])
+    price = _to_float(flight.get("price")) or 0
+
+    if age_minutes <= 30 and source_count >= 2 and price > 0:
+        status = "likely_available"
+        label = "🟢 大概率可购买"
+    elif age_minutes <= 120 and price > 0:
+        status = "possibly_available"
+        label = "🟡 可能可购买"
+    elif age_minutes > 120:
+        status = "needs_refresh"
+        label = "🟠 建议刷新确认"
+
+    if price <= 0:
+        status = "invalid"
+        label = "🔴 价格异常"
+
+    return {
+        "status": status,
+        "label": label,
+        "age_minutes": int(age_minutes),
+        "source_count": source_count,
+    }
+
+
+def calc_execution_risk(flight):
+    score = 0
+    factors = []
+
+    avail = flight.get("availability", {}) or {}
+    age = avail.get("age_minutes", 9999)
+    if age > 120:
+        score += 30
+        factors.append("价格超过2小时未验证")
+    elif age > 30:
+        score += 15
+        factors.append("价格30分钟前采集")
+
+    fare = flight.get("fare_verification", {}) or {}
+    if fare.get("level") == "mismatch":
+        score += 25
+        factors.append("票规与需求不匹配")
+    elif fare.get("level") == "partial":
+        score += 12
+        factors.append("票规部分未确认")
+
+    transfer = flight.get("transfer_risk", {}) or {}
+    if transfer.get("level") == "high":
+        score += 25
+        factors.append("中转执行风险高")
+    elif transfer.get("level") == "medium":
+        score += 12
+        factors.append("中转有一定风险")
+
+    source_count = avail.get("source_count", 0)
+    if source_count == 0:
+        score += 20
+        factors.append("无数据源验证")
+    elif source_count == 1:
+        score += 10
+        factors.append("仅单一数据源")
+
+    if score >= 50:
+        risk_level = "high"
+        risk_label = "🔴 执行风险高"
+        advice = "该方案存在较多不确定因素，建议谨慎对待或等待更可靠的方案"
+    elif score >= 25:
+        risk_level = "medium"
+        risk_label = "🟡 执行风险中等"
+        advice = "建议购买前仔细核对支付页的价格、行李和退改规则"
+    else:
+        risk_level = "low"
+        risk_label = "🟢 执行风险低"
+        advice = "该方案信息较完整，可信度较高"
+
+    flight["execution_risk"] = {
+        "level": risk_level,
+        "label": risk_label,
+        "score": score,
+        "factors": factors,
+        "advice": advice,
+    }
+    return flight["execution_risk"]
+
+
 def calc_execution_grade(flight: dict, hard_constraints=None) -> dict:
     """Calculate whether a shown option is actionable enough to execute."""
     hard_constraints = hard_constraints or {}
-    score = 100
     reasons = []
-
-    collected_minutes_ago = _collected_minutes_ago(flight)
-    if collected_minutes_ago is None:
-        score -= 10
-        reasons.append("价格采集时间未知")
-    elif collected_minutes_ago > 120:
-        score -= 30
-        reasons.append("价格超过2小时未验证")
-    elif collected_minutes_ago > 30:
-        score -= 10
-        reasons.append("价格30分钟前采集")
-
-    source = str(flight.get("data_source") or flight.get("source") or "").lower()
-    if not any(name in source for name in ["serpapi", "searchapi", "hasdata"]):
-        score -= 15
-        reasons.append("非主流数据源")
-
-    segments = flight.get("segments") or []
-    if not segments:
-        score -= 20
-        reasons.append("航段信息不完整")
-
-    has_aircraft = any(segment.get("aircraft") for segment in segments if isinstance(segment, dict))
-    if not has_aircraft:
-        score -= 5
-
-    stops = _stops_count(flight, default=0)
-    if stops > 0:
-        score -= 10
-        reasons.append("含中转，建议确认是否联程")
-    if stops > 1:
-        score -= 15
-        reasons.append("多次中转，执行风险较高")
-
+    price = _to_float(flight.get("price")) or 0
+    risk = flight.get("execution_risk") or calc_execution_risk(flight)
+    fare = flight.get("fare_verification") or {}
+    price_advice = flight.get("price_advice") or {}
     transfer = flight.get("transfer_risk") or calc_transfer_risk(flight)
     companions = hard_constraints.get("companions")
-    if companions in {"with_elderly", "with_child", "with_elderly_child", "with_both"}:
-        if transfer.get("level") == "high":
-            score = min(score, 39)
-            reasons.append("中转风险高，不适合老人/小孩")
 
-    score = max(0, min(100, score))
-    if score >= 80:
-        grade = "A"
-        grade_label = "✅ 可购买性：高"
-    elif score >= 60:
-        grade = "B"
-        grade_label = "🔶 可购买性：中"
-    elif score >= 40:
-        grade = "C"
-        grade_label = "⚠️ 仅供参考"
-    else:
+    reasons.extend(risk.get("factors") or [])
+    if fare.get("issues"):
+        reasons.extend(fare.get("issues")[:2])
+
+    if price <= 0 or price_advice.get("level") == "over_budget":
         grade = "D"
-        if "中转风险高，不适合老人/小孩" in reasons:
-            grade_label = "❌ 不推荐（中转风险高，不适合老人/小孩）"
-        else:
-            grade_label = "❌ 不推荐执行"
+        grade_label = "❌ 不推荐"
+    elif companions in {"with_elderly", "with_child", "with_elderly_child", "with_both"} and transfer.get("level") == "high":
+        grade = "D"
+        grade_label = "❌ 不推荐（中转风险高，不适合老人/小孩）"
+        reasons.append("中转风险高，不适合老人/小孩")
+    elif risk.get("level") == "low" and price_advice.get("level") in {"below_target", "within_tolerance"}:
+        grade = "A"
+        grade_label = "A级 - 强烈建议"
+    elif risk.get("level") == "medium" or price_advice.get("level") == "within_budget":
+        grade = "B"
+        grade_label = "B级 - 建议确认后购买"
+    elif risk.get("level") == "high" or fare.get("level") == "mismatch":
+        grade = "C"
+        grade_label = "C级 - 仅供参考"
+    elif risk.get("level") == "low":
+        grade = "A"
+        grade_label = "A级 - 强烈建议"
+    else:
+        grade = "B"
+        grade_label = "B级 - 建议确认后购买"
+
+    score = max(0, 100 - int(risk.get("score", 0)))
 
     flight["execution_grade"] = grade
     flight["execution_label"] = grade_label
@@ -2386,6 +2528,28 @@ def price_tolerance_advice(
     }
 
 
+def calc_final_score(flight: dict, target_price=None) -> float:
+    price = _to_float(flight.get("price")) or 0
+    target = _to_float(target_price)
+    if target and target > 0 and price > 0:
+        price_score = max(0, 100 - abs(price - target) / target * 100)
+    else:
+        raw_price_score = (flight.get("scores") or {}).get("price_score", 5)
+        price_score = max(0, min(100, float(raw_price_score) * 10))
+
+    risk_score = (flight.get("execution_risk") or {}).get("score", 50)
+    reliability_score = max(0, 100 - float(risk_score))
+
+    preference_score = flight.get("preference_score")
+    if preference_score is None:
+        preference_score = (flight.get("scores") or {}).get("total", 5)
+    preference_score = max(0, min(100, float(preference_score) * 10))
+
+    final_score = price_score * 0.4 + reliability_score * 0.3 + preference_score * 0.3
+    flight["final_score"] = round(final_score, 1)
+    return flight["final_score"]
+
+
 def analyze_all_flights(
     flights: list[dict],
     price_insights: dict = None,
@@ -2480,6 +2644,17 @@ def analyze_all_flights(
     min_p, max_p = min(prices), max(prices)
     min_d, max_d = min(durations), max(durations)
     price_anomalies = detect_price_anomalies(usable_flights, price_insights)
+    target_price_mode = (merged_preferences or {}).get("target_price_mode", "auto")
+    target_price = _to_float((merged_preferences or {}).get("target_price"))
+    target_price_effective = target_price
+    if not target_price_effective and target_price_mode in {"auto", "low_zone"}:
+        target_price_effective = _auto_target_price(price_insights, target_price_mode)
+    max_budget_effective = _to_float((merged_preferences or {}).get("max_budget"))
+    if max_budget_effective is None:
+        max_budget_effective = _to_float((merged_preferences or {}).get("budget"))
+    price_tolerance = _to_float((merged_preferences or {}).get("price_tolerance"))
+    if price_tolerance is None:
+        price_tolerance = 100
 
     for flight in usable_flights:
         price_score = (
@@ -2497,6 +2672,20 @@ def analyze_all_flights(
         )
         flight["scores"] = overall_score(flight, prices, durations, mode)
         flight["transfer_risk"] = transfer_risk(flight)
+        flight["fare_verification"] = verify_fare_rules(flight, merged_preferences)
+        flight["availability"] = estimate_availability(
+            flight,
+            flight.get("collected_at") or flight.get("snapshot_time") or flight.get("fetched_at"),
+        )
+        calc_execution_risk(flight)
+        advice = price_tolerance_advice(
+            flight.get("price"),
+            target_price_effective,
+            price_tolerance,
+            max_budget_effective,
+        )
+        if advice:
+            flight["price_advice"] = advice
         calc_execution_grade(flight, merged_preferences)
         score_multiplier = float(flight.get("score_multiplier") or 1)
         flight["preference_score"] = round(
@@ -2504,6 +2693,7 @@ def analyze_all_flights(
             - float(flight.get("preference_penalty") or 0),
             1,
         )
+        calc_final_score(flight, target_price_effective)
 
     priority_config = _normalize_priorities(priorities)
     qualified_flights = []
@@ -2753,6 +2943,12 @@ def select_recommendations(economy_flights, business_flights, mode: str = "balan
 
     def sort_key(flight: dict):
         preference_penalty = flight.get("preference_penalty", 0) or 0
+        if flight.get("final_score") is not None:
+            return (
+                -float(flight.get("final_score") or 0),
+                preference_penalty,
+                _to_float(flight.get("price")) or 99999,
+            )
         if mode == "budget":
             return (
                 preference_penalty,

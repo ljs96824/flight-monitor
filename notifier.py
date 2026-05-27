@@ -2011,6 +2011,46 @@ def _transfer_risk_lines(flight: dict) -> list[str]:
     return lines
 
 
+def _availability_text(flight: dict) -> str:
+    availability = flight.get("availability") or {}
+    label = availability.get("label", "❓ 未验证")
+    source_count = availability.get("source_count", 0)
+    age = availability.get("age_minutes")
+    age_text = "采集时间未知" if age is None or age >= 9999 else f"{age}分钟前采集"
+    source_text = f"{source_count}个数据源验证" if source_count else "无数据源验证"
+    return f"{label}（{source_text}，{age_text}）"
+
+
+def _fare_verification_lines(flight: dict) -> list[str]:
+    fare = flight.get("fare_verification") or {}
+    if not fare:
+        return []
+    lines = [f"📋 票规校验：{fare.get('label', '票规待确认')}"]
+    lines.extend(fare.get("matches") or [])
+    lines.extend(fare.get("issues") or [])
+    return lines
+
+
+def _execution_assessment_lines(flight: dict) -> list[str]:
+    fare = flight.get("fare_verification") or {}
+    transfer = flight.get("transfer_risk") or {}
+    risk = flight.get("execution_risk") or {}
+    grade = flight.get("execution_grade")
+    grade_label = flight.get("execution_label") or ""
+    transfer_label = transfer.get("label", "无（直飞）")
+    if transfer.get("level") in {"none", "无"}:
+        transfer_label = "无（直飞）"
+    lines = [
+        "执行评估：",
+        f"├ 可购买性：{_availability_text(flight)}",
+        f"├ 票规匹配：{fare.get('label', '票规待确认')}",
+        f"├ 中转风险：{transfer_label}",
+        f"├ 执行风险：{risk.get('label', '执行风险待确认')}",
+        f"└ 综合等级：{grade or '-'}级 - {grade_label}",
+    ]
+    return lines
+
+
 def generate_context(flight, all_flights):
     """生成方案的取舍说明和适合人群"""
     price = float(flight.get("price")) if _has_valid_price(flight.get("price")) else 0
@@ -2152,6 +2192,8 @@ def _append_compact_flight(
     if preference_notes:
         lines.append(f"⚙️ 偏好匹配：{'；'.join(dict.fromkeys(preference_notes))}")
     lines.append(f"价格采集于 {_collected_time_text(flight)} | 新鲜度：{_freshness_label(flight)}")
+    lines.extend(_execution_assessment_lines(flight))
+    lines.extend(_fare_verification_lines(flight))
     for advice in _execution_advice_lines(flight, route_info, analysis_result):
         lines.append(advice)
     lines.append("")
@@ -3204,6 +3246,10 @@ def format_flight_detail(
         f"<br>  价格采集于 {_collected_time_text(flight)} | "
         f"新鲜度：{_freshness_label(flight)}"
     )
+    for line in _execution_assessment_lines(flight):
+        detail += f"<br>  {line}"
+    for line in _fare_verification_lines(flight):
+        detail += f"<br>  {line}"
     for advice in _execution_advice_lines(flight, route_info, analysis_result):
         detail += f"<br>  {advice}"
     for risk_line in _transfer_risk_lines(flight):
