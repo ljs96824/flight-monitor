@@ -73,14 +73,14 @@ BUDGET_MODE_LABELS = {
     "fixed": "输入具体金额",
     "none": "没有硬上限",
     "unknown": "不确定，帮我判断合理价格",
-    "low_zone": "只要进入低价区间就提醒",
+    "low_zone": "没有明确预算，进入低价区间时提醒",
 }
 
 TRANSFER_LABELS = {
     "direct_only": "必须直飞",
     "short_ok": "可以中转，但总耗时别太长",
     "cheap_ok": "便宜很多的话可以中转",
-    "price_first": "价格优先，怎么转都行",
+    "price_first": "价格优先，可以接受较长中转",
 }
 
 DEPARTURE_TIME_LABELS = {
@@ -166,7 +166,7 @@ TRIP_RIGIDITY_LABELS = {
 }
 
 PRIMARY_GOAL_LABELS = {
-    "price_drop_alert": "跌到合适价格时提醒我",
+    "price_drop_alert": "找到合适价格时提醒我",
     "buy_timing": "判断现在该不该买",
     "cheaper_date": "帮我找更便宜的日期",
     "best_overall": "帮我找最合适航班",
@@ -224,6 +224,12 @@ FORM_TEMPLATE = """
     }
     .choice input { width: auto; margin: 0; }
     .hint { color: #666; font-size: 13px; margin-top: 4px; }
+    .field-error {
+      display: none;
+      color: #c5221f;
+      font-size: 13px;
+      margin: 6px 0 0;
+    }
     .secondary-button {
       background: #f5f7fb;
       color: #1a73e8;
@@ -342,7 +348,7 @@ FORM_TEMPLATE = """
         <label><input type="radio" name="date_flexibility" value="3"> 前后3天都行</label>
         <label><input type="radio" name="date_flexibility" value="7"> 前后一周都行</label>
       </div>
-      <p class="hint">影响系统搜索范围，选择越灵活越可能找到便宜日期</p>
+      <p class="hint">用于寻找前后日期的低价航班</p>
 
       <label>同行人员</label>
       <div class="choice">
@@ -353,19 +359,20 @@ FORM_TEMPLATE = """
       </div>
       <div id="auto-preference-notice" class="auto-notice"></div>
 
-      <label>最高能接受的价格（超过就不考虑）</label>
+      <label>最高可接受价格（超过这个价通常不考虑）</label>
       <input id="max_budget" name="max_budget" type="number" min="1" step="1" placeholder="例如 8000">
       <div class="choice">
         <label><input type="radio" name="max_budget_mode" value="fixed" checked> 输入具体金额</label>
         <label><input type="radio" name="max_budget_mode" value="none"> 没有硬上限</label>
       </div>
 
-      <label>理想入手价（到这个价格就值得买）</label>
+      <label>理想入手价格（到这个价格就值得买）</label>
       <input id="target_price" name="target_price" type="number" min="1" step="1" placeholder="例如 6000（选填）">
+      <p id="price-validation-error" class="field-error">理想入手价应低于最高可接受价，请确认是否填反了</p>
       <div class="choice">
         <label><input type="radio" name="target_price_mode" value="fixed" checked> 输入具体金额</label>
         <label><input type="radio" name="target_price_mode" value="auto"> 不确定，帮我判断合理价格</label>
-        <label><input type="radio" name="target_price_mode" value="low_zone"> 只要进入低价区间就提醒我</label>
+        <label><input type="radio" name="target_price_mode" value="low_zone"> 没有明确预算，进入低价区间时提醒我</label>
       </div>
 
       <label>可接受的价格浮动范围</label>
@@ -385,7 +392,7 @@ FORM_TEMPLATE = """
         <label><input type="radio" name="transfer_policy" value="direct_only"> 必须直飞</label>
         <label><input type="radio" name="transfer_policy" value="short_ok" checked> 可以中转，但总耗时别太长</label>
         <label><input type="radio" name="transfer_policy" value="cheap_ok"> 便宜很多的话可以中转</label>
-        <label><input type="radio" name="transfer_policy" value="price_first"> 价格优先，怎么转都行</label>
+        <label><input type="radio" name="transfer_policy" value="price_first"> 价格优先，可以接受较长中转</label>
       </div>
       <div id="short-transfer-options" class="sub-options">
         <label>最长可接受总行程时间</label>
@@ -413,10 +420,17 @@ FORM_TEMPLATE = """
 
       <label>主目标</label>
       <div class="choice">
-        <label><input type="radio" name="primary_goal" value="price_drop_alert" required> 跌到合适价格时提醒我</label>
-        <label><input type="radio" name="primary_goal" value="buy_timing" checked required> 判断现在该不该买</label>
-        <label><input type="radio" name="primary_goal" value="cheaper_date" required> 帮我找更便宜的日期</label>
-        <label><input type="radio" name="primary_goal" value="best_overall" required> 帮我找最合适航班</label>
+        <label><input type="radio" name="primary_goal" value="price_drop_alert" required> 找到合适价格时提醒我 <small style="color:gray">（适合还没急着买，等低价）</small></label>
+        <label><input type="radio" name="primary_goal" value="buy_timing" checked required> 判断现在该不该买 <small style="color:gray">（适合已看到价格，想知道能不能下手）</small></label>
+        <label><input type="radio" name="primary_goal" value="cheaper_date" required> 帮我找更便宜的日期 <small style="color:gray">（适合日期可以调整）</small></label>
+        <label><input type="radio" name="primary_goal" value="best_overall" required> 帮我找最合适航班 <small style="color:gray">（不只看价格，综合时间/行李/中转）</small></label>
+      </div>
+
+      <label>提醒频率</label>
+      <div class="choice">
+        <label><input type="radio" name="notification_frequency" value="important_only" checked> 仅重要变化时提醒（价格显著下降、即将涨价）</label>
+        <label><input type="radio" name="notification_frequency" value="daily_summary"> 每天汇总推送一次</label>
+        <label><input type="radio" name="notification_frequency" value="every_change"> 每次价格变化都提醒</label>
       </div>
     </fieldset>
 
@@ -432,7 +446,7 @@ FORM_TEMPLATE = """
           <label><input type="radio" name="trip_rigidity" value="mostly"> 可能微调日期</label>
           <label><input type="radio" name="trip_rigidity" value="flexible"> 不太确定，有可能取消</label>
         </div>
-        <p class="hint">影响退改签推荐，不确定的行程建议选择可退改机票</p>
+        <p class="hint">用于判断是否需要推荐可退改机票</p>
 
         <fieldset id="single-time-preferences" class="time-preferences time-outbound">
           <strong>时段偏好</strong>
@@ -566,8 +580,8 @@ FORM_TEMPLATE = """
     const labels = {
       dateFlex: {"0": "不能调，就这天", "1": "前后1天可以", "3": "前后3天都行", "7": "前后一周都行"},
       maxBudgetMode: {"fixed": "最高可接受", "none": "没有硬上限"},
-      targetPriceMode: {"fixed": "理想入手价", "auto": "不确定，帮我判断合理价格", "low_zone": "只要进入低价区间就提醒"},
-      transfer: {"direct_only": "必须直飞", "short_ok": "可以短中转", "cheap_ok": "便宜很多可以中转", "price_first": "价格优先，中转也可以"},
+      targetPriceMode: {"fixed": "理想入手价", "auto": "不确定，帮我判断合理价格", "low_zone": "没有明确预算，进入低价区间时提醒"},
+      transfer: {"direct_only": "必须直飞", "short_ok": "可以短中转", "cheap_ok": "便宜很多可以中转", "price_first": "价格优先，可以接受较长中转"},
       departureSlots: {
         early_morning: "早班 06:00-09:00",
         morning: "上午 09:00-12:00",
@@ -585,7 +599,8 @@ FORM_TEMPLATE = """
         redeye: "凌晨 23:00-06:00"
       },
       baggage: {"required": "必须托运", "not_needed": "不需要托运", "unknown": "不确定"},
-      primary: {"price_drop_alert": "跌到合适价格时提醒我", "buy_timing": "判断现在该不该买", "cheaper_date": "帮我找更便宜的日期", "best_overall": "帮我找最合适航班"}
+      primary: {"price_drop_alert": "找到合适价格时提醒我", "buy_timing": "判断现在该不该买", "cheaper_date": "帮我找更便宜的日期", "best_overall": "帮我找最合适航班"},
+      frequency: {"important_only": "仅重要变化时提醒", "daily_summary": "每天汇总推送一次", "every_change": "每次价格变化都提醒"}
     };
     const goalDefaults = {
       price_drop_alert: ["low_price_alert"],
@@ -604,6 +619,7 @@ FORM_TEMPLATE = """
     const targetPriceRadios = document.querySelectorAll('input[name="target_price_mode"]');
     const maxBudgetInput = document.getElementById('max_budget');
     const targetPriceInput = document.getElementById('target_price');
+    const priceValidationError = document.getElementById('price-validation-error');
     const advanced = document.getElementById('advanced-preferences');
     const advancedToggle = document.getElementById('advanced-toggle');
     const previewButton = document.getElementById('preview-button');
@@ -643,11 +659,30 @@ FORM_TEMPLATE = """
     function toggleBudgetRequired() {
       maxBudgetInput.required = false;
       targetPriceInput.required = false;
+      validatePriceInputs();
     }
 
     function toggleShortTransferOptions() {
       shortTransferOptions.style.display =
         checkedValue('transfer_policy') === 'short_ok' ? 'block' : 'none';
+    }
+
+    function validatePriceInputs() {
+      const maxBudgetMode = checkedValue('max_budget_mode');
+      const targetPriceMode = checkedValue('target_price_mode');
+      const maxBudget = Number(maxBudgetInput.value || 0);
+      const targetPrice = Number(targetPriceInput.value || 0);
+      const invalid = maxBudgetMode === 'fixed'
+        && targetPriceMode === 'fixed'
+        && maxBudget > 0
+        && targetPrice > 0
+        && targetPrice > maxBudget;
+
+      priceValidationError.style.display = invalid ? 'block' : 'none';
+      targetPriceInput.setCustomValidity(
+        invalid ? '理想入手价应低于最高可接受价，请确认是否填反了' : ''
+      );
+      return !invalid;
     }
 
     function applyDefaultSecondaryGoals() {
@@ -765,6 +800,7 @@ FORM_TEMPLATE = """
       }
       addSummaryLine(`行李：${labels.baggage[checkedValue('baggage')]}`);
       addSummaryLine(`主目标：${labels.primary[checkedValue('primary_goal')]}`);
+      addSummaryLine(`提醒频率：${labels.frequency[checkedValue('notification_frequency')]}`);
     }
 
     advancedToggle.addEventListener('click', () => {
@@ -776,6 +812,11 @@ FORM_TEMPLATE = """
     previewButton.addEventListener('click', () => {
       toggleBudgetRequired();
       toggleReturnDate();
+      if (!validatePriceInputs()) {
+        alert('理想入手价应低于最高可接受价，请确认是否填反了');
+        targetPriceInput.focus();
+        return;
+      }
       if (!form.reportValidity()) {
         return;
       }
@@ -792,13 +833,24 @@ FORM_TEMPLATE = """
     tripRadios.forEach(radio => radio.addEventListener('change', toggleReturnDate));
     maxBudgetRadios.forEach(radio => radio.addEventListener('change', toggleBudgetRequired));
     targetPriceRadios.forEach(radio => radio.addEventListener('change', toggleBudgetRequired));
+    maxBudgetInput.addEventListener('input', validatePriceInputs);
+    targetPriceInput.addEventListener('input', validatePriceInputs);
     transferRadios.forEach(radio => radio.addEventListener('change', toggleShortTransferOptions));
     primaryGoalRadios.forEach(radio => radio.addEventListener('change', applyDefaultSecondaryGoals));
     companionRadios.forEach(radio => radio.addEventListener('change', applyCompanionDefaults));
     toggleReturnDate();
     toggleBudgetRequired();
     toggleShortTransferOptions();
+    advanced.style.display = 'none';
+    advancedToggle.textContent = '▼ 展开高级偏好（可选）';
     applyDefaultSecondaryGoals();
+    form.addEventListener('submit', event => {
+      if (!validatePriceInputs()) {
+        event.preventDefault();
+        alert('理想入手价应低于最高可接受价，请确认是否填反了');
+        targetPriceInput.focus();
+      }
+    });
   </script>
 </body>
 </html>
@@ -1024,6 +1076,7 @@ def build_subscription(form) -> dict:
         "notification_goals": {
             "primary": form.get("primary_goal", "buy_timing"),
             "secondary": form.getlist("secondary_goals"),
+            "frequency": form.get("notification_frequency", "important_only"),
         },
         "status": "active",
         "created_at": datetime.now().isoformat(),
