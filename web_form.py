@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -1048,7 +1047,7 @@ SUCCESS_TEMPLATE = """
       {% endfor %}
     </ul>
 
-    <p><b>系统正在采集第一批数据，预计1-2分钟内收到首次推送</b></p>
+    <p><b>订阅已保存。下一次本地电脑同步并运行采集后，会通过PushPlus推送监控结果。</b></p>
   </div>
   <a href="{{ url_for('index') }}">继续添加订阅</a>
 </body>
@@ -1074,16 +1073,6 @@ def save_subscription(subscription: dict) -> None:
         json.dumps(subscriptions, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-
-
-def run_single_subscription(subscription: dict) -> None:
-    """Run one subscription in the background after the form is submitted."""
-    try:
-        from main import normalize_subscription, process_subscription
-
-        process_subscription(normalize_subscription(subscription), ensure_db=True)
-    except Exception as exc:
-        print(f"首次采集后台任务失败: {exc}")
 
 
 def normalize_destination(value: str) -> str:
@@ -1296,12 +1285,6 @@ def index():
 def subscribe():
     subscription = build_subscription(request.form)
     save_subscription(subscription)
-    thread = threading.Thread(
-        target=run_single_subscription,
-        args=(subscription.copy(),),
-        daemon=True,
-    )
-    thread.start()
     return redirect(url_for("success", index=len(load_subscriptions()) - 1))
 
 

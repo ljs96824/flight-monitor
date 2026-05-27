@@ -71,12 +71,108 @@ AIRPORT_TIMEZONE = {
 }
 
 
+AIRPORT_CITY = {
+    "PVG": "上海",
+    "SHA": "上海",
+    "PEK": "北京",
+    "PKX": "北京",
+    "CAN": "广州",
+    "SZX": "深圳",
+    "CTU": "成都",
+    "HGH": "杭州",
+    "NKG": "南京",
+    "KIX": "大阪",
+    "ITM": "大阪",
+    "NRT": "东京",
+    "HND": "东京",
+    "ICN": "首尔",
+    "TPE": "台北",
+    "HKG": "香港",
+    "BKK": "曼谷",
+    "SIN": "新加坡",
+    "LAX": "洛杉矶",
+    "JFK": "纽约",
+    "SFO": "旧金山",
+    "ORD": "芝加哥",
+    "DFW": "达拉斯",
+    "MCO": "奥兰多",
+    "MIA": "迈阿密",
+    "ATL": "亚特兰大",
+    "SEA": "西雅图",
+    "YVR": "温哥华",
+    "YYZ": "多伦多",
+    "LHR": "伦敦",
+    "CDG": "巴黎",
+    "FRA": "法兰克福",
+    "AMS": "阿姆斯特丹",
+    "DXB": "迪拜",
+    "DOH": "多哈",
+    "ABQ": "阿尔伯克基",
+}
+
+
+AIRPORT_CITY_EN = {
+    "PVG": "Shanghai",
+    "SHA": "Shanghai",
+    "PEK": "Beijing",
+    "PKX": "Beijing",
+    "CAN": "Guangzhou",
+    "SZX": "Shenzhen",
+    "CTU": "Chengdu",
+    "HGH": "Hangzhou",
+    "NKG": "Nanjing",
+    "KIX": "Osaka",
+    "ITM": "Osaka",
+    "NRT": "Tokyo",
+    "HND": "Tokyo",
+    "ICN": "Seoul",
+    "TPE": "Taipei",
+    "HKG": "Hong Kong",
+    "BKK": "Bangkok",
+    "SIN": "Singapore",
+    "LAX": "Los Angeles",
+    "JFK": "New York",
+    "SFO": "San Francisco",
+    "ORD": "Chicago",
+    "DFW": "Dallas",
+    "MCO": "Orlando",
+    "MIA": "Miami",
+    "ATL": "Atlanta",
+    "SEA": "Seattle",
+    "YVR": "Vancouver",
+    "YYZ": "Toronto",
+    "LHR": "London",
+    "CDG": "Paris",
+    "FRA": "Frankfurt",
+    "AMS": "Amsterdam",
+    "DXB": "Dubai",
+    "DOH": "Doha",
+    "ABQ": "Albuquerque",
+}
+
+
 def get_airport_name(iata_code):
     """Return the Chinese airport name, falling back to the original IATA code."""
     code = str(iata_code or "").strip().upper()
     if not code:
         return ""
     return AIRPORT_NAMES.get(code, code)
+
+
+def get_airport_city(iata_code):
+    """Return a generic Chinese city name for booking-site searches."""
+    code = str(iata_code or "").strip().upper()
+    if not code:
+        return ""
+    return AIRPORT_CITY.get(code, code)
+
+
+def get_airport_city_en(iata_code):
+    """Return a generic English city name for Google Flights searches."""
+    code = str(iata_code or "").strip().upper()
+    if not code:
+        return ""
+    return AIRPORT_CITY_EN.get(code, code)
 
 
 def get_airport_timezone(iata_code):

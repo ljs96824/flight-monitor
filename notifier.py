@@ -10,7 +10,12 @@ from urllib.parse import quote_plus
 
 import httpx
 
-from airports import get_airport_name, get_airport_timezone
+from airports import (
+    get_airport_city,
+    get_airport_city_en,
+    get_airport_name,
+    get_airport_timezone,
+)
 from channels import CHANNEL_INFO
 from analyzer import (
     calculate_price_references,
@@ -1334,8 +1339,12 @@ def _google_flights_url(origin: str, dest: str, date_str: str) -> str:
     origin = str(origin or "").upper()
     dest = str(dest or "").upper()
     date_str = str(date_str or "")
+    origin_city = get_airport_city_en(origin)
+    dest_city = get_airport_city_en(dest)
     query = " ".join(
-        part for part in ["flights", "from", origin, "to", dest, "on", date_str] if part
+        part
+        for part in ["flights", "from", origin_city, "to", dest_city, "on", date_str]
+        if part
     )
     return (
         "https://www.google.com/travel/flights/search"
@@ -1348,9 +1357,11 @@ def _ctrip_url(origin: str, dest: str, date_str: str, cabin="economy", flight_no
     origin = str(origin or "").upper()
     dest = str(dest or "").upper()
     date_str = str(date_str or "")
+    origin_city = get_airport_city(origin)
+    dest_city = get_airport_city(dest)
     cabin_code = "c" if str(cabin or "").lower() == "business" else "y"
     url = (
-        f"https://flights.ctrip.com/online/list/oneway-{origin}-{dest}"
+        f"https://flights.ctrip.com/online/list/oneway-{origin_city}-{dest_city}"
         f"?depdate={date_str}&cabin={cabin_code}"
     )
     if flight_no:
@@ -1400,6 +1411,8 @@ def _airline_code_from_flight_nos(flight_nos=None) -> str:
 
 def _possible_booking_links(origin, dest, date_str, flight_nos=None, cabin="economy") -> list[tuple[str, str]]:
     _, flight_no_clean = _clean_flight_numbers(flight_nos)
+    origin_city = get_airport_city(origin)
+    dest_city = get_airport_city(dest)
     links = []
     airline_code = _airline_code_from_flight_nos(flight_nos)
     airline_site = AIRLINE_BOOKING_URLS.get(airline_code)
@@ -1411,7 +1424,7 @@ def _possible_booking_links(origin, dest, date_str, flight_nos=None, cabin="econ
             (
                 "飞猪搜索",
                 "https://www.fliggy.com/flight/international-search?"
-                f"depCity={origin}&arrCity={dest}&depDate={date_str}"
+                f"depCity={origin_city}&arrCity={dest_city}&depDate={date_str}"
                 f"&flightNo={quote_plus(flight_no_clean)}",
             ),
         ]
@@ -1459,6 +1472,8 @@ def generate_booking_links(origin, dest, date_str, flight_nos=None, cabin="econo
     date_str = str(date_str or "")
     trip_class = "C" if str(cabin or "").lower() == "business" else "Y"
     _, flight_no_clean = _clean_flight_numbers(flight_nos)
+    origin_city = get_airport_city(origin)
+    dest_city = get_airport_city(dest)
     style = "color:#1a73e8;text-decoration:underline;"
     entries, has_verified_price = _booking_link_entries(
         origin, dest, date_str, flight_nos, cabin, flight
@@ -1474,7 +1489,7 @@ def generate_booking_links(origin, dest, date_str, flight_nos=None, cabin="econo
 
     feizhu_url = (
         f"https://www.fliggy.com/flight/international-search?"
-        f"depCity={origin}&arrCity={dest}&depDate={date_str}"
+        f"depCity={origin_city}&arrCity={dest_city}&depDate={date_str}"
         f"&flightNo={quote_plus(flight_no_clean)}"
     )
     links.append(f'<a href="{feizhu_url}" style="{style}">飞猪</a>')

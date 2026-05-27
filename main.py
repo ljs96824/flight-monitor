@@ -30,6 +30,7 @@ from storage import (
     init_db,
     save_flight_details,
 )
+from sync_subscriptions import sync_subscriptions
 from tracker import log_signal
 
 
@@ -663,7 +664,14 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
         return False
 
 
-def run():
+def run(sync_remote: bool = True):
+    if sync_remote:
+        try:
+            sync_subscriptions()
+        except Exception as exc:
+            logging.error(f"PythonAnywhere 订阅同步失败: {exc}")
+            print(f"[sync] PythonAnywhere 订阅同步失败，继续处理本地订阅: {exc}")
+
     # 初始化
     init_db()
     subscriptions = load_file_subscriptions()
