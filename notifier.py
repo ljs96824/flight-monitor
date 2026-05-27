@@ -679,18 +679,13 @@ def format_booking_links_text(flight: dict, depart_date: str) -> str:
     if not origin or not dest:
         return ""
 
-    ctrip = (
-        f"https://flights.ctrip.com/online/list/oneway-{origin}-{dest}"
-        f"?depdate={depart_date}"
-    )
+    _, flight_no_clean = _clean_flight_numbers(flight.get("flight_combo"))
+    ctrip = _ctrip_url(origin, dest, depart_date, "economy", flight_no_clean)
     fliggy = (
         "https://www.fliggy.com/flight/international-search"
         f"?from={origin}&to={dest}&depDate={depart_date}"
     )
-    google = (
-        "https://www.google.com/travel/flights"
-        f"?q=flights+from+{origin}+to+{dest}+on+{depart_date}"
-    )
+    google = _google_flights_url(origin, dest, depart_date)
 
     airline_sites = {
         "美航": ("美航官网", "https://www.aa.com"),
@@ -1353,27 +1348,49 @@ def _clean_flight_numbers(flight_nos) -> tuple[str, str]:
     return display, compact
 
 
+def _google_flights_url(origin: str, dest: str, date_str: str) -> str:
+    """Build a Google Flights page URL instead of a generic Google Search URL."""
+    origin = str(origin or "").upper()
+    dest = str(dest or "").upper()
+    date_str = str(date_str or "")
+    query = " ".join(
+        part for part in ["flights", "from", origin, "to", dest, "on", date_str] if part
+    )
+    return (
+        "https://www.google.com/travel/flights/search"
+        f"?q={quote_plus(query)}&curr=CNY&hl=zh-CN"
+    )
+
+
+def _ctrip_url(origin: str, dest: str, date_str: str, cabin="economy", flight_no: str = "") -> str:
+    """Build a Ctrip one-way search URL with date, cabin, and optional flight number."""
+    origin = str(origin or "").upper()
+    dest = str(dest or "").upper()
+    date_str = str(date_str or "")
+    cabin_code = "c" if str(cabin or "").lower() == "business" else "y"
+    url = (
+        f"https://flights.ctrip.com/online/list/oneway-{origin}-{dest}"
+        f"?depdate={date_str}&cabin={cabin_code}"
+    )
+    if flight_no:
+        url += f"&flightno={quote_plus(str(flight_no))}"
+    return url
+
+
 def generate_booking_links(origin, dest, date_str, flight_nos=None, cabin="economy"):
     """Generate clickable booking links for a one-way flight search."""
     origin = str(origin or "").upper()
     dest = str(dest or "").upper()
     date_str = str(date_str or "")
-    cabin_code = "c" if str(cabin or "").lower() == "business" else "y"
     trip_class = "C" if str(cabin or "").lower() == "business" else "Y"
-    flight_no_display, flight_no_clean = _clean_flight_numbers(flight_nos)
+    _, flight_no_clean = _clean_flight_numbers(flight_nos)
     style = "color:#1a73e8;text-decoration:underline;"
     links = []
 
-    google_query = " ".join(
-        part for part in [flight_no_display, date_str, origin, "to", dest, "flight"] if part
-    )
-    google_url = f"https://www.google.com/search?q={quote_plus(google_query)}"
+    google_url = _google_flights_url(origin, dest, date_str)
     links.append(f'<a href="{google_url}" style="{style}">Google Flights</a>')
 
-    ctrip_url = (
-        f"https://flights.ctrip.com/online/list/oneway-{origin}-{dest}"
-        f"?depdate={date_str}&cabin={cabin_code}&flightno={quote_plus(flight_no_clean)}"
-    )
+    ctrip_url = _ctrip_url(origin, dest, date_str, cabin, flight_no_clean)
     links.append(f'<a href="{ctrip_url}" style="{style}">携程</a>')
 
     feizhu_url = (
@@ -1951,8 +1968,9 @@ def _compact_booking_links(flight: dict, route_info: dict) -> list[tuple[str, st
     origin = route_info.get("origin", "")
     dest = route_info.get("destination", "")
     depart_date = route_info.get("depart_date", "")
+    _, flight_no_clean = _clean_flight_numbers(flight.get("flight_combo"))
     links = [
-        ("携程", f"https://flights.ctrip.com/online/list/oneway-{origin}-{dest}?depdate={depart_date}")
+        ("携程", _ctrip_url(origin, dest, depart_date, flight.get("cabin_class") or "economy", flight_no_clean))
     ]
     airline_str = " ".join(str(item) for item in _flight_airlines(flight))
     combo = str(flight.get("flight_combo", ""))
@@ -1967,7 +1985,7 @@ def _compact_booking_links(flight: dict, route_info: dict) -> list[tuple[str, st
     links.append(
         (
             "Google Flights",
-            f"https://www.google.com/travel/flights?q=flights+from+{origin}+to+{dest}+on+{depart_date}",
+            _google_flights_url(origin, dest, depart_date),
         )
     )
     return links[:3]
@@ -3138,10 +3156,7 @@ def _time_with_timezone(time_text: str, airport_code: str, show_timezone: bool) 
 
 def _booking_link(origin: str, dest: str, date_str: str, label: str) -> str:
     style = "color:#1a73e8;text-decoration:underline;"
-    url = (
-        f"https://www.google.com/search?"
-        f"q={quote_plus(' '.join(part for part in [date_str, origin, 'to', dest, 'flight'] if part))}"
-    )
+    url = _google_flights_url(origin, dest, date_str)
     return f'<a href="{url}" style="{style}">{label}</a>'
 
 
@@ -3152,12 +3167,8 @@ def _flight_booking_link(flight: dict, date_str: str | None, label: str) -> str:
     origin = first_segment.get("dep_airport") or first_segment.get("departure_airport")
     dest = last_segment.get("arr_airport") or last_segment.get("arrival_airport")
     search_date = _flight_search_date(flight, date_str)
-    flight_no = _compact_flight_numbers(flight)
     style = "color:#1a73e8;text-decoration:underline;"
-    query = " ".join(
-        part for part in [flight_no, search_date, origin, "to", dest, "flight"] if part
-    )
-    url = f"https://www.google.com/search?q={quote_plus(query)}"
+    url = _google_flights_url(origin, dest, search_date)
     return f'<a href="{url}" style="{style}">{label}</a>'
 
 
