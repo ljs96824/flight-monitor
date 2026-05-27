@@ -106,6 +106,17 @@ def city_name(iata_code) -> str:
     return f"{name}({code})" if name and name != code else code
 
 
+def _city_label(value: str | None) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    upper = text.upper()
+    if 2 <= len(upper) <= 4 and upper.isalpha():
+        city = get_airport_city(upper)
+        return city if city and city != upper else upper
+    return text
+
+
 def _display_route_summary(route_summary: str | None) -> str:
     """Replace IATA codes in a route summary with 中文名(IATA)."""
     text = str(route_summary or "")
@@ -3007,8 +3018,7 @@ def _append_multi_window_analysis(lines: list[str], windows: dict | None) -> Non
 
 
 def _round_trip_city_code(code: str | None) -> str:
-    code = (code or "").strip().upper()
-    return city_name(code) if code else ""
+    return _city_label(code)
 
 
 def _round_trip_date_text(date_text: str | None) -> str:
@@ -3339,6 +3349,7 @@ def format_flight_detail(
     prefix = f"{label}: " if label else ""
     detail = (
         f"{prefix}{flight_no} {airline} | {price_text}<br>"
+        f"  {city_name(dep_airport)} → {city_name(arr_airport)}<br>"
         f"  {dep_text}起飞 → {arr_text}到达 | {_round_trip_stops_text(flight)} "
         f"{_round_trip_duration_text(flight)} | {_flight_slot_label(flight)} | "
         f"机型: {_round_trip_aircraft_text(flight)}"
@@ -3651,7 +3662,7 @@ def format_html_message(
                 days = ""
 
         is_round_trip = bool(route_info.get("round_trip"))
-        lines.append(f"<b>✈️ {city_name(route_info.get('origin',''))} → {city_name(route_info.get('destination',''))}</b>")
+        lines.append(f"<b>✈️ {_city_label(route_info.get('origin',''))} → {_city_label(route_info.get('destination',''))}</b>")
         if is_round_trip:
             lines.append(
                 f"去程：{route_info.get('depart_date','')} | "
@@ -3894,7 +3905,7 @@ def format_comparison_message(
     days_to_dept = _days_to_depart(route_info)
     depart_date = route_info["depart_date"]
     lines = [
-        f"✈️ {city_name(route_info['origin'])} → {city_name(route_info['destination'])}",
+        f"✈️ {_city_label(route_info['origin'])} → {_city_label(route_info['destination'])}",
         "",
         f"📅 出发日期：{depart_date}",
     ]

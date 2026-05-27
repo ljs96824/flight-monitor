@@ -37,6 +37,24 @@ AIRPORT_NAMES = {
     "DXB": "迪拜",
     "DOH": "多哈",
     "ABQ": "阿尔伯克基",
+    "GMP": "首尔金浦",
+    "EWR": "纽约纽瓦克",
+    "LGA": "纽约拉瓜迪亚",
+    "OAK": "奥克兰",
+    "SJC": "圣何塞",
+    "LGW": "伦敦盖特威克",
+    "STN": "伦敦斯坦斯特德",
+    "ORY": "巴黎奥利",
+    "TSA": "台北松山",
+    "DMK": "曼谷廊曼",
+    "TFU": "成都天府",
+    "SFB": "奥兰多桑福德",
+    "MDW": "芝加哥中途",
+    "IAD": "华盛顿杜勒斯",
+    "DCA": "华盛顿里根",
+    "FLL": "劳德代尔堡",
+    "YTZ": "多伦多岛",
+    "DWC": "迪拜世界中心",
 }
 
 
@@ -68,7 +86,63 @@ AIRPORT_TIMEZONE = {
     "SIN": "新加坡",
     "BKK": "曼谷",
     "HKG": "香港",
+    "GMP": "韩国",
+    "EWR": "美东",
+    "LGA": "美东",
+    "OAK": "美西",
+    "SJC": "美西",
+    "LGW": "伦敦",
+    "STN": "伦敦",
+    "ORY": "巴黎",
+    "TSA": "台北",
+    "DMK": "曼谷",
+    "TFU": "北京",
+    "SFB": "美东",
+    "MDW": "美中",
+    "IAD": "美东",
+    "DCA": "美东",
+    "FLL": "美东",
+    "YTZ": "美东",
+    "DWC": "迪拜",
 }
+
+
+CITY_AIRPORTS = {
+    "上海": ["PVG", "SHA"],
+    "北京": ["PEK", "PKX"],
+    "东京": ["NRT", "HND"],
+    "大阪": ["KIX", "ITM"],
+    "首尔": ["ICN", "GMP"],
+    "纽约": ["JFK", "EWR", "LGA"],
+    "洛杉矶": ["LAX"],
+    "旧金山": ["SFO", "OAK", "SJC"],
+    "伦敦": ["LHR", "LGW", "STN"],
+    "巴黎": ["CDG", "ORY"],
+    "香港": ["HKG"],
+    "台北": ["TPE", "TSA"],
+    "新加坡": ["SIN"],
+    "曼谷": ["BKK", "DMK"],
+    "广州": ["CAN"],
+    "深圳": ["SZX"],
+    "成都": ["CTU", "TFU"],
+    "杭州": ["HGH"],
+    "南京": ["NKG"],
+    "奥兰多": ["MCO", "SFB"],
+    "芝加哥": ["ORD", "MDW"],
+    "华盛顿": ["IAD", "DCA"],
+    "迈阿密": ["MIA", "FLL"],
+    "西雅图": ["SEA"],
+    "多伦多": ["YYZ", "YTZ"],
+    "温哥华": ["YVR"],
+    "迪拜": ["DXB", "DWC"],
+    "阿尔伯克基": ["ABQ"],
+}
+
+
+AIRPORT_TO_CITY = {}
+for city, airports in CITY_AIRPORTS.items():
+    for code in airports:
+        AIRPORT_TO_CITY[code] = city
 
 
 AIRPORT_CITY = {
@@ -148,6 +222,24 @@ AIRPORT_CITY_EN = {
     "DXB": "Dubai",
     "DOH": "Doha",
     "ABQ": "Albuquerque",
+    "GMP": "Seoul",
+    "EWR": "New York",
+    "LGA": "New York",
+    "OAK": "San Francisco",
+    "SJC": "San Francisco",
+    "LGW": "London",
+    "STN": "London",
+    "ORY": "Paris",
+    "TSA": "Taipei",
+    "DMK": "Bangkok",
+    "TFU": "Chengdu",
+    "SFB": "Orlando",
+    "MDW": "Chicago",
+    "IAD": "Washington",
+    "DCA": "Washington",
+    "FLL": "Miami",
+    "YTZ": "Toronto",
+    "DWC": "Dubai",
 }
 
 
@@ -164,6 +256,8 @@ def get_airport_city(iata_code):
     code = str(iata_code or "").strip().upper()
     if not code:
         return ""
+    if code in AIRPORT_TO_CITY:
+        return AIRPORT_TO_CITY[code]
     return AIRPORT_CITY.get(code, code)
 
 
@@ -173,6 +267,19 @@ def get_airport_city_en(iata_code):
     if not code:
         return ""
     return AIRPORT_CITY_EN.get(code, code)
+
+
+def resolve_location(value):
+    """Resolve a city name or airport code into a display name and airport list."""
+    text = str(value or "").strip()
+    if not text:
+        return {"value": "", "type": "airport", "airports": []}
+    upper = text.upper()
+    if text in CITY_AIRPORTS:
+        return {"value": text, "type": "city", "airports": CITY_AIRPORTS[text]}
+    if 2 <= len(upper) <= 4 and upper.isascii() and upper.isalpha():
+        return {"value": upper, "type": "airport", "airports": [upper]}
+    return {"value": upper, "type": "airport", "airports": [upper]}
 
 
 def get_airport_timezone(iata_code):

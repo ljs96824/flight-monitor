@@ -9,6 +9,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 from flask import Flask, redirect, render_template_string, request, url_for
 
+from airports import format_airport, resolve_location
+
 
 BASE_DIR = Path(__file__).parent
 SUBSCRIPTIONS_PATH = BASE_DIR / "data" / "subscriptions.json"
@@ -360,10 +362,10 @@ FORM_TEMPLATE = """
         <option value="{{ code }}">{{ label }}</option>
         {% endfor %}
       </select>
-      <input name="origin_manual" placeholder="或手动输入IATA代码，例如 PVG">
+      <input name="origin_manual" placeholder="或手动输入城市名/机场代码，例如上海或PVG">
 
       <label for="destination">目的地</label>
-      <input id="destination" name="destination" placeholder="例如 MCO / Orlando / 奥兰多" required>
+      <input id="destination" name="destination" placeholder="输入城市名（如大阪、东京）或机场代码（如KIX）" required>
 
       <label>单程 / 往返</label>
       <div class="choice">
@@ -1032,6 +1034,9 @@ SUCCESS_TEMPLATE = """
   <div class="card">
     <h1>✅ 已创建监控</h1>
     <p><b>{{ summary.route }}</b></p>
+    {% if summary.airport_coverage %}
+    <p>{{ summary.airport_coverage }}</p>
+    {% endif %}
 
     <p><b>系统会在以下情况提醒你：</b></p>
     <ul>
@@ -1134,10 +1139,12 @@ def first_push_text() -> str:
 
 def build_subscription(form) -> dict:
     round_trip = parse_bool(form.get("round_trip", "false"))
-    origin = (
+    origin_input = (
         form.get("origin_manual", "").strip().upper()
         or form.get("origin_select", "").strip().upper()
     )
+    origin_info = resolve_location(origin_input)
+    destination_info = resolve_location(normalize_destination(form.get("destination", "")))
     max_budget_mode = form.get("max_budget_mode", "fixed")
     target_price_mode = form.get("target_price_mode", "fixed")
     target_price = parse_optional_budget(form.get("target_price"), target_price_mode)
@@ -1183,8 +1190,12 @@ def build_subscription(form) -> dict:
             }
         )
     return {
-        "origin": origin,
-        "destination": normalize_destination(form.get("destination", "")),
+        "origin": origin_info["value"],
+        "origin_type": origin_info["type"],
+        "origin_airports": origin_info["airports"],
+        "destination": destination_info["value"],
+        "destination_type": destination_info["type"],
+        "destination_airports": destination_info["airports"],
         "depart_date": form.get("depart_date", "").strip(),
         "return_date": form.get("return_date", "").strip() if round_trip else None,
         "round_trip": round_trip,
@@ -1269,8 +1280,21 @@ def build_success_summary(subscription: dict) -> dict:
     if budget:
         exclusions.append(f"超出¥{budget:,}预算的方案")
 
+    origin_airports = subscription.get("origin_airports") or [subscription.get("origin")]
+    destination_airports = subscription.get("destination_airports") or [
+        subscription.get("destination")
+    ]
+    coverage = ""
+    if len(origin_airports) > 1 or len(destination_airports) > 1:
+        origin_text = "、".join(format_airport(code) for code in origin_airports if code)
+        destination_text = "、".join(
+            format_airport(code) for code in destination_airports if code
+        )
+        coverage = f"覆盖出发机场：{origin_text}；到达机场：{destination_text}"
+
     return {
         "route": f"{city_label(subscription.get('origin'))} → {city_label(subscription.get('destination'))}",
+        "airport_coverage": coverage,
         "reminders": reminders,
         "exclusions": exclusions,
     }
