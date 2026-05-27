@@ -2082,6 +2082,7 @@ def _append_compact_flight(
     label: str,
     route_info: dict,
     all_flights: list[dict],
+    analysis_result: dict | None = None,
 ) -> None:
     segments = flight.get("segments") or []
     airline_text = " / ".join(_airlines_from_segments(segments))
@@ -2111,6 +2112,9 @@ def _append_compact_flight(
     )
     if preference_notes:
         lines.append(f"⚙️ 偏好匹配：{'；'.join(dict.fromkeys(preference_notes))}")
+    lines.append(f"价格采集于 {_collected_time_text(flight)} | 新鲜度：{_freshness_label(flight)}")
+    for advice in _execution_advice_lines(flight, route_info, analysis_result):
+        lines.append(advice)
     lines.append("")
     companions = _preference_value(route_info, {}, "companions", "solo")
     if companions in {"with_elderly", "with_child", "with_elderly_child"}:
@@ -2226,6 +2230,29 @@ def _append_low_option_count_notice(
         f"ℹ️ {prefix}当前仅搜到{count}个方案，可能因为航司尚未发布完整排班。"
     )
     lines.append("随着出发日期临近，航班选择会增多，系统将持续监控。")
+
+
+def _append_purchase_checklist(
+    lines: list[str], route_info: dict, analysis_result: dict
+) -> None:
+    lines.append("📋 购买前请确认：")
+    checklist = [
+        "□ 支付页最终价格是否在可接受范围内",
+        "□ 是否含税费和燃油费",
+        "□ 是否含托运行李（如需要）",
+        "□ 退改签规则是否可接受",
+        "□ 中转是否为联程票（如有中转）",
+        "□ 出发和到达时间是否正确",
+    ]
+    companions = _preference_value(route_info, analysis_result, "companions", "solo")
+    if companions in {"with_elderly", "with_child", "with_elderly_child"}:
+        checklist.extend(
+            [
+                "□ 是否避免红眼和凌晨到达",
+                "□ 中转时间是否充裕（建议≥2小时）",
+            ]
+        )
+    lines.extend(checklist)
 
 
 def _successful_source_count(source_stats: dict | None) -> int:
@@ -2882,6 +2909,13 @@ def _flight_search_date(flight: dict, fallback_date: str | None = None) -> str:
 
 
 def _collected_time_text(flight: dict) -> str:
+    collected_at = _collected_datetime(flight)
+    if collected_at:
+        return collected_at.strftime("%H:%M")
+    return datetime.now().strftime("%H:%M")
+
+
+def _collected_datetime(flight: dict) -> datetime | None:
     raw_value = (
         flight.get("collected_at")
         or flight.get("snapshot_time")
@@ -2889,12 +2923,123 @@ def _collected_time_text(flight: dict) -> str:
     )
     if raw_value:
         try:
-            return datetime.fromisoformat(str(raw_value).replace("Z", "+00:00")).strftime("%H:%M")
+            return datetime.fromisoformat(str(raw_value).replace("Z", "+00:00"))
         except ValueError:
-            time_text = _time_only(str(raw_value))
-            if time_text:
-                return time_text
-    return datetime.now().strftime("%H:%M")
+            return None
+    return None
+
+
+def _freshness_label(flight: dict) -> str:
+    collected_at = _collected_datetime(flight)
+    if not collected_at:
+        return "🔴建议刷新"
+    now = datetime.now(collected_at.tzinfo) if collected_at.tzinfo else datetime.now()
+    minutes = max(0, (now - collected_at).total_seconds() / 60)
+    if minutes <= 30:
+        return "🟢新鲜"
+    if minutes <= 120:
+        return "🟡需确认"
+    return "🔴建议刷新"
+
+
+def _has_free_checked_baggage(flight: dict) -> bool:
+    extra = flight.get("extra") or {}
+    baggage_detail = extra.get("baggage_detail") or {}
+    checked = baggage_detail.get("checked") or {}
+    if (checked.get("quantity") or 0) > 0:
+        return True
+    fare_rules = flight.get("fare_rules") or {}
+    fare_baggage = fare_rules.get("baggage") or {}
+    if (fare_baggage.get("checked_pieces") or 0) > 0:
+        return True
+    return bool(extra.get("baggage"))
+
+
+def _execution_target_price(
+    flight: dict, route_info: dict | None = None, analysis_result: dict | None = None
+) -> float | None:
+    route_info = route_info or {}
+    analysis_result = analysis_result or {}
+    price = _to_float(flight.get("price"))
+    candidates = [
+        flight.get("target_price"),
+        analysis_result.get("target_price_effective"),
+        analysis_result.get("target_price"),
+        _preference_value(route_info, analysis_result, "target_price"),
+        _preference_value(route_info, analysis_result, "budget"),
+        _preference_value(route_info, analysis_result, "max_budget"),
+    ]
+    for candidate in candidates:
+        value = _to_float(candidate)
+        if value and value > 0:
+            return value
+    return price * 1.05 if price and price > 0 else None
+
+
+def _execution_advice_lines(
+    flight: dict, route_info: dict | None = None, analysis_result: dict | None = None
+) -> list[str]:
+    grade = flight.get("execution_grade") or "C"
+    label = flight.get("execution_label")
+    price = _to_float(flight.get("price"))
+    final_limit = price * 1.05 if price and price > 0 else None
+    target_price = _execution_target_price(flight, route_info, analysis_result)
+    final_limit_text = _price_text(final_limit) if final_limit else "当前采集价上浮5%以内"
+    target_price_text = _price_text(target_price) if target_price else "你的目标价"
+    baggage_clause = "且含托运行李" if _has_free_checked_baggage(flight) else "且行李规则符合需求"
+
+    lines = []
+    if label:
+        lines.append(label)
+    reasons = flight.get("execution_reasons") or []
+    if reasons:
+        lines.append(f"执行提醒：{'；'.join(str(reason) for reason in reasons[:3])}")
+
+    if grade == "A":
+        lines.extend(
+            [
+                "✅ 操作建议：",
+                f"若支付页最终价不超过{final_limit_text}，{baggage_clause}，建议购买。",
+                f"若最终价超过{target_price_text}，建议继续监控。",
+            ]
+        )
+    elif grade == "B":
+        lines.extend(
+            [
+                "🔶 操作建议：",
+                "点击链接确认最终价格和票规后再购买。",
+                "注意确认是否含托运行李、是否联程票。",
+            ]
+        )
+    elif grade == "C":
+        lines.extend(
+            [
+                "⚠️ 仅供参考：",
+                "该价格仅用于判断市场区间，当前可购买性未验证。",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "❌ 其他参考：",
+                "当前可执行性较低，不作为主购买方案。",
+            ]
+        )
+    return lines
+
+
+def _message_collected_time(analysis_result: dict, route_info: dict) -> str:
+    for flight in analysis_result.get("all_flights") or []:
+        collected_at = _collected_datetime(flight)
+        if collected_at:
+            return collected_at.strftime("%Y-%m-%d %H:%M")
+    value = route_info.get("collected_at") or analysis_result.get("collected_at")
+    if value:
+        try:
+            return datetime.fromisoformat(str(value).replace("Z", "+00:00")).strftime("%Y-%m-%d %H:%M")
+        except ValueError:
+            pass
+    return datetime.now().strftime("%Y-%m-%d %H:%M")
 
 
 def _time_with_timezone(time_text: str, airport_code: str, show_timezone: bool) -> str:
@@ -2951,7 +3096,13 @@ def _round_trip_score_text(flight: dict) -> str:
     return f"评分{value:.0f}"
 
 
-def format_flight_detail(flight: dict, date_str: str | None = None, label: str | None = None) -> str:
+def format_flight_detail(
+    flight: dict,
+    date_str: str | None = None,
+    label: str | None = None,
+    route_info: dict | None = None,
+    analysis_result: dict | None = None,
+) -> str:
     """统一格式化往返方案详情，去程和返程共用。"""
     flight_no = _compact_flight_numbers(flight)
     airline = _round_trip_airline_text(flight)
@@ -3001,12 +3152,25 @@ def format_flight_detail(flight: dict, date_str: str | None = None, label: str |
     )
     if booking_links:
         detail += f"<br>  🔗 去购买: {booking_links}"
-        detail += f"<br>  ⏱ 价格采集于 {_collected_time_text(flight)}，实际价格以购买页为准"
+    detail += (
+        f"<br>  价格采集于 {_collected_time_text(flight)} | "
+        f"新鲜度：{_freshness_label(flight)}"
+    )
+    for advice in _execution_advice_lines(flight, route_info, analysis_result):
+        detail += f"<br>  {advice}"
     return detail
 
 
-def _round_trip_option_line(index: int, flight: dict, date_str: str | None = None) -> str:
-    return format_flight_detail(flight, date_str, _option_label(index))
+def _round_trip_option_line(
+    index: int,
+    flight: dict,
+    date_str: str | None = None,
+    route_info: dict | None = None,
+    analysis_result: dict | None = None,
+) -> str:
+    return format_flight_detail(
+        flight, date_str, _option_label(index), route_info, analysis_result
+    )
 
 
 def _append_round_trip_recommendations(
@@ -3016,6 +3180,8 @@ def _append_round_trip_recommendations(
     destination: str,
     depart_date: str | None,
     flights: list[dict] | None,
+    route_info: dict | None = None,
+    analysis_result: dict | None = None,
     limit: int = 5,
 ) -> None:
     flights = flights or []
@@ -3027,12 +3193,14 @@ def _append_round_trip_recommendations(
     )
     lines.append("━━━ 推荐方案 ━━━")
     for index, flight in enumerate(flights[:limit]):
-        lines.append(_round_trip_option_line(index, flight, depart_date))
+        lines.append(
+            _round_trip_option_line(index, flight, depart_date, route_info, analysis_result)
+        )
     lines.append("")
 
 
 def _append_simple_top3(lines: list[str], title: str, flights: list[dict] | None) -> None:
-    _append_round_trip_recommendations(lines, title, "", "", "", flights, 3)
+    _append_round_trip_recommendations(lines, title, "", "", "", flights, limit=3)
 
 
 def _round_trip_combo_flight_line(prefix: str, flight: dict, date_str: str | None) -> str:
@@ -3075,8 +3243,12 @@ def _round_trip_top_flights(analysis: dict | None) -> list[dict]:
         or analysis.get("all_flights")
         or []
     )
+    valid_flights = [flight for flight in flights if _has_valid_price(flight.get("price"))]
+    primary_flights = [
+        flight for flight in valid_flights if flight.get("execution_grade") != "D"
+    ]
     return sorted(
-        [flight for flight in flights if _has_valid_price(flight.get("price"))],
+        primary_flights or valid_flights,
         key=lambda flight: float(flight.get("price") or 999999),
     )
 
@@ -3156,6 +3328,8 @@ def _append_round_trip_block(
         route_info.get("destination", ""),
         route_info.get("depart_date"),
         outbound_flights,
+        route_info,
+        outbound_analysis,
         5,
     )
     _append_round_trip_recommendations(
@@ -3165,6 +3339,8 @@ def _append_round_trip_block(
         route_info.get("origin", ""),
         route_info.get("return_date"),
         return_flights,
+        route_info,
+        return_analysis,
         5,
     )
 
@@ -3233,6 +3409,8 @@ def format_html_message(
         else:
             lines.append(f"📅 出发日期：{route_info.get('depart_date','')}")
         lines.append(f"⏳ 距出发：{days}天")
+        lines.append(f"📊 数据采集时间：{_message_collected_time(analysis_result, route_info)}")
+        lines.append("⏱ 建议在2小时内确认购买，超时请等待下次推送刷新价格")
         lines.append(_sort_rule_text(route_info.get("mode") or analysis_result.get("mode")))
         lines.append("以下方案按当前排序规则展示，排序不代表推荐。")
         preference_summary = analysis_result.get("preference_summary") or {}
@@ -3343,16 +3521,39 @@ def format_html_message(
             )
 
         if not is_round_trip:
-            for index, flight in enumerate(economy_recs[:economy_limit]):
+            main_economy_recs = [
+                flight for flight in economy_recs if flight.get("execution_grade") != "D"
+            ][:economy_limit]
+            other_reference_recs = [
+                flight for flight in economy_recs if flight.get("execution_grade") == "D"
+            ][:2]
+            for index, flight in enumerate(main_economy_recs):
                 _append_compact_flight(
-                    lines, flight, _option_label(index), route_info, all_flights
+                    lines,
+                    flight,
+                    _option_label(index),
+                    route_info,
+                    all_flights,
+                    analysis_result,
                 )
+            if other_reference_recs:
+                lines.append("━━━ 其他参考 ━━━")
+                lines.append("")
+                for index, flight in enumerate(other_reference_recs):
+                    _append_compact_flight(
+                        lines,
+                        flight,
+                        f"参考{index + 1}",
+                        route_info,
+                        all_flights,
+                        analysis_result,
+                    )
 
         if not is_round_trip and business_rec:
             lines.append("━━━ 商务舱参考 ━━━")
             lines.append("")
             _append_compact_flight(
-                lines, business_rec, "商务舱最低价", route_info, all_flights
+                lines, business_rec, "商务舱最低价", route_info, all_flights, analysis_result
             )
 
         trend = generate_trend_summary(
@@ -3412,9 +3613,10 @@ def format_html_message(
         else:
             _append_low_option_count_notice(lines, analysis_result)
         lines.append("")
+        _append_purchase_checklist(lines, route_info, analysis_result)
+        lines.append("")
 
-        from datetime import datetime
-        collected_at = datetime.now().strftime("%Y-%m-%d %H:%M")
+        collected_at = _message_collected_time(analysis_result, route_info)
         lines.append(f"数据采集于 {collected_at} | 价格可能随时变动，建议尽快确认")
         lines.append("💡 机票价格实时波动，推荐方案基于采集时数据。")
         lines.append("点击链接后如价格有变化属于正常现象。")

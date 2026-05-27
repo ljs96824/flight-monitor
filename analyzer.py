@@ -1894,6 +1894,87 @@ def _stops_count(flight: dict, default: int = 99) -> int:
         return default
 
 
+def _collected_minutes_ago(flight: dict) -> float | None:
+    raw_value = (
+        flight.get("collected_at")
+        or flight.get("snapshot_time")
+        or flight.get("fetched_at")
+    )
+    if not raw_value:
+        return None
+    try:
+        collected_at = datetime.fromisoformat(str(raw_value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    now = datetime.now(collected_at.tzinfo) if collected_at.tzinfo else datetime.now()
+    return max(0, (now - collected_at).total_seconds() / 60)
+
+
+def calc_execution_grade(flight: dict, hard_constraints=None) -> dict:
+    """Calculate whether a shown option is actionable enough to execute."""
+    _ = hard_constraints
+    score = 100
+    reasons = []
+
+    collected_minutes_ago = _collected_minutes_ago(flight)
+    if collected_minutes_ago is None:
+        score -= 10
+        reasons.append("价格采集时间未知")
+    elif collected_minutes_ago > 120:
+        score -= 30
+        reasons.append("价格超过2小时未验证")
+    elif collected_minutes_ago > 30:
+        score -= 10
+        reasons.append("价格30分钟前采集")
+
+    source = str(flight.get("data_source") or flight.get("source") or "").lower()
+    if not any(name in source for name in ["serpapi", "searchapi", "hasdata"]):
+        score -= 15
+        reasons.append("非主流数据源")
+
+    segments = flight.get("segments") or []
+    if not segments:
+        score -= 20
+        reasons.append("航段信息不完整")
+
+    has_aircraft = any(segment.get("aircraft") for segment in segments if isinstance(segment, dict))
+    if not has_aircraft:
+        score -= 5
+
+    stops = _stops_count(flight, default=0)
+    if stops > 0:
+        score -= 10
+        reasons.append("含中转，建议确认是否联程")
+    if stops > 1:
+        score -= 15
+        reasons.append("多次中转，执行风险较高")
+
+    score = max(0, min(100, score))
+    if score >= 80:
+        grade = "A"
+        grade_label = "✅ 可购买性：高"
+    elif score >= 60:
+        grade = "B"
+        grade_label = "🔶 可购买性：中"
+    elif score >= 40:
+        grade = "C"
+        grade_label = "⚠️ 仅供参考"
+    else:
+        grade = "D"
+        grade_label = "❌ 不推荐执行"
+
+    flight["execution_grade"] = grade
+    flight["execution_label"] = grade_label
+    flight["execution_reasons"] = reasons
+    flight["execution_score"] = score
+    return {
+        "grade": grade,
+        "label": grade_label,
+        "reasons": reasons,
+        "score": score,
+    }
+
+
 def _apply_user_preferences(
     flights: list[dict], preferences: dict | None
 ) -> tuple[list[dict], list[dict], dict]:
@@ -2295,6 +2376,7 @@ def analyze_all_flights(
         )
         flight["scores"] = overall_score(flight, prices, durations, mode)
         flight["transfer_risk"] = transfer_risk(flight)
+        calc_execution_grade(flight, merged_preferences)
         score_multiplier = float(flight.get("score_multiplier") or 1)
         flight["preference_score"] = round(
             flight["scores"]["total"] * score_multiplier
