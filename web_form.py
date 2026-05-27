@@ -290,13 +290,55 @@ FORM_TEMPLATE = """
     }
     #summary-card h2 { margin-top: 0; font-size: 20px; }
     #summary-card ul { padding-left: 22px; }
+    #mobile-stepper,
+    #step-nav {
+      display: none;
+    }
+    #mobile-stepper {
+      border: 1px solid #d7e3f7;
+      border-radius: 8px;
+      background: #f7f9fc;
+      padding: 12px;
+      margin: 16px 0;
+      text-align: center;
+      font-weight: 700;
+    }
+    .step-dots { letter-spacing: 6px; }
     .button-row {
       display: grid;
       grid-template-columns: 1fr 1fr;
       gap: 12px;
     }
+    .step-nav-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    @media (max-width: 720px) {
+      #mobile-stepper,
+      #step-nav {
+        display: block;
+      }
+      .form-step {
+        display: none;
+      }
+      .form-step.active {
+        display: block;
+      }
+      #advanced-toggle,
+      #advanced-preferences {
+        display: none !important;
+      }
+      #preview-button {
+        display: none;
+      }
+      #preview-button.step-final-visible {
+        display: block;
+      }
+    }
     @media (max-width: 520px) {
       .button-row { grid-template-columns: 1fr; }
+      .step-nav-row { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -304,9 +346,14 @@ FORM_TEMPLATE = """
   <h1>航班监控订阅</h1>
   <p class="hint">先填基础需求即可；高级偏好可以按需展开。</p>
 
+  <div id="mobile-stepper">
+    <div class="step-dots" id="step-dots">● ○ ○ ○</div>
+    <div id="step-label">第1步/共4步：行程信息</div>
+  </div>
+
   <form id="subscription-form" method="post" action="{{ url_for('subscribe') }}">
-    <fieldset>
-      <legend>基础问题</legend>
+    <fieldset class="form-step active" data-step="1">
+      <legend>行程信息</legend>
 
       <label for="origin">出发地</label>
       <select id="origin" name="origin_select">
@@ -358,6 +405,10 @@ FORM_TEMPLATE = """
         <label><input type="radio" name="companions" value="with_elderly_child"> 老人和小孩都有</label>
       </div>
       <div id="auto-preference-notice" class="auto-notice"></div>
+    </fieldset>
+
+    <fieldset class="form-step" data-step="2">
+      <legend>价格和中转</legend>
 
       <label>最高可接受价格（超过这个价通常不考虑）</label>
       <input id="max_budget" name="max_budget" type="number" min="1" step="1" placeholder="例如 8000">
@@ -404,20 +455,28 @@ FORM_TEMPLATE = """
         </div>
       </div>
 
-      <label>可接受起飞时间</label>
-      <div class="choice">
-        <label><input type="radio" name="departure_time_policy" value="any"> 不限制</label>
-        <label><input type="radio" name="departure_time_policy" value="daytime" checked> 白天优先（06:00-20:00）</label>
-        <label><input type="radio" name="departure_time_policy" value="no_redeye"> 不接受红眼凌晨</label>
-      </div>
-
       <label>是否需要托运行李</label>
       <div class="choice">
         <label><input type="radio" name="baggage" value="required" checked> 必须</label>
         <label><input type="radio" name="baggage" value="not_needed"> 不需要</label>
         <label><input type="radio" name="baggage" value="unknown"> 不确定</label>
       </div>
+    </fieldset>
 
+    <fieldset class="form-step" data-step="3">
+      <legend>时间偏好</legend>
+
+      <label>可接受起飞时间</label>
+      <div class="choice">
+        <label><input type="radio" name="departure_time_policy" value="any"> 不限制</label>
+        <label><input type="radio" name="departure_time_policy" value="daytime" checked> 白天优先（06:00-20:00）</label>
+        <label><input type="radio" name="departure_time_policy" value="no_redeye"> 不接受红眼凌晨</label>
+      </div>
+      <div id="step-time-preferences"></div>
+    </fieldset>
+
+    <fieldset class="form-step" data-step="4">
+      <legend>提醒目标</legend>
       <label>主目标</label>
       <div class="choice">
         <label><input type="radio" name="primary_goal" value="price_drop_alert" required> 找到合适价格时提醒我 <small style="color:gray">（适合还没急着买，等低价）</small></label>
@@ -564,13 +623,20 @@ FORM_TEMPLATE = """
       </fieldset>
     </div>
 
+    <div id="step-nav">
+      <div class="step-nav-row">
+        <button id="step-prev" class="secondary-button" type="button">上一步</button>
+        <button id="step-next" type="button">下一步</button>
+      </div>
+    </div>
+
     <button id="preview-button" type="button">开始监控</button>
 
     <div id="summary-card">
       <h2>系统将这样理解你的需求：</h2>
       <ul id="summary-list"></ul>
       <div class="button-row">
-        <button type="submit">确认订阅</button>
+        <button type="submit">确认并开始监控</button>
         <button id="edit-button" class="secondary-button" type="button">返回修改</button>
       </div>
     </div>
@@ -632,10 +698,74 @@ FORM_TEMPLATE = """
     const secondaryGoalChecks = document.querySelectorAll('input[name="secondary_goals"]');
     const companionRadios = document.querySelectorAll('input[name="companions"]');
     const autoPreferenceNotice = document.getElementById('auto-preference-notice');
+    const stepPanels = Array.from(document.querySelectorAll('.form-step'));
+    const mobileStepper = document.getElementById('mobile-stepper');
+    const stepDots = document.getElementById('step-dots');
+    const stepLabel = document.getElementById('step-label');
+    const stepPrev = document.getElementById('step-prev');
+    const stepNext = document.getElementById('step-next');
+    const stepTimePreferences = document.getElementById('step-time-preferences');
+    const stepTitles = ['行程信息', '价格和中转', '时间偏好', '提醒目标'];
+    let currentStep = 1;
+
+    if (stepTimePreferences) {
+      stepTimePreferences.appendChild(singleTimePreferences);
+      stepTimePreferences.appendChild(roundTripTimePreferences);
+    }
 
     function checkedValue(name) {
       const selected = document.querySelector(`input[name="${name}"]:checked`);
       return selected ? selected.value : "";
+    }
+
+    function isMobileStepper() {
+      return window.matchMedia('(max-width: 720px)').matches;
+    }
+
+    function updateStepper() {
+      const mobile = isMobileStepper();
+      stepPanels.forEach(panel => {
+        const isActive = Number(panel.dataset.step) === currentStep;
+        panel.classList.toggle('active', !mobile || isActive);
+      });
+      stepDots.textContent = stepTitles
+        .map((_, index) => index + 1 === currentStep ? '●' : '○')
+        .join(' ');
+      stepLabel.textContent = `第${currentStep}步/共4步：${stepTitles[currentStep - 1]}`;
+      stepPrev.disabled = currentStep === 1;
+      stepNext.style.display = currentStep === stepTitles.length ? 'none' : 'block';
+      previewButton.classList.remove('step-final-visible');
+      if (mobile && currentStep === stepTitles.length) {
+        buildSummary();
+        summaryCard.style.display = 'block';
+      } else if (mobile) {
+        summaryCard.style.display = 'none';
+      }
+    }
+
+    function goToStep(step) {
+      currentStep = Math.max(1, Math.min(stepTitles.length, step));
+      updateStepper();
+      if (isMobileStepper()) {
+        mobileStepper.scrollIntoView({behavior: 'smooth', block: 'start'});
+      }
+    }
+
+    function validateCurrentStep() {
+      toggleBudgetRequired();
+      toggleReturnDate();
+      if (!validatePriceInputs()) {
+        alert('理想入手价应低于最高可接受价，请确认是否填反了');
+        targetPriceInput.focus();
+        return false;
+      }
+      return form.reportValidity();
+    }
+
+    function refreshSummaryIfFinalStep() {
+      if (isMobileStepper() && currentStep === stepTitles.length) {
+        buildSummary();
+      }
     }
 
     function checkedValues(name) {
@@ -803,6 +933,19 @@ FORM_TEMPLATE = """
       addSummaryLine(`提醒频率：${labels.frequency[checkedValue('notification_frequency')]}`);
     }
 
+    stepPrev.addEventListener('click', () => {
+      goToStep(currentStep - 1);
+    });
+
+    stepNext.addEventListener('click', () => {
+      if (!validateCurrentStep()) {
+        return;
+      }
+      goToStep(currentStep + 1);
+    });
+
+    window.addEventListener('resize', updateStepper);
+
     advancedToggle.addEventListener('click', () => {
       const expanded = advanced.style.display === 'block';
       advanced.style.display = expanded ? 'none' : 'block';
@@ -827,16 +970,28 @@ FORM_TEMPLATE = """
 
     editButton.addEventListener('click', () => {
       summaryCard.style.display = 'none';
+      if (isMobileStepper()) {
+        goToStep(1);
+        return;
+      }
       window.scrollTo({top: 0, behavior: 'smooth'});
     });
 
-    tripRadios.forEach(radio => radio.addEventListener('change', toggleReturnDate));
+    tripRadios.forEach(radio => radio.addEventListener('change', () => {
+      toggleReturnDate();
+      updateStepper();
+    }));
     maxBudgetRadios.forEach(radio => radio.addEventListener('change', toggleBudgetRequired));
     targetPriceRadios.forEach(radio => radio.addEventListener('change', toggleBudgetRequired));
     maxBudgetInput.addEventListener('input', validatePriceInputs);
     targetPriceInput.addEventListener('input', validatePriceInputs);
     transferRadios.forEach(radio => radio.addEventListener('change', toggleShortTransferOptions));
-    primaryGoalRadios.forEach(radio => radio.addEventListener('change', applyDefaultSecondaryGoals));
+    primaryGoalRadios.forEach(radio => radio.addEventListener('change', () => {
+      applyDefaultSecondaryGoals();
+      if (isMobileStepper() && currentStep === stepTitles.length) {
+        buildSummary();
+      }
+    }));
     companionRadios.forEach(radio => radio.addEventListener('change', applyCompanionDefaults));
     toggleReturnDate();
     toggleBudgetRequired();
@@ -844,6 +999,9 @@ FORM_TEMPLATE = """
     advanced.style.display = 'none';
     advancedToggle.textContent = '▼ 展开高级偏好（可选）';
     applyDefaultSecondaryGoals();
+    updateStepper();
+    form.addEventListener('input', refreshSummaryIfFinalStep);
+    form.addEventListener('change', refreshSummaryIfFinalStep);
     form.addEventListener('submit', event => {
       if (!validatePriceInputs()) {
         event.preventDefault();
