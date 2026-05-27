@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import threading
+import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -1091,7 +1093,7 @@ SUCCESS_TEMPLATE = """
       {% endfor %}
     </ul>
 
-    <p><b>订阅已保存。下一次本地电脑同步并运行采集后，会通过PushPlus推送监控结果。</b></p>
+    <p><b>订阅已保存。系统正在采集第一批数据，预计1-2分钟内收到首次推送。</b></p>
   </div>
   <a href="{{ url_for('index') }}">继续添加订阅</a>
 </body>
@@ -1117,6 +1119,47 @@ def save_subscription(subscription: dict) -> None:
         json.dumps(subscriptions, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+
+
+def run_single_subscription(subscription: dict) -> None:
+    """Run one subscription collection in a background thread."""
+    print("[后台] 线程已启动")
+    try:
+        print("[后台] 开始导入 main 处理函数")
+        from main import _normalize_subscription, process_subscription
+
+        print("[后台] main 处理函数导入完成")
+        print("[后台] 开始规范化订阅")
+        normalized_subscription = _normalize_subscription(subscription)
+        print(
+            "[后台] 订阅规范化完成: "
+            f"{normalized_subscription.get('origin')}→"
+            f"{normalized_subscription.get('destination')} "
+            f"{normalized_subscription.get('depart_date')}"
+        )
+
+        print("[后台] 开始采集、分析并推送")
+        ok = process_subscription(normalized_subscription, ensure_db=True)
+        print(f"[后台] 采集分析推送结束: ok={ok}")
+    except Exception as exc:
+        print(f"[后台] 执行失败: {exc}")
+        traceback.print_exc()
+
+
+def start_background_collection(subscription: dict) -> None:
+    """Start collection without blocking the form response."""
+    try:
+        print("[后台] 准备启动采集线程")
+        thread = threading.Thread(
+            target=run_single_subscription,
+            args=(subscription,),
+            daemon=True,
+        )
+        thread.start()
+        print(f"[后台] 采集线程已启动: {thread.name}")
+    except Exception as exc:
+        print(f"[后台] 启动线程失败: {exc}")
+        traceback.print_exc()
 
 
 def normalize_destination(value: str) -> str:
@@ -1346,9 +1389,26 @@ def index():
 
 @app.post("/subscribe")
 def subscribe():
-    subscription = build_subscription(request.form)
-    save_subscription(subscription)
-    return redirect(url_for("success", index=len(load_subscriptions()) - 1))
+    try:
+        print("[表单] 开始构建订阅")
+        subscription = build_subscription(request.form)
+        print("[表单] 订阅构建完成")
+
+        print("[表单] 开始保存订阅")
+        save_subscription(subscription)
+        subscriptions = load_subscriptions()
+        index = len(subscriptions) - 1
+        print(f"[表单] 订阅保存完成: index={index}")
+
+        print("[表单] 开始触发后台采集")
+        start_background_collection(subscription)
+        print("[表单] 后台采集触发完成")
+
+        return redirect(url_for("success", index=index))
+    except Exception as exc:
+        print(f"[表单] 提交订阅失败: {exc}")
+        traceback.print_exc()
+        raise
 
 
 @app.get("/success")
