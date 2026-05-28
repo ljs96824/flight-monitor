@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import json
+import time
 from datetime import date, datetime
 from pathlib import Path
 from urllib.parse import quote, quote_plus
@@ -170,7 +171,7 @@ def _post_pushplus(pushplus_token: str, title: str, content: str):
             "content": content,
             "template": "html",
         },
-        timeout=15,
+        timeout=30,
     )
     if not resp.text:
         print(f"[推送] PushPlus返回空响应，消息可能过长({len(content)}字符)")
@@ -721,24 +722,28 @@ def send(content: str, title: str = "航班监控通知") -> bool:
     pushplus_token = os.environ.get("PUSHPLUS_TOKEN", "")
     if pushplus_token:
         msg = _prepare_pushplus_content(content)
-        try:
-            result = _post_pushplus(pushplus_token, title, msg)
-            if result is None:
-                retry_msg = _compact_pushplus_message(msg, level=2)
-                retry_msg = _hard_limit_pushplus_message(retry_msg)
-                if retry_msg != msg:
-                    print(f"[推送] 尝试二次精简重发: {len(retry_msg)} 字符")
-                    result = _post_pushplus(pushplus_token, title, retry_msg)
-            if result is None:
-                return False
-            if result.get("code") == 200:
-                print("PushPlus推送成功")
-                return True
-            print(f"PushPlus推送失败: {result.get('msg', '未知错误')}")
-            return False
-        except Exception as exc:
-            print(f"PushPlus推送异常: {exc}")
-            return False
+        for attempt in range(2):
+            try:
+                result = _post_pushplus(pushplus_token, title, msg)
+                if result is None:
+                    retry_msg = _compact_pushplus_message(msg, level=2)
+                    retry_msg = _hard_limit_pushplus_message(retry_msg)
+                    if retry_msg != msg:
+                        print(f"[推送] 尝试二次精简重发: {len(retry_msg)} 字符")
+                        result = _post_pushplus(pushplus_token, title, retry_msg)
+                if result and result.get("code") == 200:
+                    print("PushPlus推送成功")
+                    return True
+                print(f"PushPlus返回异常: {result}")
+            except httpx.TimeoutException:
+                print(f"[推送] 第{attempt + 1}次超时，{'重试中...' if attempt == 0 else '放弃'}")
+            except Exception as exc:
+                print(f"[推送] 异常: {exc}")
+                break
+
+            if attempt == 0:
+                time.sleep(3)
+        return False
 
     webhook = os.environ.get("WECOM_WEBHOOK", "")
     if webhook:
