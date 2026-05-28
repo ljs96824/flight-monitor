@@ -385,6 +385,28 @@ def save_roundtrip_price_history(
     roundtrip_lowest,
 ) -> None:
     """Save one round-trip lowest-price snapshot."""
+    save_roundtrip_snapshot(
+        route,
+        depart_date,
+        return_date,
+        outbound_lowest,
+        return_lowest,
+        roundtrip_lowest,
+        datetime.now().isoformat(),
+    )
+
+
+def save_roundtrip_snapshot(
+    route: str,
+    depart_date: str,
+    return_date: str,
+    outbound_lowest,
+    return_lowest,
+    roundtrip_total,
+    collected_at,
+) -> None:
+    """Save one normalized round-trip lowest-price snapshot."""
+    roundtrip_lowest = roundtrip_total
     if not route or not depart_date or not return_date or roundtrip_lowest is None:
         return
     init_db()
@@ -400,7 +422,7 @@ def save_roundtrip_price_history(
                 route,
                 depart_date,
                 return_date,
-                datetime.now().isoformat(),
+                collected_at or datetime.now().isoformat(),
                 outbound_lowest,
                 return_lowest,
                 roundtrip_lowest,
@@ -426,4 +448,19 @@ def get_roundtrip_price_history(
             """,
             (route, depart_date, return_date, limit),
         ).fetchall()
-    return list(reversed(_rows_to_dicts(rows)))
+    normalized = []
+    for row in reversed(_rows_to_dicts(rows)):
+        snapshot_time = row.get("snapshot_time") or ""
+        normalized.append(
+            {
+                "date": snapshot_time[:10],
+                "timestamp": snapshot_time,
+                "outbound": row.get("outbound_lowest"),
+                "return": row.get("return_lowest"),
+                "total": row.get("roundtrip_lowest"),
+                "outbound_lowest": row.get("outbound_lowest"),
+                "return_lowest": row.get("return_lowest"),
+                "roundtrip_lowest": row.get("roundtrip_lowest"),
+            }
+        )
+    return normalized

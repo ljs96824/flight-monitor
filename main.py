@@ -30,7 +30,7 @@ from storage import (
     get_lowest_price_history,
     get_previous_snapshot_prices,
     init_db,
-    save_roundtrip_price_history,
+    save_roundtrip_snapshot,
     save_flight_details,
 )
 from sync_subscriptions import sync_subscriptions
@@ -726,13 +726,14 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
                     target_price=sub.get("target_price"),
                     max_budget=sub.get("max_budget"),
                 )
-                save_roundtrip_price_history(
+                save_roundtrip_snapshot(
                     route,
                     sub["depart_date"],
                     return_date,
                     round_trip_analysis.get("outbound_min"),
                     round_trip_analysis.get("return_min"),
                     round_trip_analysis.get("total_min"),
+                    datetime.now().isoformat(),
                 )
                 roundtrip_history = get_roundtrip_price_history(
                     route, sub["depart_date"], return_date, 14

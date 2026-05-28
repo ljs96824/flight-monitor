@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import json
 from datetime import date, datetime
 from pathlib import Path
 from urllib.parse import quote, quote_plus
@@ -31,6 +32,8 @@ from analyzer import (
 BUY_SIGNALS = {"strong_buy", "buy", "buy_now"}
 BASE_DIR = Path(__file__).parent
 NOTIFICATIONS_LOG = BASE_DIR / "data" / "notifications_log.txt"
+PUSHPLUS_MAX_CHARS = 30000
+COMPACT_NOTICE = "完整方案详情因篇幅限制已精简，如需查看全部方案请回复'详情'"
 
 
 def should_notify(analysis: dict, prev_signal: str | None) -> tuple[bool, str | None]:
@@ -48,6 +51,136 @@ def should_notify(analysis: dict, prev_signal: str | None) -> tuple[bool, str | 
     if analysis.get("target_vs_cheapest", 0) > 1000:
         return True, "cheaper_alt"
     return False, None
+
+
+def _compact_booking_line(line: str) -> str:
+    if "<a" not in line:
+        return line
+    parts = line.split(" | ")
+    kept = [
+        part
+        for part in parts
+        if "携程" in part or "飞猪" in part or "去哪儿" in part
+    ]
+    return " | ".join(kept) if kept else line
+
+
+def _append_compact_notice(content: str) -> str:
+    if COMPACT_NOTICE in content:
+        return content
+    return f"{content}<br><br>{COMPACT_NOTICE}"
+
+
+def _hard_limit_pushplus_message(content: str, limit: int = PUSHPLUS_MAX_CHARS) -> str:
+    notice = f"<br><br>{COMPACT_NOTICE}"
+    if len(content) <= limit:
+        return content
+    keep = max(0, limit - len(notice) - 20)
+    return content[:keep] + notice
+
+
+def _compact_pushplus_message(content: str, level: int = 1) -> str:
+    """Shrink generated HTML when PushPlus rejects overly long messages."""
+    lines = str(content or "").split("<br>")
+    compacted = []
+    checklist_count = None
+    skip_price_explanation = False
+
+    for raw_line in lines:
+        line = raw_line
+        stripped = re.sub(r"<[^>]+>", "", line).strip()
+
+        if skip_price_explanation:
+            if not stripped or "━" in stripped:
+                skip_price_explanation = False
+            else:
+                continue
+
+        if level >= 1:
+            if "<a " in line:
+                line = _compact_booking_line(line)
+            if re.match(r"^(No\.[4-9]|[4-9]\.)", stripped):
+                continue
+            if "购买前请确认" in stripped:
+                checklist_count = 0
+                compacted.append(line)
+                continue
+            if checklist_count is not None and stripped.startswith("□"):
+                checklist_count += 1
+                if checklist_count > 5:
+                    continue
+            elif checklist_count is not None and not stripped.startswith("□"):
+                checklist_count = None
+
+            verbose_price_words = [
+                "历史最低",
+                "历史平均",
+                "历史最高",
+                "数据量",
+                "价格上涨概率",
+                "价格下降概率",
+                "平均涨",
+                "平均降",
+                "近60天",
+                "数据点",
+            ]
+            if any(word in stripped for word in verbose_price_words):
+                continue
+
+        if level >= 2:
+            if "关于价格说明" in stripped:
+                skip_price_explanation = True
+                continue
+            if "执行评估：" in stripped or "票规校验" in stripped:
+                continue
+            if stripped.startswith(("├", "└")) and "综合等级" not in stripped:
+                continue
+            if any(word in stripped for word in ("票规匹配", "可购买性", "执行风险")):
+                continue
+
+        compacted.append(line)
+
+    return _append_compact_notice("<br>".join(compacted))
+
+
+def _prepare_pushplus_content(content: str) -> str:
+    print(f"[推送] 消息长度: {len(content)} 字符")
+    if len(content) <= PUSHPLUS_MAX_CHARS:
+        return content
+
+    compacted = _compact_pushplus_message(content, level=1)
+    print(f"[推送] 消息超长，已精简: {len(compacted)} 字符")
+    if len(compacted) <= PUSHPLUS_MAX_CHARS:
+        return compacted
+
+    compacted = _compact_pushplus_message(compacted, level=2)
+    print(f"[推送] 二次精简后长度: {len(compacted)} 字符")
+    if len(compacted) > PUSHPLUS_MAX_CHARS:
+        compacted = _hard_limit_pushplus_message(compacted)
+        print(f"[推送] 硬截断后长度: {len(compacted)} 字符")
+    return compacted
+
+
+def _post_pushplus(pushplus_token: str, title: str, content: str):
+    resp = httpx.post(
+        "https://www.pushplus.plus/send",
+        json={
+            "token": pushplus_token,
+            "title": title,
+            "content": content,
+            "template": "html",
+        },
+        timeout=15,
+    )
+    if not resp.text:
+        print(f"[推送] PushPlus返回空响应，消息可能过长({len(content)}字符)")
+        return None
+    try:
+        return resp.json()
+    except json.JSONDecodeError:
+        print(f"[推送] JSON解析失败，响应内容: {resp.text[:200]}")
+        print(f"[推送] 消息长度: {len(content)}字符，可能超出限制")
+        return None
 
 
 DISCLAIMER = "以上内容基于历史价格数据分析，仅供参考。\n实际购买请以航司或OTA官网价格为准。"
@@ -587,18 +720,17 @@ def send(content: str, title: str = "航班监控通知") -> bool:
     """发送推送通知，优先PushPlus，备选企业微信。"""
     pushplus_token = os.environ.get("PUSHPLUS_TOKEN", "")
     if pushplus_token:
+        msg = _prepare_pushplus_content(content)
         try:
-            resp = httpx.post(
-                "https://www.pushplus.plus/send",
-                json={
-                    "token": pushplus_token,
-                    "title": title,
-                    "content": content,
-                    "template": "html",
-                },
-                timeout=15,
-            )
-            result = resp.json()
+            result = _post_pushplus(pushplus_token, title, msg)
+            if result is None:
+                retry_msg = _compact_pushplus_message(msg, level=2)
+                retry_msg = _hard_limit_pushplus_message(retry_msg)
+                if retry_msg != msg:
+                    print(f"[推送] 尝试二次精简重发: {len(retry_msg)} 字符")
+                    result = _post_pushplus(pushplus_token, title, retry_msg)
+            if result is None:
+                return False
             if result.get("code") == 200:
                 print("PushPlus推送成功")
                 return True
@@ -3865,6 +3997,197 @@ def _append_round_trip_all_options(
     lines.append("")
 
 
+def _roundtrip_value(row: dict | None, key: str):
+    row = row or {}
+    if key == "outbound":
+        return _to_float(row.get("outbound", row.get("outbound_lowest")))
+    if key == "return":
+        return _to_float(row.get("return", row.get("return_lowest")))
+    return _to_float(row.get("total", row.get("roundtrip_lowest")))
+
+
+def _roundtrip_date_label(row: dict) -> str:
+    raw = str(row.get("date") or row.get("timestamp") or row.get("snapshot_time") or "")
+    raw = raw[:10]
+    try:
+        parsed = date.fromisoformat(raw)
+        return f"{parsed.month}/{parsed.day}"
+    except ValueError:
+        return raw or "--"
+
+
+def _roundtrip_reference_gap(current, reference, reference_name: str) -> str:
+    current_value = _to_float(current)
+    reference_value = _to_float(reference)
+    if current_value is None or reference_value is None:
+        return ""
+    diff = current_value - reference_value
+    if abs(diff) < 1:
+        return f"  → 当前即为{reference_name} 🔥"
+    if diff > 0:
+        return f"  → 当前比{reference_name}贵{_price_text(diff)}"
+    return f"  → 当前比{reference_name}便宜{_price_text(abs(diff))} ✅"
+
+
+def _append_roundtrip_price_reference(
+    lines: list[str], round_trip: dict, route_info: dict
+) -> None:
+    total_min = _to_float(round_trip.get("total_min"))
+    outbound_min = _to_float(round_trip.get("outbound_min"))
+    return_min = _to_float(round_trip.get("return_min"))
+    if total_min is None:
+        return
+
+    analysis = round_trip.get("price_analysis") or {}
+    references = analysis.get("references") or {}
+    lines.append("<b>📊 往返价格参考</b>")
+    lines.append("")
+    lines.append(
+        f"当前往返最低总价：{_price_text(total_min)}（去{_price_text(outbound_min)} + 回{_price_text(return_min)}）"
+    )
+    lines.append("")
+
+    absolute_ref = references.get("absolute_min") or {}
+    if absolute_ref.get("price") is not None:
+        lines.append(f"历史往返最低：{_price_text(absolute_ref.get('price'))}")
+        lines.append(_roundtrip_reference_gap(total_min, absolute_ref.get("price"), "历史最低"))
+        lines.append("")
+
+    conditional_ref = references.get("conditional_min") or {}
+    if conditional_ref.get("price") is not None:
+        label = conditional_ref.get("label") or "同条件往返最低"
+        lines.append(f"{label}：{_price_text(conditional_ref.get('price'))}")
+        lines.append(_roundtrip_reference_gap(total_min, conditional_ref.get("price"), "它"))
+        sample_size = conditional_ref.get("sample_size")
+        if sample_size:
+            lines.append(f"  → 基于{sample_size}个往返价格点")
+        lines.append("")
+
+    recent_ref = references.get("recent_min") or {}
+    if recent_ref.get("price") is not None:
+        lines.append(f"近期往返最低（你关注以来）：{_price_text(recent_ref.get('price'))}")
+        lines.append(_roundtrip_reference_gap(total_min, recent_ref.get("price"), "近期最低"))
+        lines.append("")
+
+    target = _to_float(route_info.get("target_price"))
+    if target:
+        ideal_total = target * 2
+        lines.append(f"理想往返总价：{_price_text(ideal_total)}")
+        diff = ideal_total - total_min
+        if diff >= 0:
+            lines.append(f"  → 低于理想价{_price_text(diff)} ✅ 已达标")
+        else:
+            lines.append(f"  → 距离理想价还差{_price_text(abs(diff))}")
+        lines.append("")
+
+
+def _roundtrip_price_sequence(prices: list[float]) -> str:
+    if not prices:
+        return ""
+    return " → ".join(_price_text(price) for price in prices[-7:])
+
+
+def _format_leg_change(value) -> str:
+    amount = _to_float(value)
+    if amount is None:
+        return "暂无变化数据"
+    if abs(amount) < 1:
+        return "持平"
+    verb = "降" if amount < 0 else "涨"
+    return f"{verb}{_price_text(abs(amount))}"
+
+
+def _append_roundtrip_price_analysis(lines: list[str], round_trip: dict) -> None:
+    analysis = round_trip.get("price_analysis") or {}
+    if not analysis.get("available"):
+        return
+
+    short_term = analysis.get("short_term") or {}
+    mid_term = analysis.get("mid_term") or {}
+    split = analysis.get("split") or {}
+    if not short_term and not mid_term and not split:
+        return
+
+    lines.append("<b>📈 往返价格分析</b>")
+    lines.append("")
+
+    if short_term:
+        lines.append(
+            f"短期（近7天）：{short_term.get('trend', '数据积累中')}（{short_term.get('change_pct', 0)}%）"
+        )
+        sequence = _roundtrip_price_sequence(short_term.get("prices") or [])
+        if sequence:
+            lines.append(f"  往返总价：{sequence}")
+        lines.append(
+            f"  其中去程{_format_leg_change(short_term.get('outbound_change'))}，"
+            f"返程{_format_leg_change(short_term.get('return_change'))}"
+        )
+        lines.append("")
+
+    if mid_term:
+        lines.append("中期（你关注以来）：")
+        if mid_term.get("level"):
+            lines.append(f"  {mid_term['level']}")
+        vs_avg = _to_float(mid_term.get("vs_avg"))
+        if vs_avg is not None:
+            if abs(vs_avg) < 1:
+                lines.append("  与平均往返价格基本持平")
+            elif vs_avg < 0:
+                lines.append(f"  比平均往返价格便宜{_price_text(abs(vs_avg))}")
+            else:
+                lines.append(f"  比平均往返价格贵{_price_text(vs_avg)}")
+        lines.append("")
+
+    if split:
+        lines.append("拆分看：")
+        if split.get("outbound_level"):
+            lines.append(f"  去程价格处于{split['outbound_level']}")
+        if split.get("return_level"):
+            marker = " ← 返程拉低了总价" if "较低" in str(split.get("return_level")) else ""
+            lines.append(f"  返程价格处于{split['return_level']}{marker}")
+        if split.get("contribution"):
+            lines.append(f"  {split['contribution']}")
+        lines.append("")
+
+    if analysis.get("advice"):
+        lines.append(analysis["advice"])
+        lines.append("")
+
+
+def _roundtrip_bar(price: float, min_price: float, max_price: float) -> str:
+    if max_price <= min_price:
+        return "██████████"
+    width = 12
+    level = int((price - min_price) / (max_price - min_price) * (width - 4)) + 4
+    return "█" * max(4, min(width, level))
+
+
+def _append_roundtrip_trend_chart(lines: list[str], round_trip: dict) -> None:
+    analysis = round_trip.get("price_analysis") or {}
+    rows = analysis.get("trend_chart") or round_trip.get("history") or []
+    chart_rows = []
+    for row in rows[-7:]:
+        total = _roundtrip_value(row, "total")
+        if total is not None:
+            chart_rows.append((row, total))
+    if not chart_rows:
+        return
+
+    totals = [total for _, total in chart_rows]
+    min_price = min(totals)
+    max_price = max(totals)
+    trend_label = (analysis.get("short_term") or {}).get("trend") or (round_trip.get("trend") or {}).get("direction", "")
+    lines.append("<b>📉 往返总价走势（近7次采集）</b>")
+    for index, (row, total) in enumerate(chart_rows):
+        suffix = " ← 当前" if index == len(chart_rows) - 1 else ""
+        lines.append(
+            f"{_roundtrip_date_label(row)}  {_price_text(total)}  {_roundtrip_bar(total, min_price, max_price)}{suffix}"
+        )
+    if trend_label:
+        lines.append(f"趋势：{trend_label}")
+    lines.append("")
+
+
 def _append_round_trip_block(
     lines: list[str],
     outbound_analysis: dict,
@@ -3911,6 +4234,10 @@ def _append_round_trip_block(
     if round_trip.get("mix_match_tip"):
         lines.append(round_trip["mix_match_tip"])
     lines.append("")
+
+    _append_roundtrip_price_reference(lines, round_trip, route_info)
+    _append_roundtrip_price_analysis(lines, round_trip)
+    _append_roundtrip_trend_chart(lines, round_trip)
 
     if top_combinations:
         lines.append("<b>🔄 往返最优组合 Top3</b>")
@@ -4045,40 +4372,46 @@ def format_html_message(
         if not _has_valid_price(current_min):
             current_min = None
         goals = _goals(route_info, analysis_result)
-        lines.extend(_price_scale_lines(current_min, route_info, analysis_result))
-        if _primary_goal(route_info, analysis_result) == "cheaper_date":
-            _append_nearby_dates(
-                lines, route_info.get("nearby_dates") or analysis_result.get("nearby_dates")
-            )
-        if is_round_trip:
-            _append_round_trip_block(lines, outbound_analysis, route_info, return_analysis)
-        history = price_insights.get("price_history") if price_insights else None
-        price_pos = price_position_description(current_min, history) if current_min else None
-        wait_risk = (
-            waiting_risk_description(history, current_min, days or 0)
-            if current_min
-            else None
-        )
-        own_history = _normalize_own_history_for_refs(route_info)
-        price_refs = (
-            calculate_price_references(current_min, history, own_history, days or 0, all_flights)
-            if current_min
-            else {}
-        )
-        window_analysis = (
-            multi_window_analysis(current_min, own_history, history, days or 0)
-            if current_min
-            else {}
-        )
         source_stats_for_message = (
             source_stats
             or route_info.get("source_stats")
             or analysis_result.get("source_stats")
         )
+        if not is_round_trip:
+            lines.extend(_price_scale_lines(current_min, route_info, analysis_result))
+        if not is_round_trip and _primary_goal(route_info, analysis_result) == "cheaper_date":
+            _append_nearby_dates(
+                lines, route_info.get("nearby_dates") or analysis_result.get("nearby_dates")
+            )
+        if is_round_trip:
+            _append_round_trip_block(lines, outbound_analysis, route_info, return_analysis)
+        history = None if is_round_trip else (price_insights.get("price_history") if price_insights else None)
+        price_pos = None if is_round_trip else (price_position_description(current_min, history) if current_min else None)
+        wait_risk = None
+        own_history = []
+        price_refs = {}
+        window_analysis = {}
+        if not is_round_trip:
+            wait_risk = (
+                waiting_risk_description(history, current_min, days or 0)
+                if current_min
+                else None
+            )
+            own_history = _normalize_own_history_for_refs(route_info)
+            price_refs = (
+                calculate_price_references(current_min, history, own_history, days or 0, all_flights)
+                if current_min
+                else {}
+            )
+            window_analysis = (
+                multi_window_analysis(current_min, own_history, history, days or 0)
+                if current_min
+                else {}
+            )
         evidence_source = price_pos or {"data_points": len(_history_prices(history))}
         evidence = _evidence_text(evidence_source, source_stats_for_message)
 
-        if "price_drop_alert" in goals:
+        if not is_round_trip and "price_drop_alert" in goals:
             _append_price_drop_alert(lines, analysis_result, route_info)
 
         if "buy_timing" in goals and price_pos:
@@ -4165,41 +4498,42 @@ def format_html_message(
                 lines, business_rec, "商务舱最低价", route_info, all_flights, analysis_result
             )
 
-        trend = generate_trend_summary(
-            history,
-            current_min,
-        )
-        current_prices = [
-            float(flight.get("price"))
-            for flight in all_flights
-            if _has_valid_price(flight.get("price"))
-        ]
-        if trend.get("available"):
-            high_price = max(trend["max_price"], current_min) if current_min else trend["max_price"]
-            low_price = min(trend["min_price"], current_min) if current_min else trend["min_price"]
-            avg_price = trend["avg_price"]
-        elif current_prices:
-            high_price = max(current_prices)
-            low_price = min(current_prices)
-            avg_price = round(sum(current_prices) / len(current_prices))
-            current_min = current_min or low_price
-        else:
-            high_price = low_price = avg_price = current_min = None
+        if not is_round_trip:
+            trend = generate_trend_summary(
+                history,
+                current_min,
+            )
+            current_prices = [
+                float(flight.get("price"))
+                for flight in all_flights
+                if _has_valid_price(flight.get("price"))
+            ]
+            if trend.get("available"):
+                high_price = max(trend["max_price"], current_min) if current_min else trend["max_price"]
+                low_price = min(trend["min_price"], current_min) if current_min else trend["min_price"]
+                avg_price = trend["avg_price"]
+            elif current_prices:
+                high_price = max(current_prices)
+                low_price = min(current_prices)
+                avg_price = round(sum(current_prices) / len(current_prices))
+                current_min = current_min or low_price
+            else:
+                high_price = low_price = avg_price = current_min = None
 
-        lines.append("━━━━━━━━━━━━━━━━")
-        lines.append("")
-        lines.append("📈 价格走势")
-        arrow_line = _trend_arrow_line(history)
-        if arrow_line:
-            lines.append(arrow_line)
-        if current_min is None:
-            lines.append("暂无有效价格数据")
-        else:
-            lines.append(f"最高：{_price_text(high_price)}")
-            lines.append(f"最低：{_price_text(low_price)}")
-            lines.append(f"平均：{_price_text(avg_price)}")
-            lines.append(f"当前最低价：{_price_text(current_min)}")
-        lines.append("")
+            lines.append("━━━━━━━━━━━━━━━━")
+            lines.append("")
+            lines.append("📈 价格走势")
+            arrow_line = _trend_arrow_line(history)
+            if arrow_line:
+                lines.append(arrow_line)
+            if current_min is None:
+                lines.append("暂无有效价格数据")
+            else:
+                lines.append(f"最高：{_price_text(high_price)}")
+                lines.append(f"最低：{_price_text(low_price)}")
+                lines.append(f"平均：{_price_text(avg_price)}")
+                lines.append(f"当前最低价：{_price_text(current_min)}")
+            lines.append("")
         lines.append(f"📊 经济舱价格区间：{_cabin_price_range_text(all_flights, 'economy', analysis_result)}")
         lines.append(f"📊 商务舱价格区间：{_cabin_price_range_text(all_flights, 'business', analysis_result)}")
         lines.append("")

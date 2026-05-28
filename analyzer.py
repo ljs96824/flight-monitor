@@ -2935,9 +2935,9 @@ def analyze_roundtrip_trend(history: list[dict] | None) -> dict:
     """Analyze recent round-trip total price history."""
     rows = history or []
     prices = [
-        _to_float(row.get("roundtrip_lowest"))
+        _to_float(row.get("total", row.get("roundtrip_lowest")))
         for row in rows
-        if _to_float(row.get("roundtrip_lowest")) is not None
+        if _to_float(row.get("total", row.get("roundtrip_lowest"))) is not None
     ]
     if not prices:
         return {"available": False}
@@ -2966,6 +2966,226 @@ def analyze_roundtrip_trend(history: list[dict] | None) -> dict:
         "is_recent_low": prices[-1] <= min(prices),
         "direction": direction,
         "icon": icon,
+    }
+
+
+def _roundtrip_row_value(row: dict, key: str):
+    if key == "outbound":
+        return _to_float(row.get("outbound", row.get("outbound_lowest")))
+    if key == "return":
+        return _to_float(row.get("return", row.get("return_lowest")))
+    return _to_float(row.get("total", row.get("roundtrip_lowest")))
+
+
+def _roundtrip_percentile_level(percentile: int) -> str:
+    if percentile <= 10:
+        return f"当前处于极低水平（比{100 - percentile}%的历史价格都便宜）"
+    if percentile <= 25:
+        return f"当前处于较低水平（比{100 - percentile}%的历史价格都便宜）"
+    if percentile <= 50:
+        return "当前处于中等偏低水平"
+    if percentile <= 75:
+        return "当前处于中等偏高水平"
+    if percentile <= 90:
+        return f"当前处于较高水平（比{percentile}%的历史价格都贵）"
+    return "当前处于极高水平"
+
+
+def _roundtrip_leg_level(current_price, history: list[dict], key: str) -> str:
+    current = _to_float(current_price)
+    prices = [
+        _roundtrip_row_value(row, key)
+        for row in history or []
+        if _roundtrip_row_value(row, key) is not None
+    ]
+    if current is None or len(prices) < 3:
+        return "历史数据不足"
+    percentile = round(sum(1 for price in prices if price < current) / len(prices) * 100)
+    if percentile <= 25:
+        return "较低水平"
+    if percentile <= 50:
+        return "中等偏低水平"
+    if percentile <= 75:
+        return "中等偏高水平"
+    return "较高水平"
+
+
+def analyze_roundtrip_prices(
+    history: list[dict] | None,
+    current_total,
+    outbound_current,
+    return_current,
+    target_price=None,
+    max_budget=None,
+    days_to_dept=None,
+) -> dict:
+    """Analyze round-trip total price references, trend, and leg contribution."""
+    rows = history or []
+    current_total = _to_float(current_total)
+    outbound_current = _to_float(outbound_current)
+    return_current = _to_float(return_current)
+    if current_total is None:
+        return {"available": False}
+
+    totals = [
+        _roundtrip_row_value(row, "total")
+        for row in rows
+        if _roundtrip_row_value(row, "total") is not None
+    ]
+    outbound_prices = [
+        _roundtrip_row_value(row, "outbound")
+        for row in rows
+        if _roundtrip_row_value(row, "outbound") is not None
+    ]
+    return_prices = [
+        _roundtrip_row_value(row, "return")
+        for row in rows
+        if _roundtrip_row_value(row, "return") is not None
+    ]
+
+    chart_rows = list(rows)
+    latest_total = _roundtrip_row_value(rows[-1], "total") if rows else None
+    if latest_total is None or abs(latest_total - current_total) >= 1:
+        chart_rows.append(
+            {
+                "date": datetime.now().date().isoformat(),
+                "outbound": outbound_current,
+                "return": return_current,
+                "total": current_total,
+            }
+        )
+
+    if not totals:
+        totals = [current_total]
+    elif abs(totals[-1] - current_total) >= 1:
+        totals = totals + [current_total]
+
+    references = {
+        "current": {
+            "price": current_total,
+            "outbound": outbound_current,
+            "return": return_current,
+        },
+    }
+    if totals:
+        references["absolute_min"] = {
+            "price": min(totals),
+            "label": "历史往返最低",
+        }
+        references["recent_min"] = {
+            "price": min(totals[-14:]),
+            "label": "近期往返最低（你关注以来）",
+            "sample_size": len(totals[-14:]),
+        }
+    if totals and days_to_dept is not None:
+        references["conditional_min"] = {
+            "price": min(totals),
+            "label": f"同条件往返最低（提前{days_to_dept}天±7天）",
+            "sample_size": len(totals),
+        }
+
+    short_term = {}
+    recent = totals[-7:]
+    if len(recent) >= 2:
+        change_pct = round((recent[-1] - recent[0]) / recent[0] * 100, 1) if recent[0] else 0
+        if all(recent[i] <= recent[i - 1] for i in range(1, len(recent))) and recent[-1] < recent[0]:
+            trend = "📉 持续下降中"
+        elif all(recent[i] >= recent[i - 1] for i in range(1, len(recent))) and recent[-1] > recent[0]:
+            trend = "📈 持续上涨中"
+        elif recent[-1] < recent[0]:
+            trend = "📉 下降中"
+        elif recent[-1] > recent[0]:
+            trend = "📈 上涨中"
+        else:
+            trend = "➡️ 基本持平"
+
+        previous_row = chart_rows[-2] if len(chart_rows) >= 2 else {}
+        outbound_previous = _roundtrip_row_value(previous_row, "outbound")
+        return_previous = _roundtrip_row_value(previous_row, "return")
+        outbound_change = (
+            outbound_current - outbound_previous
+            if outbound_current is not None and outbound_previous is not None
+            else None
+        )
+        return_change = (
+            return_current - return_previous
+            if return_current is not None and return_previous is not None
+            else None
+        )
+        short_term = {
+            "trend": trend,
+            "change_pct": change_pct,
+            "prices": recent,
+            "outbound_change": outbound_change,
+            "return_change": return_change,
+        }
+
+    mid_term = {}
+    if len(totals) >= 2:
+        percentile = round(sum(1 for price in totals if price < current_total) / len(totals) * 100)
+        avg_price = round(sum(totals) / len(totals))
+        mid_term = {
+            "percentile": percentile,
+            "level": _roundtrip_percentile_level(percentile),
+            "min": min(totals),
+            "max": max(totals),
+            "avg": avg_price,
+            "vs_avg": current_total - avg_price,
+            "data_points": len(totals),
+        }
+
+    split = {}
+    if outbound_prices and return_prices:
+        outbound_level = _roundtrip_leg_level(outbound_current, rows, "outbound")
+        return_level = _roundtrip_leg_level(return_current, rows, "return")
+        contribution = ""
+        previous_row = chart_rows[-2] if len(chart_rows) >= 2 else {}
+        outbound_change = short_term.get("outbound_change")
+        return_change = short_term.get("return_change")
+        if outbound_change is not None and return_change is not None:
+            if outbound_change > 0 and return_change < 0:
+                contribution = "返程降价抵消了去程涨价"
+            elif outbound_change < 0 and return_change > 0:
+                contribution = "去程降价抵消了返程涨价"
+            elif outbound_change < 0 and return_change < 0:
+                contribution = "去程和返程同步下降"
+            elif outbound_change > 0 and return_change > 0:
+                contribution = "去程和返程同步上涨"
+        split = {
+            "outbound_level": outbound_level,
+            "return_level": return_level,
+            "contribution": contribution,
+            "previous": previous_row,
+        }
+
+    target = _to_float(target_price)
+    max_b = _to_float(max_budget)
+    advice = ""
+    if target and current_total <= target * 2:
+        advice = (
+            f"⭐ 往返购买建议：往返总价¥{current_total:,.0f}已低于理想价¥{target * 2:,.0f}，"
+            "且处于近期低位。可以考虑锁定，继续等待的降幅空间有限。"
+        )
+    elif max_b and current_total <= max_b * 2:
+        advice = (
+            f"⭐ 往返购买建议：往返总价¥{current_total:,.0f}在最高预算内，"
+            "但仍高于理想价，可结合出行确定性继续观察。"
+        )
+    elif max_b and current_total > max_b * 2:
+        advice = (
+            f"⭐ 往返购买建议：往返总价¥{current_total:,.0f}超出最高预算，"
+            "可等待下一轮价格变化或扩大日期范围。"
+        )
+
+    return {
+        "available": True,
+        "history": rows,
+        "references": references,
+        "short_term": short_term,
+        "mid_term": mid_term,
+        "split": split,
+        "trend_chart": chart_rows[-7:],
+        "advice": advice,
     }
 
 
@@ -3037,6 +3257,15 @@ def analyze_round_trip(
 
     trend = analyze_roundtrip_trend(history)
     previous = trend.get("previous") if trend.get("available") else None
+    price_analysis = analyze_roundtrip_prices(
+        history,
+        total_min,
+        outbound_min,
+        return_min,
+        target_price=target_price,
+        max_budget=max_budget,
+        days_to_dept=outbound_analysis.get("days_to_dept"),
+    )
 
     return {
         "outbound_min": outbound_min,
@@ -3050,6 +3279,7 @@ def analyze_round_trip(
         "mix_match_tip": _mix_match_tip(combinations),
         "history": history or [],
         "trend": trend,
+        "price_analysis": price_analysis,
         "previous": previous,
         "advice": _roundtrip_budget_advice(total_min, target_price, max_budget),
     }
