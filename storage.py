@@ -102,6 +102,20 @@ def init_db() -> None:
             )
             """
         )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS roundtrip_price_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                route TEXT,
+                depart_date TEXT,
+                return_date TEXT,
+                snapshot_time TEXT,
+                outbound_lowest REAL,
+                return_lowest REAL,
+                roundtrip_lowest REAL
+            )
+            """
+        )
 
 
 def save_snapshots(records: list[dict]) -> None:
@@ -360,3 +374,56 @@ def get_flight_price_history(
         ).fetchall()
 
     return [_decode_segments(row) for row in _rows_to_dicts(rows)]
+
+
+def save_roundtrip_price_history(
+    route: str,
+    depart_date: str,
+    return_date: str,
+    outbound_lowest,
+    return_lowest,
+    roundtrip_lowest,
+) -> None:
+    """Save one round-trip lowest-price snapshot."""
+    if not route or not depart_date or not return_date or roundtrip_lowest is None:
+        return
+    init_db()
+    with _connect() as connection:
+        connection.execute(
+            """
+            INSERT INTO roundtrip_price_history (
+                route, depart_date, return_date, snapshot_time,
+                outbound_lowest, return_lowest, roundtrip_lowest
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                route,
+                depart_date,
+                return_date,
+                datetime.now().isoformat(),
+                outbound_lowest,
+                return_lowest,
+                roundtrip_lowest,
+            ),
+        )
+
+
+def get_roundtrip_price_history(
+    route: str, depart_date: str, return_date: str, limit: int = 14
+) -> list[dict]:
+    """Get recent round-trip lowest-price snapshots."""
+    init_db()
+    with _connect() as connection:
+        rows = connection.execute(
+            """
+            SELECT *
+            FROM roundtrip_price_history
+            WHERE route = ?
+              AND depart_date = ?
+              AND return_date = ?
+            ORDER BY snapshot_time DESC
+            LIMIT ?
+            """,
+            (route, depart_date, return_date, limit),
+        ).fetchall()
+    return list(reversed(_rows_to_dicts(rows)))

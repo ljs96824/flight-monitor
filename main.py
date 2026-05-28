@@ -26,9 +26,11 @@ from health_check import system_health_check
 from notifier import format_html_message, send
 from sources.aggregator import FlightAggregator, build_default_sources
 from storage import (
+    get_roundtrip_price_history,
     get_lowest_price_history,
     get_previous_snapshot_prices,
     init_db,
+    save_roundtrip_price_history,
     save_flight_details,
 )
 from sync_subscriptions import sync_subscriptions
@@ -718,8 +720,29 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
                 ).days
                 return_analysis["nearby_dates"] = return_nearby_dates
                 analysis["return_analysis"] = return_analysis
+                round_trip_analysis = analyze_round_trip(
+                    analysis,
+                    return_analysis,
+                    target_price=sub.get("target_price"),
+                    max_budget=sub.get("max_budget"),
+                )
+                save_roundtrip_price_history(
+                    route,
+                    sub["depart_date"],
+                    return_date,
+                    round_trip_analysis.get("outbound_min"),
+                    round_trip_analysis.get("return_min"),
+                    round_trip_analysis.get("total_min"),
+                )
+                roundtrip_history = get_roundtrip_price_history(
+                    route, sub["depart_date"], return_date, 14
+                )
                 analysis["round_trip_analysis"] = analyze_round_trip(
-                    analysis, return_analysis
+                    analysis,
+                    return_analysis,
+                    target_price=sub.get("target_price"),
+                    max_budget=sub.get("max_budget"),
+                    history=roundtrip_history,
                 )
                 analysis["round_trip"] = True
                 print("[往返] return_analysis 已传入 format_html_message")

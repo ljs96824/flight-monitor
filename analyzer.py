@@ -5,6 +5,7 @@ from __future__ import annotations
 import statistics
 from datetime import date, datetime, time, timedelta
 
+from price_estimator import calc_transaction_price
 from storage import get_all_history, get_latest_alternatives, get_target_history
 
 
@@ -2673,6 +2674,7 @@ def analyze_all_flights(
         flight["scores"] = overall_score(flight, prices, durations, mode)
         flight["transfer_risk"] = transfer_risk(flight)
         flight["fare_verification"] = verify_fare_rules(flight, merged_preferences)
+        flight["price_estimate"] = calc_transaction_price(flight, merged_preferences)
         flight["availability"] = estimate_availability(
             flight,
             flight.get("collected_at") or flight.get("snapshot_time") or flight.get("fetched_at"),
@@ -2881,7 +2883,114 @@ def _top_flights_for_round_trip(analysis: dict, limit: int = 3) -> list[dict]:
     )[:limit]
 
 
-def analyze_round_trip(outbound_analysis: dict, return_analysis: dict) -> dict:
+def _flight_transaction_price(flight: dict):
+    estimate = flight.get("price_estimate") or {}
+    value = _to_float(estimate.get("transaction_price"))
+    if value is None:
+        value = _to_float(estimate.get("estimated_price"))
+    return value if value is not None else _to_float(flight.get("price"))
+
+
+def _roundtrip_airlines(flight: dict) -> set[str]:
+    names = set(str(name) for name in flight.get("airlines") or [] if name)
+    for segment in flight.get("segments") or []:
+        if isinstance(segment, dict) and segment.get("airline"):
+            names.add(str(segment.get("airline")))
+    if not names and flight.get("airline_summary"):
+        names.update(part.strip() for part in str(flight["airline_summary"]).split("/") if part.strip())
+    return names
+
+
+def _mix_match_tip(combinations: list[dict]) -> str:
+    if not combinations:
+        return ""
+    best = combinations[0]
+    best_total = _to_float(best.get("total_price"))
+    if best_total is None:
+        return ""
+    same_airline = []
+    for combo in combinations:
+        outbound_airlines = _roundtrip_airlines(combo.get("outbound") or {})
+        return_airlines = _roundtrip_airlines(combo.get("return") or {})
+        if outbound_airlines and return_airlines and outbound_airlines.intersection(return_airlines):
+            same_airline.append(combo)
+    if not same_airline:
+        return ""
+    best_same = min(same_airline, key=lambda item: _to_float(item.get("total_price")) or 999999)
+    same_total = _to_float(best_same.get("total_price"))
+    if same_total is None or same_total <= best_total:
+        return ""
+    diff = same_total - best_total
+    outbound = best.get("outbound") or {}
+    return_flight = best.get("return") or {}
+    return (
+        "💡 如果去程和返程分开买不同航司，总价可能更低："
+        f"最优混搭：去程{outbound.get('flight_combo', '')}¥{best.get('outbound_price'):,.0f} + "
+        f"返程{return_flight.get('flight_combo', '')}¥{best.get('return_price'):,.0f} = ¥{best_total:,.0f}，"
+        f"比最优同航司组合便宜¥{diff:,.0f}"
+    )
+
+
+def analyze_roundtrip_trend(history: list[dict] | None) -> dict:
+    """Analyze recent round-trip total price history."""
+    rows = history or []
+    prices = [
+        _to_float(row.get("roundtrip_lowest"))
+        for row in rows
+        if _to_float(row.get("roundtrip_lowest")) is not None
+    ]
+    if not prices:
+        return {"available": False}
+
+    recent = prices[-4:]
+    if len(recent) >= 2:
+        if recent[-1] < recent[0]:
+            direction = "连续下降中" if all(recent[i] <= recent[i - 1] for i in range(1, len(recent))) else "整体下降"
+            icon = "📉"
+        elif recent[-1] > recent[0]:
+            direction = "连续上涨中" if all(recent[i] >= recent[i - 1] for i in range(1, len(recent))) else "整体上涨"
+            icon = "📈"
+        else:
+            direction = "基本持平"
+            icon = "➡️"
+    else:
+        direction = "数据积累中"
+        icon = ""
+
+    return {
+        "available": True,
+        "prices": prices,
+        "recent_prices": recent,
+        "previous": rows[-2] if len(rows) >= 2 else None,
+        "current": rows[-1] if rows else None,
+        "is_recent_low": prices[-1] <= min(prices),
+        "direction": direction,
+        "icon": icon,
+    }
+
+
+def _roundtrip_budget_advice(roundtrip_lowest, target_price=None, max_budget=None) -> str:
+    total = _to_float(roundtrip_lowest)
+    target = _to_float(target_price)
+    max_b = _to_float(max_budget)
+    if total is None:
+        return ""
+    if target and total <= target * 2:
+        return f"🔥 往返总价¥{total:,.0f}已低于理想总价¥{target * 2:,.0f}，建议锁定"
+    if max_b and total <= max_b * 2:
+        return f"📊 往返总价在预算内但高于理想价，可继续观望"
+    if max_b and total > max_b * 2:
+        return f"⏳ 往返总价超出预算，建议等待降价"
+    return ""
+
+
+def analyze_round_trip(
+    outbound_analysis: dict,
+    return_analysis: dict,
+    target_price=None,
+    max_budget=None,
+    history: list[dict] | None = None,
+) -> dict:
     """Analyze outbound and return legs together for a round-trip subscription."""
     outbound_top = _top_flights_for_round_trip(outbound_analysis, 3)
     return_top = _top_flights_for_round_trip(return_analysis, 3)
@@ -2900,6 +3009,10 @@ def analyze_round_trip(outbound_analysis: dict, return_analysis: dict) -> dict:
                     "outbound_price": outbound_price,
                     "return_price": return_price,
                     "total_price": outbound_price + return_price,
+                    "transaction_total": (
+                        (_flight_transaction_price(outbound) or outbound_price)
+                        + (_flight_transaction_price(return_flight) or return_price)
+                    ),
                 }
             )
 
@@ -2922,14 +3035,23 @@ def analyze_round_trip(outbound_analysis: dict, return_analysis: dict) -> dict:
         else:
             insight = f"去程和返程价格相对均衡，总价¥{total:,.0f}"
 
+    trend = analyze_roundtrip_trend(history)
+    previous = trend.get("previous") if trend.get("available") else None
+
     return {
         "outbound_min": outbound_min,
         "return_min": return_min,
         "total_min": total_min,
+        "max_combination": combinations[-1] if combinations else None,
         "top_combinations": combinations[:3],
         "outbound_top3": outbound_top,
         "return_top3": return_top,
         "insight": insight,
+        "mix_match_tip": _mix_match_tip(combinations),
+        "history": history or [],
+        "trend": trend,
+        "previous": previous,
+        "advice": _roundtrip_budget_advice(total_min, target_price, max_budget),
     }
 
 
