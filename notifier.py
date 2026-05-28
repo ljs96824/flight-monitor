@@ -1588,31 +1588,23 @@ def _possible_booking_links(origin, dest, date_str, flight_nos=None, cabin="econ
     date_str = str(date_str or "")
     origin_city = AIRPORT_CITY.get(origin, origin)
     dest_city = AIRPORT_CITY.get(dest, dest)
-    origin_en = AIRPORT_CITY_EN.get(origin, origin)
-    dest_en = AIRPORT_CITY_EN.get(dest, dest)
-
     ctrip_url = (
         "https://flights.ctrip.com/online/list/"
         f"oneway-{origin}-{dest}?depdate={date_str}&cabin=y_s"
     )
     fliggy_url = (
-        "https://www.fliggy.com/flight/international-search?"
-        "tripType=1"
-        f"&depCity={quote(origin_city)}"
-        f"&arrCity={quote(dest_city)}"
-        f"&depDate={date_str}"
+        "https://s.fliggy.com/search?"
+        f"keyword={quote(origin_city + '到' + dest_city + '机票+' + date_str)}"
     )
     qunar_url = (
         "https://flight.qunar.com/site/oneway_list.htm"
-        f"?searchDepartureAirport={quote_plus(origin_city)}"
-        f"&searchArrivalAirport={quote_plus(dest_city)}"
+        f"?searchDepartureAirport={quote(origin_city)}"
+        f"&searchArrivalAirport={quote(dest_city)}"
         f"&searchDepartureTime={date_str}"
     )
     trip_url = (
         "https://www.trip.com/flights/"
-        f"{origin_en.lower().replace(' ', '-')}-to-"
-        f"{dest_en.lower().replace(' ', '-')}/tickets-"
-        f"{origin.lower()}-{dest.lower()}"
+        f"{origin.lower()}-to-{dest.lower()}/tickets-{origin.lower()}-{dest.lower()}"
         f"?dcity={origin}&acity={dest}&ddate={date_str}&class=Y"
     )
     sky_url = (
@@ -1627,7 +1619,12 @@ def _possible_booking_links(origin, dest, date_str, flight_nos=None, cabin="econ
         ("去哪儿", qunar_url),
         ("Trip.com", trip_url),
         ("天巡", sky_url),
-        ("Google Flights", _google_flights_query_url(origin, dest, date_str)),
+        (
+            "Google Flights",
+            "https://www.google.com/travel/flights?"
+            f"q=flights+from+{quote(origin_city)}+to+{quote(dest_city)}+on+{date_str}"
+            "&curr=CNY&hl=zh-CN",
+        ),
     ]
 
 
@@ -1672,48 +1669,7 @@ def generate_booking_links(
         origin_city = AIRPORT_CITY.get(origin, origin)
     if not dest_city:
         dest_city = AIRPORT_CITY.get(dest, dest)
-    origin_en = AIRPORT_CITY_EN.get(origin, origin)
-    dest_en = AIRPORT_CITY_EN.get(dest, dest)
-
-    ctrip_url = (
-        "https://flights.ctrip.com/online/list/"
-        f"oneway-{origin}-{dest}?depdate={date_str}&cabin=y_s"
-    )
-    fliggy_url = (
-        "https://www.fliggy.com/flight/international-search?"
-        "tripType=1"
-        f"&depCity={quote(origin_city)}"
-        f"&arrCity={quote(dest_city)}"
-        f"&depDate={date_str}"
-    )
-    qunar_url = (
-        "https://flight.qunar.com/site/oneway_list.htm"
-        f"?searchDepartureAirport={quote_plus(origin_city)}"
-        f"&searchArrivalAirport={quote_plus(dest_city)}"
-        f"&searchDepartureTime={date_str}"
-    )
-    trip_url = (
-        "https://www.trip.com/flights/"
-        f"{origin_en.lower().replace(' ', '-')}-to-"
-        f"{dest_en.lower().replace(' ', '-')}/tickets-"
-        f"{origin.lower()}-{dest.lower()}"
-        f"?dcity={origin}&acity={dest}&ddate={date_str}&class=Y"
-    )
-    google_url = _google_flights_query_url(origin, dest, date_str)
-    sky_url = (
-        "https://www.tianxun.com/transport/flights/"
-        f"{origin}/{dest}/{date_str}/"
-        "?adultsv2=1&cabinclass=economy&currency=CNY"
-    )
-
-    links = [
-        ("携程", ctrip_url),
-        ("飞猪", fliggy_url),
-        ("去哪儿", qunar_url),
-        ("Trip.com", trip_url),
-        ("天巡", sky_url),
-        ("Google Flights", google_url),
-    ]
+    links = _possible_booking_links(origin, dest, date_str, flight_no)
     return " | ".join(
         f'<a href="{url}" target="_blank">{label}</a>' for label, url in links
     )
@@ -3713,23 +3669,28 @@ def _round_trip_score_flights(analysis: dict | None) -> list[dict]:
     )[:3]
 
 
-def _round_trip_score_line(index: int, flight: dict) -> str:
+def _round_trip_score_line(index: int, flight: dict, date_str: str | None = None) -> str:
     flight_no = _compact_flight_numbers(flight)
     airline = _round_trip_airline_text(flight)
     price = flight.get("price")
     price_text = _price_text(price)
-    return (
+    line = (
         f"{index}. {flight_no} {airline} | {price_text} | "
         f"{_round_trip_time_range(flight)} | {_flight_slot_label(flight)} | "
         f"{_round_trip_stops_text(flight)} | "
         f"{_round_trip_aircraft_text(flight)} | {_round_trip_score_text(flight)}"
     )
+    links = _combo_full_booking_links(flight, date_str)
+    if links:
+        line += f"<br>  🔗 {links}"
+    return line
 
 
 def _append_round_trip_score_top3(
     lines: list[str],
     outbound_analysis: dict,
     return_analysis: dict,
+    route_info: dict | None = None,
 ) -> None:
     outbound_ranked = _round_trip_score_flights(outbound_analysis)
     return_ranked = _round_trip_score_flights(return_analysis)
@@ -3739,11 +3700,11 @@ def _append_round_trip_score_top3(
     if outbound_ranked:
         lines.append("━━ 去程 ━━")
         for index, flight in enumerate(outbound_ranked, start=1):
-            lines.append(_round_trip_score_line(index, flight))
+            lines.append(_round_trip_score_line(index, flight, (route_info or {}).get("depart_date")))
     if return_ranked:
         lines.append("━━ 返程 ━━")
         for index, flight in enumerate(return_ranked, start=1):
-            lines.append(_round_trip_score_line(index, flight))
+            lines.append(_round_trip_score_line(index, flight, (route_info or {}).get("return_date")))
     lines.append("")
 
 
@@ -3802,7 +3763,7 @@ def _combo_price_status(total_price, route_info: dict) -> str:
     return ""
 
 
-def _combo_ctrip_link(flight: dict, date_str: str | None, label: str) -> str:
+def _combo_full_booking_links(flight: dict, date_str: str | None) -> str:
     segments = flight.get("segments") or []
     if not segments:
         return ""
@@ -3811,11 +3772,13 @@ def _combo_ctrip_link(flight: dict, date_str: str | None, label: str) -> str:
     search_date = _flight_search_date(flight, date_str)
     if not origin or not dest or not search_date:
         return ""
-    url = (
-        "https://flights.ctrip.com/online/list/"
-        f"oneway-{origin}-{dest}?depdate={search_date}&cabin=y_s"
+    return generate_booking_links(
+        origin,
+        dest,
+        search_date,
+        flight.get("flight_combo"),
+        flight=flight,
     )
-    return f'<a href="{url}" target="_blank">{label}</a>'
 
 
 def _append_round_trip_combo_card(lines: list[str], index: int, combo: dict, route_info: dict) -> None:
@@ -3829,23 +3792,21 @@ def _append_round_trip_combo_card(lines: list[str], index: int, combo: dict, rou
         if _has_valid_price(outbound_est) and _has_valid_price(return_est):
             transaction_total = float(outbound_est) + float(return_est)
     extra = (float(transaction_total or 0) - float(total or 0)) if transaction_total is not None else 0
+    outbound_links = _combo_full_booking_links(outbound, route_info.get("depart_date"))
+    return_links = _combo_full_booking_links(return_flight, route_info.get("return_date"))
     lines.append(f"No.{index} 总价{_price_text(total)}{_combo_price_status(total, route_info)}")
     lines.append(f"┌ 去: {_flight_combo_summary(outbound, route_info.get('depart_date'))}")
+    if outbound_links:
+        lines.append(f"│ 🔗 {outbound_links}")
     lines.append(f"└ 回: {_flight_combo_summary(return_flight, route_info.get('return_date'))}")
+    if return_links:
+        lines.append(f"  🔗 {return_links}")
     if transaction_total is not None:
         if extra > 0:
             lines.append(f"  预估交易价：{_price_text(transaction_total)}（+额外费用{_price_text(extra)}）")
         else:
             lines.append(f"  预估交易价：{_price_text(transaction_total)}（全服务，无额外费用）")
-    links = []
-    outbound_link = _combo_ctrip_link(outbound, route_info.get("depart_date"), "携程去程")
-    return_link = _combo_ctrip_link(return_flight, route_info.get("return_date"), "携程返程")
-    if outbound_link:
-        links.append(outbound_link)
-    if return_link:
-        links.append(return_link)
-    link_text = " | ".join(links) if links else "购买链接待确认"
-    lines.append(f"  执行等级：{_combo_grade(combo)}级 | 🔗 {link_text}")
+    lines.append(f"  执行等级：{_combo_grade(combo)}级")
     lines.append("")
 
 
