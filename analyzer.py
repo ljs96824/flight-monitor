@@ -2197,6 +2197,152 @@ def calc_execution_grade(flight: dict, hard_constraints=None) -> dict:
     }
 
 
+def _confidence_level_label(value: str) -> str:
+    return value if value in {"高", "中", "低"} else "低"
+
+
+def calc_confidence(flight: dict, source_stats=None, price_history=None) -> dict:
+    """Break decision confidence into user-readable dimensions."""
+    flight = flight or {}
+    source_stats = source_stats or {}
+    dimensions = {}
+    details = {}
+
+    age = (flight.get("availability") or {}).get("age_minutes", 9999)
+    try:
+        age = int(age)
+    except (TypeError, ValueError):
+        age = 9999
+    dimensions["价格新鲜度"] = "高" if age <= 30 else "中" if age <= 120 else "低"
+    details["价格新鲜度"] = f"{age}分钟前采集" if age < 9999 else "采集时间未知"
+
+    history_count = len(price_history) if price_history else 0
+    dimensions["历史样本量"] = "高" if history_count >= 14 else "中" if history_count >= 5 else "低"
+    details["历史样本量"] = f"近期{history_count}次采集"
+
+    source_count = (flight.get("availability") or {}).get("source_count", 0)
+    if not source_count:
+        data_source = str(flight.get("data_source") or flight.get("source") or "")
+        source_count = len([item for item in data_source.split("+") if item])
+    if not source_count and source_stats:
+        source_count = sum(
+            1
+            for value in source_stats.values()
+            if isinstance(value, dict) and "成功" in str(value.get("status", ""))
+        )
+    dimensions["渠道一致性"] = "高" if source_count >= 3 else "中" if source_count >= 2 else "低"
+    details["渠道一致性"] = f"{source_count}个数据源一致" if source_count else "数据源不足"
+
+    fare = flight.get("fare_verification") or {}
+    fare_level = fare.get("level")
+    dimensions["票规完整度"] = (
+        "高" if fare_level == "full" else "中" if fare_level == "partial" else "低"
+    )
+    details["票规完整度"] = "票规已确认" if fare_level == "full" else "行李退改待确认"
+
+    avail = flight.get("availability") or {}
+    avail_status = avail.get("status", "unknown")
+    dimensions["可购买性"] = (
+        "高"
+        if avail_status == "likely_available"
+        else "中"
+        if avail_status == "possibly_available"
+        else "低"
+    )
+    details["可购买性"] = avail.get("label") or "待支付页验证"
+
+    high_count = sum(1 for value in dimensions.values() if _confidence_level_label(value) == "高")
+    if high_count >= 4:
+        overall = "高"
+    elif high_count >= 2:
+        overall = "中高"
+    else:
+        overall = "中"
+
+    return {"overall": overall, "dimensions": dimensions, "details": details}
+
+
+def generate_decision_summary(
+    lowest_price,
+    target_price,
+    max_budget,
+    confidence=None,
+    execution_grade=None,
+) -> dict:
+    """Generate a compact decision summary for the notification top card."""
+    lowest = _to_float(lowest_price)
+    target = _to_float(target_price)
+    max_b = _to_float(max_budget)
+    confidence = confidence or {}
+    execution_grade = execution_grade or "C"
+
+    if lowest is None:
+        price_judgment = "暂无有效价格"
+    elif target and lowest <= target:
+        price_judgment = "偏低，已达理想价"
+    elif target and lowest <= target * 1.05:
+        price_judgment = "接近理想价"
+    elif max_b and lowest <= max_b:
+        price_judgment = "在预算内但高于理想价"
+    elif max_b and lowest > max_b:
+        price_judgment = "超出预算"
+    else:
+        price_judgment = "需要结合历史价格判断"
+
+    if execution_grade == "A":
+        exec_judgment = "信息完整，可购买"
+    elif execution_grade == "B":
+        exec_judgment = "购买前需确认价格和票规"
+    else:
+        exec_judgment = "购买渠道或票规待确认"
+
+    if price_judgment.startswith("偏低") and execution_grade == "A":
+        conclusion = "强烈建议购买"
+    elif "接近理想价" in price_judgment or "偏低" in price_judgment:
+        conclusion = "可以购买前验证"
+    elif "预算内" in price_judgment:
+        conclusion = "可以观察"
+    else:
+        conclusion = "建议等待"
+
+    if lowest and target:
+        verify_limit = target * 1.05
+    elif lowest:
+        verify_limit = lowest * 1.05
+    else:
+        verify_limit = None
+
+    if conclusion in {"强烈建议购买", "可以购买前验证"} and verify_limit:
+        action_advice = f"若支付页最终价≤¥{verify_limit:,.0f}且含托运行李，可以购买"
+    elif max_b:
+        action_advice = f"若最终价仍低于¥{max_b:,.0f}，可按刚需程度决定"
+    else:
+        action_advice = "先验证支付页最终价、行李和退改规则"
+
+    reasons = []
+    if lowest and target:
+        if lowest <= target:
+            reasons.append(f"当前价格¥{lowest:,.0f}已达到理想入手价")
+        elif lowest <= target * 1.05:
+            reasons.append(f"当前价格¥{lowest:,.0f}已接近理想入手价")
+        else:
+            reasons.append(f"当前价格¥{lowest:,.0f}高于理想入手价")
+    elif lowest:
+        reasons.append(f"当前价格为¥{lowest:,.0f}")
+    reasons.append(f"执行判断：{exec_judgment}")
+    if confidence.get("overall"):
+        reasons.append(f"数据置信度：{confidence['overall']}")
+
+    return {
+        "conclusion": conclusion,
+        "price_judgment": price_judgment,
+        "execution_judgment": exec_judgment,
+        "action_advice": action_advice,
+        "confidence": confidence.get("overall", "中"),
+        "reasons": reasons[:3],
+    }
+
+
 def _apply_user_preferences(
     flights: list[dict], preferences: dict | None
 ) -> tuple[list[dict], list[dict], dict]:
@@ -2847,6 +2993,20 @@ def analyze_all_flights(
         if advice:
             flight["price_advice"] = advice
 
+    decision_flight = by_price[0] if by_price else usable_flights[0]
+    confidence_breakdown = calc_confidence(
+        decision_flight,
+        {},
+        (price_insights or {}).get("price_history") if price_insights else None,
+    )
+    decision_summary = generate_decision_summary(
+        lowest_price,
+        target_price_effective,
+        max_budget_effective,
+        confidence_breakdown,
+        decision_flight.get("execution_grade"),
+    )
+
     return {
         "total_options": len(usable_flights),
         "total_options_before_preferences": original_options,
@@ -2867,6 +3027,8 @@ def analyze_all_flights(
         "target_price_mode": target_price_mode,
         "price_tolerance": price_tolerance,
         "price_band": price_band,
+        "decision_summary": decision_summary,
+        "confidence_breakdown": confidence_breakdown,
         "mode": mode,
         "priorities": priority_config,
         "qualified_flights": qualified_flights,
@@ -3268,6 +3430,31 @@ def analyze_round_trip(
         max_budget=max_budget,
         days_to_dept=outbound_analysis.get("days_to_dept"),
     )
+    best_combo = combinations[0] if combinations else {}
+    combo_grades = [
+        (best_combo.get("outbound") or {}).get("execution_grade"),
+        (best_combo.get("return") or {}).get("execution_grade"),
+    ]
+    grade_order = {"A": 0, "B": 1, "C": 2, "D": 3}
+    execution_grade = max(
+        [grade for grade in combo_grades if grade],
+        key=lambda grade: grade_order.get(grade, 2),
+        default="C",
+    )
+    confidence_breakdown = calc_confidence(
+        best_combo.get("outbound") or (outbound_top[0] if outbound_top else {}),
+        {},
+        history,
+    )
+    target_float = _to_float(target_price)
+    max_budget_float = _to_float(max_budget)
+    decision_summary = generate_decision_summary(
+        total_min,
+        target_float * 2 if target_float else None,
+        max_budget_float * 2 if max_budget_float else None,
+        confidence_breakdown,
+        execution_grade,
+    )
 
     return {
         "outbound_min": outbound_min,
@@ -3282,6 +3469,8 @@ def analyze_round_trip(
         "history": history or [],
         "trend": trend,
         "price_analysis": price_analysis,
+        "decision_summary": decision_summary,
+        "confidence_breakdown": confidence_breakdown,
         "previous": previous,
         "advice": _roundtrip_budget_advice(total_min, target_price, max_budget),
     }

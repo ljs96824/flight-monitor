@@ -23,6 +23,8 @@ from airports import (
 from channels import CHANNEL_INFO
 from analyzer import (
     calculate_price_references,
+    calc_confidence,
+    generate_decision_summary,
     generate_trend_summary,
     multi_window_analysis,
     price_position_description,
@@ -4308,6 +4310,212 @@ def _price_scale_lines(current_min, route_info: dict, analysis_result: dict) -> 
     return lines
 
 
+def _best_decision_flight(analysis: dict | None) -> dict:
+    analysis = analysis or {}
+    candidates = (
+        analysis.get("economy_recommendations")
+        or analysis.get("recommendations")
+        or analysis.get("all_flights")
+        or []
+    )
+    normalized = []
+    for item in candidates:
+        flight = item.get("flight") if isinstance(item, dict) and item.get("flight") else item
+        if isinstance(flight, dict) and _has_valid_price(flight.get("price")):
+            normalized.append(flight)
+    return sorted(normalized, key=lambda flight: _to_float(flight.get("price")) or 999999)[0] if normalized else {}
+
+
+def _decision_prices(
+    analysis_result: dict, route_info: dict, is_round_trip: bool
+) -> tuple[float | None, float | None, float | None]:
+    if is_round_trip:
+        round_trip = analysis_result.get("round_trip_analysis") or {}
+        current = _to_float(round_trip.get("total_min"))
+        target_single = (
+            _to_float(route_info.get("target_price"))
+            or _to_float(analysis_result.get("target_price_effective"))
+            or _to_float(analysis_result.get("target_price"))
+        )
+        max_single = (
+            _to_float(route_info.get("max_budget"))
+            or _to_float(route_info.get("budget"))
+            or _to_float(analysis_result.get("max_budget"))
+        )
+        return (
+            current,
+            target_single * 2 if target_single else None,
+            max_single * 2 if max_single else None,
+        )
+
+    current = (
+        _to_float(analysis_result.get("current_min_price"))
+        or _to_float((analysis_result.get("price_range") or [None])[0])
+    )
+    target = (
+        _to_float(analysis_result.get("target_price_effective"))
+        or _to_float(_preference_value(route_info, analysis_result, "target_price"))
+    )
+    max_budget = (
+        _to_float(analysis_result.get("max_budget"))
+        or _to_float(_preference_value(route_info, analysis_result, "max_budget"))
+        or _to_float(_preference_value(route_info, analysis_result, "budget"))
+    )
+    return current, target, max_budget
+
+
+def _action_zone_label(current, target, max_budget) -> str:
+    current = _to_float(current)
+    target = _to_float(target)
+    max_budget = _to_float(max_budget)
+    if current is None:
+        return "暂无有效价格"
+    if target and current <= target:
+        return "强烈建议购买"
+    if target and current <= target * 1.05:
+        return "仍值得购买"
+    if target and max_budget and current <= (target + max_budget) / 2:
+        return "可以考虑"
+    if max_budget and current <= max_budget:
+        return "仅刚需建议"
+    if max_budget and current > max_budget:
+        return "不建议购买"
+    return "需要人工确认"
+
+
+def _action_threshold_lines(current, target, max_budget) -> list[str]:
+    target = _to_float(target)
+    max_budget = _to_float(max_budget)
+    current = _to_float(current)
+    if not target and not max_budget:
+        return []
+
+    lines = ["<b>🎯 你的操作区间：</b>"]
+    if target:
+        lines.append(f"≤ {_price_text(target)}：强烈建议验证并购买")
+        lines.append(f"{_price_text(target)}-{_price_text(target * 1.05)}：仍值得购买")
+    if target and max_budget:
+        midpoint = (target + max_budget) / 2
+        lines.append(f"{_price_text(target * 1.05)}-{_price_text(midpoint)}：可以考虑，但不是最佳价")
+        lines.append(f"{_price_text(midpoint)}-{_price_text(max_budget)}：仅刚需建议")
+    if max_budget:
+        lines.append(f"> {_price_text(max_budget)}：不建议购买")
+    if current:
+        lines.append(f"当前价格 {_price_text(current)} → 落在【{_action_zone_label(current, target, max_budget)}】区间")
+    lines.append("")
+    return lines
+
+
+def _confidence_lines(confidence: dict | None) -> list[str]:
+    if not confidence:
+        return []
+    dimensions = confidence.get("dimensions") or {}
+    details = confidence.get("details") or {}
+    lines = [f"📊 数据置信度：{confidence.get('overall', '中')}"]
+    for name in ["价格新鲜度", "历史样本量", "渠道一致性", "票规完整度", "可购买性"]:
+        level = dimensions.get(name)
+        if not level:
+            continue
+        icon = "✓" if level in {"高", "中"} else "⚠"
+        detail = details.get(name)
+        suffix = f"（{detail}）" if detail else ""
+        lines.append(f"{icon} {name}：{level}{suffix}")
+    lines.append("")
+    return lines
+
+
+def _decision_context(
+    analysis_result: dict,
+    route_info: dict,
+    source_stats: dict | None,
+    price_insights: dict | None,
+    is_round_trip: bool,
+) -> tuple[dict, dict, float | None, float | None, float | None]:
+    current, target, max_budget = _decision_prices(analysis_result, route_info, is_round_trip)
+    if is_round_trip:
+        round_trip = analysis_result.get("round_trip_analysis") or {}
+        combo = (round_trip.get("top_combinations") or [{}])[0]
+        best_flight = combo.get("outbound") or {}
+        confidence = round_trip.get("confidence_breakdown") or calc_confidence(
+            best_flight, source_stats, round_trip.get("history") or []
+        )
+        decision = round_trip.get("decision_summary") or generate_decision_summary(
+            current,
+            target,
+            max_budget,
+            confidence,
+            best_flight.get("execution_grade"),
+        )
+        return decision, confidence, current, target, max_budget
+
+    best_flight = _best_decision_flight(analysis_result)
+    history = (price_insights or {}).get("price_history") if price_insights else None
+    confidence = analysis_result.get("confidence_breakdown") or calc_confidence(
+        best_flight, source_stats, history
+    )
+    decision = analysis_result.get("decision_summary") or generate_decision_summary(
+        current,
+        target,
+        max_budget,
+        confidence,
+        best_flight.get("execution_grade"),
+    )
+    return decision, confidence, current, target, max_budget
+
+
+def _append_decision_summary_card(
+    lines: list[str],
+    analysis_result: dict,
+    route_info: dict,
+    source_stats: dict | None,
+    price_insights: dict | None,
+    is_round_trip: bool,
+) -> None:
+    decision, confidence, current, target, max_budget = _decision_context(
+        analysis_result, route_info, source_stats, price_insights, is_round_trip
+    )
+    conclusion = decision.get("conclusion") or "可以观察"
+    price_judgment = decision.get("price_judgment") or "需要结合历史价格判断"
+    exec_judgment = decision.get("execution_judgment") or "购买渠道或票规待确认"
+    action_advice = decision.get("action_advice") or "先验证支付页最终价、行李和退改规则"
+    availability = (confidence.get("dimensions") or {}).get("可购买性", "中")
+
+    lines.append("━━━━━━━━━━━━━━")
+    lines.append("<b>📌 当前判断</b>")
+    lines.append("")
+    lines.append(f"结论：{conclusion}")
+    lines.append(f"置信度：{confidence.get('overall', decision.get('confidence', '中'))}")
+    lines.append("")
+    lines.append(f"{'当前往返总价' if is_round_trip else '当前价格'}：{_price_text(current)}")
+    if target:
+        lines.append(f"理想入手价：{_price_text(target)}")
+    if max_budget:
+        lines.append(f"最高可接受价：{_price_text(max_budget)}")
+    lines.append("")
+    lines.append(f"价格位置：{price_judgment}")
+    lines.append(f"价格判断：{price_judgment}")
+    lines.append(f"执行判断：{exec_judgment}")
+    lines.append(f"行动建议：{action_advice}")
+    lines.append(f"可购买性：{availability}")
+    lines.append("")
+    lines.append("一句话原因：")
+    reasons = decision.get("reasons") or []
+    if reasons:
+        lines.append("；".join(reasons[:2]))
+    else:
+        lines.append("当前价格和执行信息需要结合支付页最终结果确认。")
+    lines.append("━━━━━━━━━━━━━━")
+    lines.append("")
+
+    lines.extend(_action_threshold_lines(current, target, max_budget))
+    lines.extend(_confidence_lines(confidence))
+    lines.append("<b>💡 为什么这样判断？</b>")
+    for index, reason in enumerate((decision.get("reasons") or [])[:3], start=1):
+        lines.append(f"{index}. {reason}")
+    lines.append("[展开详细分析]")
+    lines.append("")
+
+
 def format_html_message(
     analysis_result=None,
     route_info=None,
@@ -4337,6 +4545,19 @@ def format_html_message(
                 days = ""
 
         is_round_trip = bool(route_info.get("round_trip"))
+        source_stats_for_message = (
+            source_stats
+            or route_info.get("source_stats")
+            or analysis_result.get("source_stats")
+        )
+        _append_decision_summary_card(
+            lines,
+            analysis_result,
+            route_info,
+            source_stats_for_message,
+            price_insights,
+            is_round_trip,
+        )
         if is_round_trip:
             lines.append(
                 f"<b>✈️ {_city_label(route_info.get('origin',''))} → "
@@ -4377,11 +4598,6 @@ def format_html_message(
         if not _has_valid_price(current_min):
             current_min = None
         goals = _goals(route_info, analysis_result)
-        source_stats_for_message = (
-            source_stats
-            or route_info.get("source_stats")
-            or analysis_result.get("source_stats")
-        )
         if not is_round_trip:
             lines.extend(_price_scale_lines(current_min, route_info, analysis_result))
         if not is_round_trip and _primary_goal(route_info, analysis_result) == "cheaper_date":
