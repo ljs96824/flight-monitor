@@ -227,6 +227,15 @@ FORM_TEMPLATE = """
     }
     .choice input { width: auto; margin: 0; }
     .hint { color: #666; font-size: 13px; margin-top: 4px; }
+    .muted-option {
+      opacity: 0.55;
+    }
+    .inline-warning {
+      display: none;
+      color: #777;
+      font-size: 13px;
+      margin: 8px 0 0;
+    }
     .field-error {
       display: none;
       color: #c5221f;
@@ -405,6 +414,7 @@ FORM_TEMPLATE = """
 
       <label>最高可接受价格（超过这个价通常不考虑）</label>
       <input id="max_budget" name="max_budget" type="number" min="1" step="1" placeholder="例如 8000">
+      <p class="hint">超过这个价通常不考虑</p>
       <div class="choice">
         <label><input type="radio" name="max_budget_mode" value="fixed" checked> 输入具体金额</label>
         <label><input type="radio" name="max_budget_mode" value="none"> 不确定，帮我判断</label>
@@ -412,6 +422,7 @@ FORM_TEMPLATE = """
 
       <label>理想入手价格（可选，到这个价格就值得买）</label>
       <input id="target_price" name="target_price" type="number" min="1" step="1" placeholder="例如 6000（选填）">
+      <p class="hint">到这个价格就值得买（可选）</p>
       <p id="price-validation-error" class="field-error">理想入手价应低于最高可接受价，请确认是否填反了</p>
       <div class="choice">
         <label><input type="radio" name="target_price_mode" value="fixed" checked> 输入具体金额</label>
@@ -568,6 +579,7 @@ FORM_TEMPLATE = """
       <div id="advanced-rules">
         <fieldset>
           <legend>更细的筛选规则</legend>
+          <p class="hint">适合有特定要求的用户，一般用户可跳过</p>
 
           <div id="short-transfer-options" class="sub-options">
             <label>最长可接受总行程时间</label>
@@ -597,6 +609,7 @@ FORM_TEMPLATE = """
             <label><input type="checkbox" name="secondary_goals" value="cheaper_date"> 前后日期更便宜提醒</label>
             <label><input type="checkbox" name="secondary_goals" value="better_same_day"> 同日更优方案提醒</label>
           </div>
+          <p id="date-flex-warning" class="inline-warning">你选了不可调整，但仍可接收前后日期差价参考</p>
 
           <label>提醒频率</label>
           <div class="choice">
@@ -623,7 +636,7 @@ FORM_TEMPLATE = """
     <button id="preview-button" type="button">开始监控</button>
 
     <div id="summary-card">
-      <h2>系统将这样理解你的需求：</h2>
+      <h2>📋 系统将按以下规则监控：</h2>
       <ul id="summary-list"></ul>
       <div class="button-row">
         <button type="submit">确认并开始监控</button>
@@ -659,7 +672,7 @@ FORM_TEMPLATE = """
       frequency: {"important_only": "仅重要变化时提醒", "daily_summary": "每天汇总推送一次", "every_change": "每次价格变化都提醒"}
     };
     const goalDefaults = {
-      price_drop_alert: ["low_price_alert"],
+      price_drop_alert: ["low_price_alert", "price_risk_alert"],
       buy_timing: ["price_risk_alert", "low_price_alert"],
       cheaper_date: ["cheaper_date"],
       best_overall: ["better_same_day"]
@@ -699,10 +712,18 @@ FORM_TEMPLATE = """
     const editButton = document.getElementById('edit-button');
     const transferRadios = document.querySelectorAll('input[name="transfer_policy"]');
     const shortTransferOptions = document.getElementById('short-transfer-options');
+    const shortTransferInputs = shortTransferOptions
+      ? shortTransferOptions.querySelectorAll('input')
+      : [];
     const primaryGoalRadios = document.querySelectorAll('input[name="primary_goal"]');
     const secondaryGoalChecks = document.querySelectorAll('input[name="secondary_goals"]');
+    const dateFlexRadios = document.querySelectorAll('input[name="date_flexibility"]');
+    const dateFlexWarning = document.getElementById('date-flex-warning');
+    const cheaperDateCheck = document.querySelector('input[name="secondary_goals"][value="cheaper_date"]');
+    const cheaperDateLabel = cheaperDateCheck ? cheaperDateCheck.closest('label') : null;
     const companionRadios = document.querySelectorAll('input[name="companions"]');
     const autoPreferenceNotice = document.getElementById('auto-preference-notice');
+    const departurePolicyInput = document.querySelector('input[name="departure_time_policy"]');
     const stepPanels = Array.from(document.querySelectorAll('.form-step'));
     const mobileStepper = document.getElementById('mobile-stepper');
     const stepDots = document.getElementById('step-dots');
@@ -814,8 +835,12 @@ FORM_TEMPLATE = """
     }
 
     function toggleShortTransferOptions() {
-      shortTransferOptions.style.display =
-        checkedValue('transfer_policy') === 'reasonable' ? 'block' : 'none';
+      const policy = checkedValue('transfer_policy');
+      const visible = policy === 'reasonable' || policy === 'price_first';
+      shortTransferOptions.style.display = visible ? 'block' : 'none';
+      shortTransferInputs.forEach(input => {
+        input.disabled = !visible;
+      });
     }
 
     function validatePriceInputs() {
@@ -841,6 +866,18 @@ FORM_TEMPLATE = """
       secondaryGoalChecks.forEach(check => {
         check.checked = defaults.includes(check.value);
       });
+      updateDateFlexHint();
+    }
+
+    function updateDateFlexHint() {
+      const fixedDate = checkedValue('date_flexibility') === '0';
+      const showHint = fixedDate;
+      if (cheaperDateLabel) {
+        cheaperDateLabel.classList.toggle('muted-option', fixedDate);
+      }
+      if (dateFlexWarning) {
+        dateFlexWarning.style.display = showHint ? 'block' : 'none';
+      }
     }
 
     function setRadio(name, value, mark = false) {
@@ -887,16 +924,29 @@ FORM_TEMPLATE = """
         'outbound_departure_slots',
         'return_departure_slots'
       ].forEach(name => setCheckbox(name, 'redeye', false, true));
+      if (departurePolicyInput) {
+        departurePolicyInput.value = 'no_redeye';
+      }
       setRadio('baggage', 'required', true);
 
       if (companions === 'with_elderly' || companions === 'with_elderly_child') {
-        setRadio('transfer_policy', 'reasonable', true);
+        setRadio(
+          'transfer_policy',
+          companions === 'with_elderly_child' ? 'direct_only' : 'reasonable',
+          true
+        );
         setRadio('short_transfer_limit', 'extra_3', true);
         toggleShortTransferOptions();
         autoPreferenceNotice.textContent = '已根据老人同行自动调整推荐偏好，你仍可手动修改';
       } else if (companions === 'with_child') {
         autoPreferenceNotice.textContent = '已根据带小孩出行自动调整推荐偏好，你仍可手动修改';
       }
+      if (companions === 'with_child') {
+        setRadio('transfer_policy', 'reasonable', true);
+        setRadio('short_transfer_limit', 'extra_3', true);
+      }
+      toggleShortTransferOptions();
+      autoPreferenceNotice.textContent = '已根据老人/小孩同行，默认提高白天航班、直飞、行李权重，你仍可手动修改';
       autoPreferenceNotice.style.display = 'block';
     }
 
@@ -907,6 +957,88 @@ FORM_TEMPLATE = """
     }
 
     function buildSummary() {
+      {
+      summaryList.innerHTML = "";
+      const money = value => `¥${Number(value).toLocaleString('zh-CN')}`;
+      const origin = selectedOrigin();
+      const destination = form.destination.value.trim();
+      const isRoundTrip = checkedValue('round_trip') === 'true';
+      const maxBudgetMode = checkedValue('max_budget_mode');
+      const targetPriceMode = checkedValue('target_price_mode');
+      const maxBudget = Number(maxBudgetInput.value || 0);
+      const targetPrice = Number(targetPriceInput.value || 0);
+      const dateFlexText = {
+        "0": "不可调整",
+        "1": "前后1天",
+        "3": "前后3天",
+        "7": "前后一周"
+      };
+      const transferText = {
+        direct_only: "必须直飞",
+        reasonable: "可以接受合理中转",
+        price_first: "价格优先，中转也可以"
+      };
+      const baggageText = {
+        required: "必须托运",
+        not_needed: "不需要托运",
+        unknown: "不确定"
+      };
+      const primaryText = {
+        price_drop_alert: "到合适价格提醒我",
+        buy_timing: "判断现在该不该买",
+        cheaper_date: "找更便宜日期",
+        best_overall: "找综合更合适航班"
+      };
+
+      addSummaryLine(`${origin} → ${destination}`);
+      addSummaryLine(
+        isRoundTrip
+          ? `往返 | 去程${form.depart_date.value} | 返程${returnDate.value}`
+          : `单程 | 出发${form.depart_date.value}`
+      );
+      addSummaryLine(`日期：${dateFlexText[checkedValue('date_flexibility')] || checkedValue('date_flexibility')}`);
+      if (maxBudgetMode === 'fixed' && maxBudget > 0) {
+        addSummaryLine(`最高可接受价：${money(maxBudget)}`);
+      } else if (maxBudgetMode !== 'fixed') {
+        addSummaryLine('最高可接受价：不确定，帮我判断');
+      }
+      if (targetPriceMode === 'fixed' && targetPrice > 0) {
+        addSummaryLine(`理想入手价：${money(targetPrice)}`);
+      } else if (targetPriceMode !== 'fixed') {
+        addSummaryLine(`理想入手价：${labels.targetPriceMode[targetPriceMode] || targetPriceMode}`);
+      }
+      addSummaryLine(`中转：${transferText[checkedValue('transfer_policy')] || checkedValue('transfer_policy')}`);
+      addSummaryLine(`行李：${baggageText[checkedValue('baggage')] || checkedValue('baggage')}`);
+      addSummaryLine(`主目标：${primaryText[checkedValue('primary_goal')] || checkedValue('primary_goal')}`);
+
+      if (advanced.style.display === 'block') {
+        const companions = checkedValue('companions');
+        if (companions && companions !== 'solo') {
+          addSummaryLine(`同行人员：${document.querySelector('input[name="companions"]:checked')?.parentElement.textContent.trim()}`);
+        }
+        if (isRoundTrip) {
+          addSummaryLine(`去程起飞时段：${slotSummary('outbound_departure_slots', labels.departureSlots)}`);
+          addSummaryLine(`返程起飞时段：${slotSummary('return_departure_slots', labels.departureSlots)}`);
+        } else {
+          addSummaryLine(`起飞时段：${slotSummary('departure_slots', labels.departureSlots)}`);
+        }
+      }
+
+      if (advancedRules.style.display === 'block') {
+        if (checkedValue('transfer_policy') !== 'direct_only') {
+          const limit = document.querySelector('input[name="short_transfer_limit"]:checked');
+          addSummaryLine(`最长总行程：${limit ? limit.parentElement.textContent.trim() : '未设置'}`);
+        }
+        const secondaryGoals = checkedValues('secondary_goals');
+        if (secondaryGoals.length) {
+          addSummaryLine(`附加关注：${secondaryGoals.length}项`);
+        }
+        addSummaryLine(`提醒频率：${labels.frequency[checkedValue('notification_frequency')] || checkedValue('notification_frequency')}`);
+      }
+
+      addSummaryLine('未填写的偏好将按普通出行默认处理。');
+      return;
+      }
       summaryList.innerHTML = "";
       const origin = selectedOrigin();
       const destination = form.destination.value.trim().toUpperCase();
@@ -1011,6 +1143,8 @@ FORM_TEMPLATE = """
     originSelect.addEventListener('change', updateOriginAirportHint);
     originManual.addEventListener('input', updateOriginAirportHint);
     transferRadios.forEach(radio => radio.addEventListener('change', toggleShortTransferOptions));
+    dateFlexRadios.forEach(radio => radio.addEventListener('change', updateDateFlexHint));
+    secondaryGoalChecks.forEach(check => check.addEventListener('change', updateDateFlexHint));
     primaryGoalRadios.forEach(radio => radio.addEventListener('change', () => {
       applyDefaultSecondaryGoals();
       if (isMobileStepper() && currentStep === stepTitles.length) {
@@ -1021,6 +1155,7 @@ FORM_TEMPLATE = """
     toggleReturnDate();
     toggleBudgetRequired();
     toggleShortTransferOptions();
+    updateDateFlexHint();
     updateOriginAirportHint();
     advanced.style.display = 'none';
     advancedToggle.textContent = '＋ 补充偏好，让推荐更准确';
@@ -1035,6 +1170,16 @@ FORM_TEMPLATE = """
         event.preventDefault();
         alert('理想入手价应低于最高可接受价，请确认是否填反了');
         targetPriceInput.focus();
+        return;
+      }
+      if (summaryCard.style.display !== 'block') {
+        event.preventDefault();
+        if (!form.reportValidity()) {
+          return;
+        }
+        buildSummary();
+        summaryCard.style.display = 'block';
+        summaryCard.scrollIntoView({behavior: 'smooth', block: 'start'});
       }
     });
   </script>
