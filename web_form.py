@@ -62,16 +62,17 @@ DATE_FLEX_LABELS = {
 
 BUDGET_MODE_LABELS = {
     "fixed": "输入具体金额",
-    "none": "没有硬上限",
+    "none": "不确定，帮我判断",
     "unknown": "不确定，帮我判断合理价格",
     "low_zone": "没有明确预算，进入低价区间时提醒",
 }
 
 TRANSFER_LABELS = {
     "direct_only": "必须直飞",
+    "reasonable": "可以接受合理中转",
     "short_ok": "可以中转，但总耗时别太长",
     "cheap_ok": "便宜很多的话可以中转",
-    "price_first": "价格优先，可以接受较长中转",
+    "price_first": "价格优先，中转也可以",
 }
 
 DEPARTURE_TIME_LABELS = {
@@ -247,6 +248,7 @@ FORM_TEMPLATE = """
     }
     #return-date-wrap,
     #advanced-preferences,
+    #advanced-rules,
     #summary-card {
       display: none;
     }
@@ -327,10 +329,6 @@ FORM_TEMPLATE = """
       .form-step.active {
         display: block;
       }
-      #advanced-toggle,
-      #advanced-preferences {
-        display: none !important;
-      }
       #preview-button {
         display: none;
       }
@@ -400,14 +398,6 @@ FORM_TEMPLATE = """
       </div>
       <p class="hint">用于寻找前后日期的低价航班</p>
 
-      <label>同行人员</label>
-      <div class="choice">
-        <label><input type="radio" name="companions" value="solo" checked> 仅本人</label>
-        <label><input type="radio" name="companions" value="with_elderly"> 有老人同行</label>
-        <label><input type="radio" name="companions" value="with_child"> 有小孩同行（12岁以下）</label>
-        <label><input type="radio" name="companions" value="with_elderly_child"> 老人和小孩都有</label>
-      </div>
-      <div id="auto-preference-notice" class="auto-notice"></div>
     </fieldset>
 
     <fieldset class="form-step" data-step="2">
@@ -417,10 +407,10 @@ FORM_TEMPLATE = """
       <input id="max_budget" name="max_budget" type="number" min="1" step="1" placeholder="例如 8000">
       <div class="choice">
         <label><input type="radio" name="max_budget_mode" value="fixed" checked> 输入具体金额</label>
-        <label><input type="radio" name="max_budget_mode" value="none"> 没有硬上限</label>
+        <label><input type="radio" name="max_budget_mode" value="none"> 不确定，帮我判断</label>
       </div>
 
-      <label>理想入手价格（到这个价格就值得买）</label>
+      <label>理想入手价格（可选，到这个价格就值得买）</label>
       <input id="target_price" name="target_price" type="number" min="1" step="1" placeholder="例如 6000（选填）">
       <p id="price-validation-error" class="field-error">理想入手价应低于最高可接受价，请确认是否填反了</p>
       <div class="choice">
@@ -429,33 +419,14 @@ FORM_TEMPLATE = """
         <label><input type="radio" name="target_price_mode" value="low_zone"> 没有明确预算，进入低价区间时提醒我</label>
       </div>
 
-      <label>可接受的价格浮动范围</label>
-      <div class="choice">
-        <label><input type="radio" name="price_tolerance_mode" value="100" checked> 理想价上浮100元以内</label>
-        <label><input type="radio" name="price_tolerance_mode" value="200"> 理想价上浮200元以内</label>
-        <label><input type="radio" name="price_tolerance_mode" value="500"> 理想价上浮500元以内</label>
-        <label>
-          <input type="radio" name="price_tolerance_mode" value="custom">
-          自定义：
-          <input id="price_tolerance_custom" name="price_tolerance_custom" type="number" min="1" step="1" placeholder="元" class="inline-number">
-        </label>
-      </div>
+      <input type="hidden" name="price_tolerance_mode" value="100">
+      <input id="price_tolerance_custom" name="price_tolerance_custom" type="hidden">
 
       <label>中转接受程度</label>
       <div class="choice">
         <label><input type="radio" name="transfer_policy" value="direct_only"> 必须直飞</label>
-        <label><input type="radio" name="transfer_policy" value="short_ok" checked> 可以中转，但总耗时别太长</label>
-        <label><input type="radio" name="transfer_policy" value="cheap_ok"> 便宜很多的话可以中转</label>
-        <label><input type="radio" name="transfer_policy" value="price_first"> 价格优先，可以接受较长中转</label>
-      </div>
-      <div id="short-transfer-options" class="sub-options">
-        <label>最长可接受总行程时间</label>
-        <div class="choice">
-          <label><input type="radio" name="short_transfer_limit" value="extra_3" checked> 不超过直飞时间+3小时</label>
-          <label><input type="radio" name="short_transfer_limit" value="extra_6"> 不超过直飞时间+6小时</label>
-          <label><input type="radio" name="short_transfer_limit" value="total_18"> 不超过18小时</label>
-          <label><input type="radio" name="short_transfer_limit" value="total_24"> 不超过24小时</label>
-        </div>
+        <label><input type="radio" name="transfer_policy" value="reasonable" checked> 可以接受合理中转</label>
+        <label><input type="radio" name="transfer_policy" value="price_first"> 价格优先，中转也可以</label>
       </div>
 
       <label>是否需要托运行李</label>
@@ -467,19 +438,7 @@ FORM_TEMPLATE = """
     </fieldset>
 
     <fieldset class="form-step" data-step="3">
-      <legend>时间偏好</legend>
-
-      <label>可接受起飞时间</label>
-      <div class="choice">
-        <label><input type="radio" name="departure_time_policy" value="any"> 不限制</label>
-        <label><input type="radio" name="departure_time_policy" value="daytime" checked> 白天优先（06:00-20:00）</label>
-        <label><input type="radio" name="departure_time_policy" value="no_redeye"> 不接受红眼凌晨</label>
-      </div>
-      <div id="step-time-preferences"></div>
-    </fieldset>
-
-    <fieldset class="form-step" data-step="4">
-      <legend>提醒目标</legend>
+      <legend>监控目标</legend>
       <label>主目标</label>
       <div class="choice">
         <label><input type="radio" name="primary_goal" value="price_drop_alert" required> 找到合适价格时提醒我 <small style="color:gray">（适合还没急着买，等低价）</small></label>
@@ -488,27 +447,23 @@ FORM_TEMPLATE = """
         <label><input type="radio" name="primary_goal" value="best_overall" required> 帮我找最合适航班 <small style="color:gray">（不只看价格，综合时间/行李/中转）</small></label>
       </div>
 
-      <label>提醒频率</label>
-      <div class="choice">
-        <label><input type="radio" name="notification_frequency" value="important_only" checked> 仅重要变化时提醒（价格显著下降、即将涨价）</label>
-        <label><input type="radio" name="notification_frequency" value="daily_summary"> 每天汇总推送一次</label>
-        <label><input type="radio" name="notification_frequency" value="every_change"> 每次价格变化都提醒</label>
-      </div>
-    </fieldset>
-
-    <button id="advanced-toggle" class="secondary-button" type="button">▼ 展开高级偏好（可选）</button>
-
-    <div id="advanced-preferences">
+      <button id="advanced-toggle" class="secondary-button" type="button">＋ 补充偏好，让推荐更准确</button>
+      <div id="advanced-preferences">
       <fieldset>
-        <legend>高级偏好</legend>
+        <legend>补充偏好，让推荐更准确</legend>
+        <p class="hint">不填也可以，系统会按普通出行默认规则监控</p>
 
-        <label>这次行程是否可能取消或改期？</label>
+        <label>同行人员</label>
         <div class="choice">
-          <label><input type="radio" name="trip_rigidity" value="confirmed" checked> 铁定出发，不会变</label>
-          <label><input type="radio" name="trip_rigidity" value="mostly"> 可能微调日期</label>
-          <label><input type="radio" name="trip_rigidity" value="flexible"> 不太确定，有可能取消</label>
+          <label><input type="radio" name="companions" value="solo" checked> 仅本人</label>
+          <label><input type="radio" name="companions" value="with_elderly"> 有老人同行</label>
+          <label><input type="radio" name="companions" value="with_child"> 有小孩同行（12岁以下）</label>
+          <label><input type="radio" name="companions" value="with_elderly_child"> 老人和小孩都有</label>
         </div>
-        <p class="hint">用于判断是否需要推荐可退改机票</p>
+        <div id="auto-preference-notice" class="auto-notice"></div>
+
+        <input type="hidden" name="departure_time_policy" value="any">
+        <input type="hidden" name="trip_rigidity" value="confirmed">
 
         <fieldset id="single-time-preferences" class="time-preferences time-outbound">
           <strong>时段偏好</strong>
@@ -597,30 +552,6 @@ FORM_TEMPLATE = """
           <label><input type="radio" name="price_sensitivity" value="max"> 价格优先，只要显著便宜都可以看</label>
         </div>
 
-        <label>航司偏好</label>
-        <div class="choice">
-          <label><input type="radio" name="airline_policy" value="any" checked> 不限制</label>
-          <label><input type="radio" name="airline_policy" value="prefer_full_service"> 偏好全服务航司</label>
-          <label><input type="radio" name="airline_policy" value="no_lcc"> 不接受廉航</label>
-          <label><input type="radio" name="airline_policy" value="exclude_airlines"> 有不接受的航司吗？</label>
-        </div>
-        <input name="exclude_airlines" placeholder="选填，多个航司用逗号分隔，例如 Spirit, Frontier">
-
-        <label>出发机场偏好（可选）</label>
-        <div class="choice">
-          <label><input type="radio" name="origin_airport_preference" value="all" checked> 不限（搜索所有机场）</label>
-          <label><input type="radio" name="origin_airport_preference" value="PVG"> 只搜浦东PVG</label>
-          <label><input type="radio" name="origin_airport_preference" value="SHA"> 只搜虹桥SHA</label>
-        </div>
-
-        <label>附加关注</label>
-        <div class="choice">
-          <label><input type="checkbox" name="secondary_goals" value="low_price_alert"> 异常低价提醒</label>
-          <label><input type="checkbox" name="secondary_goals" value="price_risk_alert"> 涨价风险提醒</label>
-          <label><input type="checkbox" name="secondary_goals" value="cheaper_date"> 前后日期更便宜提醒</label>
-          <label><input type="checkbox" name="secondary_goals" value="better_same_day"> 同日更优方案提醒</label>
-        </div>
-
         <label>出行类型</label>
         <select name="trip_type">
           <option value="business_meeting">商务会议</option>
@@ -632,6 +563,55 @@ FORM_TEMPLATE = """
         </select>
       </fieldset>
     </div>
+
+      <button id="rules-toggle" class="secondary-button" type="button">＋ 更细的筛选规则</button>
+      <div id="advanced-rules">
+        <fieldset>
+          <legend>更细的筛选规则</legend>
+
+          <div id="short-transfer-options" class="sub-options">
+            <label>最长可接受总行程时间</label>
+            <div class="choice">
+              <label><input type="radio" name="short_transfer_limit" value="extra_3"> 不超过直飞时间+3小时</label>
+              <label><input type="radio" name="short_transfer_limit" value="extra_6" checked> 不超过直飞时间+6小时</label>
+              <label><input type="radio" name="short_transfer_limit" value="total_18"> 不超过18小时</label>
+              <label><input type="radio" name="short_transfer_limit" value="total_24"> 不超过24小时</label>
+            </div>
+          </div>
+
+          <label>航司偏好</label>
+          <div class="choice">
+            <label><input type="radio" name="airline_policy" value="any" checked> 不限制</label>
+            <label><input type="radio" name="airline_policy" value="prefer_full_service"> 偏好全服务航司</label>
+            <label><input type="radio" name="airline_policy" value="no_lcc"> 不接受廉航</label>
+            <label><input type="radio" name="airline_policy" value="exclude_airlines"> 有不接受的航司吗？</label>
+          </div>
+
+          <label>不接受的航司</label>
+          <input name="exclude_airlines" placeholder="选填，多个航司用逗号分隔，例如 Spirit, Frontier">
+
+          <label>附加关注</label>
+          <div class="choice">
+            <label><input type="checkbox" name="secondary_goals" value="low_price_alert"> 异常低价提醒</label>
+            <label><input type="checkbox" name="secondary_goals" value="price_risk_alert"> 涨价风险提醒</label>
+            <label><input type="checkbox" name="secondary_goals" value="cheaper_date"> 前后日期更便宜提醒</label>
+            <label><input type="checkbox" name="secondary_goals" value="better_same_day"> 同日更优方案提醒</label>
+          </div>
+
+          <label>提醒频率</label>
+          <div class="choice">
+            <label><input type="radio" name="notification_frequency" value="important_only" checked> 仅重要变化时提醒（价格显著下降、即将涨价）</label>
+            <label><input type="radio" name="notification_frequency" value="daily_summary"> 每天汇总推送一次</label>
+            <label><input type="radio" name="notification_frequency" value="every_change"> 每次价格变化都提醒</label>
+          </div>
+        </fieldset>
+      </div>
+    </fieldset>
+
+    <fieldset class="form-step" data-step="4">
+      <legend>完成</legend>
+      <p class="hint">请确认下面的需求摘要，确认后系统会保存订阅并开始监控。</p>
+    </fieldset>
 
     <div id="step-nav">
       <div class="step-nav-row">
@@ -655,9 +635,9 @@ FORM_TEMPLATE = """
   <script>
     const labels = {
       dateFlex: {"0": "不能调，就这天", "1": "前后1天可以", "3": "前后3天都行", "7": "前后一周都行"},
-      maxBudgetMode: {"fixed": "最高可接受", "none": "没有硬上限"},
+      maxBudgetMode: {"fixed": "最高可接受", "none": "不确定，帮我判断"},
       targetPriceMode: {"fixed": "理想入手价", "auto": "不确定，帮我判断合理价格", "low_zone": "没有明确预算，进入低价区间时提醒"},
-      transfer: {"direct_only": "必须直飞", "short_ok": "可以短中转", "cheap_ok": "便宜很多可以中转", "price_first": "价格优先，可以接受较长中转"},
+      transfer: {"direct_only": "必须直飞", "reasonable": "可以接受合理中转", "price_first": "价格优先，中转也可以", "short_ok": "可以短中转", "cheap_ok": "便宜很多可以中转"},
       departureSlots: {
         early_morning: "早班 06:00-09:00",
         morning: "上午 09:00-12:00",
@@ -711,6 +691,8 @@ FORM_TEMPLATE = """
     const priceValidationError = document.getElementById('price-validation-error');
     const advanced = document.getElementById('advanced-preferences');
     const advancedToggle = document.getElementById('advanced-toggle');
+    const advancedRules = document.getElementById('advanced-rules');
+    const rulesToggle = document.getElementById('rules-toggle');
     const previewButton = document.getElementById('preview-button');
     const summaryCard = document.getElementById('summary-card');
     const summaryList = document.getElementById('summary-list');
@@ -728,7 +710,7 @@ FORM_TEMPLATE = """
     const stepPrev = document.getElementById('step-prev');
     const stepNext = document.getElementById('step-next');
     const stepTimePreferences = document.getElementById('step-time-preferences');
-    const stepTitles = ['行程信息', '价格和中转', '时间偏好', '提醒目标'];
+    const stepTitles = ['行程信息', '价格底线', '监控目标', '完成'];
     let currentStep = 1;
 
     if (stepTimePreferences) {
@@ -833,7 +815,7 @@ FORM_TEMPLATE = """
 
     function toggleShortTransferOptions() {
       shortTransferOptions.style.display =
-        checkedValue('transfer_policy') === 'short_ok' ? 'block' : 'none';
+        checkedValue('transfer_policy') === 'reasonable' ? 'block' : 'none';
     }
 
     function validatePriceInputs() {
@@ -908,7 +890,7 @@ FORM_TEMPLATE = """
       setRadio('baggage', 'required', true);
 
       if (companions === 'with_elderly' || companions === 'with_elderly_child') {
-        setRadio('transfer_policy', 'short_ok', true);
+        setRadio('transfer_policy', 'reasonable', true);
         setRadio('short_transfer_limit', 'extra_3', true);
         toggleShortTransferOptions();
         autoPreferenceNotice.textContent = '已根据老人同行自动调整推荐偏好，你仍可手动修改';
@@ -949,12 +931,8 @@ FORM_TEMPLATE = """
       } else {
         addSummaryLine(`理想入手价：${labels.targetPriceMode[targetPriceMode]}`);
       }
-      const toleranceMode = checkedValue('price_tolerance_mode');
-      const toleranceCustom = Number(document.getElementById('price_tolerance_custom').value || 0);
-      const tolerance = toleranceMode === 'custom' ? toleranceCustom : Number(toleranceMode || 100);
-      addSummaryLine(`可接受浮动：理想价上浮¥${tolerance.toLocaleString('zh-CN')}以内`);
       addSummaryLine(`中转策略：${labels.transfer[checkedValue('transfer_policy')]}`);
-      if (checkedValue('transfer_policy') === 'short_ok') {
+      if (checkedValue('transfer_policy') === 'reasonable') {
         const limit = document.querySelector('input[name="short_transfer_limit"]:checked');
         addSummaryLine(`最长总行程时间：${limit ? limit.parentElement.textContent.trim() : '不超过直飞时间+3小时'}`);
       }
@@ -988,7 +966,13 @@ FORM_TEMPLATE = """
     advancedToggle.addEventListener('click', () => {
       const expanded = advanced.style.display === 'block';
       advanced.style.display = expanded ? 'none' : 'block';
-      advancedToggle.textContent = expanded ? '▼ 展开高级偏好（可选）' : '▲ 收起高级偏好';
+      advancedToggle.textContent = expanded ? '＋ 补充偏好，让推荐更准确' : '－ 收起补充偏好';
+    });
+
+    rulesToggle.addEventListener('click', () => {
+      const expanded = advancedRules.style.display === 'block';
+      advancedRules.style.display = expanded ? 'none' : 'block';
+      rulesToggle.textContent = expanded ? '＋ 更细的筛选规则' : '－ 收起筛选规则';
     });
 
     previewButton.addEventListener('click', () => {
@@ -1039,7 +1023,9 @@ FORM_TEMPLATE = """
     toggleShortTransferOptions();
     updateOriginAirportHint();
     advanced.style.display = 'none';
-    advancedToggle.textContent = '▼ 展开高级偏好（可选）';
+    advancedToggle.textContent = '＋ 补充偏好，让推荐更准确';
+    advancedRules.style.display = 'none';
+    rulesToggle.textContent = '＋ 更细的筛选规则';
     applyDefaultSecondaryGoals();
     updateStepper();
     form.addEventListener('input', refreshSummaryIfFinalStep);
@@ -1235,9 +1221,9 @@ def build_subscription(form) -> dict:
         max_budget = infer_max_budget(parse_int(form.get("max_budget"), 0), target_price)
     max_extra_duration_hours = None
     max_total_duration_hours = None
-    if form.get("transfer_policy", "short_ok") == "short_ok":
+    if form.get("transfer_policy", "reasonable") in {"reasonable", "short_ok"}:
         max_extra_duration_hours, max_total_duration_hours = parse_short_transfer_limit(
-            form.get("short_transfer_limit")
+            form.get("short_transfer_limit") or "extra_6"
         )
     departure_slots = form.getlist("departure_slots") or DEFAULT_DEPARTURE_SLOTS
     arrival_slots = form.getlist("arrival_slots") or DEFAULT_ARRIVAL_SLOTS
@@ -1287,27 +1273,27 @@ def build_subscription(form) -> dict:
         "hard_constraints": {
             "max_budget": max_budget,
             "max_budget_mode": max_budget_mode,
-            "transfer_policy": form.get("transfer_policy", "short_ok"),
+            "transfer_policy": form.get("transfer_policy", "reasonable"),
             "max_extra_duration_hours": max_extra_duration_hours,
             "max_total_duration_hours": max_total_duration_hours,
             "departure_time_policy": form.get("departure_time_policy", "no_redeye"),
             "arrival_time_policy": form.get("arrival_time_policy", "any"),
             **time_constraints,
             "baggage": form.get("baggage", "required"),
-            "refund_flexibility": form.get("refund_flexibility", "preferred"),
-            "airline_policy": form.get("airline_policy", "any"),
             "origin_airport_preference": form.get("origin_airport_preference", "all"),
-            "exclude_airlines": [
-                item.strip()
-                for item in form.get("exclude_airlines", "").replace("，", ",").split(",")
-                if item.strip()
-            ],
         },
         "soft_preferences": {
             "trip_type": form.get("trip_type", "tourism"),
             "companions": form.get("companions", "solo"),
             "price_sensitivity": form.get("price_sensitivity", "low"),
             "trip_rigidity": form.get("trip_rigidity", "confirmed"),
+            "refund_flexibility": form.get("refund_flexibility", "preferred"),
+            "airline_policy": form.get("airline_policy", "any"),
+            "exclude_airlines": [
+                item.strip()
+                for item in form.get("exclude_airlines", "").replace("，", ",").split(",")
+                if item.strip()
+            ],
             "target_price": target_price,
             "target_price_mode": target_price_mode,
             "price_tolerance": price_tolerance,

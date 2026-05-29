@@ -69,6 +69,7 @@ def _map_transfer_policy(policy: str | None) -> str:
     mapping = {
         "direct_only": "must",
         "must": "must",
+        "reasonable": "flexible",
         "short_ok": "flexible",
         "flexible": "flexible",
         "cheap_ok": "cheap_ok",
@@ -198,10 +199,14 @@ def _normalize_subscription(item: dict) -> dict:
         "return_arrival_slots", item.get("return_arrival_slots")
     )
     baggage = hard_constraints.get("baggage", item.get("need_baggage", "unknown"))
-    refund_flexibility = hard_constraints.get(
-        "refund_flexibility", item.get("refund_flexibility", "unknown")
+    refund_flexibility = soft_preferences.get(
+        "refund_flexibility",
+        hard_constraints.get("refund_flexibility", item.get("refund_flexibility", "unknown")),
     )
-    exclude_airlines = hard_constraints.get("exclude_airlines", item.get("exclude_airlines", []))
+    exclude_airlines = soft_preferences.get(
+        "exclude_airlines",
+        hard_constraints.get("exclude_airlines", item.get("exclude_airlines", [])),
+    )
     if isinstance(exclude_airlines, str):
         exclude_airlines = [
             value.strip()
@@ -230,7 +235,7 @@ def _normalize_subscription(item: dict) -> dict:
         "date_flexibility": item.get("date_flexibility", 0),
         "return_date_flexibility": item.get("return_date_flexibility", 0),
         "direct_only": _map_transfer_policy(transfer_policy),
-        "transfer_policy": transfer_policy or "short_ok",
+        "transfer_policy": transfer_policy or "reasonable",
         "max_extra_duration_hours": hard_constraints.get(
             "max_extra_duration_hours", item.get("max_extra_duration_hours")
         ),
@@ -251,8 +256,9 @@ def _normalize_subscription(item: dict) -> dict:
         "return_arrival_slots": return_arrival_slots,
         "need_baggage": baggage,
         "refund_flexibility": refund_flexibility,
-        "airline_policy": hard_constraints.get(
-            "airline_policy", item.get("airline_policy", "any")
+        "airline_policy": soft_preferences.get(
+            "airline_policy",
+            hard_constraints.get("airline_policy", item.get("airline_policy", "any")),
         ),
         "exclude_airlines": exclude_airlines if isinstance(exclude_airlines, list) else [],
         "trip_type": soft_preferences.get("trip_type", item.get("trip_type", "tourism")),
@@ -307,7 +313,7 @@ def load_file_subscriptions() -> list[dict]:
 def subscription_preferences(sub: dict) -> dict:
     return {
         "direct_only": sub.get("direct_only", "flexible"),
-        "transfer_policy": sub.get("transfer_policy", "short_ok"),
+        "transfer_policy": sub.get("transfer_policy", "reasonable"),
         "red_eye": sub.get("red_eye", "reject"),
         "red_eye_policy": sub.get("red_eye_policy", "not_allowed"),
         "departure_time_policy": sub.get("departure_time_policy", "after_06"),
@@ -794,7 +800,7 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
                 "round_trip": round_trip,
                 "date_flexibility": sub.get("date_flexibility", 0),
                 "direct_only": sub.get("direct_only", "flexible"),
-                "transfer_policy": sub.get("transfer_policy", "short_ok"),
+                "transfer_policy": sub.get("transfer_policy", "reasonable"),
                 "red_eye": sub.get("red_eye", "reject"),
                 "red_eye_policy": sub.get("red_eye_policy", "not_allowed"),
                 "departure_time_policy": sub.get("departure_time_policy", "after_06"),

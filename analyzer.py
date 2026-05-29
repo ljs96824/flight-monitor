@@ -2202,7 +2202,7 @@ def _apply_user_preferences(
 ) -> tuple[list[dict], list[dict], dict]:
     preferences = preferences or {}
     direct_only = preferences.get("direct_only", "flexible")
-    transfer_policy = preferences.get("transfer_policy", "short_ok")
+    transfer_policy = preferences.get("transfer_policy", "reasonable")
     direct_required = direct_only in {"must", "direct_only", "must_direct"} or transfer_policy in {
         "must",
         "direct_only",
@@ -2230,6 +2230,8 @@ def _apply_user_preferences(
         price_tolerance = 100
     max_extra_duration_hours = _to_float(preferences.get("max_extra_duration_hours"))
     max_total_duration_hours = _to_float(preferences.get("max_total_duration_hours"))
+    if transfer_policy == "reasonable" and max_extra_duration_hours is None and max_total_duration_hours is None:
+        max_extra_duration_hours = 6
 
     direct_flights = [flight for flight in flights if _stops_count(flight) == 0]
     non_red_eye_flights = [flight for flight in flights if not _is_red_eye(flight)]
@@ -2319,13 +2321,13 @@ def _apply_user_preferences(
             else:
                 penalties.append("包含中转")
 
-        if transfer_policy == "short_ok" and stops > 0:
+        if transfer_policy in {"reasonable", "short_ok"} and stops > 0:
             total_minutes = int(flight.get("total_duration_min") or 0)
             if duration_limit_minutes and total_minutes > duration_limit_minutes:
                 excluded.append(
                     {
                         **flight,
-                        "exclude_reason": "超过短中转最长可接受总行程时间",
+                        "exclude_reason": "超过合理中转最长可接受总行程时间",
                     }
                 )
                 continue
@@ -2333,8 +2335,8 @@ def _apply_user_preferences(
                 penalty += 2
                 penalties.append("中转总时长偏长")
             else:
-                notes.append("短中转可接受")
-        elif transfer_policy == "price_first" and stops > 0:
+                notes.append("合理中转可接受")
+        elif transfer_policy in {"price_first", "cheap_ok"} and stops > 0:
             notes.append("价格优先，保留中转方案")
 
         if red_eye == "reject" and _is_red_eye(flight):
