@@ -4675,6 +4675,601 @@ def _append_judgment_limits(
     lines.append("")
 
 
+def _section(lines: list[str], title: str | None = None) -> None:
+    lines.append("━━━━━━━━━━━━━━━━━━")
+    if title:
+        lines.append(title)
+        lines.append("")
+
+
+def _compact_link_text(link_text: str, limit: int = 4) -> str:
+    parts = [part for part in str(link_text or "").split(" | ") if part.strip()]
+    return " | ".join(parts[:limit])
+
+
+def _flight_link_text(flight: dict, route_info: dict, limit: int = 4) -> str:
+    links = _compact_booking_links(flight, route_info)
+    if not links:
+        return ""
+    return " | ".join(
+        f'<a href="{url}" target="_blank">{name}</a>' for name, url in links[:limit]
+    )
+
+
+def _combo_leg_line(prefix: str, flight: dict, date_str: str | None) -> str:
+    return (
+        f"{prefix}: {_compact_flight_numbers(flight)} {_round_trip_airline_text(flight)} | "
+        f"{_flight_combo_time_text(flight, date_str)} | "
+        f"{_round_trip_stops_text(flight)} | {_price_text(flight.get('price'))}"
+    )
+
+
+def _combo_transaction_total(combo: dict) -> float | None:
+    transaction_total = _to_float(combo.get("transaction_total"))
+    if transaction_total is not None:
+        return transaction_total
+    outbound = combo.get("outbound") or {}
+    return_flight = combo.get("return") or {}
+    outbound_est = _estimated_price_value(outbound) or combo.get("outbound_price")
+    return_est = _estimated_price_value(return_flight) or combo.get("return_price")
+    if _has_valid_price(outbound_est) and _has_valid_price(return_est):
+        return float(outbound_est) + float(return_est)
+    return None
+
+
+def _round_trip_combo_tags(combo: dict, route_info: dict, confidence: dict | None) -> str:
+    total = _to_float(combo.get("total_price"))
+    target = _to_float(route_info.get("target_price"))
+    target_total = target * 2 if target else None
+    if total is None or not target_total:
+        price_label = "价格待判断"
+    elif total <= target_total:
+        price_label = "价格偏低"
+    elif total <= target_total * 1.05:
+        price_label = "接近理想"
+    elif total <= target_total * 1.25:
+        price_label = "价格中等"
+    else:
+        price_label = "价格偏高"
+
+    legs = [combo.get("outbound") or {}, combo.get("return") or {}]
+    availability_labels = [_status_availability_label(flight) for flight in legs if flight]
+    if "需刷新" in availability_labels:
+        availability = "需刷新"
+    elif availability_labels and all(label == "可购买" for label in availability_labels):
+        availability = "可购买"
+    else:
+        availability = "可买性待确认"
+
+    risk_labels = [_status_risk_label(flight) for flight in legs if flight]
+    if "风险高" in risk_labels:
+        risk = "风险高"
+    elif "风险中" in risk_labels:
+        risk = "风险中"
+    else:
+        risk = "风险低"
+
+    return " | ".join(
+        [
+            price_label,
+            availability,
+            f"置信度{(confidence or {}).get('overall', '中')}",
+            risk,
+        ]
+    )
+
+
+def _combo_direct_first_key(combo: dict) -> tuple[int, float]:
+    legs = [combo.get("outbound") or {}, combo.get("return") or {}]
+    direct = all(int(flight.get("stops") or 0) == 0 for flight in legs if flight)
+    return (0 if direct else 1, _to_float(combo.get("total_price")) or 999999)
+
+
+def _round_trip_combinations(analysis_result: dict) -> list[dict]:
+    round_trip = analysis_result.get("round_trip_analysis") or {}
+    combos = [combo for combo in (round_trip.get("top_combinations") or []) if combo]
+    if not combos:
+        outbound_flights = (round_trip.get("outbound_top3") or _round_trip_top_flights(analysis_result))[:3]
+        return_analysis = analysis_result.get("return_analysis") or {}
+        return_flights = (round_trip.get("return_top3") or _round_trip_top_flights(return_analysis))[:3]
+        for outbound in outbound_flights:
+            for return_flight in return_flights:
+                outbound_price = _to_float(outbound.get("price"))
+                return_price = _to_float(return_flight.get("price"))
+                if outbound_price is None or return_price is None:
+                    continue
+                combos.append(
+                    {
+                        "outbound": outbound,
+                        "return": return_flight,
+                        "outbound_price": outbound_price,
+                        "return_price": return_price,
+                        "total_price": outbound_price + return_price,
+                    }
+                )
+    return sorted(combos, key=_combo_direct_first_key)
+
+
+def _combo_human_recommendation(combo: dict, route_info: dict) -> str:
+    total = _to_float(combo.get("total_price"))
+    target = _to_float(route_info.get("target_price"))
+    max_budget = _to_float(route_info.get("max_budget") or route_info.get("budget"))
+    target_total = target * 2 if target else None
+    max_total = max_budget * 2 if max_budget else None
+    grade = _combo_grade(combo)
+    if total is None:
+        return "建议等待 - 当前总价仍需确认"
+    if target_total and total <= target_total and grade == "A":
+        return "强烈建议购买 - 往返总价达标且执行信息较完整"
+    if target_total and total <= target_total * 1.05:
+        return "值得验证 - 价格达标，但购买链路尚未完全确认"
+    if max_total and total <= max_total:
+        return "可以观察 - 总价仍在预算内"
+    return "建议等待 - 当前往返总价或执行信息仍需确认"
+
+
+def _single_flights_for_sections(analysis_result: dict) -> list[dict]:
+    candidates = (
+        analysis_result.get("economy_recommendations")
+        or analysis_result.get("recommendations")
+        or analysis_result.get("all_flights")
+        or []
+    )
+    flights = []
+    for item in candidates:
+        flight = item.get("flight") if isinstance(item, dict) and item.get("flight") else item
+        if isinstance(flight, dict) and _has_valid_price(flight.get("price")):
+            flights.append(flight)
+    return sorted(
+        flights,
+        key=lambda flight: (
+            0 if int(flight.get("stops") or 0) == 0 else 1,
+            _to_float(flight.get("price")) or 999999,
+        ),
+    )
+
+
+def _single_option_lines(
+    lines: list[str],
+    flight: dict,
+    label: str,
+    route_info: dict,
+    analysis_result: dict,
+    link_limit: int = 4,
+) -> None:
+    lines.append(f"<b>{label}</b>")
+    lines.append(
+        f"{_compact_flight_numbers(flight)} {_round_trip_airline_text(flight)} | "
+        f"{_flight_price_text(flight)}"
+    )
+    lines.append(
+        f"{_flight_combo_time_text(flight, route_info.get('depart_date'))} | "
+        f"{_round_trip_stops_text(flight)} | {_round_trip_aircraft_text(flight)}"
+    )
+    lines.append(f"🏷 {_flight_status_tags(flight, route_info, analysis_result)}")
+    lines.append(_human_recommendation_text(flight, route_info, analysis_result))
+    estimate_lines = _price_estimate_summary_lines(flight)
+    if estimate_lines:
+        lines.extend(estimate_lines[:3])
+    links = _flight_link_text(flight, route_info, link_limit)
+    if links:
+        lines.append(f"🔗 {links}")
+    lines.append("")
+
+
+def _round_trip_combo_option_lines(
+    lines: list[str],
+    combo: dict,
+    label: str,
+    route_info: dict,
+    confidence: dict | None,
+    link_limit: int = 4,
+) -> None:
+    outbound = combo.get("outbound") or {}
+    return_flight = combo.get("return") or {}
+    total = _to_float(combo.get("total_price"))
+    transaction_total = _combo_transaction_total(combo)
+    extra = (
+        transaction_total - total
+        if transaction_total is not None and total is not None
+        else None
+    )
+
+    lines.append(f"<b>{label}</b>")
+    lines.append(_combo_leg_line("去", outbound, route_info.get("depart_date")))
+    lines.append(_combo_leg_line("回", return_flight, route_info.get("return_date")))
+    if transaction_total is not None:
+        if extra and extra > 0:
+            lines.append(
+                f"往返总价 {_price_text(total)} | 预估实付 {_price_text(transaction_total)}（含额外费用）"
+            )
+        else:
+            lines.append(
+                f"往返总价 {_price_text(total)} | 预估实付 {_price_text(transaction_total)}（无额外费用）"
+            )
+    else:
+        lines.append(f"往返总价 {_price_text(total)}")
+    lines.append(f"🏷 {_round_trip_combo_tags(combo, route_info, confidence)}")
+    lines.append(_combo_human_recommendation(combo, route_info))
+    outbound_links = _compact_link_text(
+        _combo_full_booking_links(outbound, route_info.get("depart_date")),
+        link_limit,
+    )
+    return_links = _compact_link_text(
+        _combo_full_booking_links(return_flight, route_info.get("return_date")),
+        link_limit,
+    )
+    if outbound_links:
+        lines.append(f"🔗 去程：{outbound_links}")
+    if return_links:
+        lines.append(f"🔗 返程：{return_links}")
+    lines.append("")
+
+
+def _confidence_compact_lines(confidence: dict | None) -> list[str]:
+    confidence = confidence or {}
+    dimensions = confidence.get("dimensions") or {}
+    if not dimensions:
+        return []
+    positive = []
+    warnings = []
+    for name in ["价格新鲜度", "渠道一致性", "历史样本量", "票规完整度", "可购买性"]:
+        level = dimensions.get(name)
+        if not level:
+            continue
+        item = f"{name}：{level}"
+        if level in {"高", "中高", "中"}:
+            positive.append(f"✓ {item}")
+        else:
+            warnings.append(f"⚠ {item}")
+    lines = ["数据置信度构成："]
+    if positive:
+        lines.append(" | ".join(positive[:3]))
+    if warnings:
+        lines.append(" | ".join(warnings[:3]))
+    return lines
+
+
+def _append_current_judgment_section(
+    lines: list[str],
+    analysis_result: dict,
+    route_info: dict,
+    source_stats: dict | None,
+    price_insights: dict | None,
+    is_round_trip: bool,
+) -> tuple[dict, dict, float | None, float | None, float | None]:
+    decision, confidence, current, target, max_budget = _decision_context(
+        analysis_result, route_info, source_stats, price_insights, is_round_trip
+    )
+    _section(lines)
+    lines.append(f"<b>📌 当前判断：{decision.get('conclusion', '可以观察')}</b>")
+    lines.append(f"置信度：{confidence.get('overall', decision.get('confidence', '中'))}")
+    lines.append("")
+
+    if is_round_trip:
+        round_trip = analysis_result.get("round_trip_analysis") or {}
+        outbound_min = round_trip.get("outbound_min")
+        return_min = round_trip.get("return_min")
+        lines.append(
+            f"往返总价：{_price_text(current)}（去{_price_text(outbound_min)} + 回{_price_text(return_min)}）"
+        )
+        label = "理想总价"
+    else:
+        lines.append(f"当前价格：{_price_text(current)}")
+        label = "理想价"
+    if target:
+        status = "已达标 ✅" if current is not None and current <= target else "未达标"
+        lines.append(f"{label}：{_price_text(target)} | {status}")
+    if max_budget:
+        lines.append(f"最高可接受价：{_price_text(max_budget)}")
+    lines.append("")
+    return decision, confidence, current, target, max_budget
+
+
+def _append_operation_section(
+    lines: list[str],
+    decision: dict,
+    current,
+    target,
+    max_budget,
+    is_round_trip: bool,
+) -> None:
+    _section(lines, "<b>🎯 操作建议</b>")
+    verify_limit = _to_float(current)
+    if verify_limit:
+        verify_limit *= 1.05
+        price_name = "往返总价" if is_round_trip else "最终价"
+        lines.append(
+            f"若支付页{price_name}≤{_price_text(verify_limit)}且含托运行李，可以购买前验证。"
+        )
+    if max_budget:
+        price_name = "总价" if is_round_trip else "价格"
+        lines.append(f"若{price_name}涨到{_price_text(max_budget)}以上，建议继续监控。")
+    advice = decision.get("action_advice")
+    if advice:
+        lines.append(advice)
+    lines.append("")
+    lines.append("你的操作区间：")
+    if current and max_budget:
+        lines.append(
+            f"≤{_price_text(current)} 强烈建议 | "
+            f"{_price_text(current)}-{_price_text(max_budget)} 值得买 | "
+            f">{_price_text(max_budget)} 再等等"
+        )
+    else:
+        lines.extend(_action_threshold_lines(current, target, max_budget)[:4])
+    lines.append(f"当前落在【{_action_zone_label(current, target, max_budget)}】区间")
+    lines.append("")
+
+
+def _append_core_reasons_section(lines: list[str], decision: dict, confidence: dict) -> None:
+    _section(lines, "<b>💡 为什么这样判断？</b>")
+    reasons = (decision.get("reasons") or [])[:3]
+    if reasons:
+        for index, reason in enumerate(reasons, start=1):
+            lines.append(f"{index}. {reason}")
+    else:
+        lines.append("1. 当前价格和执行信息需要结合支付页最终结果确认")
+    lines.append("")
+    lines.extend(_confidence_compact_lines(confidence))
+    lines.append("")
+
+
+def _append_risk_section(
+    lines: list[str],
+    route_info: dict,
+    analysis_result: dict,
+    price_insights: dict | None,
+    is_round_trip: bool,
+    return_analysis: dict | None,
+    primary_flight: dict | None = None,
+) -> None:
+    _section(lines, "<b>⚠️ 主要风险</b>")
+    primary_flight = primary_flight or {}
+    risk_label = _status_risk_label(primary_flight) if primary_flight else "风险中"
+    execution_risk = (primary_flight.get("execution_risk") or {}).get("label")
+    transfer_risk = (primary_flight.get("transfer_risk") or {}).get("label")
+    lines.append("等待风险：中 - 继续等可能错过低价，但仍有小幅降价空间")
+    lines.append(f"执行风险：{risk_label.replace('风险', '')} - {execution_risk or '需到支付页确认最终价和票规'}")
+    lines.append(f"体验风险：{transfer_risk or '低 - 当前方案基本符合时间和中转要求'}")
+    lines.append("")
+    _append_judgment_limits(
+        lines,
+        route_info,
+        analysis_result,
+        price_insights,
+        is_round_trip,
+        return_analysis,
+    )
+
+
+def _append_detailed_analysis_section(
+    lines: list[str],
+    analysis_result: dict,
+    route_info: dict,
+    price_insights: dict | None,
+    source_stats: dict | None,
+    is_round_trip: bool,
+    outbound_analysis: dict,
+    return_analysis: dict | None,
+    compact: bool = False,
+) -> None:
+    _section(lines, "<b>📈 详细分析</b>")
+    if is_round_trip:
+        round_trip = analysis_result.get("round_trip_analysis") or {}
+        _append_roundtrip_trend_chart(lines, round_trip)
+        if not compact:
+            _append_roundtrip_price_reference(lines, round_trip, route_info)
+            _append_roundtrip_price_analysis(lines, round_trip)
+            _append_round_trip_change_table(lines, round_trip)
+        outbound_flights = round_trip.get("outbound_top3") or _round_trip_top_flights(outbound_analysis)
+        return_flights = round_trip.get("return_top3") or _round_trip_top_flights(return_analysis)
+        limit = 3 if compact else 5
+        _append_round_trip_all_options(
+            lines,
+            "去程全部方案（按价格排序）",
+            outbound_flights[:limit],
+            route_info.get("depart_date"),
+        )
+        _append_round_trip_all_options(
+            lines,
+            "返程全部方案（按价格排序）",
+            return_flights[:limit],
+            route_info.get("return_date"),
+        )
+    else:
+        current_min = (
+            analysis_result.get("price_range", [None])[0]
+            if analysis_result.get("price_range")
+            else None
+        )
+        history = price_insights.get("price_history") if price_insights else None
+        trend = generate_trend_summary(history, current_min)
+        arrow_line = _trend_arrow_line(history)
+        if arrow_line:
+            lines.append(f"价格走势：{arrow_line}")
+        elif trend.get("available"):
+            lines.append(
+                f"价格走势：最低{_price_text(trend.get('min_price'))} | "
+                f"最高{_price_text(trend.get('max_price'))} | 平均{_price_text(trend.get('avg_price'))}"
+            )
+        own_history = _normalize_own_history_for_refs(route_info)
+        if not compact and current_min:
+            refs = calculate_price_references(
+                current_min,
+                history,
+                own_history,
+                analysis_result.get("days_to_dept") or 0,
+                analysis_result.get("all_flights") or [],
+            )
+            _append_price_references(lines, refs, current_min, "")
+            window_analysis = multi_window_analysis(
+                current_min,
+                own_history,
+                history,
+                analysis_result.get("days_to_dept") or 0,
+            )
+            _append_multi_window_analysis(lines, window_analysis)
+            _append_price_anomaly_lines(lines, analysis_result.get("price_anomalies") or [])
+
+    lines.append("")
+    _append_purchase_checklist(lines, route_info, analysis_result)
+    lines.append("")
+    lines.extend(_compact_source_summary_lines(source_stats))
+    _append_system_health_lines(lines, analysis_result.get("system_health") or {})
+    lines.append("")
+
+
+def _format_structured_html_message(
+    analysis_result=None,
+    route_info=None,
+    source_stats=None,
+    price_insights=None,
+    outbound_analysis=None,
+    return_analysis=None,
+    compact: bool = False,
+) -> str:
+    route_info = route_info or {}
+    analysis_result = analysis_result or outbound_analysis or {}
+    outbound_analysis = outbound_analysis or analysis_result
+    return_analysis = return_analysis or analysis_result.get("return_analysis") or {}
+    is_round_trip = bool(route_info.get("round_trip"))
+    source_stats_for_message = (
+        source_stats
+        or route_info.get("source_stats")
+        or analysis_result.get("source_stats")
+    )
+
+    lines: list[str] = []
+    main_limit = 2
+    alt_limit = 2 if compact else 3
+    link_limit = 3 if compact else 4
+
+    decision, confidence, current, target, max_budget = _append_current_judgment_section(
+        lines,
+        analysis_result,
+        route_info,
+        source_stats_for_message,
+        price_insights,
+        is_round_trip,
+    )
+
+    primary_flight = None
+    primary_items = []
+    alternative_items = []
+
+    _section(lines, "<b>⭐ 推荐方案</b>")
+    if is_round_trip:
+        combos = _round_trip_combinations(analysis_result)
+        primary_items = combos[:main_limit]
+        alternative_items = combos[main_limit : main_limit + alt_limit]
+        primary_flight = (primary_items[0].get("outbound") or {}) if primary_items else {}
+        if primary_items:
+            for index, combo in enumerate(primary_items):
+                _round_trip_combo_option_lines(
+                    lines,
+                    combo,
+                    f"推荐方案{chr(65 + index)}",
+                    route_info,
+                    confidence,
+                    link_limit,
+                )
+        else:
+            lines.append("暂无可展示的往返组合")
+            lines.append("")
+    else:
+        flights = _single_flights_for_sections(analysis_result)
+        primary_items = [flight for flight in flights if flight.get("execution_grade") != "D"][:main_limit]
+        alternative_items = [flight for flight in flights if flight not in primary_items][:alt_limit]
+        primary_flight = primary_items[0] if primary_items else {}
+        if primary_items:
+            for index, flight in enumerate(primary_items):
+                _single_option_lines(
+                    lines,
+                    flight,
+                    f"推荐方案{chr(65 + index)}",
+                    route_info,
+                    analysis_result,
+                    link_limit,
+                )
+        else:
+            lines.append("暂无可展示的主推方案")
+            lines.append("")
+
+    _append_operation_section(lines, decision, current, target, max_budget, is_round_trip)
+
+    _section(lines, "<b>🔀 备选方案</b>")
+    if alternative_items:
+        for index, item in enumerate(alternative_items):
+            label = f"方案{chr(65 + main_limit + index)}"
+            if is_round_trip:
+                _round_trip_combo_option_lines(
+                    lines,
+                    item,
+                    label,
+                    route_info,
+                    confidence,
+                    3,
+                )
+            else:
+                _single_option_lines(
+                    lines,
+                    item,
+                    label,
+                    route_info,
+                    analysis_result,
+                    3,
+                )
+    else:
+        lines.append("暂无更多符合条件的备选方案")
+        lines.append("")
+
+    lines.append("━━━ 以下为判断依据 ━━━")
+    _append_core_reasons_section(lines, decision, confidence)
+    _append_risk_section(
+        lines,
+        route_info,
+        analysis_result,
+        price_insights,
+        is_round_trip,
+        return_analysis,
+        primary_flight,
+    )
+    _append_detailed_analysis_section(
+        lines,
+        analysis_result,
+        route_info,
+        price_insights,
+        source_stats_for_message,
+        is_round_trip,
+        outbound_analysis,
+        return_analysis,
+        compact,
+    )
+
+    if is_round_trip:
+        _append_low_option_count_notice(lines, outbound_analysis, "去程")
+        _append_low_option_count_notice(lines, return_analysis, "返程")
+    else:
+        _append_low_option_count_notice(lines, analysis_result)
+
+    collected_at = _message_collected_time(analysis_result, route_info)
+    lines.append("")
+    lines.append(f"数据采集于 {collected_at} | 价格可能随时变动，建议尽快确认")
+    lines.append("💡 机票价格实时波动，推荐方案基于采集时数据。")
+    lines.append("点击链接后如价格有变化属于正常现象。")
+    lines.append("如果涨价幅度超过5%，系统会在下次采集时提醒你。")
+    lines.append("")
+    if not compact:
+        _append_price_explanation_lines(lines)
+        lines.append("")
+    lines.append("━━━━━━━━━━━━━━━━")
+    lines.append("以上数据来自第三方API，仅供参考。")
+    lines.append("实际价格请以航司或OTA官网价格为准。")
+    lines.append("以上排序基于当前配置规则，不代表最优选择。请根据您的时间、预算和出行需求自行判断。")
+    return "<br>".join(lines)
+
+
 def format_html_message(
     analysis_result=None,
     route_info=None,
@@ -4684,6 +5279,27 @@ def format_html_message(
     return_analysis=None,
 ):
     """生成压缩版HTML消息：经济舱3-4个方案 + 商务舱1个方案。"""
+    message = _format_structured_html_message(
+        analysis_result=analysis_result,
+        route_info=route_info,
+        source_stats=source_stats,
+        price_insights=price_insights,
+        outbound_analysis=outbound_analysis,
+        return_analysis=return_analysis,
+        compact=False,
+    )
+    if len(message) > PUSHPLUS_COMPACT_CHARS:
+        message = _format_structured_html_message(
+            analysis_result=analysis_result,
+            route_info=route_info,
+            source_stats=source_stats,
+            price_insights=price_insights,
+            outbound_analysis=outbound_analysis,
+            return_analysis=return_analysis,
+            compact=True,
+        )
+    return message
+
     route_info = route_info or {}
     analysis_result = analysis_result or outbound_analysis or {}
     outbound_analysis = outbound_analysis or analysis_result
