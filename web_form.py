@@ -244,6 +244,30 @@ FORM_TEMPLATE = """
       font-size: 13px;
       margin: 6px 0 0;
     }
+    .template-banner {
+      display: none;
+      border: 1px solid #c8d6f0;
+      border-radius: 8px;
+      background: #f7f9fc;
+      padding: 10px 12px;
+      margin: 12px 0;
+      font-size: 14px;
+    }
+    .template-banner button {
+      width: auto;
+      margin: 6px 8px 0 0;
+      padding: 7px 10px;
+      font-size: 14px;
+    }
+    .required-progress {
+      border: 1px solid #d7e3f7;
+      border-radius: 8px;
+      background: #f7f9fc;
+      padding: 10px 12px;
+      margin: 12px 0;
+      color: #333;
+      font-size: 14px;
+    }
     .secondary-button {
       background: #f5f7fb;
       color: #1a73e8;
@@ -350,8 +374,13 @@ FORM_TEMPLATE = """
     #round-trip-time-preferences { display: none; }
     #custom-time-options,
     #overnight-transfer-options,
-    #self-transfer-options {
+    #self-transfer-options,
+    #email-reminder-wrap,
+    #page-only-hint {
       display: none;
+    }
+    #budget-amount-fields {
+      display: block;
     }
     #summary-card {
       border: 1px solid #c8d6f0;
@@ -413,6 +442,13 @@ FORM_TEMPLATE = """
 <body>
   <h1>航班监控订阅</h1>
   <p class="hint">先填基础需求即可；高级偏好可以按需展开。</p>
+  <div id="saved-template-banner" class="template-banner">
+    检测到上次的偏好设置，是否套用？
+    <div>
+      <button id="apply-template-button" class="secondary-button" type="button">套用</button>
+      <button id="ignore-template-button" class="secondary-button" type="button">忽略</button>
+    </div>
+  </div>
 
   <div id="mobile-stepper">
     <div class="step-dots" id="step-dots">● ○ ○ ○</div>
@@ -428,6 +464,7 @@ FORM_TEMPLATE = """
       </div>
       <p class="hint">快速监控只填写基础信息；精准监控会展开补充偏好和筛选规则。</p>
     </div>
+    <div id="required-progress" class="required-progress">已完成 0/10 个基础项</div>
 
     <fieldset class="form-step active" data-step="1">
       <legend>行程信息</legend>
@@ -485,6 +522,14 @@ FORM_TEMPLATE = """
     <fieldset class="form-step" data-step="2">
       <legend>价格和中转</legend>
 
+      <label>价格策略</label>
+      <div class="choice">
+        <label><input type="radio" name="budget_strategy" value="explicit" checked> 我有明确预算</label>
+        <label><input type="radio" name="budget_strategy" value="auto_judge"> 不知道合理价，帮我判断</label>
+        <label><input type="radio" name="budget_strategy" value="low_price_alert"> 只要进入低价区间就提醒</label>
+      </div>
+
+      <div id="budget-amount-fields">
       <label>最高可接受价格（超过这个价通常不考虑）</label>
       <input id="max_budget" name="max_budget" type="number" min="1" step="1" placeholder="例如 8000">
       <p class="hint">超过这个价通常不考虑</p>
@@ -501,6 +546,7 @@ FORM_TEMPLATE = """
         <label><input type="radio" name="target_price_mode" value="fixed" checked> 输入具体金额</label>
         <label><input type="radio" name="target_price_mode" value="auto"> 不确定，帮我判断合理价格</label>
         <label><input type="radio" name="target_price_mode" value="low_zone"> 没有明确预算，进入低价区间时提醒我</label>
+      </div>
       </div>
 
       <input type="hidden" name="price_tolerance_mode" value="100">
@@ -655,6 +701,7 @@ FORM_TEMPLATE = """
           <option value="family_elder">家庭老人同行</option>
           <option value="other">其他</option>
         </select>
+        <p class="hint">这些偏好会影响推荐排序，不会影响是否创建监控</p>
       </fieldset>
     </div>
 
@@ -710,12 +757,15 @@ FORM_TEMPLATE = """
           </div>
           <p id="date-flex-warning" class="inline-warning">你选了不可调整，但仍可接收前后日期差价参考</p>
 
+          <div id="advanced-frequency-copy" style="display:none">
           <label>提醒频率</label>
           <div class="choice">
             <label><input type="radio" name="notification_frequency" value="important_only" checked> 仅重要变化时提醒（价格显著下降、即将涨价）</label>
             <label><input type="radio" name="notification_frequency" value="daily_summary"> 每天汇总推送一次</label>
             <label><input type="radio" name="notification_frequency" value="every_change"> 每次价格变化都提醒</label>
           </div>
+          </div>
+          <p class="hint">规则越严格，可能匹配的方案越少。如果没有结果，系统会提示你放宽哪些条件</p>
         </fieldset>
       </div>
     </fieldset>
@@ -737,6 +787,31 @@ FORM_TEMPLATE = """
     <div id="summary-card">
       <h2>即将创建的监控：</h2>
       <ul id="summary-list"></ul>
+      <fieldset>
+        <legend>提醒设置</legend>
+        <label>提醒方式</label>
+        <div class="choice">
+          <label><input type="radio" name="notification_method" value="email"> 邮箱</label>
+          <label><input type="radio" name="notification_method" value="pushplus" checked> PushPlus微信推送</label>
+          <label><input type="radio" name="notification_method" value="page_only"> 暂时只在页面查看</label>
+        </div>
+        <div id="email-reminder-wrap">
+          <label for="notification_email">邮箱地址</label>
+          <input id="notification_email" name="notification_email" type="email" placeholder="you@example.com">
+        </div>
+        <p id="page-only-hint" class="hint">你可以稍后在订阅列表查看监控结果</p>
+
+        <label>提醒频率</label>
+        <div class="choice">
+          <label><input type="radio" name="notification_frequency" value="important_only" checked> 仅重要变化提醒</label>
+          <label><input type="radio" name="notification_frequency" value="daily_summary"> 每天汇总一次</label>
+          <label><input type="radio" name="notification_frequency" value="every_change"> 价格变化就提醒</label>
+        </div>
+      </fieldset>
+      <p class="hint">开始后，系统会立即生成当前购买判断，并在价格进入低价区间、涨价风险升高或出现异常低价时提醒你。</p>
+      <div class="choice">
+        <label><input type="checkbox" id="remember-preferences" name="remember_preferences" value="true"> 记住这组偏好（下次自动填充）</label>
+      </div>
       <div class="button-row">
         <button type="submit">确认并开始监控</button>
         <button id="edit-button" class="secondary-button" type="button">返回修改</button>
@@ -781,6 +856,12 @@ FORM_TEMPLATE = """
 
     const form = document.getElementById('subscription-form');
     const modeRadios = document.querySelectorAll('input[name="monitor_mode"]');
+    const budgetStrategyRadios = document.querySelectorAll('input[name="budget_strategy"]');
+    const budgetAmountFields = document.getElementById('budget-amount-fields');
+    const requiredProgress = document.getElementById('required-progress');
+    const savedTemplateBanner = document.getElementById('saved-template-banner');
+    const applyTemplateButton = document.getElementById('apply-template-button');
+    const ignoreTemplateButton = document.getElementById('ignore-template-button');
     const originSelect = document.getElementById('origin');
     const originManual = document.querySelector('input[name="origin_manual"]');
     const destinationInput = document.getElementById('destination');
@@ -820,6 +901,11 @@ FORM_TEMPLATE = """
     const summaryCard = document.getElementById('summary-card');
     const summaryList = document.getElementById('summary-list');
     const editButton = document.getElementById('edit-button');
+    const notificationMethodRadios = document.querySelectorAll('input[name="notification_method"]');
+    const notificationEmailInput = document.getElementById('notification_email');
+    const emailReminderWrap = document.getElementById('email-reminder-wrap');
+    const pageOnlyHint = document.getElementById('page-only-hint');
+    const rememberPreferences = document.getElementById('remember-preferences');
     const transferRadios = document.querySelectorAll('input[name="transfer_policy"]');
     const shortTransferOptions = document.getElementById('short-transfer-options');
     const shortTransferInputs = shortTransferOptions
@@ -889,6 +975,7 @@ FORM_TEMPLATE = """
     }
 
     function validateCurrentStep() {
+      updateRequiredProgress();
       toggleBudgetRequired();
       toggleReturnDate();
       if (!validatePriceInputs()) {
@@ -897,6 +984,39 @@ FORM_TEMPLATE = """
         return false;
       }
       return form.reportValidity();
+    }
+
+    function updateRequiredProgress() {
+      const missing = [];
+      const origin = selectedOrigin();
+      const destination = destinationInput.value.trim();
+      const isRoundTrip = checkedValue('round_trip') === 'true';
+      const strategy = checkedValue('budget_strategy');
+      const baseItems = [
+        {done: Boolean(origin && origin !== '其他'), label: '出发地'},
+        {done: Boolean(destination), label: '目的地'},
+        {done: Boolean(checkedValue('round_trip')), label: '单程/往返'},
+        {done: Boolean(form.depart_date.value), label: '出发日期'},
+        {done: !isRoundTrip || Boolean(returnDate.value), label: '返程日期'},
+        {done: Boolean(checkedValue('date_flexibility')), label: '日期弹性'},
+        {done: Boolean(strategy) && (strategy !== 'explicit' || Boolean(maxBudgetInput.value || targetPriceInput.value)), label: '价格策略'},
+        {done: Boolean(checkedValue('transfer_policy')), label: '中转接受程度'},
+        {done: Boolean(checkedValue('baggage')), label: '托运行李'},
+        {done: Boolean(checkedValue('primary_goal')), label: '主目标'}
+      ];
+      baseItems.forEach(item => {
+        if (!item.done) missing.push(item.label);
+      });
+      const done = baseItems.length - missing.length;
+      if (requiredProgress) {
+        requiredProgress.textContent = missing.length
+          ? `已完成 ${done}/10 个基础项；还需填写：${missing.join('、')}`
+          : '已完成 10/10 个基础项';
+      }
+      if (previewButton) {
+        previewButton.textContent = missing.length ? `请先填写${missing[0]}` : '开始监控';
+      }
+      return missing;
     }
 
     function refreshSummaryIfFinalStep() {
@@ -1095,9 +1215,39 @@ FORM_TEMPLATE = """
     }
 
     function toggleBudgetRequired() {
+      const explicit = checkedValue('budget_strategy') === 'explicit';
+      if (budgetAmountFields) {
+        budgetAmountFields.style.display = explicit ? 'block' : 'none';
+      }
       maxBudgetInput.required = false;
       targetPriceInput.required = false;
+      if (!explicit) {
+        if (checkedValue('budget_strategy') === 'auto_judge') {
+          setRadio('max_budget_mode', 'none');
+          setRadio('target_price_mode', 'auto');
+        } else if (checkedValue('budget_strategy') === 'low_price_alert') {
+          setRadio('max_budget_mode', 'none');
+          setRadio('target_price_mode', 'low_zone');
+        }
+      } else {
+        setRadio('max_budget_mode', 'fixed');
+        setRadio('target_price_mode', 'fixed');
+      }
       validatePriceInputs();
+      updateRequiredProgress();
+    }
+
+    function toggleNotificationMethod() {
+      const method = checkedValue('notification_method') || 'pushplus';
+      if (emailReminderWrap) {
+        emailReminderWrap.style.display = method === 'email' ? 'block' : 'none';
+      }
+      if (notificationEmailInput) {
+        notificationEmailInput.required = method === 'email';
+      }
+      if (pageOnlyHint) {
+        pageOnlyHint.style.display = method === 'page_only' ? 'block' : 'none';
+      }
     }
 
     function toggleShortTransferOptions() {
@@ -1245,17 +1395,20 @@ FORM_TEMPLATE = """
       summaryLine('行程', isRoundTrip ? '往返' : '单程');
       summaryLine('出发', form.depart_date.value);
       if (isRoundTrip) {
-        summaryLine('返程', returnDate.value);
+      summaryLine('返程', returnDate.value);
       }
       summaryLine('日期弹性', selectedLabel('date_flexibility'));
-      summaryLine(
-        '最高可接受价',
-        maxBudgetMode === 'fixed' ? money(maxBudgetInput.value) : selectedLabel('max_budget_mode')
-      );
-      summaryLine(
-        '理想入手价',
-        targetPriceMode === 'fixed' ? money(targetPriceInput.value) : selectedLabel('target_price_mode')
-      );
+      summaryLine('价格策略', selectedLabel('budget_strategy'));
+      if (checkedValue('budget_strategy') === 'explicit') {
+        summaryLine(
+          '最高可接受价',
+          maxBudgetMode === 'fixed' ? money(maxBudgetInput.value) : selectedLabel('max_budget_mode')
+        );
+        summaryLine(
+          '理想入手价',
+          targetPriceMode === 'fixed' ? money(targetPriceInput.value) : selectedLabel('target_price_mode')
+        );
+      }
       summaryLine('中转', selectedLabel('transfer_policy'));
       summaryLine('行李', selectedLabel('baggage'));
       if (checkedValue('companions') !== 'solo') {
@@ -1281,9 +1434,81 @@ FORM_TEMPLATE = """
       }
       const secondary = selectedCheckboxLabels('secondary_goals');
       summaryLine('提醒', secondary.length ? secondary.join('、') : selectedLabel('primary_goal'));
+      summaryLine('提醒方式', selectedLabel('notification_method'));
       summaryLine('提醒频率', selectedLabel('notification_frequency'));
       addSummaryLine('未填写的偏好将按普通出行默认处理');
       return;
+    }
+
+    function collectPreferenceTemplate() {
+      return {
+        monitor_mode: checkedValue('monitor_mode'),
+        budget_strategy: checkedValue('budget_strategy'),
+        transfer_policy: checkedValue('transfer_policy'),
+        baggage: checkedValue('baggage'),
+        time_preference: checkedValue('time_preference'),
+        refund_flexibility: checkedValue('refund_flexibility'),
+        price_sensitivity: checkedValue('price_sensitivity'),
+        trip_type: form.trip_type ? form.trip_type.value : '',
+        companions: checkedValue('companions'),
+        airline_policy: checkedValue('airline_policy'),
+        notification_method: checkedValue('notification_method'),
+        notification_frequency: checkedValue('notification_frequency'),
+        secondary_goals: checkedValues('secondary_goals'),
+        short_transfer_limit: checkedValue('short_transfer_limit'),
+        accept_overnight_transfer: checkedValue('accept_overnight_transfer'),
+        accept_self_transfer: checkedValue('accept_self_transfer')
+      };
+    }
+
+    function applyPreferenceTemplate(data) {
+      if (!data) return;
+      [
+        'monitor_mode',
+        'budget_strategy',
+        'transfer_policy',
+        'baggage',
+        'time_preference',
+        'refund_flexibility',
+        'price_sensitivity',
+        'companions',
+        'airline_policy',
+        'notification_method',
+        'notification_frequency',
+        'short_transfer_limit',
+        'accept_overnight_transfer',
+        'accept_self_transfer'
+      ].forEach(name => {
+        if (data[name]) setRadio(name, data[name]);
+      });
+      if (form.trip_type && data.trip_type) {
+        form.trip_type.value = data.trip_type;
+      }
+      secondaryGoalChecks.forEach(check => {
+        check.checked = (data.secondary_goals || []).includes(check.value);
+      });
+      applyMonitorMode();
+      toggleBudgetRequired();
+      toggleNotificationMethod();
+      toggleReturnDate();
+      updateRequiredProgress();
+    }
+
+    function setupSavedTemplatePrompt() {
+      try {
+        const raw = localStorage.getItem('flightMonitorPreferenceTemplate');
+        if (!raw || !savedTemplateBanner) return;
+        savedTemplateBanner.style.display = 'block';
+        applyTemplateButton?.addEventListener('click', () => {
+          applyPreferenceTemplate(JSON.parse(raw));
+          savedTemplateBanner.style.display = 'none';
+        });
+        ignoreTemplateButton?.addEventListener('click', () => {
+          savedTemplateBanner.style.display = 'none';
+        });
+      } catch (err) {
+        console.warn('读取偏好模板失败', err);
+      }
     }
 
     stepPrev.addEventListener('click', () => {
@@ -1339,17 +1564,23 @@ FORM_TEMPLATE = """
     tripRadios.forEach(radio => radio.addEventListener('change', () => {
       toggleReturnDate();
       updateStepper();
+      updateRequiredProgress();
     }));
+    budgetStrategyRadios.forEach(radio => radio.addEventListener('change', toggleBudgetRequired));
     maxBudgetRadios.forEach(radio => radio.addEventListener('change', toggleBudgetRequired));
     targetPriceRadios.forEach(radio => radio.addEventListener('change', toggleBudgetRequired));
-    maxBudgetInput.addEventListener('input', validatePriceInputs);
-    targetPriceInput.addEventListener('input', validatePriceInputs);
-    originSelect.addEventListener('change', updateOriginAirportHint);
-    originManual.addEventListener('input', updateOriginAirportHint);
-    destinationInput.addEventListener('input', updateDestinationAirportHint);
+    maxBudgetInput.addEventListener('input', () => { validatePriceInputs(); updateRequiredProgress(); });
+    targetPriceInput.addEventListener('input', () => { validatePriceInputs(); updateRequiredProgress(); });
+    originSelect.addEventListener('change', () => { updateOriginAirportHint(); updateRequiredProgress(); });
+    originManual.addEventListener('input', () => { updateOriginAirportHint(); updateRequiredProgress(); });
+    destinationInput.addEventListener('input', () => { updateDestinationAirportHint(); updateRequiredProgress(); });
     modeRadios.forEach(radio => radio.addEventListener('change', applyMonitorMode));
     timePreferenceRadios.forEach(radio => radio.addEventListener('change', toggleTimePreference));
-    transferRadios.forEach(radio => radio.addEventListener('change', toggleShortTransferOptions));
+    notificationMethodRadios.forEach(radio => radio.addEventListener('change', toggleNotificationMethod));
+    transferRadios.forEach(radio => radio.addEventListener('change', () => {
+      toggleShortTransferOptions();
+      updateRequiredProgress();
+    }));
     dateFlexRadios.forEach(radio => radio.addEventListener('change', updateDateFlexHint));
     secondaryGoalChecks.forEach(check => check.addEventListener('change', updateDateFlexHint));
     primaryGoalRadios.forEach(radio => radio.addEventListener('change', () => {
@@ -1361,10 +1592,12 @@ FORM_TEMPLATE = """
     companionRadios.forEach(radio => radio.addEventListener('change', applyCompanionDefaults));
     toggleReturnDate();
     toggleBudgetRequired();
+    toggleNotificationMethod();
     toggleShortTransferOptions();
     updateDateFlexHint();
     updateOriginAirportHint();
     updateDestinationAirportHint();
+    updateRequiredProgress();
     advanced.style.display = 'none';
     advancedToggle.textContent = '＋ 补充偏好，让推荐更准确';
     advancedRules.style.display = 'none';
@@ -1372,9 +1605,16 @@ FORM_TEMPLATE = """
     applyMonitorMode();
     toggleTimePreference();
     applyDefaultSecondaryGoals();
+    setupSavedTemplatePrompt();
     updateStepper();
-    form.addEventListener('input', refreshSummaryIfFinalStep);
-    form.addEventListener('change', refreshSummaryIfFinalStep);
+    form.addEventListener('input', () => {
+      updateRequiredProgress();
+      refreshSummaryIfFinalStep();
+    });
+    form.addEventListener('change', () => {
+      updateRequiredProgress();
+      refreshSummaryIfFinalStep();
+    });
     form.addEventListener('submit', event => {
       if (!validatePriceInputs()) {
         event.preventDefault();
@@ -1390,6 +1630,17 @@ FORM_TEMPLATE = """
         buildSummary();
         summaryCard.style.display = 'block';
         summaryCard.scrollIntoView({behavior: 'smooth', block: 'start'});
+        return;
+      }
+      if (rememberPreferences && rememberPreferences.checked) {
+        try {
+          localStorage.setItem(
+            'flightMonitorPreferenceTemplate',
+            JSON.stringify(collectPreferenceTemplate())
+          );
+        } catch (err) {
+          console.warn('保存偏好模板失败', err);
+        }
       }
     });
   </script>
@@ -1603,12 +1854,23 @@ def build_subscription(form) -> dict:
         )
         - (set(origin_airports_active) | set(destination_airports_active))
     )
+    budget_strategy = form.get("budget_strategy", "explicit")
     max_budget_mode = form.get("max_budget_mode", "fixed")
     target_price_mode = form.get("target_price_mode", "fixed")
-    target_price = parse_optional_budget(form.get("target_price"), target_price_mode)
+    if budget_strategy == "auto_judge":
+        max_budget_mode = "none"
+        target_price_mode = "auto"
+    elif budget_strategy == "low_price_alert":
+        max_budget_mode = "none"
+        target_price_mode = "low_zone"
+    target_price = (
+        parse_optional_budget(form.get("target_price"), target_price_mode)
+        if budget_strategy == "explicit"
+        else None
+    )
     price_tolerance = parse_price_tolerance(form)
     max_budget = None
-    if max_budget_mode == "fixed":
+    if budget_strategy == "explicit" and max_budget_mode == "fixed":
         max_budget = infer_max_budget(parse_int(form.get("max_budget"), 0), target_price)
     max_extra_duration_hours = None
     max_total_duration_hours = None
@@ -1669,8 +1931,11 @@ def build_subscription(form) -> dict:
             parse_int(form.get("return_date_flexibility"), 0) if round_trip else 0
         ),
         "hard_constraints": {
+            "budget_strategy": budget_strategy,
             "max_budget": max_budget,
             "max_budget_mode": max_budget_mode,
+            "target_price": target_price,
+            "target_price_mode": target_price_mode,
             "transfer_policy": form.get("transfer_policy", "reasonable"),
             "max_extra_duration_hours": max_extra_duration_hours,
             "max_total_duration_hours": max_total_duration_hours,
@@ -1705,6 +1970,8 @@ def build_subscription(form) -> dict:
         "notification_goals": {
             "primary": form.get("primary_goal", "buy_timing"),
             "secondary": form.getlist("secondary_goals"),
+            "method": form.get("notification_method", "pushplus"),
+            "email": form.get("notification_email", "").strip(),
             "frequency": form.get("notification_frequency", "important_only"),
         },
         "status": "active",

@@ -789,6 +789,14 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
         with ANALYSIS_LOG.open("a", encoding="utf-8") as file:
             file.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
 
+        if (
+            (sub.get("hard_constraints", {}) or {}).get("budget_strategy")
+            == "low_price_alert"
+            and not analysis.get("low_price_alert_triggered", False)
+        ):
+            print("[推送] 当前价格未进入低价区间，按订阅策略跳过推送")
+            return True
+
         message_kwargs = {
             "analysis_result": analysis,
             "outbound_analysis": analysis,
@@ -841,6 +849,13 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
         }
         print(f"[DEBUG] 传给notifier的参数keys: {list(message_kwargs.keys())}")
         msg = format_html_message(**message_kwargs)
+        notification_goals = sub.get("notification_goals", {}) or {}
+        notification_method = notification_goals.get("method", "pushplus")
+        if notification_method == "page_only":
+            print("[推送] 用户选择仅页面查看，跳过主动推送")
+            return True
+        if notification_method == "email":
+            print("[推送] 邮件功能待接入，暂时使用PushPlus推送")
         send(msg)
         logging.info(f"{route} 已推送方案对比表")
         return True

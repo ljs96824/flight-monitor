@@ -2736,7 +2736,20 @@ def _auto_target_price(price_insights: dict | None, mode: str) -> float | None:
     prices = sorted(_extract_history_prices(price_insights))
     if len(prices) < 5:
         return None
-    percentile = 0.2 if mode == "low_zone" else 0.35
+    if mode == "low_zone":
+        percentile = 0.30
+    elif mode == "auto_judge":
+        percentile = 0.25
+    else:
+        percentile = 0.35
+    index = min(len(prices) - 1, max(0, round((len(prices) - 1) * percentile)))
+    return float(prices[index])
+
+
+def _auto_budget_price(price_insights: dict | None, percentile: float) -> float | None:
+    prices = sorted(_extract_history_prices(price_insights))
+    if len(prices) < 5:
+        return None
     index = min(len(prices) - 1, max(0, round((len(prices) - 1) * percentile)))
     return float(prices[index])
 
@@ -2905,13 +2918,22 @@ def analyze_all_flights(
     min_p, max_p = min(prices), max(prices)
     min_d, max_d = min(durations), max(durations)
     price_anomalies = detect_price_anomalies(usable_flights, price_insights)
+    budget_strategy = (merged_preferences or {}).get("budget_strategy", "explicit")
     target_price_mode = (merged_preferences or {}).get("target_price_mode", "auto")
     target_price = _to_float((merged_preferences or {}).get("target_price"))
     target_price_effective = target_price
-    if not target_price_effective and target_price_mode in {"auto", "low_zone"}:
+    if budget_strategy == "auto_judge":
+        target_price_effective = _auto_budget_price(price_insights, 0.25)
+    elif budget_strategy == "low_price_alert":
+        target_price_effective = _auto_budget_price(price_insights, 0.30)
+    elif not target_price_effective and target_price_mode in {"auto", "low_zone", "auto_judge"}:
         target_price_effective = _auto_target_price(price_insights, target_price_mode)
     max_budget_effective = _to_float((merged_preferences or {}).get("max_budget"))
-    if max_budget_effective is None:
+    if budget_strategy == "auto_judge":
+        max_budget_effective = _auto_budget_price(price_insights, 0.75)
+    elif budget_strategy == "low_price_alert":
+        max_budget_effective = None
+    elif max_budget_effective is None:
         max_budget_effective = _to_float((merged_preferences or {}).get("budget"))
     price_tolerance = _to_float((merged_preferences or {}).get("price_tolerance"))
     if price_tolerance is None:
@@ -3078,13 +3100,22 @@ def analyze_all_flights(
         if cabin_prices:
             cabin_price_ranges[cabin_class] = [min(cabin_prices), max(cabin_prices)]
 
+    budget_strategy = (merged_preferences or {}).get("budget_strategy", "explicit")
     target_price_mode = (merged_preferences or {}).get("target_price_mode", "auto")
     target_price = _to_float((merged_preferences or {}).get("target_price"))
     target_price_effective = target_price
-    if not target_price_effective and target_price_mode in {"auto", "low_zone"}:
+    if budget_strategy == "auto_judge":
+        target_price_effective = _auto_budget_price(price_insights, 0.25)
+    elif budget_strategy == "low_price_alert":
+        target_price_effective = _auto_budget_price(price_insights, 0.30)
+    elif not target_price_effective and target_price_mode in {"auto", "low_zone", "auto_judge"}:
         target_price_effective = _auto_target_price(price_insights, target_price_mode)
     max_budget_effective = _to_float((merged_preferences or {}).get("max_budget"))
-    if max_budget_effective is None:
+    if budget_strategy == "auto_judge":
+        max_budget_effective = _auto_budget_price(price_insights, 0.75)
+    elif budget_strategy == "low_price_alert":
+        max_budget_effective = None
+    elif max_budget_effective is None:
         max_budget_effective = _to_float((merged_preferences or {}).get("budget"))
     price_tolerance = _to_float((merged_preferences or {}).get("price_tolerance"))
     if price_tolerance is None:
@@ -3144,6 +3175,15 @@ def analyze_all_flights(
         "target_price": target_price,
         "target_price_effective": target_price_effective,
         "target_price_mode": target_price_mode,
+        "budget_strategy": budget_strategy,
+        "low_price_alert_triggered": (
+            budget_strategy != "low_price_alert"
+            or (
+                target_price_effective is not None
+                and lowest_price is not None
+                and lowest_price <= target_price_effective
+            )
+        ),
         "price_tolerance": price_tolerance,
         "price_band": price_band,
         "decision_summary": decision_summary,
