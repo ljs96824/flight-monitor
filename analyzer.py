@@ -2620,6 +2620,23 @@ def _apply_user_preferences(
     return kept, excluded, {"fallback": False}
 
 
+def _excluded_flight_summary(flights: list[dict]) -> list[dict]:
+    summaries = []
+    for flight in flights or []:
+        price = _to_float(flight.get("price"))
+        if price is None or price <= 0:
+            continue
+        summaries.append(
+            {
+                "price": price,
+                "flight_combo": flight.get("flight_combo") or "",
+                "airline_summary": flight.get("airline_summary")
+                or " / ".join(flight.get("airlines") or []),
+                "reason": flight.get("exclude_reason") or "不符合当前筛选条件",
+            }
+        )
+    return sorted(summaries, key=lambda item: item["price"])
+
 
 def _extract_history_prices(price_insights: dict | None) -> list[float]:
     history = (price_insights or {}).get("price_history") or []
@@ -2754,16 +2771,28 @@ def analyze_all_flights(
             flight for flight in usable_flights if _stops_count(flight) == 0
         ]
         if direct_flights:
+            direct_policy_excluded = [
+                {**flight, "exclude_reason": "用户设置必须直飞"}
+                for flight in usable_flights
+                if _stops_count(flight) > 0
+            ]
             usable_flights = direct_flights
         else:
+            direct_policy_excluded = []
             merged_preferences["no_direct_flag"] = True
+    else:
+        direct_policy_excluded = []
 
     usable_flights, preference_excluded, preference_summary = _apply_user_preferences(
         usable_flights, merged_preferences
     )
+    excluded_flights = direct_policy_excluded + preference_excluded
     print(f"[过滤后] {len(usable_flights)}个航班")
     if not usable_flights:
-        return {"error": "no_flights"}
+        return {
+            "error": "no_flights",
+            "excluded_flights": _excluded_flight_summary(excluded_flights),
+        }
 
     # 1. 按价格排名
     by_price = sorted(usable_flights, key=lambda f: _to_float(f.get("price")) or float("inf"))
@@ -3035,6 +3064,7 @@ def analyze_all_flights(
         "reference_flights": reference_flights,
         "user_preferences": merged_preferences,
         "preference_excluded_count": len(preference_excluded),
+        "excluded_flights": _excluded_flight_summary(excluded_flights),
         "preference_summary": preference_summary,
     }
 
