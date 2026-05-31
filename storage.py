@@ -116,6 +116,20 @@ def init_db() -> None:
             )
             """
         )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS last_push_prices (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                subscription_key TEXT UNIQUE,
+                route TEXT,
+                depart_date TEXT,
+                return_date TEXT,
+                price REAL,
+                push_type TEXT,
+                pushed_at TEXT
+            )
+            """
+        )
 
 
 def save_snapshots(records: list[dict]) -> None:
@@ -464,3 +478,81 @@ def get_roundtrip_price_history(
             }
         )
     return normalized
+
+
+def _last_push_key(route: str, depart_date: str, return_date: str | None = None) -> str:
+    """Build a stable key for the latest pushed price of one subscription."""
+    return "|".join([route or "", depart_date or "", return_date or ""])
+
+
+def get_last_push_price(
+    route: str, depart_date: str, return_date: str | None = None
+) -> dict | None:
+    """Get the most recent pushed price for one subscription."""
+    if not route or not depart_date:
+        return None
+    init_db()
+    key = _last_push_key(route, depart_date, return_date)
+    with _connect() as connection:
+        row = connection.execute(
+            """
+            SELECT *
+            FROM last_push_prices
+            WHERE subscription_key = ?
+            LIMIT 1
+            """,
+            (key,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def save_last_push_price(
+    route: str,
+    depart_date: str,
+    return_date: str | None,
+    price,
+    push_type: str | None = None,
+    pushed_at: str | None = None,
+) -> None:
+    """Persist the price used in the latest notification."""
+    if not route or not depart_date or price is None:
+        return
+    try:
+        price_value = float(price)
+    except (TypeError, ValueError):
+        return
+    if price_value <= 0:
+        return
+
+    init_db()
+    key = _last_push_key(route, depart_date, return_date)
+    pushed_at = pushed_at or datetime.now().isoformat(timespec="seconds")
+    with _connect() as connection:
+        existing = connection.execute(
+            "SELECT id FROM last_push_prices WHERE subscription_key = ?",
+            (key,),
+        ).fetchone()
+        if existing:
+            connection.execute(
+                """
+                UPDATE last_push_prices
+                SET route = ?,
+                    depart_date = ?,
+                    return_date = ?,
+                    price = ?,
+                    push_type = ?,
+                    pushed_at = ?
+                WHERE subscription_key = ?
+                """,
+                (route, depart_date, return_date, price_value, push_type, pushed_at, key),
+            )
+        else:
+            connection.execute(
+                """
+                INSERT INTO last_push_prices (
+                    subscription_key, route, depart_date, return_date,
+                    price, push_type, pushed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (key, route, depart_date, return_date, price_value, push_type, pushed_at),
+            )

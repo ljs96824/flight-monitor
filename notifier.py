@@ -24,12 +24,14 @@ from channels import CHANNEL_INFO
 from analyzer import (
     calculate_price_references,
     calc_confidence,
+    determine_push_type,
     generate_decision_summary,
     generate_trend_summary,
     multi_window_analysis,
     price_position_description,
     waiting_risk_description,
 )
+from storage import get_last_push_price, save_last_push_price
 
 
 BUY_SIGNALS = {"strong_buy", "buy", "buy_now"}
@@ -720,11 +722,21 @@ def _log_notification(content: str) -> None:
         file.write(entry)
 
 
+def _notification_title_from_content(content: str, fallback: str) -> str:
+    """Use the action label at the top of the message as the PushPlus title."""
+    text = re.sub(r"<[^>]+>", "", content or "").replace("&nbsp;", " ").strip()
+    first_line = re.split(r"(?:<br>|\n)", text, maxsplit=1)[0].strip()
+    if first_line.startswith("【") and "】" in first_line:
+        return first_line[:80]
+    return fallback
+
+
 def send(content: str, title: str = "航班监控通知") -> bool:
     """发送推送通知，优先PushPlus，备选企业微信。"""
     pushplus_token = os.environ.get("PUSHPLUS_TOKEN", "")
     if pushplus_token:
         msg = _prepare_pushplus_content(content)
+        title = _notification_title_from_content(msg, title)
         for attempt in range(2):
             try:
                 result = _post_pushplus(pushplus_token, title, msg)
@@ -4981,6 +4993,138 @@ def _confidence_compact_lines(confidence: dict | None) -> list[str]:
     return lines
 
 
+def _last_push_route_parts(route_info: dict, is_round_trip: bool) -> tuple[str, str, str | None]:
+    origin = route_info.get("origin") or route_info.get("origin_city") or ""
+    dest = route_info.get("destination") or route_info.get("destination_city") or ""
+    route = route_info.get("route") or f"{origin}-{dest}"
+    depart_date = route_info.get("depart_date") or ""
+    return_date = route_info.get("return_date") if is_round_trip else None
+    return route, depart_date, return_date
+
+
+def _price_history_for_push(price_insights: dict | None, analysis_result: dict, is_round_trip: bool):
+    if is_round_trip:
+        round_trip = analysis_result.get("round_trip_analysis") or {}
+        history = round_trip.get("history") or round_trip.get("price_history") or []
+        if history:
+            return [item.get("total") if isinstance(item, dict) else item for item in history]
+    return (price_insights or {}).get("price_history") or analysis_result.get("price_history") or []
+
+
+def _push_title_text(push_meta: dict, route_info: dict, current, is_round_trip: bool) -> str:
+    push_type = (push_meta or {}).get("type") or "价格提醒"
+    origin = route_info.get("origin_city") or get_airport_city(route_info.get("origin", "")) or route_info.get("origin", "")
+    dest = route_info.get("destination_city") or get_airport_city(route_info.get("destination", "")) or route_info.get("destination", "")
+    if is_round_trip:
+        return f"【{push_type}】{origin} → {dest} 往返{_price_text(current)}"
+    return f"【{push_type}】{origin} → {dest} {_price_text(current)}"
+
+
+def _confidence_deduction_text(confidence: dict) -> str:
+    dimensions = (confidence or {}).get("dimensions") or {}
+    lows = [str(key) for key, value in dimensions.items() if value in {"低", "待确认"}]
+    return "、".join(lows[:2]) + "仍需确认" if lows else ""
+
+
+def _recommendation_price_line(analysis_result: dict, current, is_round_trip: bool) -> str:
+    if not is_round_trip:
+        return _price_text(current)
+    round_trip = analysis_result.get("round_trip_analysis") or {}
+    outbound_min = round_trip.get("outbound_min")
+    return_min = round_trip.get("return_min")
+    if outbound_min is not None and return_min is not None:
+        return f"往返{_price_text(current)}（去{_price_text(outbound_min)} + 回{_price_text(return_min)}）"
+    return f"往返{_price_text(current)}"
+
+
+def _append_action_header_section(
+    lines: list[str],
+    push_meta: dict,
+    route_info: dict,
+    decision: dict,
+    confidence: dict,
+    current,
+    target,
+    max_budget,
+    analysis_result: dict,
+    is_round_trip: bool,
+) -> None:
+    title = _push_title_text(push_meta, route_info, current, is_round_trip)
+    verify_limit = _to_float(current)
+    verify_limit = verify_limit * 1.05 if verify_limit else None
+    risk_hint = _confidence_deduction_text(confidence) or "票规/渠道需确认"
+    lines.append(f"<b>{title}</b>")
+    lines.append("")
+    lines.append(f"当前建议：{decision.get('conclusion', '可以观察')}")
+    lines.append(f"推荐方案：{_recommendation_price_line(analysis_result, current, is_round_trip)}")
+    lines.append(f"购买条件：支付页≤{_price_text(verify_limit)}且含托运行李")
+    lines.append(f"置信度：{confidence.get('overall', decision.get('confidence', '中'))}")
+    lines.append(f"主要风险：{risk_hint}")
+    if target:
+        target_label = "理想总价" if is_round_trip else "理想入手价"
+        status = "已达标" if current is not None and current <= target else "未达标"
+        lines.append(f"{target_label}：{_price_text(target)} | {status}")
+    if max_budget:
+        lines.append(f"最高可接受：{_price_text(max_budget)}")
+    lines.append("")
+
+
+def _append_push_reason_section(lines: list[str], push_meta: dict) -> None:
+    _section(lines, "<b>📍 为什么现在提醒你?</b>")
+    reasons = (push_meta or {}).get("reasons") or ["当前价格或方案状态触发了你的监控条件"]
+    for reason in reasons[:4]:
+        lines.append(f"- {reason}")
+    lines.append("")
+
+
+def _append_price_change_section(
+    lines: list[str],
+    current,
+    target,
+    max_budget,
+    push_meta: dict,
+    is_round_trip: bool,
+) -> None:
+    _section(lines, "<b>价格变化</b>")
+    lines.append(f"{'当前往返价' if is_round_trip else '当前价'}：{_price_text(current)}")
+    change = (push_meta or {}).get("price_change") or {}
+    if change:
+        lines.append(f"上次提醒：{_price_text(change.get('last'))}")
+        diff = _to_float(change.get("diff"))
+        if diff is not None:
+            if diff < 0:
+                lines.append(f"下降：{_price_text(abs(diff))}")
+            elif diff > 0:
+                lines.append(f"上涨：{_price_text(diff)}")
+            else:
+                lines.append("变化：持平")
+    else:
+        lines.append("上次提醒：暂无记录")
+    if target:
+        lines.append(f"{'你的理想总价' if is_round_trip else '你的理想价'}：{_price_text(target)}")
+        if current is not None and current <= target:
+            lines.append(f"→ 当前低于理想价{_price_text(target - current)}，在强烈建议区间")
+    if max_budget:
+        lines.append(f"{'最高可接受总价' if is_round_trip else '最高可接受'}：{_price_text(max_budget)}")
+    lines.append("")
+
+
+def _append_validity_section(lines: list[str], analysis_result: dict, route_info: dict, primary_flight: dict | None) -> None:
+    _section(lines, "<b>推荐有效期</b>")
+    lines.append(f"价格更新时间：{_message_collected_time(analysis_result, route_info)}")
+    age = ((primary_flight or {}).get("availability") or {}).get("age_minutes")
+    try:
+        age_value = int(age)
+    except (TypeError, ValueError):
+        age_value = None
+    if age_value is not None and age_value > 120:
+        lines.append("该价格已超过2小时未验证，仅供参考，请以支付页为准")
+    else:
+        lines.append("建议有效期：30分钟")
+        lines.append("超过有效期请在支付页重新确认")
+    lines.append("")
+
+
 def _append_current_judgment_section(
     lines: list[str],
     analysis_result: dict,
@@ -5471,12 +5615,31 @@ def _format_structured_html_message(
     alt_limit = 2 if compact else 3
     link_limit = 3 if compact else 4
 
-    decision, confidence, current, target, max_budget = _append_current_judgment_section(
-        lines,
+    decision, confidence, current, target, max_budget = _decision_context(
+        analysis_result, route_info, source_stats_for_message, price_insights, is_round_trip
+    )
+    route_key, depart_key, return_key = _last_push_route_parts(route_info, is_round_trip)
+    last_push = get_last_push_price(route_key, depart_key, return_key)
+    price_history_for_push = _price_history_for_push(price_insights, analysis_result, is_round_trip)
+    push_meta = determine_push_type(
+        current,
+        target,
+        max_budget,
+        price_history_for_push,
+        analysis_result.get("days_to_dept"),
+        (last_push or {}).get("price"),
         analysis_result,
+    )
+    _append_action_header_section(
+        lines,
+        push_meta,
         route_info,
-        source_stats_for_message,
-        price_insights,
+        decision,
+        confidence,
+        current,
+        target,
+        max_budget,
+        analysis_result,
         is_round_trip,
     )
 
@@ -5526,7 +5689,10 @@ def _format_structured_html_message(
             lines.append("暂无可展示的主推方案")
             lines.append("")
 
+    _append_push_reason_section(lines, push_meta)
+    _append_price_change_section(lines, current, target, max_budget, push_meta, is_round_trip)
     _append_operation_section(lines, decision, current, target, max_budget, is_round_trip)
+    _append_validity_section(lines, analysis_result, route_info, primary_flight)
 
     _section(lines, "<b>🔀 备选方案</b>")
     if alternative_items:
@@ -5563,7 +5729,6 @@ def _format_structured_html_message(
     _append_sorting_logic_section(lines, route_info, is_round_trip)
     lines.append("━━━ 以下为判断依据 ━━━")
     _append_core_reasons_section(lines, decision, confidence)
-    _append_excluded_low_price_section(lines, analysis_result, current, route_info, compact)
     _append_risk_section(
         lines,
         route_info,
@@ -5573,6 +5738,7 @@ def _format_structured_html_message(
         return_analysis,
         primary_flight,
     )
+    _append_excluded_low_price_section(lines, analysis_result, current, route_info, compact)
     _append_confidence_section(lines, confidence)
     _append_next_actions_section(lines, route_info)
     _append_detailed_analysis_section(
@@ -5607,6 +5773,14 @@ def _format_structured_html_message(
     lines.append("以上数据来自第三方API，仅供参考。")
     lines.append("实际价格请以航司或OTA官网价格为准。")
     lines.append("以上排序基于当前配置规则，不代表最优选择。请根据您的时间、预算和出行需求自行判断。")
+    save_last_push_price(
+        route_key,
+        depart_key,
+        return_key,
+        current,
+        (push_meta or {}).get("type"),
+        datetime.now().isoformat(timespec="seconds"),
+    )
     return "<br>".join(lines)
 
 

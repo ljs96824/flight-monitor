@@ -2612,6 +2612,194 @@ def generate_decision_summary(
     }
 
 
+def _flatten_price_history(price_history) -> list[float]:
+    """Normalize price history formats into valid positive prices."""
+    prices = []
+    if isinstance(price_history, dict):
+        price_history = price_history.get("price_history") or price_history.get("history") or []
+    for item in price_history or []:
+        value = item[1] if isinstance(item, (list, tuple)) and len(item) >= 2 else item
+        price = _to_float(value)
+        if price and price > 0:
+            prices.append(price)
+    return prices
+
+
+def determine_push_type(
+    current_price,
+    target_price=None,
+    max_budget=None,
+    price_history=None,
+    days_to_dept=None,
+    last_push_price=None,
+    analysis_result=None,
+) -> dict:
+    """Determine the action-notification type and user-facing trigger reasons."""
+    current = _to_float(current_price)
+    target = _to_float(target_price)
+    max_b = _to_float(max_budget)
+    last_price = _to_float(last_push_price)
+    analysis_result = analysis_result or {}
+    prices = sorted(_flatten_price_history(price_history))
+
+    percentile = None
+    historical_30 = None
+    if current is not None and prices:
+        below = sum(1 for price in prices if price < current)
+        percentile = round(below / len(prices) * 100)
+        index = min(len(prices) - 1, max(0, round((len(prices) - 1) * 0.30)))
+        historical_30 = prices[index]
+
+    push_type = "同日更优方案"
+    if current is None:
+        push_type = "价格已失效"
+    elif _has_stale_primary_price(analysis_result):
+        push_type = "价格已失效"
+    elif historical_30 and current <= historical_30:
+        push_type = "异常低价"
+    elif target and current <= target:
+        push_type = "进入低价区间"
+    elif _has_cheaper_nearby_date(analysis_result, current):
+        push_type = "前后日期更便宜"
+    elif _has_better_same_day_option(analysis_result):
+        push_type = "同日更优方案"
+    elif _is_price_rise_risk(days_to_dept, analysis_result):
+        push_type = "涨价风险"
+
+    reasons = []
+    if target and current is not None:
+        if current <= target:
+            reasons.append("当前价格进入你的理想入手区间")
+        else:
+            reasons.append(f"当前距离理想入手价还差¥{current - target:,.0f}")
+    if last_price and current is not None:
+        diff = current - last_price
+        if diff < 0:
+            reasons.append(f"比上次提醒下降¥{abs(diff):,.0f}")
+        elif diff > 0:
+            reasons.append(f"比上次提醒上涨¥{diff:,.0f}")
+        else:
+            reasons.append("与上次提醒价格持平")
+    if percentile is not None:
+        if percentile <= 30:
+            reasons.append(f"低于相似历史价格的{100 - percentile}%")
+        elif percentile >= 70:
+            reasons.append(f"高于相似历史价格的{percentile}%")
+    reasons.extend(_matched_constraint_reasons(analysis_result))
+    if _is_price_rise_risk(days_to_dept, analysis_result):
+        days_text = f"{days_to_dept}天" if days_to_dept is not None else "临近出发"
+        reasons.append(f"距出发{days_text}，低价继续变化的风险上升")
+
+    price_change = None
+    if last_price and current is not None:
+        diff = current - last_price
+        price_change = {
+            "last": last_price,
+            "current": current,
+            "diff": diff,
+            "direction": "down" if diff < 0 else "up" if diff > 0 else "flat",
+        }
+
+    return {
+        "type": push_type,
+        "reasons": _dedupe_text(reasons)[:4],
+        "price_change": price_change,
+        "percentile": percentile,
+        "historical_30_price": historical_30,
+    }
+
+
+def _dedupe_text(items: list[str]) -> list[str]:
+    result = []
+    for item in items:
+        text = str(item or "").strip()
+        if text and text not in result:
+            result.append(text)
+    return result
+
+
+def _has_stale_primary_price(analysis_result: dict) -> bool:
+    candidates = []
+    if analysis_result.get("all_flights"):
+        candidates.extend(analysis_result.get("all_flights") or [])
+    round_trip = analysis_result.get("round_trip_analysis") or {}
+    for combo in round_trip.get("combinations") or []:
+        candidates.extend([combo.get("outbound") or {}, combo.get("return") or {}])
+    for flight in candidates[:3]:
+        age = ((flight or {}).get("availability") or {}).get("age_minutes")
+        try:
+            if age is not None and int(age) > 120:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
+def _has_cheaper_nearby_date(analysis_result: dict, current: float | None) -> bool:
+    if current is None:
+        return False
+    candidates = []
+    nearby = analysis_result.get("nearby_dates") or analysis_result.get("nearby_date_prices") or {}
+    if isinstance(nearby, dict):
+        candidates = nearby.values()
+    elif isinstance(nearby, list):
+        candidates = nearby
+    for item in candidates:
+        if isinstance(item, dict):
+            price = _to_float(item.get("min_price") or item.get("price"))
+        else:
+            price = _to_float(item)
+        if price and price < current:
+            return True
+    return False
+
+
+def _has_better_same_day_option(analysis_result: dict) -> bool:
+    flights = analysis_result.get("all_flights") or []
+    if len(flights) < 2:
+        return False
+    valid = [flight for flight in flights if _to_float(flight.get("price"))]
+    if len(valid) < 2:
+        return False
+    sorted_by_price = sorted(valid, key=lambda f: _to_float(f.get("price")) or 999999)
+    best = sorted_by_price[0]
+    second = sorted_by_price[1]
+    best_grade = best.get("execution_grade")
+    second_grade = second.get("execution_grade")
+    return best_grade in {"A", "B"} and second_grade not in {"A", "B"}
+
+
+def _is_price_rise_risk(days_to_dept, analysis_result: dict) -> bool:
+    try:
+        days = int(days_to_dept) if days_to_dept is not None else int(analysis_result.get("days_to_dept", 999))
+    except (TypeError, ValueError):
+        days = 999
+    if days <= 14:
+        return True
+    risk = analysis_result.get("waiting_risk") or {}
+    up_prob = _to_float(risk.get("up_probability"))
+    down_prob = _to_float(risk.get("down_probability"))
+    return bool(up_prob and down_prob is not None and up_prob > down_prob)
+
+
+def _matched_constraint_reasons(analysis_result: dict) -> list[str]:
+    flights = analysis_result.get("all_flights") or []
+    if not flights:
+        round_trip = analysis_result.get("round_trip_analysis") or {}
+        combos = round_trip.get("combinations") or []
+        if combos:
+            flights = [combos[0].get("outbound") or {}, combos[0].get("return") or {}]
+    reasons = []
+    first = flights[0] if flights else {}
+    if first.get("stops", 0) == 0:
+        reasons.append("符合你设置的直飞条件")
+    fare = first.get("fare_verification") or {}
+    matches = " ".join(fare.get("matches") or [])
+    if "托运" in matches or "行李" in matches:
+        reasons.append("符合你设置的托运行李要求")
+    return reasons
+
+
 def _apply_user_preferences(
     flights: list[dict], preferences: dict | None
 ) -> tuple[list[dict], list[dict], dict]:
