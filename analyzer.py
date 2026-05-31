@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import statistics
+import re
 from datetime import date, datetime, time, timedelta
 
 from price_estimator import calc_transaction_price
@@ -125,10 +126,21 @@ def apply_default_rules(subscription: dict) -> dict:
     quick_mode = monitor_mode != "precise"
     defaults_applied = []
 
-    time_pref = soft.get("time_preference") or hard.get("time_preference")
+    time_pref = (
+        soft.get("time_preference_mode")
+        or soft.get("time_preference")
+        or hard.get("time_preference_mode")
+        or hard.get("time_preference")
+    )
     if quick_mode or not time_pref:
         soft["time_preference"] = "no_redeye"
+        soft["time_preference_mode"] = "no_redeye"
+        soft["departure_time_windows"] = [["06:00", "23:00"]]
+        soft["arrival_time_windows"] = [["06:00", "23:00"]]
+        soft["red_eye_allowed"] = False
+        soft["early_morning_allowed"] = True
         hard["time_preference"] = "no_redeye"
+        hard["time_preference_mode"] = "no_redeye"
         hard["departure_time_policy"] = "no_redeye"
         if not hard.get("arrival_time_policy") or hard.get("arrival_time_policy") == "any":
             hard["arrival_time_policy"] = "no_midnight"
@@ -1948,10 +1960,12 @@ def time_slot_from_hour(hour: int | None) -> str | None:
     if hour is None:
         return None
     if 6 <= hour < 9:
-        return "early_morning"
+        return "dawn"
     if 9 <= hour < 12:
         return "morning"
-    if 12 <= hour < 17:
+    if 12 <= hour < 14:
+        return "noon"
+    if 14 <= hour < 17:
         return "afternoon"
     if 17 <= hour < 20:
         return "evening"
@@ -1970,7 +1984,9 @@ def _normalize_time_slots(slots) -> set[str]:
         value = str(slot or "").strip()
         if not value:
             continue
-        normalized.add("afternoon" if value == "noon" else value)
+        if value == "early_morning":
+            value = "dawn"
+        normalized.add(value)
     return normalized
 
 
@@ -2003,8 +2019,12 @@ def _direction_time_slots(preferences: dict, direction: str) -> tuple[object, ob
 
 
 def _is_red_eye(flight: dict) -> bool:
-    hour = _first_departure_hour(flight)
-    return hour is not None and (hour >= 23 or hour < 6)
+    dep_hour = _first_departure_hour(flight)
+    arr_hour = _last_arrival_hour(flight)
+    return any(
+        hour is not None and (hour >= 23 or hour < 6)
+        for hour in (dep_hour, arr_hour)
+    )
 
 
 def _matches_departure_policy(flight: dict, policy: str) -> bool:
@@ -2037,6 +2057,95 @@ def _is_daytime_flight(flight: dict) -> bool:
     dep_ok = dep_hour is None or 8 <= dep_hour <= 20
     arr_ok = arr_hour is None or 6 <= arr_hour <= 22
     return dep_ok and arr_ok
+
+
+def _time_to_minutes(value) -> int | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    match = re.search(r"(\d{1,2}):(\d{2})", text)
+    if not match:
+        return None
+    hour = int(match.group(1))
+    minute = int(match.group(2))
+    return hour * 60 + minute
+
+
+def _hour_to_minutes(hour: int | None) -> int | None:
+    return None if hour is None else int(hour) * 60
+
+
+def _matches_time_windows(hour: int | None, windows) -> bool:
+    if hour is None or not windows:
+        return True
+    minute = _hour_to_minutes(hour)
+    if minute is None:
+        return True
+    for window in windows:
+        if not isinstance(window, (list, tuple)) or len(window) < 2:
+            continue
+        start = _time_to_minutes(window[0])
+        end = _time_to_minutes(window[1])
+        if start is None or end is None:
+            continue
+        if start <= end:
+            if start <= minute < end:
+                return True
+        elif minute >= start or minute < end:
+            return True
+    return False
+
+
+def _direction_time_windows(preferences: dict, direction: str) -> tuple[object, object]:
+    if direction == "return":
+        dep_windows = preferences.get("return_departure_time_windows")
+        arr_windows = preferences.get("return_arrival_time_windows")
+    else:
+        dep_windows = preferences.get("outbound_departure_time_windows")
+        arr_windows = preferences.get("outbound_arrival_time_windows")
+    return (
+        dep_windows or preferences.get("departure_time_windows") or [],
+        arr_windows or preferences.get("arrival_time_windows") or [],
+    )
+
+
+def match_time_preference(flight: dict, soft_prefs: dict) -> tuple[bool, str]:
+    mode = (
+        soft_prefs.get("time_preference_mode")
+        or soft_prefs.get("time_preference")
+        or "unlimited"
+    )
+    mode = "unlimited" if mode == "any" else mode
+    if mode == "unlimited":
+        return True, ""
+
+    dep_hour = _first_departure_hour(flight)
+    arr_hour = _last_arrival_hour(flight)
+    dep_red_eye = dep_hour is not None and (dep_hour >= 23 or dep_hour < 6)
+    arr_red_eye = arr_hour is not None and (arr_hour >= 23 or arr_hour < 6)
+
+    if mode == "daytime":
+        is_daytime = (
+            (dep_hour is None or 6 <= dep_hour < 20)
+            and (arr_hour is None or 6 <= arr_hour < 20)
+        )
+        return True, "白天航班" if is_daytime else "非白天，排序降权"
+
+    if mode == "no_redeye":
+        if dep_red_eye or arr_red_eye:
+            return False, "红眼/凌晨航班，已排除"
+        return True, ""
+
+    if mode == "custom":
+        direction = soft_prefs.get("direction", "outbound")
+        dep_windows, arr_windows = _direction_time_windows(soft_prefs, direction)
+        dep_ok = _matches_time_windows(dep_hour, dep_windows)
+        arr_ok = _matches_time_windows(arr_hour, arr_windows)
+        if dep_ok and arr_ok:
+            return True, ""
+        return False, "不在你设置的可接受时段内"
+
+    return True, ""
 
 
 def _has_free_checked_baggage(flight: dict) -> bool:
@@ -2517,6 +2626,18 @@ def _apply_user_preferences(
     red_eye = preferences.get("red_eye", "reject")
     departure_time_policy = preferences.get("departure_time_policy", "any")
     arrival_time_policy = preferences.get("arrival_time_policy", "any")
+    time_preference_mode = (
+        preferences.get("time_preference_mode")
+        or preferences.get("time_preference")
+        or "unlimited"
+    )
+    time_preference_mode = "unlimited" if time_preference_mode == "any" else time_preference_mode
+    use_legacy_time_filters = time_preference_mode not in {
+        "unlimited",
+        "daytime",
+        "no_redeye",
+        "custom",
+    }
     direction = preferences.get("direction", "outbound")
     preferred_departure_slots, preferred_arrival_slots = _direction_time_slots(
         preferences, direction
@@ -2576,20 +2697,30 @@ def _apply_user_preferences(
         stops = _stops_count(flight)
         price = _to_float(flight.get("price")) or 0
 
-        if preferred_departure_slots and not _matches_time_slots(
+        time_ok, time_note = match_time_preference(flight, preferences)
+        if not time_ok:
+            excluded.append({**flight, "exclude_reason": time_note or "时间不符合订阅偏好"})
+            continue
+        if time_note == "非白天，排序降权":
+            penalty += 1
+            penalties.append(time_note)
+        elif time_note:
+            notes.append(time_note)
+
+        if use_legacy_time_filters and preferred_departure_slots and not _matches_time_slots(
             _first_departure_hour(flight), preferred_departure_slots
         ):
             excluded.append({**flight, "exclude_reason": "起飞时段不符合订阅偏好"})
             continue
-        if not preferred_departure_slots and not _matches_departure_policy(flight, departure_time_policy):
+        if use_legacy_time_filters and not preferred_departure_slots and not _matches_departure_policy(flight, departure_time_policy):
             excluded.append({**flight, "exclude_reason": "起飞时间不符合订阅偏好"})
             continue
-        if preferred_arrival_slots and not _matches_time_slots(
+        if use_legacy_time_filters and preferred_arrival_slots and not _matches_time_slots(
             _last_arrival_hour(flight), preferred_arrival_slots
         ):
             excluded.append({**flight, "exclude_reason": "到达时段不符合订阅偏好"})
             continue
-        if not preferred_arrival_slots and not _matches_arrival_policy(flight, arrival_time_policy):
+        if use_legacy_time_filters and not preferred_arrival_slots and not _matches_arrival_policy(flight, arrival_time_policy):
             excluded.append({**flight, "exclude_reason": "到达时间不符合订阅偏好"})
             continue
         if airline_policy == "no_lcc" and _contains_any_airline(flight, LCC_AIRLINES):

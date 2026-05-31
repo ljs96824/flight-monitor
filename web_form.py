@@ -100,27 +100,39 @@ COMMON_ORIGINS = [
 ]
 
 TIME_SLOT_LABELS = {
-    "early_morning": "早班 06:00-09:00",
-    "morning": "上午 09:00-12:00",
-    "afternoon": "下午 12:00-17:00",
+    "dawn": "清晨 06:00-09:00",
+    "morning": "早上 09:00-12:00",
+    "noon": "中午 12:00-14:00",
+    "afternoon": "下午 14:00-17:00",
     "evening": "傍晚 17:00-20:00",
-    "night": "晚班 20:00-23:00",
-    "redeye": "红眼 23:00-06:00",
+    "night": "晚上 20:00-23:00",
+    "redeye": "凌晨/红眼 23:00-06:00",
 }
 
 ARRIVAL_SLOT_LABELS = {
-    "early_morning": "清晨 06:00-09:00",
-    "morning": "上午 09:00-12:00",
-    "afternoon": "下午 12:00-17:00",
+    "dawn": "清晨 06:00-09:00",
+    "morning": "早上 09:00-12:00",
+    "noon": "中午 12:00-14:00",
+    "afternoon": "下午 14:00-17:00",
     "evening": "傍晚 17:00-20:00",
-    "night": "晚间 20:00-23:00",
-    "redeye": "凌晨 23:00-06:00",
+    "night": "晚上 20:00-23:00",
+    "redeye": "凌晨/红眼 23:00-06:00",
 }
 
-DEFAULT_DEPARTURE_SLOTS = ["early_morning", "morning", "afternoon", "evening", "night"]
-DEFAULT_ARRIVAL_SLOTS = ["early_morning", "morning", "afternoon", "evening", "night"]
-ALL_TIME_SLOTS = ["early_morning", "morning", "afternoon", "evening", "night", "redeye"]
-DAYTIME_TIME_SLOTS = ["early_morning", "morning", "afternoon", "evening"]
+TIME_SEGMENTS = {
+    "dawn": ["06:00", "09:00"],
+    "morning": ["09:00", "12:00"],
+    "noon": ["12:00", "14:00"],
+    "afternoon": ["14:00", "17:00"],
+    "evening": ["17:00", "20:00"],
+    "night": ["20:00", "23:00"],
+    "redeye": ["23:00", "06:00"],
+}
+
+DEFAULT_DEPARTURE_SLOTS = ["dawn", "morning", "noon", "afternoon", "evening", "night"]
+DEFAULT_ARRIVAL_SLOTS = ["dawn", "morning", "noon", "afternoon", "evening", "night"]
+ALL_TIME_SLOTS = ["dawn", "morning", "noon", "afternoon", "evening", "night", "redeye"]
+DAYTIME_TIME_SLOTS = ["dawn", "morning", "noon", "afternoon", "evening"]
 
 BAGGAGE_LABELS = {
     "required": "必须托运行李",
@@ -455,6 +467,7 @@ FORM_TEMPLATE = """
     .time-return { background: #eefaf3; }
     #round-trip-time-preferences { display: none; }
     #custom-time-options,
+    #precise-time-options,
     #overnight-transfer-options,
     #self-transfer-options,
     #email-reminder-wrap,
@@ -713,9 +726,9 @@ FORM_TEMPLATE = """
         <div id="pref-detail-time" class="pref-card-detail">
         <label>时间偏好</label>
         <div class="choice">
-          <label><input type="radio" name="time_preference" value="any" checked> 不限制</label>
+          <label><input type="radio" name="time_preference" value="unlimited" checked> 不限制</label>
           <label><input type="radio" name="time_preference" value="daytime"> 白天优先</label>
-          <label><input type="radio" name="time_preference" value="no_redeye"> 不接受红眼凌晨</label>
+          <label><input type="radio" name="time_preference" value="no_redeye"> 不接受红眼/凌晨到达</label>
           <label><input type="radio" name="time_preference" value="custom"> 自定义时间段</label>
         </div>
 
@@ -724,22 +737,24 @@ FORM_TEMPLATE = """
           <strong>时段偏好</strong>
           <label>偏好哪些时段起飞？（可多选）</label>
           <div class="choice">
-            <label><input type="checkbox" name="departure_slots" value="early_morning" checked> 早班 06:00-09:00</label>
-            <label><input type="checkbox" name="departure_slots" value="morning" checked> 上午 09:00-12:00</label>
-            <label><input type="checkbox" name="departure_slots" value="afternoon" checked> 下午 12:00-17:00</label>
+            <label><input type="checkbox" name="departure_slots" value="dawn" checked> 清晨 06:00-09:00</label>
+            <label><input type="checkbox" name="departure_slots" value="morning" checked> 早上 09:00-12:00</label>
+            <label><input type="checkbox" name="departure_slots" value="noon" checked> 中午 12:00-14:00</label>
+            <label><input type="checkbox" name="departure_slots" value="afternoon" checked> 下午 14:00-17:00</label>
             <label><input type="checkbox" name="departure_slots" value="evening" checked> 傍晚 17:00-20:00</label>
-            <label><input type="checkbox" name="departure_slots" value="night" checked> 晚班 20:00-23:00</label>
-            <label><input type="checkbox" name="departure_slots" value="redeye"> 红眼 23:00-06:00</label>
+            <label><input type="checkbox" name="departure_slots" value="night" checked> 晚上 20:00-23:00</label>
+            <label><input type="checkbox" name="departure_slots" value="redeye"> 凌晨/红眼 23:00-06:00</label>
           </div>
 
           <label>可接受哪些时段到达？（可多选）</label>
           <div class="choice">
-            <label><input type="checkbox" name="arrival_slots" value="early_morning" checked> 清晨 06:00-09:00</label>
-            <label><input type="checkbox" name="arrival_slots" value="morning" checked> 上午 09:00-12:00</label>
-            <label><input type="checkbox" name="arrival_slots" value="afternoon" checked> 下午 12:00-17:00</label>
+            <label><input type="checkbox" name="arrival_slots" value="dawn" checked> 清晨 06:00-09:00</label>
+            <label><input type="checkbox" name="arrival_slots" value="morning" checked> 早上 09:00-12:00</label>
+            <label><input type="checkbox" name="arrival_slots" value="noon" checked> 中午 12:00-14:00</label>
+            <label><input type="checkbox" name="arrival_slots" value="afternoon" checked> 下午 14:00-17:00</label>
             <label><input type="checkbox" name="arrival_slots" value="evening" checked> 傍晚 17:00-20:00</label>
-            <label><input type="checkbox" name="arrival_slots" value="night" checked> 晚间 20:00-23:00</label>
-            <label><input type="checkbox" name="arrival_slots" value="redeye"> 凌晨 23:00-06:00</label>
+            <label><input type="checkbox" name="arrival_slots" value="night" checked> 晚上 20:00-23:00</label>
+            <label><input type="checkbox" name="arrival_slots" value="redeye"> 凌晨/红眼 23:00-06:00</label>
           </div>
         </fieldset>
 
@@ -748,22 +763,24 @@ FORM_TEMPLATE = """
             <strong>━━ 去程时段偏好 ━━</strong>
             <label>去程偏好哪些时段起飞？</label>
             <div class="choice">
-              <label><input type="checkbox" name="outbound_departure_slots" value="early_morning" checked> 早班 06:00-09:00</label>
-              <label><input type="checkbox" name="outbound_departure_slots" value="morning" checked> 上午 09:00-12:00</label>
-              <label><input type="checkbox" name="outbound_departure_slots" value="afternoon" checked> 下午 12:00-17:00</label>
+              <label><input type="checkbox" name="outbound_departure_slots" value="dawn" checked> 清晨 06:00-09:00</label>
+              <label><input type="checkbox" name="outbound_departure_slots" value="morning" checked> 早上 09:00-12:00</label>
+              <label><input type="checkbox" name="outbound_departure_slots" value="noon" checked> 中午 12:00-14:00</label>
+              <label><input type="checkbox" name="outbound_departure_slots" value="afternoon" checked> 下午 14:00-17:00</label>
               <label><input type="checkbox" name="outbound_departure_slots" value="evening" checked> 傍晚 17:00-20:00</label>
-              <label><input type="checkbox" name="outbound_departure_slots" value="night" checked> 晚班 20:00-23:00</label>
-              <label><input type="checkbox" name="outbound_departure_slots" value="redeye"> 红眼 23:00-06:00</label>
+              <label><input type="checkbox" name="outbound_departure_slots" value="night" checked> 晚上 20:00-23:00</label>
+              <label><input type="checkbox" name="outbound_departure_slots" value="redeye"> 凌晨/红眼 23:00-06:00</label>
             </div>
 
             <label>去程可接受哪些时段到达？</label>
             <div class="choice">
-              <label><input type="checkbox" name="outbound_arrival_slots" value="early_morning" checked> 清晨 06:00-09:00</label>
-              <label><input type="checkbox" name="outbound_arrival_slots" value="morning" checked> 上午 09:00-12:00</label>
-              <label><input type="checkbox" name="outbound_arrival_slots" value="afternoon" checked> 下午 12:00-17:00</label>
+              <label><input type="checkbox" name="outbound_arrival_slots" value="dawn" checked> 清晨 06:00-09:00</label>
+              <label><input type="checkbox" name="outbound_arrival_slots" value="morning" checked> 早上 09:00-12:00</label>
+              <label><input type="checkbox" name="outbound_arrival_slots" value="noon" checked> 中午 12:00-14:00</label>
+              <label><input type="checkbox" name="outbound_arrival_slots" value="afternoon" checked> 下午 14:00-17:00</label>
               <label><input type="checkbox" name="outbound_arrival_slots" value="evening" checked> 傍晚 17:00-20:00</label>
-              <label><input type="checkbox" name="outbound_arrival_slots" value="night" checked> 晚间 20:00-23:00</label>
-              <label><input type="checkbox" name="outbound_arrival_slots" value="redeye"> 凌晨 23:00-06:00</label>
+              <label><input type="checkbox" name="outbound_arrival_slots" value="night" checked> 晚上 20:00-23:00</label>
+              <label><input type="checkbox" name="outbound_arrival_slots" value="redeye"> 凌晨/红眼 23:00-06:00</label>
             </div>
           </fieldset>
 
@@ -771,24 +788,38 @@ FORM_TEMPLATE = """
             <strong>━━ 返程时段偏好 ━━</strong>
             <label>返程偏好哪些时段起飞？</label>
             <div class="choice">
-              <label><input type="checkbox" name="return_departure_slots" value="early_morning" checked> 早班 06:00-09:00</label>
-              <label><input type="checkbox" name="return_departure_slots" value="morning" checked> 上午 09:00-12:00</label>
-              <label><input type="checkbox" name="return_departure_slots" value="afternoon" checked> 下午 12:00-17:00</label>
+              <label><input type="checkbox" name="return_departure_slots" value="dawn" checked> 清晨 06:00-09:00</label>
+              <label><input type="checkbox" name="return_departure_slots" value="morning" checked> 早上 09:00-12:00</label>
+              <label><input type="checkbox" name="return_departure_slots" value="noon" checked> 中午 12:00-14:00</label>
+              <label><input type="checkbox" name="return_departure_slots" value="afternoon" checked> 下午 14:00-17:00</label>
               <label><input type="checkbox" name="return_departure_slots" value="evening" checked> 傍晚 17:00-20:00</label>
-              <label><input type="checkbox" name="return_departure_slots" value="night" checked> 晚班 20:00-23:00</label>
-              <label><input type="checkbox" name="return_departure_slots" value="redeye"> 红眼 23:00-06:00</label>
+              <label><input type="checkbox" name="return_departure_slots" value="night" checked> 晚上 20:00-23:00</label>
+              <label><input type="checkbox" name="return_departure_slots" value="redeye"> 凌晨/红眼 23:00-06:00</label>
             </div>
 
             <label>返程可接受哪些时段到达？</label>
             <div class="choice">
-              <label><input type="checkbox" name="return_arrival_slots" value="early_morning" checked> 清晨 06:00-09:00</label>
-              <label><input type="checkbox" name="return_arrival_slots" value="morning" checked> 上午 09:00-12:00</label>
-              <label><input type="checkbox" name="return_arrival_slots" value="afternoon" checked> 下午 12:00-17:00</label>
+              <label><input type="checkbox" name="return_arrival_slots" value="dawn" checked> 清晨 06:00-09:00</label>
+              <label><input type="checkbox" name="return_arrival_slots" value="morning" checked> 早上 09:00-12:00</label>
+              <label><input type="checkbox" name="return_arrival_slots" value="noon" checked> 中午 12:00-14:00</label>
+              <label><input type="checkbox" name="return_arrival_slots" value="afternoon" checked> 下午 14:00-17:00</label>
               <label><input type="checkbox" name="return_arrival_slots" value="evening" checked> 傍晚 17:00-20:00</label>
-              <label><input type="checkbox" name="return_arrival_slots" value="night" checked> 晚间 20:00-23:00</label>
-              <label><input type="checkbox" name="return_arrival_slots" value="redeye"> 凌晨 23:00-06:00</label>
+              <label><input type="checkbox" name="return_arrival_slots" value="night" checked> 晚上 20:00-23:00</label>
+              <label><input type="checkbox" name="return_arrival_slots" value="redeye"> 凌晨/红眼 23:00-06:00</label>
             </div>
           </fieldset>
+        </div>
+        <button id="precise-time-toggle" class="secondary-button" type="button" style="font-size:13px;padding:8px;margin-top:10px;">需要更精确？按小时设置</button>
+        <div id="precise-time-options" class="sub-options">
+          <label>最早起飞</label>
+          <input type="time" name="departure_time_start">
+          <label>最晚起飞</label>
+          <input type="time" name="departure_time_end">
+          <label>最早到达</label>
+          <input type="time" name="arrival_time_start">
+          <label>最晚到达</label>
+          <input type="time" name="arrival_time_end">
+          <p class="hint">填写后会覆盖上面的自然语言时段。</p>
         </div>
         </div>
         </div>
@@ -962,20 +993,22 @@ FORM_TEMPLATE = """
       targetPriceMode: {"fixed": "理想入手价", "auto": "不确定，帮我判断合理价格", "low_zone": "没有明确预算，进入低价区间时提醒"},
       transfer: {"direct_only": "必须直飞", "reasonable": "可以接受合理中转", "price_first": "价格优先，中转也可以", "short_ok": "可以短中转", "cheap_ok": "便宜很多可以中转"},
       departureSlots: {
-        early_morning: "早班 06:00-09:00",
-        morning: "上午 09:00-12:00",
-        afternoon: "下午 12:00-17:00",
+        dawn: "清晨 06:00-09:00",
+        morning: "早上 09:00-12:00",
+        noon: "中午 12:00-14:00",
+        afternoon: "下午 14:00-17:00",
         evening: "傍晚 17:00-20:00",
-        night: "晚班 20:00-23:00",
-        redeye: "红眼 23:00-06:00"
+        night: "晚上 20:00-23:00",
+        redeye: "凌晨/红眼 23:00-06:00"
       },
       arrivalSlots: {
-        early_morning: "清晨 06:00-09:00",
-        morning: "上午 09:00-12:00",
-        afternoon: "下午 12:00-17:00",
+        dawn: "清晨 06:00-09:00",
+        morning: "早上 09:00-12:00",
+        noon: "中午 12:00-14:00",
+        afternoon: "下午 14:00-17:00",
         evening: "傍晚 17:00-20:00",
-        night: "晚间 20:00-23:00",
-        redeye: "凌晨 23:00-06:00"
+        night: "晚上 20:00-23:00",
+        redeye: "凌晨/红眼 23:00-06:00"
       },
       baggage: {"required": "必须托运", "not_needed": "不需要托运", "unknown": "不确定"},
       primary: {"price_drop_alert": "找到合适价格时提醒我", "buy_timing": "判断现在该不该买", "cheaper_date": "帮我找更便宜的日期", "best_overall": "帮我找最合适航班"},
@@ -1027,6 +1060,8 @@ FORM_TEMPLATE = """
     const returnWrap = document.getElementById('return-date-wrap');
     const returnDate = document.getElementById('return_date');
     const customTimeOptions = document.getElementById('custom-time-options');
+    const preciseTimeToggle = document.getElementById('precise-time-toggle');
+    const preciseTimeOptions = document.getElementById('precise-time-options');
     const singleTimePreferences = document.getElementById('single-time-preferences');
     const roundTripTimePreferences = document.getElementById('round-trip-time-preferences');
     const timePreferenceRadios = document.querySelectorAll('input[name="time_preference"]');
@@ -1322,10 +1357,13 @@ FORM_TEMPLATE = """
     }
 
     function toggleTimePreference() {
-      const preference = checkedValue('time_preference') || 'any';
+      const preference = checkedValue('time_preference') || 'unlimited';
       const custom = preference === 'custom' && checkedValue('monitor_mode') === 'precise';
       if (customTimeOptions) {
         customTimeOptions.style.display = custom ? 'block' : 'none';
+      }
+      if (!custom && preciseTimeOptions) {
+        preciseTimeOptions.style.display = 'none';
       }
       if (departurePolicyInput) {
         departurePolicyInput.value = preference === 'custom' ? 'any' : preference;
@@ -1346,8 +1384,9 @@ FORM_TEMPLATE = """
     function timePreferenceTextFromValue(value) {
       const map = {
         any: '不限制',
+        unlimited: '不限制',
         daytime: '白天优先',
-        no_redeye: '不接受红眼',
+        no_redeye: '不接受红眼/凌晨到达',
         custom: '自定义时间段'
       };
       return map[value] || '';
@@ -1371,7 +1410,7 @@ FORM_TEMPLATE = """
       const timePreference = checkedValue('time_preference');
       setPrefValue(
         'time',
-        timePreference === 'any' ? '使用默认：避免红眼' : selectedLabel('time_preference')
+        timePreference === 'unlimited' ? '使用默认：避免红眼' : selectedLabel('time_preference')
       );
       const refund = checkedValue('refund_flexibility');
       setPrefValue(
@@ -1572,7 +1611,8 @@ FORM_TEMPLATE = """
       if (hard.transfer_policy) setRadio('transfer_policy', hard.transfer_policy);
       if (hard.baggage) setRadio('baggage', hard.baggage);
       if (soft.companions) setRadio('companions', soft.companions);
-      if (soft.time_preference || hard.time_preference) setRadio('time_preference', soft.time_preference || hard.time_preference);
+      const savedTimeMode = soft.time_preference_mode || soft.time_preference || hard.time_preference;
+      if (savedTimeMode) setRadio('time_preference', savedTimeMode === 'any' ? 'unlimited' : savedTimeMode);
       if (soft.refund_flexibility) setRadio('refund_flexibility', soft.refund_flexibility);
       if (soft.price_sensitivity) setRadio('price_sensitivity', soft.price_sensitivity);
       if (soft.trip_type && form.trip_type) form.trip_type.value = soft.trip_type;
@@ -1662,7 +1702,7 @@ FORM_TEMPLATE = """
     function systemDefaultRulesForSummary() {
       const precise = checkedValue('monitor_mode') === 'precise';
       const rules = [];
-      if (!precise || checkedValue('time_preference') === 'any') {
+      if (!precise || checkedValue('time_preference') === 'unlimited') {
         rules.push('✓ 不推荐红眼/凌晨到达');
       }
       if (!precise || checkedValue('baggage') === 'unknown') {
@@ -1788,7 +1828,7 @@ FORM_TEMPLATE = """
         'accept_overnight_transfer',
         'accept_self_transfer'
       ].forEach(name => {
-        if (data[name]) setRadio(name, data[name]);
+        if (data[name]) setRadio(name, name === 'time_preference' && data[name] === 'any' ? 'unlimited' : data[name]);
       });
       if (data.notification_frequency) {
         setRadio('notification_frequency_rule', data.notification_frequency);
@@ -1903,6 +1943,10 @@ FORM_TEMPLATE = """
     destinationInput.addEventListener('input', () => { updateDestinationAirportHint(); updateRequiredProgress(); });
     modeRadios.forEach(radio => radio.addEventListener('change', applyMonitorMode));
     timePreferenceRadios.forEach(radio => radio.addEventListener('change', toggleTimePreference));
+    preciseTimeToggle?.addEventListener('click', () => {
+      if (!preciseTimeOptions) return;
+      preciseTimeOptions.style.display = preciseTimeOptions.style.display === 'block' ? 'none' : 'block';
+    });
     notificationMethodRadios.forEach(radio => radio.addEventListener('change', toggleNotificationMethod));
     notificationFrequencyRuleRadios.forEach(radio => radio.addEventListener('change', () => {
       syncNotificationFrequencyFromRule();
@@ -2132,14 +2176,32 @@ def update_subscription_preference(index: int, field: str, value: str) -> bool:
     soft = subscription.setdefault("soft_preferences", {})
 
     if field == "time_preference":
+        value = normalize_time_preference_mode(value)
         hard["time_preference"] = value
+        hard["time_preference_mode"] = value
         soft["time_preference"] = value
+        soft["time_preference_mode"] = value
         if value == "no_redeye":
             hard["departure_time_policy"] = "no_redeye"
             hard["arrival_time_policy"] = "no_midnight"
+            soft["departure_time_windows"] = [["06:00", "23:00"]]
+            soft["arrival_time_windows"] = [["06:00", "23:00"]]
+            soft["red_eye_allowed"] = False
+            soft["early_morning_allowed"] = True
         elif value == "daytime":
             hard["departure_time_policy"] = "daytime"
             hard["arrival_time_policy"] = "daytime_only"
+            soft["departure_time_windows"] = [["06:00", "20:00"]]
+            soft["arrival_time_windows"] = [["06:00", "20:00"]]
+            soft["red_eye_allowed"] = False
+            soft["early_morning_allowed"] = True
+        elif value == "unlimited":
+            hard["departure_time_policy"] = "any"
+            hard["arrival_time_policy"] = "any"
+            soft["departure_time_windows"] = []
+            soft["arrival_time_windows"] = []
+            soft["red_eye_allowed"] = True
+            soft["early_morning_allowed"] = True
     elif field == "airline_policy":
         soft["airline_policy"] = value
     elif field == "accept_self_transfer":
@@ -2262,13 +2324,69 @@ def parse_active_airports(raw: str | None, fallback: list[str]) -> list[str]:
 
 def time_slots_from_preference(form, field_name: str, default_slots: list[str]) -> list[str]:
     preference = form.get("time_preference", "any")
-    if preference == "any":
+    if preference in {"any", "unlimited"}:
         return list(ALL_TIME_SLOTS)
     if preference == "daytime":
         return list(DAYTIME_TIME_SLOTS)
     if preference == "no_redeye":
         return list(DEFAULT_DEPARTURE_SLOTS)
     return form.getlist(field_name) or list(default_slots)
+
+
+def normalize_time_preference_mode(value: str | None) -> str:
+    mode = value or "unlimited"
+    return "unlimited" if mode == "any" else mode
+
+
+def time_windows_from_slots(slots: list[str]) -> list[list[str]]:
+    windows = []
+    for slot in slots:
+        window = TIME_SEGMENTS.get(slot)
+        if window:
+            windows.append(list(window))
+    return windows
+
+
+def precise_window(form, start_name: str, end_name: str) -> list[list[str]] | None:
+    start = (form.get(start_name) or "").strip()
+    end = (form.get(end_name) or "").strip()
+    if start and end:
+        return [[start, end]]
+    return None
+
+
+def time_windows_from_preference(
+    form,
+    field_name: str,
+    default_slots: list[str],
+    start_name: str,
+    end_name: str,
+) -> list[list[str]]:
+    mode = normalize_time_preference_mode(form.get("time_preference"))
+    if mode == "unlimited":
+        return []
+    if mode == "daytime":
+        return [["06:00", "20:00"]]
+    if mode == "no_redeye":
+        return [["06:00", "23:00"]]
+    custom_precise = precise_window(form, start_name, end_name)
+    if custom_precise:
+        return custom_precise
+    return time_windows_from_slots(form.getlist(field_name) or list(default_slots))
+
+
+def red_eye_allowed_from_windows(mode: str, windows: list[list[str]]) -> bool:
+    if mode == "unlimited":
+        return True
+    if mode in {"daytime", "no_redeye"}:
+        return False
+    return any(window == ["23:00", "06:00"] for window in windows)
+
+
+def early_morning_allowed_from_windows(mode: str, windows: list[list[str]]) -> bool:
+    if mode in {"unlimited", "daytime", "no_redeye"}:
+        return True
+    return any((window[0] <= "08:00" < window[1]) or window[0] == "06:00" for window in windows)
 
 
 def first_push_text() -> str:
@@ -2320,6 +2438,7 @@ def build_subscription(form) -> dict:
         max_extra_duration_hours, max_total_duration_hours = parse_short_transfer_limit(
             form.get("short_transfer_limit") or "extra_6"
         )
+    time_mode = normalize_time_preference_mode(form.get("time_preference"))
     departure_slots = time_slots_from_preference(
         form, "departure_slots", DEFAULT_DEPARTURE_SLOTS
     )
@@ -2338,11 +2457,40 @@ def build_subscription(form) -> dict:
     return_arrival_slots = time_slots_from_preference(
         form, "return_arrival_slots", DEFAULT_ARRIVAL_SLOTS
     )
+    departure_time_windows = time_windows_from_preference(
+        form, "departure_slots", DEFAULT_DEPARTURE_SLOTS, "departure_time_start", "departure_time_end"
+    )
+    arrival_time_windows = time_windows_from_preference(
+        form, "arrival_slots", DEFAULT_ARRIVAL_SLOTS, "arrival_time_start", "arrival_time_end"
+    )
+    outbound_departure_time_windows = time_windows_from_preference(
+        form, "outbound_departure_slots", DEFAULT_DEPARTURE_SLOTS, "departure_time_start", "departure_time_end"
+    )
+    outbound_arrival_time_windows = time_windows_from_preference(
+        form, "outbound_arrival_slots", DEFAULT_ARRIVAL_SLOTS, "arrival_time_start", "arrival_time_end"
+    )
+    return_departure_time_windows = time_windows_from_preference(
+        form, "return_departure_slots", DEFAULT_DEPARTURE_SLOTS, "departure_time_start", "departure_time_end"
+    )
+    return_arrival_time_windows = time_windows_from_preference(
+        form, "return_arrival_slots", DEFAULT_ARRIVAL_SLOTS, "arrival_time_start", "arrival_time_end"
+    )
+    all_time_windows = (
+        departure_time_windows
+        + arrival_time_windows
+        + outbound_departure_time_windows
+        + outbound_arrival_time_windows
+        + return_departure_time_windows
+        + return_arrival_time_windows
+    )
     time_constraints = {
         "departure_slots": departure_slots,
         "arrival_slots": arrival_slots,
         "preferred_departure_slots": departure_slots,
         "preferred_arrival_slots": arrival_slots,
+        "time_preference_mode": time_mode,
+        "departure_time_windows": departure_time_windows,
+        "arrival_time_windows": arrival_time_windows,
     }
     if round_trip:
         time_constraints.update(
@@ -2353,6 +2501,10 @@ def build_subscription(form) -> dict:
                 "return_arrival_slots": return_arrival_slots,
                 "preferred_departure_slots": outbound_departure_slots,
                 "preferred_arrival_slots": outbound_arrival_slots,
+                "outbound_departure_time_windows": outbound_departure_time_windows,
+                "outbound_arrival_time_windows": outbound_arrival_time_windows,
+                "return_departure_time_windows": return_departure_time_windows,
+                "return_arrival_time_windows": return_arrival_time_windows,
             }
         )
     return {
@@ -2384,7 +2536,7 @@ def build_subscription(form) -> dict:
             "max_total_duration_hours": max_total_duration_hours,
             "departure_time_policy": form.get("departure_time_policy", "no_redeye"),
             "arrival_time_policy": form.get("arrival_time_policy", "any"),
-            "time_preference": form.get("time_preference", "any"),
+            "time_preference": time_mode,
             **time_constraints,
             "baggage": form.get("baggage", "required"),
             "origin_airport_preference": form.get("origin_airport_preference", "all"),
@@ -2395,7 +2547,16 @@ def build_subscription(form) -> dict:
         },
         "soft_preferences": {
             "trip_type": form.get("trip_type", "tourism"),
-            "time_preference": form.get("time_preference", "any"),
+            "time_preference": time_mode,
+            "time_preference_mode": time_mode,
+            "departure_time_windows": departure_time_windows,
+            "arrival_time_windows": arrival_time_windows,
+            "outbound_departure_time_windows": outbound_departure_time_windows,
+            "outbound_arrival_time_windows": outbound_arrival_time_windows,
+            "return_departure_time_windows": return_departure_time_windows,
+            "return_arrival_time_windows": return_arrival_time_windows,
+            "red_eye_allowed": red_eye_allowed_from_windows(time_mode, all_time_windows),
+            "early_morning_allowed": early_morning_allowed_from_windows(time_mode, all_time_windows),
             "companions": form.get("companions", "solo"),
             "price_sensitivity": form.get("price_sensitivity", "low"),
             "trip_rigidity": form.get("trip_rigidity", "confirmed"),

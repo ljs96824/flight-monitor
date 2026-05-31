@@ -3734,6 +3734,8 @@ def format_flight_detail(
     )
     for estimate_line in estimate_lines:
         detail += f"<br>  {estimate_line}"
+    if show_timezone:
+        detail += "<br>  到达时间按当地时间计算"
     if booking_links:
         title = "购买渠道" if _verified_booking_options(flight) else "可能的购买渠道"
         detail += f"<br>  🔗 {title}: {booking_links}"
