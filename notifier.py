@@ -4685,6 +4685,9 @@ def _section(lines: list[str], title: str | None = None) -> None:
 CARD_STYLE = "border:1px solid #ddd;border-radius:8px;padding:12px;margin:8px 0;"
 PRIMARY_TITLE_STYLE = "font-weight:bold;color:#2563eb;"
 ACTION_STYLE = "margin-top:6px;color:#16a34a;"
+ACTION_ZONE_STYLE = (
+    "border-left:4px solid #16a34a;padding:8px;margin:8px 0;background:#f0fdf4;"
+)
 
 
 def _compact_link_text(link_text: str, limit: int = 4) -> str:
@@ -4703,6 +4706,10 @@ def _flight_link_text(flight: dict, route_info: dict, limit: int = 4) -> str:
 
 def _channel_names(limit: int = 4) -> str:
     return " / ".join(["携程", "飞猪", "去哪儿", "Trip.com"][:limit])
+
+
+def _status_span(text: str, color: str = "#16a34a") -> str:
+    return f'<span style="color:{color};font-weight:bold;">{text}</span>'
 
 
 def _constraint_match_text(*flights: dict) -> str:
@@ -5013,7 +5020,11 @@ def _append_current_judgment_section(
         f"主要风险是{risk_hint}</div>"
     )
     if target:
-        status = "已达标 ✅" if current is not None and current <= target else "未达标"
+        status = (
+            _status_span("已达标", "#16a34a")
+            if current is not None and current <= target
+            else _status_span("未达标", "#dc2626")
+        )
         lines.append(f"<div>{label}：{_price_text(target)} | {status}</div>")
     lines.append("</div>")
     return decision, confidence, current, target, max_budget
@@ -5027,7 +5038,7 @@ def _append_operation_section(
     max_budget,
     is_round_trip: bool,
 ) -> None:
-    _section(lines, "<b>🎯 操作建议</b>")
+    _section(lines, "<b>操作建议</b>")
     verify_limit = _to_float(current)
     if verify_limit:
         verify_limit *= 1.05
@@ -5042,16 +5053,33 @@ def _append_operation_section(
     if advice:
         lines.append(advice)
     lines.append("")
-    lines.append("你的操作区间：")
+    price_label = "往返总价" if is_round_trip else "价格"
+    lines.append(f'<div style="{ACTION_ZONE_STYLE}">')
+    lines.append(f"<div>你的价格行动区间（{price_label}）：</div>")
     if current and max_budget:
+        midpoint = (current + max_budget) / 2
         lines.append(
-            f"≤{_price_text(current)} 强烈建议 | "
-            f"{_price_text(current)}-{_price_text(max_budget)} 值得买 | "
-            f">{_price_text(max_budget)} 再等等"
+            f"<div>≤{_price_text(current)} 强烈建议验证并购买</div>"
+        )
+        lines.append(
+            f"<div>{_price_text(current)}-{_price_text(verify_limit or current)} 值得购买</div>"
+        )
+        lines.append(
+            f"<div>{_price_text(verify_limit or current)}-{_price_text(midpoint)} 可以考虑</div>"
+        )
+        lines.append(
+            f"<div>{_price_text(midpoint)}-{_price_text(max_budget)} 仅刚需建议</div>"
+        )
+        lines.append(
+            f"<div>&gt;{_price_text(max_budget)} 不建议购买</div>"
         )
     else:
-        lines.extend(_action_threshold_lines(current, target, max_budget)[:4])
-    lines.append(f"当前落在【{_action_zone_label(current, target, max_budget)}】区间")
+        for item in _action_threshold_lines(current, target, max_budget)[:4]:
+            lines.append(f"<div>{item}</div>")
+    lines.append(
+        f"<div>当前{_price_text(current)} → 落在【{_status_span(_action_zone_label(current, target, max_budget))}】区间</div>"
+    )
+    lines.append("</div>")
     lines.append("")
 
 
@@ -5067,8 +5095,44 @@ def _append_core_reasons_section(lines: list[str], decision: dict, confidence: d
 
 
 def _append_confidence_section(lines: list[str], confidence: dict) -> None:
-    _section(lines, "<b>📊 置信度拆解</b>")
-    lines.extend(_confidence_compact_lines(confidence) or ["暂无足够置信度拆解数据"])
+    _section(lines, "<b>置信度拆解</b>")
+    confidence = confidence or {}
+    dimensions = confidence.get("dimensions") or {}
+    details = confidence.get("details") or {}
+    labels = [
+        ("价格新鲜度", "价格新鲜度"),
+        ("历史样本量", "历史样本量"),
+        ("渠道可购买性", "可购买性"),
+        ("票规完整度", "票规完整度"),
+        ("用户约束匹配", "用户约束匹配"),
+    ]
+    fallback_notes = {
+        "价格新鲜度": "基于最近一次采集时间",
+        "历史样本量": "基于近期/历史价格点数量",
+        "可购买性": "待支付页验证",
+        "票规完整度": "行李/退改未核实",
+        "用户约束匹配": "基于当前筛选条件",
+    }
+    if not dimensions:
+        lines.append("暂无足够置信度拆解数据")
+    else:
+        for display_name, key in labels:
+            level = dimensions.get(key) or ("待确认" if key == "票规完整度" else None)
+            if not level:
+                continue
+            note = details.get(key) or fallback_notes.get(key, "")
+            lines.append(f"{display_name}：{level}（{note}）")
+    lines.append("")
+    lines.append(f"总体：{confidence.get('overall', '中')}")
+    low_items = [
+        name
+        for name, key in labels
+        if dimensions.get(key) in {"低", "待确认"}
+    ]
+    if low_items:
+        lines.append(f"主要扣分项：{'、'.join(low_items[:2])}尚未确认")
+    else:
+        lines.append("主要扣分项：暂无明显短板")
     lines.append("")
 
 
@@ -5128,14 +5192,36 @@ def _append_risk_section(
     return_analysis: dict | None,
     primary_flight: dict | None = None,
 ) -> None:
-    _section(lines, "<b>⚠️ 主要风险</b>")
+    _section(lines, "<b>风险权衡</b>")
     primary_flight = primary_flight or {}
-    risk_label = _status_risk_label(primary_flight) if primary_flight else "风险中"
-    execution_risk = (primary_flight.get("execution_risk") or {}).get("label")
-    transfer_risk = (primary_flight.get("transfer_risk") or {}).get("label")
-    lines.append("等待风险：中 - 继续等可能错过低价，但仍有小幅降价空间")
-    lines.append(f"执行风险：{risk_label.replace('风险', '')} - {execution_risk or '需到支付页确认最终价和票规'}")
-    lines.append(f"体验风险：{transfer_risk or '低 - 当前方案基本符合时间和中转要求'}")
+    risk = (
+        (analysis_result.get("round_trip_analysis") or {}).get("buy_vs_wait_risk")
+        if is_round_trip
+        else analysis_result.get("buy_vs_wait_risk")
+    ) or {}
+    buy_risks = risk.get("buy_risks") or [
+        "可能遇到支付页跳价",
+        "票规需确认（行李/退改）",
+        "不同渠道售后政策不同",
+    ]
+    wait_risks = risk.get("wait_risks") or [
+        "可能错过当前低价",
+        "临近出发价格通常上涨",
+        "理想价再次出现不确定",
+    ]
+    lines.append(f"<b>如果现在买（风险：{risk.get('buy_level', '中')}）：</b>")
+    for item in buy_risks[:3]:
+        lines.append(f"- {item}")
+    lines.append("")
+    lines.append(f"<b>如果继续等（风险：{risk.get('wait_level', '中')}）：</b>")
+    for item in wait_risks[:3]:
+        lines.append(f"- {item}")
+    lines.append("")
+    summary = risk.get("summary")
+    if not summary:
+        status = _status_risk_label(primary_flight) if primary_flight else "风险中"
+        summary = f"当前执行风险为{status.replace('风险', '')}，建议以支付页最终价格和票规为准。"
+    lines.append(f"权衡建议：{summary}")
     lines.append("")
     _append_judgment_limits(
         lines,
@@ -5145,6 +5231,27 @@ def _append_risk_section(
         is_round_trip,
         return_analysis,
     )
+
+
+def _subscription_form_url(route_info: dict | None = None) -> str:
+    route_info = route_info or {}
+    return (
+        route_info.get("subscription_form_url")
+        or os.environ.get("SUBSCRIPTION_FORM_URL")
+        or os.environ.get("PYTHONANYWHERE_FORM_URL")
+        or "https://ljs96824.pythonanywhere.com"
+    )
+
+
+def _append_next_actions_section(lines: list[str], route_info: dict) -> None:
+    _section(lines, "<b>下一步操作</b>")
+    form_url = _subscription_form_url(route_info)
+    lines.append("查看购买渠道：已在方案卡片内列出")
+    lines.append("复制购买前检查清单：见详细分析中的检查清单")
+    lines.append("价格变化会自动推送，无需手动刷新")
+    lines.append(f'修改监控偏好：<a href="{form_url}" target="_blank">打开订阅表单</a>')
+    lines.append("买不到/价格不对：可回复“价格不对”或“详情”反馈")
+    lines.append("")
 
 
 def _append_detailed_analysis_section(
@@ -5352,6 +5459,7 @@ def _format_structured_html_message(
         primary_flight,
     )
     _append_confidence_section(lines, confidence)
+    _append_next_actions_section(lines, route_info)
     _append_detailed_analysis_section(
         lines,
         analysis_result,

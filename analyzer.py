@@ -705,6 +705,89 @@ def waiting_risk_description(price_history, current_price, days_to_dept):
     }
 
 
+def calc_buy_vs_wait_risk(
+    current_price,
+    price_history=None,
+    days_to_dept=None,
+    target_price=None,
+    execution_grade=None,
+) -> dict:
+    """Compare the practical risk of buying now versus waiting."""
+    current = _to_float(current_price)
+    target = _to_float(target_price)
+    if price_history and isinstance(price_history[0], (list, tuple)):
+        prices = [price for _, price in price_history if price and price > 0]
+    else:
+        prices = [price for price in (price_history or []) if price and price > 0]
+    try:
+        days = int(days_to_dept) if days_to_dept is not None else None
+    except (TypeError, ValueError):
+        days = None
+
+    buy_risks = [
+        "可能遇到支付页跳价",
+        "票规需确认（行李/退改）",
+        "不同渠道售后政策不同",
+    ]
+    wait_risks = ["可能错过当前低价", "理想价再次出现不确定"]
+
+    if days is not None and days <= 14:
+        wait_risks.insert(1, "临近出发价格通常上涨")
+        wait_level = "高"
+    elif days is not None and days <= 30:
+        wait_risks.insert(1, "出发窗口逐渐接近，价格上行风险增加")
+        wait_level = "中"
+    else:
+        wait_level = "中"
+
+    if execution_grade == "A":
+        buy_level = "低"
+    elif execution_grade in {"C", "D"}:
+        buy_level = "高"
+    else:
+        buy_level = "中"
+
+    low_position = False
+    trend_text = "历史样本仍在积累"
+    if prices and current is not None:
+        avg_price = sum(prices) / len(prices)
+        below = sum(1 for price in prices if price < current)
+        percentile = below / len(prices) * 100
+        low_position = percentile <= 35 or current <= avg_price
+        if len(prices) >= 3:
+            recent = prices[-5:] if len(prices) >= 5 else prices
+            if recent[-1] < recent[0] * 0.98:
+                trend_text = "近期仍有下降"
+            elif recent[-1] > recent[0] * 1.02:
+                trend_text = "近期价格走高"
+            else:
+                trend_text = "近期价格相对稳定"
+
+    target_reached = bool(current is not None and target and current <= target)
+    if target_reached and low_position:
+        leaning = "倾向尽快验证购买"
+        summary = "当前已接近理想价且处于低位，继续等的下行空间有限，倾向于尽快验证购买。"
+    elif target_reached:
+        leaning = "倾向验证购买"
+        summary = "当前价格已达到理想价，主要需要确认支付页最终价格和票规。"
+    elif trend_text == "近期仍有下降" and (days is None or days > 21):
+        leaning = "可以短暂观察"
+        summary = "价格仍有下降迹象且时间尚可，可以短暂观察，但需关注涨价风险。"
+    else:
+        leaning = "谨慎观察"
+        summary = "当前价格或执行信息仍有不确定性，适合继续监控并等待更清晰信号。"
+
+    return {
+        "buy_level": buy_level,
+        "wait_level": wait_level,
+        "buy_risks": buy_risks,
+        "wait_risks": wait_risks,
+        "leaning": leaning,
+        "summary": summary,
+        "trend": trend_text,
+    }
+
+
 def _history_prices_for_combo(price_history, combo: str) -> list[float]:
     """Extract historical prices for one flight combo from flexible history shapes."""
     if not price_history or not combo:
@@ -3035,6 +3118,13 @@ def analyze_all_flights(
         confidence_breakdown,
         decision_flight.get("execution_grade"),
     )
+    buy_vs_wait_risk = calc_buy_vs_wait_risk(
+        lowest_price,
+        (price_insights or {}).get("price_history") if price_insights else None,
+        merged_preferences.get("days_to_dept"),
+        target_price_effective,
+        decision_flight.get("execution_grade"),
+    )
 
     return {
         "total_options": len(usable_flights),
@@ -3057,6 +3147,7 @@ def analyze_all_flights(
         "price_tolerance": price_tolerance,
         "price_band": price_band,
         "decision_summary": decision_summary,
+        "buy_vs_wait_risk": buy_vs_wait_risk,
         "confidence_breakdown": confidence_breakdown,
         "mode": mode,
         "priorities": priority_config,
@@ -3485,6 +3576,13 @@ def analyze_round_trip(
         confidence_breakdown,
         execution_grade,
     )
+    buy_vs_wait_risk = calc_buy_vs_wait_risk(
+        total_min,
+        [row.get("total") for row in (history or []) if isinstance(row, dict)],
+        outbound_analysis.get("days_to_dept"),
+        target_float * 2 if target_float else None,
+        execution_grade,
+    )
 
     return {
         "outbound_min": outbound_min,
@@ -3501,6 +3599,7 @@ def analyze_round_trip(
         "price_analysis": price_analysis,
         "decision_summary": decision_summary,
         "confidence_breakdown": confidence_breakdown,
+        "buy_vs_wait_risk": buy_vs_wait_risk,
         "previous": previous,
         "advice": _roundtrip_budget_advice(total_min, target_price, max_budget),
     }
