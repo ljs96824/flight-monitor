@@ -17,6 +17,7 @@ from analyzer import apply_default_rules
 
 BASE_DIR = Path(__file__).parent
 SUBSCRIPTIONS_PATH = BASE_DIR / "data" / "subscriptions.json"
+FEEDBACK_PATH = BASE_DIR / "data" / "feedback.json"
 load_dotenv(BASE_DIR / ".env", encoding="utf-8")
 
 app = Flask(__name__)
@@ -2140,6 +2141,65 @@ SUCCESS_TEMPLATE = """
 """
 
 
+FEEDBACK_TEMPLATE = """
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>提醒反馈</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 620px; margin: 32px auto; padding: 0 16px; line-height: 1.7; color: #222; }
+    .card { background: #f7f9fc; border: 1px solid #dbe5f6; border-radius: 8px; padding: 18px; }
+    label { display: block; margin: 10px 0; }
+    textarea { width: 100%; min-height: 90px; box-sizing: border-box; }
+    button { width: 100%; padding: 12px; border: 0; border-radius: 8px; background: #1a73e8; color: white; font-size: 16px; margin-top: 12px; }
+    select, input[type=text] { width: 100%; padding: 10px; box-sizing: border-box; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>{{ "✅ 已收到反馈" if saved else "这条提醒有用吗？" }}</h1>
+    {% if saved %}
+      <p>感谢反馈。系统会先记录这些信息，后续用于优化可购买性校验和推荐排序。</p>
+      <a href="{{ url_for('index') }}">返回订阅表单</a>
+    {% else %}
+      <form method="post">
+        <input type="hidden" name="subscription_id" value="{{ subscription_id }}">
+        <p>订阅：{{ subscription_id or "未指定" }}</p>
+        <label><input type="radio" name="feedback_type" value="useful" required> 有用</label>
+        <label><input type="radio" name="feedback_type" value="price_changed"> 价格变了</label>
+        <label><input type="radio" name="feedback_type" value="unavailable"> 买不到（无票）</label>
+        <label><input type="radio" name="feedback_type" value="no_baggage"> 不含行李</label>
+        <label><input type="radio" name="feedback_type" value="link_failed"> 跳转失败</label>
+        <label><input type="radio" name="feedback_type" value="mismatch"> 不符合需求</label>
+        <label><input type="radio" name="feedback_type" value="mute_similar"> 不想再提醒这类</label>
+
+        <label>
+          如果是“买不到”，具体原因：
+          <select name="unavailable_reason">
+            <option value="">请选择（可选）</option>
+            <option value="price_changed">价格变化</option>
+            <option value="sold_out">无票</option>
+            <option value="no_baggage">不含行李</option>
+            <option value="link_failed">跳转失败</option>
+            <option value="payment_failed">支付失败</option>
+            <option value="fare_rule_mismatch">票规不一致</option>
+          </select>
+        </label>
+        <label>
+          补充说明（可选）：
+          <textarea name="comment" placeholder="比如实际支付页价格、平台名称、哪里不符合需求"></textarea>
+        </label>
+        <button type="submit">提交反馈</button>
+      </form>
+    {% endif %}
+  </div>
+</body>
+</html>
+"""
+
+
 def load_subscriptions() -> list[dict]:
     if not SUBSCRIPTIONS_PATH.exists():
         return []
@@ -2164,6 +2224,26 @@ def save_subscription(subscription: dict, index: int | None = None) -> int:
         encoding="utf-8",
     )
     return saved_index
+
+
+def load_feedback() -> list[dict]:
+    if not FEEDBACK_PATH.exists():
+        return []
+    try:
+        data = json.loads(FEEDBACK_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return []
+    return data if isinstance(data, list) else []
+
+
+def save_feedback(record: dict) -> None:
+    FEEDBACK_PATH.parent.mkdir(exist_ok=True)
+    records = load_feedback()
+    records.append(record)
+    FEEDBACK_PATH.write_text(
+        json.dumps(records, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
 
 def update_subscription_preference(index: int, field: str, value: str) -> bool:
@@ -2723,6 +2803,31 @@ def success():
         summary=build_success_summary(subscription) if subscription else {},
         first_push_time=first_push_text(),
         index=index if subscriptions else None,
+    )
+
+
+@app.route("/feedback", methods=["GET", "POST"])
+def feedback():
+    subscription_id = request.values.get("sub") or request.values.get("subscription_id") or ""
+    if request.method == "POST":
+        record = {
+            "subscription_id": request.form.get("subscription_id") or subscription_id,
+            "feedback_type": request.form.get("feedback_type", ""),
+            "unavailable_reason": request.form.get("unavailable_reason", ""),
+            "comment": request.form.get("comment", "").strip(),
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+            "user_agent": request.headers.get("User-Agent", ""),
+        }
+        save_feedback(record)
+        return render_template_string(
+            FEEDBACK_TEMPLATE,
+            saved=True,
+            subscription_id=record["subscription_id"],
+        )
+    return render_template_string(
+        FEEDBACK_TEMPLATE,
+        saved=False,
+        subscription_id=subscription_id,
     )
 
 

@@ -31,7 +31,12 @@ from analyzer import (
     price_position_description,
     waiting_risk_description,
 )
-from storage import get_last_push_price, save_last_push_price
+from storage import (
+    get_last_push_price,
+    get_last_push_snapshot,
+    save_last_push_price,
+    save_push_snapshot,
+)
 
 
 BUY_SIGNALS = {"strong_buy", "buy", "buy_now"}
@@ -5125,6 +5130,194 @@ def _append_validity_section(lines: list[str], analysis_result: dict, route_info
     lines.append("")
 
 
+def _notification_frequency(route_info: dict, analysis_result: dict) -> str:
+    goals = (
+        route_info.get("notification_goals")
+        or analysis_result.get("notification_goals")
+        or {}
+    )
+    if isinstance(goals, dict):
+        return goals.get("frequency") or "important_only"
+    return "important_only"
+
+
+def _resolved_detail_level(route_info: dict, analysis_result: dict, detail_level: str | None) -> str:
+    if detail_level in {"short", "full"}:
+        return detail_level
+    frequency = _notification_frequency(route_info, analysis_result)
+    return "full" if frequency == "daily_digest" else "short"
+
+
+def _subscription_edit_url(route_info: dict) -> str:
+    base = _subscription_form_url(route_info).rstrip("/")
+    sub_id = (
+        route_info.get("subscription_id")
+        or route_info.get("id")
+        or route_info.get("_index")
+        or route_info.get("index")
+    )
+    if sub_id is not None and str(sub_id) != "":
+        return f"{base}/?edit={quote(str(sub_id))}"
+    return base
+
+
+def _feedback_url(route_info: dict) -> str:
+    base = _subscription_form_url(route_info).rstrip("/")
+    sub_id = (
+        route_info.get("subscription_id")
+        or route_info.get("id")
+        or route_info.get("_index")
+        or route_info.get("index")
+        or _last_push_route_parts(route_info, bool(route_info.get("round_trip")))[0]
+    )
+    return f"{base}/feedback?sub={quote(str(sub_id))}"
+
+
+def _primary_booking_links_for_action(route_info: dict, primary_flight: dict | None, limit: int = 3) -> str:
+    if primary_flight:
+        links = _flight_link_text(primary_flight, route_info, limit)
+        if links:
+            return links
+    origin = route_info.get("origin", "")
+    dest = route_info.get("destination", "")
+    date_str = route_info.get("depart_date", "")
+    return generate_booking_links(origin, dest, date_str)
+
+
+def _append_action_links_section(
+    lines: list[str],
+    route_info: dict,
+    primary_flight: dict | None,
+    is_round_trip: bool,
+) -> None:
+    _section(lines, "<b>下一步操作</b>")
+    edit_url = _subscription_edit_url(route_info)
+    feedback_url = _feedback_url(route_info)
+    links = _primary_booking_links_for_action(route_info, primary_flight, 3)
+    if is_round_trip:
+        lines.append(f"重新验证价格：去程 {links}")
+    else:
+        lines.append(f"重新验证价格：{links}")
+    lines.append(f'修改监控偏好：<a href="{edit_url}" target="_blank">打开订阅表单</a>')
+    lines.append("购买前请确认：最终价、托运行李、退改签、是否联程")
+    lines.append(f'反馈买不到/价格不对：<a href="{feedback_url}" target="_blank">反馈</a>')
+    interval = route_info.get("check_interval_hours") or os.environ.get("CHECK_INTERVAL_HOURS") or "6"
+    lines.append(f"系统每隔{interval}小时自动检查一次，价格有重要变化会再次提醒你。")
+    lines.append("")
+
+
+def _snapshot_channels(flight: dict | None) -> list[str]:
+    if not flight:
+        return []
+    options = flight.get("booking_options") or []
+    channels = [
+        str(option.get("platform"))
+        for option in options
+        if isinstance(option, dict) and option.get("platform")
+    ]
+    if channels:
+        return sorted(set(channels))
+    source = str(flight.get("data_source") or flight.get("source") or "")
+    return sorted({item for item in source.split("+") if item})
+
+
+def _snapshot_fare_status(flight: dict | None) -> str:
+    if not flight:
+        return ""
+    fare = flight.get("fare_verification") or {}
+    matches = " ".join(fare.get("matches") or [])
+    issues = " ".join(fare.get("issues") or [])
+    if "托运" in matches or "行李" in matches:
+        return "已确认含托运行李"
+    if "托运" in issues or "行李" in issues:
+        return "行李待确认"
+    return fare.get("label") or fare.get("level") or "票规待确认"
+
+
+def _append_last_push_difference_section(
+    lines: list[str],
+    last_snapshot: dict | None,
+    current,
+    confidence: dict,
+    primary_flight: dict | None,
+) -> None:
+    _section(lines, "<b>与上次提醒的区别</b>")
+    if not last_snapshot:
+        lines.append("这是该航线的首次提醒。")
+        lines.append("")
+        return
+
+    try:
+        pushed_at = datetime.fromisoformat(str(last_snapshot.get("pushed_at")))
+        days_ago = (datetime.now() - pushed_at).days
+        time_text = f"{days_ago}天前" if days_ago else "上次"
+    except (TypeError, ValueError):
+        time_text = "上次"
+    lines.append(f"相比上次提醒（{time_text}）：")
+
+    old_price = _to_float(last_snapshot.get("price"))
+    now_price = _to_float(current)
+    if old_price and now_price:
+        diff = now_price - old_price
+        if diff < 0:
+            lines.append(f"- 价格下降{_price_text(abs(diff))}")
+        elif diff > 0:
+            lines.append(f"- 价格上涨{_price_text(diff)}")
+        else:
+            lines.append("- 价格持平")
+
+    old_conf = last_snapshot.get("confidence")
+    new_conf = (confidence or {}).get("overall")
+    if old_conf and new_conf and old_conf != new_conf:
+        lines.append(f"- 置信度从{old_conf}变为{new_conf}")
+
+    try:
+        old_channels = set(json.loads(last_snapshot.get("channels") or "[]"))
+    except json.JSONDecodeError:
+        old_channels = set()
+    new_channels = set(_snapshot_channels(primary_flight))
+    added = sorted(new_channels - old_channels)
+    if added:
+        lines.append(f"- 新增可购买渠道：{'、'.join(added[:3])}")
+
+    old_fare = last_snapshot.get("fare_status")
+    new_fare = _snapshot_fare_status(primary_flight)
+    if new_fare and old_fare != new_fare:
+        lines.append(f"- 票规状态：{new_fare}")
+    lines.append("")
+
+
+def _save_current_push_snapshot(
+    route_key: str,
+    depart_key: str,
+    return_key: str | None,
+    current,
+    confidence: dict,
+    primary_flight: dict | None,
+    push_meta: dict,
+) -> None:
+    now = datetime.now().isoformat(timespec="seconds")
+    save_last_push_price(
+        route_key,
+        depart_key,
+        return_key,
+        current,
+        (push_meta or {}).get("type"),
+        now,
+    )
+    save_push_snapshot(
+        route_key,
+        depart_key,
+        return_key,
+        current,
+        (confidence or {}).get("overall"),
+        _snapshot_channels(primary_flight),
+        _snapshot_fare_status(primary_flight),
+        (push_meta or {}).get("type"),
+        now,
+    )
+
+
 def _append_current_judgment_section(
     lines: list[str],
     analysis_result: dict,
@@ -5504,12 +5697,13 @@ def _subscription_form_url(route_info: dict | None = None) -> str:
 
 def _append_next_actions_section(lines: list[str], route_info: dict) -> None:
     _section(lines, "<b>下一步操作</b>")
-    form_url = _subscription_form_url(route_info)
+    form_url = _subscription_edit_url(route_info)
+    feedback_url = _feedback_url(route_info)
     lines.append("查看购买渠道：已在方案卡片内列出")
     lines.append("复制购买前检查清单：见详细分析中的检查清单")
     lines.append("价格变化会自动推送，无需手动刷新")
     lines.append(f'修改监控偏好：<a href="{form_url}" target="_blank">打开订阅表单</a>')
-    lines.append("买不到/价格不对：可回复“价格不对”或“详情”反馈")
+    lines.append(f'买不到/价格不对：<a href="{feedback_url}" target="_blank">提交反馈</a>')
     lines.append("")
 
 
@@ -5598,6 +5792,8 @@ def _format_structured_html_message(
     outbound_analysis=None,
     return_analysis=None,
     compact: bool = False,
+    detail_level: str | None = None,
+    persist_snapshot: bool = True,
 ) -> str:
     route_info = route_info or {}
     analysis_result = analysis_result or outbound_analysis or {}
@@ -5614,12 +5810,14 @@ def _format_structured_html_message(
     main_limit = 2
     alt_limit = 2 if compact else 3
     link_limit = 3 if compact else 4
+    detail_level = _resolved_detail_level(route_info, analysis_result, detail_level)
 
     decision, confidence, current, target, max_budget = _decision_context(
         analysis_result, route_info, source_stats_for_message, price_insights, is_round_trip
     )
     route_key, depart_key, return_key = _last_push_route_parts(route_info, is_round_trip)
     last_push = get_last_push_price(route_key, depart_key, return_key)
+    last_snapshot = get_last_push_snapshot(route_key, depart_key, return_key)
     price_history_for_push = _price_history_for_push(price_insights, analysis_result, is_round_trip)
     push_meta = determine_push_type(
         current,
@@ -5691,6 +5889,20 @@ def _format_structured_html_message(
 
     _append_push_reason_section(lines, push_meta)
     _append_price_change_section(lines, current, target, max_budget, push_meta, is_round_trip)
+    _append_action_links_section(lines, route_info, primary_flight, is_round_trip)
+    if detail_level == "short":
+        if persist_snapshot:
+            _save_current_push_snapshot(
+                route_key,
+                depart_key,
+                return_key,
+                current,
+                confidence,
+                primary_flight,
+                push_meta,
+            )
+        return "<br>".join(lines)
+
     _append_operation_section(lines, decision, current, target, max_budget, is_round_trip)
     _append_validity_section(lines, analysis_result, route_info, primary_flight)
 
@@ -5739,6 +5951,7 @@ def _format_structured_html_message(
         primary_flight,
     )
     _append_excluded_low_price_section(lines, analysis_result, current, route_info, compact)
+    _append_last_push_difference_section(lines, last_snapshot, current, confidence, primary_flight)
     _append_confidence_section(lines, confidence)
     _append_next_actions_section(lines, route_info)
     _append_detailed_analysis_section(
@@ -5773,14 +5986,16 @@ def _format_structured_html_message(
     lines.append("以上数据来自第三方API，仅供参考。")
     lines.append("实际价格请以航司或OTA官网价格为准。")
     lines.append("以上排序基于当前配置规则，不代表最优选择。请根据您的时间、预算和出行需求自行判断。")
-    save_last_push_price(
-        route_key,
-        depart_key,
-        return_key,
-        current,
-        (push_meta or {}).get("type"),
-        datetime.now().isoformat(timespec="seconds"),
-    )
+    if persist_snapshot:
+        _save_current_push_snapshot(
+            route_key,
+            depart_key,
+            return_key,
+            current,
+            confidence,
+            primary_flight,
+            push_meta,
+        )
     return "<br>".join(lines)
 
 
@@ -5791,6 +6006,7 @@ def format_html_message(
     price_insights=None,
     outbound_analysis=None,
     return_analysis=None,
+    detail_level=None,
 ):
     """生成压缩版HTML消息：经济舱3-4个方案 + 商务舱1个方案。"""
     message = _format_structured_html_message(
@@ -5801,6 +6017,8 @@ def format_html_message(
         outbound_analysis=outbound_analysis,
         return_analysis=return_analysis,
         compact=False,
+        detail_level=detail_level,
+        persist_snapshot=False,
     )
     if len(message) > PUSHPLUS_COMPACT_CHARS:
         message = _format_structured_html_message(
@@ -5811,6 +6029,20 @@ def format_html_message(
             outbound_analysis=outbound_analysis,
             return_analysis=return_analysis,
             compact=True,
+            detail_level=detail_level,
+            persist_snapshot=True,
+        )
+    else:
+        message = _format_structured_html_message(
+            analysis_result=analysis_result,
+            route_info=route_info,
+            source_stats=source_stats,
+            price_insights=price_insights,
+            outbound_analysis=outbound_analysis,
+            return_analysis=return_analysis,
+            compact=False,
+            detail_level=detail_level,
+            persist_snapshot=True,
         )
     return message
 

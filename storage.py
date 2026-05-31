@@ -130,6 +130,23 @@ def init_db() -> None:
             )
             """
         )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS push_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                subscription_key TEXT,
+                route TEXT,
+                depart_date TEXT,
+                return_date TEXT,
+                pushed_at TEXT,
+                price REAL,
+                confidence TEXT,
+                channels TEXT,
+                fare_status TEXT,
+                push_type TEXT
+            )
+            """
+        )
 
 
 def save_snapshots(records: list[dict]) -> None:
@@ -556,3 +573,73 @@ def save_last_push_price(
                 """,
                 (key, route, depart_date, return_date, price_value, push_type, pushed_at),
             )
+
+
+def get_last_push_snapshot(
+    route: str, depart_date: str, return_date: str | None = None
+) -> dict | None:
+    """Get the latest notification snapshot for one subscription."""
+    if not route or not depart_date:
+        return None
+    init_db()
+    key = _last_push_key(route, depart_date, return_date)
+    with _connect() as connection:
+        row = connection.execute(
+            """
+            SELECT *
+            FROM push_snapshots
+            WHERE subscription_key = ?
+            ORDER BY pushed_at DESC, id DESC
+            LIMIT 1
+            """,
+            (key,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def save_push_snapshot(
+    route: str,
+    depart_date: str,
+    return_date: str | None,
+    price,
+    confidence: str | None = None,
+    channels: list[str] | None = None,
+    fare_status: str | None = None,
+    push_type: str | None = None,
+    pushed_at: str | None = None,
+) -> None:
+    """Save one notification snapshot for comparing with the next push."""
+    if not route or not depart_date or price is None:
+        return
+    try:
+        price_value = float(price)
+    except (TypeError, ValueError):
+        return
+    if price_value <= 0:
+        return
+
+    init_db()
+    key = _last_push_key(route, depart_date, return_date)
+    pushed_at = pushed_at or datetime.now().isoformat(timespec="seconds")
+    channels_text = json.dumps(channels or [], ensure_ascii=False)
+    with _connect() as connection:
+        connection.execute(
+            """
+            INSERT INTO push_snapshots (
+                subscription_key, route, depart_date, return_date,
+                pushed_at, price, confidence, channels, fare_status, push_type
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                key,
+                route,
+                depart_date,
+                return_date,
+                pushed_at,
+                price_value,
+                confidence,
+                channels_text,
+                fare_status,
+                push_type,
+            ),
+        )
