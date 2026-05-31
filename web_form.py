@@ -11,7 +11,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from flask import Flask, redirect, render_template_string, request, url_for
 
-from airports import format_airport, resolve_location
+from airports import AIRPORT_SHORT_NAMES, CITY_AIRPORTS, format_airport, resolve_location
 
 
 BASE_DIR = Path(__file__).parent
@@ -118,6 +118,8 @@ ARRIVAL_SLOT_LABELS = {
 
 DEFAULT_DEPARTURE_SLOTS = ["early_morning", "morning", "afternoon", "evening", "night"]
 DEFAULT_ARRIVAL_SLOTS = ["early_morning", "morning", "afternoon", "evening", "night"]
+ALL_TIME_SLOTS = ["early_morning", "morning", "afternoon", "evening", "night", "redeye"]
+DAYTIME_TIME_SLOTS = ["early_morning", "morning", "afternoon", "evening"]
 
 BAGGAGE_LABELS = {
     "required": "必须托运行李",
@@ -247,6 +249,58 @@ FORM_TEMPLATE = """
       color: #1a73e8;
       border: 1px solid #c8d6f0;
     }
+    .mode-toggle {
+      border: 1px solid #d7e3f7;
+      border-radius: 10px;
+      background: #f7f9fc;
+      padding: 12px;
+      margin: 16px 0;
+    }
+    .mode-toggle-title {
+      font-weight: bold;
+      margin-bottom: 8px;
+    }
+    .airport-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .airport-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid #c8d6f0;
+      border-radius: 999px;
+      background: #eef6ff;
+      color: #174ea6;
+      padding: 5px 9px;
+      font-size: 13px;
+    }
+    .airport-tag button {
+      width: auto;
+      margin: 0;
+      padding: 0 2px;
+      border: 0;
+      background: transparent;
+      color: #174ea6;
+      font-size: 14px;
+      line-height: 1;
+    }
+    .airport-tag button:disabled {
+      color: #999;
+      cursor: not-allowed;
+    }
+    .smart-panel {
+      overflow: hidden;
+      max-height: 0;
+      opacity: 0;
+      transition: max-height 0.25s ease, opacity 0.2s ease;
+    }
+    .smart-panel.open {
+      max-height: 2600px;
+      opacity: 1;
+    }
     button {
       margin-top: 20px;
       background: #1a73e8;
@@ -294,6 +348,11 @@ FORM_TEMPLATE = """
     .time-outbound { background: #eef6ff; }
     .time-return { background: #eefaf3; }
     #round-trip-time-preferences { display: none; }
+    #custom-time-options,
+    #overnight-transfer-options,
+    #self-transfer-options {
+      display: none;
+    }
     #summary-card {
       border: 1px solid #c8d6f0;
       border-radius: 8px;
@@ -361,6 +420,15 @@ FORM_TEMPLATE = """
   </div>
 
   <form id="subscription-form" method="post" action="{{ url_for('subscribe') }}">
+    <div class="mode-toggle">
+      <div class="mode-toggle-title">模式</div>
+      <div class="choice">
+        <label><input type="radio" name="monitor_mode" value="quick" checked> 快速监控</label>
+        <label><input type="radio" name="monitor_mode" value="precise"> 精准监控</label>
+      </div>
+      <p class="hint">快速监控只填写基础信息；精准监控会展开补充偏好和筛选规则。</p>
+    </div>
+
     <fieldset class="form-step active" data-step="1">
       <legend>行程信息</legend>
 
@@ -372,9 +440,14 @@ FORM_TEMPLATE = """
       </select>
       <input name="origin_manual" placeholder="或手动输入城市名/机场代码，例如上海或PVG">
       <p id="origin-airport-hint" class="hint"></p>
+      <div id="origin-airport-tags" class="airport-tags"></div>
+      <input id="origin_airports_active" name="origin_airports_active" type="hidden">
 
       <label for="destination">目的地</label>
       <input id="destination" name="destination" placeholder="输入城市名（如大阪、东京）或机场代码（如KIX）" required>
+      <p id="destination-airport-hint" class="hint"></p>
+      <div id="destination-airport-tags" class="airport-tags"></div>
+      <input id="destination_airports_active" name="destination_airports_active" type="hidden">
 
       <label>单程 / 往返</label>
       <div class="choice">
@@ -459,7 +532,7 @@ FORM_TEMPLATE = """
       </div>
 
       <button id="advanced-toggle" class="secondary-button" type="button">＋ 补充偏好，让推荐更准确</button>
-      <div id="advanced-preferences">
+      <div id="advanced-preferences" class="smart-panel">
       <fieldset>
         <legend>补充偏好，让推荐更准确</legend>
         <p class="hint">不填也可以，系统会按普通出行默认规则监控</p>
@@ -476,6 +549,15 @@ FORM_TEMPLATE = """
         <input type="hidden" name="departure_time_policy" value="any">
         <input type="hidden" name="trip_rigidity" value="confirmed">
 
+        <label>时间偏好</label>
+        <div class="choice">
+          <label><input type="radio" name="time_preference" value="any" checked> 不限制</label>
+          <label><input type="radio" name="time_preference" value="daytime"> 白天优先</label>
+          <label><input type="radio" name="time_preference" value="no_redeye"> 不接受红眼凌晨</label>
+          <label><input type="radio" name="time_preference" value="custom"> 自定义时间段</label>
+        </div>
+
+        <div id="custom-time-options">
         <fieldset id="single-time-preferences" class="time-preferences time-outbound">
           <strong>时段偏好</strong>
           <label>偏好哪些时段起飞？（可多选）</label>
@@ -546,6 +628,7 @@ FORM_TEMPLATE = """
             </div>
           </fieldset>
         </div>
+        </div>
 
         <label>如果行程变化，你希望机票怎样？</label>
         <div class="choice">
@@ -576,7 +659,7 @@ FORM_TEMPLATE = """
     </div>
 
       <button id="rules-toggle" class="secondary-button" type="button">＋ 更细的筛选规则</button>
-      <div id="advanced-rules">
+      <div id="advanced-rules" class="smart-panel">
         <fieldset>
           <legend>更细的筛选规则</legend>
           <p class="hint">适合有特定要求的用户，一般用户可跳过</p>
@@ -588,6 +671,22 @@ FORM_TEMPLATE = """
               <label><input type="radio" name="short_transfer_limit" value="extra_6" checked> 不超过直飞时间+6小时</label>
               <label><input type="radio" name="short_transfer_limit" value="total_18"> 不超过18小时</label>
               <label><input type="radio" name="short_transfer_limit" value="total_24"> 不超过24小时</label>
+            </div>
+          </div>
+
+          <div id="overnight-transfer-options" class="sub-options">
+            <label>是否接受过夜中转</label>
+            <div class="choice">
+              <label><input type="radio" name="accept_overnight_transfer" value="false" checked> 不接受</label>
+              <label><input type="radio" name="accept_overnight_transfer" value="true"> 可以接受</label>
+            </div>
+          </div>
+
+          <div id="self-transfer-options" class="sub-options">
+            <label>是否接受非联程</label>
+            <div class="choice">
+              <label><input type="radio" name="accept_self_transfer" value="false" checked> 不接受</label>
+              <label><input type="radio" name="accept_self_transfer" value="true"> 可以接受</label>
             </div>
           </div>
 
@@ -636,7 +735,7 @@ FORM_TEMPLATE = """
     <button id="preview-button" type="button">开始监控</button>
 
     <div id="summary-card">
-      <h2>📋 系统将按以下规则监控：</h2>
+      <h2>即将创建的监控：</h2>
       <ul id="summary-list"></ul>
       <div class="button-row">
         <button type="submit">确认并开始监控</button>
@@ -677,11 +776,20 @@ FORM_TEMPLATE = """
       cheaper_date: ["cheaper_date"],
       best_overall: ["better_same_day"]
     };
+    const cityAirports = {{ city_airports|tojson }};
+    const airportShortNames = {{ airport_short_names|tojson }};
 
     const form = document.getElementById('subscription-form');
+    const modeRadios = document.querySelectorAll('input[name="monitor_mode"]');
     const originSelect = document.getElementById('origin');
     const originManual = document.querySelector('input[name="origin_manual"]');
+    const destinationInput = document.getElementById('destination');
     const originAirportHint = document.getElementById('origin-airport-hint');
+    const destinationAirportHint = document.getElementById('destination-airport-hint');
+    const originAirportTags = document.getElementById('origin-airport-tags');
+    const destinationAirportTags = document.getElementById('destination-airport-tags');
+    const originAirportsActiveInput = document.getElementById('origin_airports_active');
+    const destinationAirportsActiveInput = document.getElementById('destination_airports_active');
     const originAirportHints = {
       "上海": "将搜索以下机场出发的航班：浦东PVG、虹桥SHA",
       "北京": "将搜索以下机场出发的航班：首都PEK、大兴PKX",
@@ -695,8 +803,10 @@ FORM_TEMPLATE = """
     const tripRadios = document.querySelectorAll('input[name="round_trip"]');
     const returnWrap = document.getElementById('return-date-wrap');
     const returnDate = document.getElementById('return_date');
+    const customTimeOptions = document.getElementById('custom-time-options');
     const singleTimePreferences = document.getElementById('single-time-preferences');
     const roundTripTimePreferences = document.getElementById('round-trip-time-preferences');
+    const timePreferenceRadios = document.querySelectorAll('input[name="time_preference"]');
     const maxBudgetRadios = document.querySelectorAll('input[name="max_budget_mode"]');
     const targetPriceRadios = document.querySelectorAll('input[name="target_price_mode"]');
     const maxBudgetInput = document.getElementById('max_budget');
@@ -715,6 +825,8 @@ FORM_TEMPLATE = """
     const shortTransferInputs = shortTransferOptions
       ? shortTransferOptions.querySelectorAll('input')
       : [];
+    const overnightTransferOptions = document.getElementById('overnight-transfer-options');
+    const selfTransferOptions = document.getElementById('self-transfer-options');
     const primaryGoalRadios = document.querySelectorAll('input[name="primary_goal"]');
     const secondaryGoalChecks = document.querySelectorAll('input[name="secondary_goals"]');
     const dateFlexRadios = document.querySelectorAll('input[name="date_flexibility"]');
@@ -734,9 +846,8 @@ FORM_TEMPLATE = """
     const stepTitles = ['行程信息', '价格底线', '监控目标', '完成'];
     let currentStep = 1;
 
-    if (stepTimePreferences) {
-      stepTimePreferences.appendChild(singleTimePreferences);
-      stepTimePreferences.appendChild(roundTripTimePreferences);
+    if (stepTimePreferences && customTimeOptions) {
+      stepTimePreferences.appendChild(customTimeOptions);
     }
 
     function checkedValue(name) {
@@ -808,24 +919,179 @@ FORM_TEMPLATE = """
       return selected === 'OTHER' ? '其他' : selected;
     }
 
+    const airportState = {
+      origin: {all: [], active: []},
+      destination: {all: [], active: []}
+    };
+
+    function airportShortLabel(code) {
+      const upper = String(code || '').trim().toUpperCase();
+      return `${upper} ${airportShortNames[upper] || upper}`;
+    }
+
+    function resolveAirportsForInput(value) {
+      const text = String(value || '').trim();
+      if (!text) {
+        return [];
+      }
+      const upper = text.toUpperCase();
+      if (cityAirports[text]) {
+        return cityAirports[text];
+      }
+      if (/^[A-Z]{2,4}$/.test(upper)) {
+        return [upper];
+      }
+      return [upper];
+    }
+
+    function renderAirportTags(kind) {
+      const isOrigin = kind === 'origin';
+      const tagsEl = isOrigin ? originAirportTags : destinationAirportTags;
+      const hiddenEl = isOrigin ? originAirportsActiveInput : destinationAirportsActiveInput;
+      const hintEl = isOrigin ? originAirportHint : destinationAirportHint;
+      const state = airportState[kind];
+      if (!tagsEl || !hiddenEl) {
+        return;
+      }
+      tagsEl.innerHTML = '';
+      hiddenEl.value = state.active.join(',');
+      if (hintEl) {
+        hintEl.textContent = state.active.length ? '将搜索这些机场：' : '';
+      }
+      state.active.forEach(code => {
+        const tag = document.createElement('span');
+        tag.className = 'airport-tag';
+        tag.textContent = airportShortLabel(code);
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.textContent = '×';
+        remove.disabled = state.active.length <= 1;
+        remove.addEventListener('click', () => {
+          if (state.active.length <= 1) {
+            return;
+          }
+          state.active = state.active.filter(item => item !== code);
+          renderAirportTags(kind);
+          refreshSummaryIfFinalStep();
+        });
+        tag.appendChild(remove);
+        tagsEl.appendChild(tag);
+      });
+    }
+
+    function updateAirportSelection(kind) {
+      const value = kind === 'origin' ? selectedOrigin() : destinationInput.value.trim();
+      const airports = resolveAirportsForInput(value);
+      airportState[kind].all = airports;
+      airportState[kind].active = airports.slice();
+      renderAirportTags(kind);
+    }
+
     function updateOriginAirportHint() {
-      if (!originAirportHint) {
+      updateAirportSelection('origin');
+    }
+
+    function updateDestinationAirportHint() {
+      updateAirportSelection('destination');
+    }
+
+    function activeAirportText(kind) {
+      const active = airportState[kind].active;
+      return active.length ? active.join('、') : '';
+    }
+
+    function setSmartPanel(panel, open) {
+      if (!panel) {
         return;
       }
-      const manual = originManual.value.trim();
-      if (manual) {
-        originAirportHint.textContent = `将按你手动输入的“${manual}”解析出发机场`;
+      if (open) {
+        panel.style.display = 'block';
+        window.requestAnimationFrame(() => panel.classList.add('open'));
         return;
       }
-      originAirportHint.textContent = originAirportHints[originSelect.value] || "";
+      panel.classList.remove('open');
+      window.setTimeout(() => {
+        if (!panel.classList.contains('open')) {
+          panel.style.display = 'none';
+        }
+      }, 260);
+    }
+
+    function applyMonitorMode() {
+      const precise = checkedValue('monitor_mode') === 'precise';
+      [advancedToggle, rulesToggle].forEach(button => {
+        if (button) {
+          button.style.display = precise ? 'block' : 'none';
+        }
+      });
+      if (advancedToggle) {
+        advancedToggle.textContent = precise ? '－ 收起补充偏好' : '＋ 补充偏好，让推荐更准确';
+      }
+      if (rulesToggle) {
+        rulesToggle.textContent = precise ? '－ 收起筛选规则' : '＋ 更细的筛选规则';
+      }
+      setSmartPanel(advanced, precise);
+      setSmartPanel(advancedRules, precise);
+      toggleTimePreference();
+      toggleShortTransferOptions();
+      refreshSummaryIfFinalStep();
+    }
+
+    function toggleTimePreference() {
+      const preference = checkedValue('time_preference') || 'any';
+      const custom = preference === 'custom' && checkedValue('monitor_mode') === 'precise';
+      if (customTimeOptions) {
+        customTimeOptions.style.display = custom ? 'block' : 'none';
+      }
+      if (departurePolicyInput) {
+        departurePolicyInput.value = preference === 'custom' ? 'any' : preference;
+      }
+      const isRoundTrip = checkedValue('round_trip') === 'true';
+      if (singleTimePreferences) {
+        singleTimePreferences.style.display = custom && !isRoundTrip ? 'block' : 'none';
+      }
+      if (roundTripTimePreferences) {
+        roundTripTimePreferences.style.display = custom && isRoundTrip ? 'block' : 'none';
+      }
+    }
+
+    function timePreferenceText() {
+      const map = {
+        any: '不限制',
+        daytime: '白天优先',
+        no_redeye: '不接受红眼',
+        custom: '自定义时间段'
+      };
+      return map[checkedValue('time_preference')] || '';
+    }
+
+    function selectedLabel(name) {
+      const input = document.querySelector(`input[name="${name}"]:checked`);
+      return input ? input.parentElement.textContent.trim() : '';
+    }
+
+    function selectedCheckboxLabels(name) {
+      return Array.from(document.querySelectorAll(`input[name="${name}"]:checked`))
+        .map(input => input.parentElement.textContent.trim());
+    }
+
+    function money(value) {
+      const num = Number(value || 0);
+      return num > 0 ? `¥${num.toLocaleString('zh-CN')}` : '';
+    }
+
+    function summaryLine(label, value) {
+      if (!value) {
+        return;
+      }
+      addSummaryLine(`${label}: ${value}`);
     }
 
     function toggleReturnDate() {
       const isRoundTrip = checkedValue('round_trip') === 'true';
       returnWrap.style.display = isRoundTrip ? 'block' : 'none';
-      singleTimePreferences.style.display = isRoundTrip ? 'none' : 'block';
-      roundTripTimePreferences.style.display = isRoundTrip ? 'block' : 'none';
       returnDate.required = isRoundTrip;
+      toggleTimePreference();
     }
 
     function toggleBudgetRequired() {
@@ -836,11 +1102,19 @@ FORM_TEMPLATE = """
 
     function toggleShortTransferOptions() {
       const policy = checkedValue('transfer_policy');
-      const visible = policy === 'reasonable' || policy === 'price_first';
+      const precise = checkedValue('monitor_mode') === 'precise';
+      const visible = precise && (policy === 'reasonable' || policy === 'price_first');
+      const priceFirst = precise && policy === 'price_first';
       shortTransferOptions.style.display = visible ? 'block' : 'none';
       shortTransferInputs.forEach(input => {
         input.disabled = !visible;
       });
+      if (overnightTransferOptions) {
+        overnightTransferOptions.style.display = priceFirst ? 'block' : 'none';
+      }
+      if (selfTransferOptions) {
+        selfTransferOptions.style.display = priceFirst ? 'block' : 'none';
+      }
     }
 
     function validatePriceInputs() {
@@ -927,6 +1201,8 @@ FORM_TEMPLATE = """
       if (departurePolicyInput) {
         departurePolicyInput.value = 'no_redeye';
       }
+      setRadio('time_preference', 'no_redeye', true);
+      toggleTimePreference();
       setRadio('baggage', 'required', true);
 
       if (companions === 'with_elderly' || companions === 'with_elderly_child') {
@@ -957,129 +1233,57 @@ FORM_TEMPLATE = """
     }
 
     function buildSummary() {
-      {
       summaryList.innerHTML = "";
-      const money = value => `¥${Number(value).toLocaleString('zh-CN')}`;
       const origin = selectedOrigin();
-      const destination = form.destination.value.trim();
+      const destination = destinationInput.value.trim();
       const isRoundTrip = checkedValue('round_trip') === 'true';
       const maxBudgetMode = checkedValue('max_budget_mode');
       const targetPriceMode = checkedValue('target_price_mode');
-      const maxBudget = Number(maxBudgetInput.value || 0);
-      const targetPrice = Number(targetPriceInput.value || 0);
-      const dateFlexText = {
-        "0": "不可调整",
-        "1": "前后1天",
-        "3": "前后3天",
-        "7": "前后一周"
-      };
-      const transferText = {
-        direct_only: "必须直飞",
-        reasonable: "可以接受合理中转",
-        price_first: "价格优先，中转也可以"
-      };
-      const baggageText = {
-        required: "必须托运",
-        not_needed: "不需要托运",
-        unknown: "不确定"
-      };
-      const primaryText = {
-        price_drop_alert: "到合适价格提醒我",
-        buy_timing: "判断现在该不该买",
-        cheaper_date: "找更便宜日期",
-        best_overall: "找综合更合适航班"
-      };
 
-      addSummaryLine(`${origin} → ${destination}`);
-      addSummaryLine(
-        isRoundTrip
-          ? `往返 | 去程${form.depart_date.value} | 返程${returnDate.value}`
-          : `单程 | 出发${form.depart_date.value}`
+      summaryLine('路线', origin && destination ? `${origin} → ${destination}` : '');
+      summaryLine('覆盖机场', `去${activeAirportText('origin') || '-'} | 到${activeAirportText('destination') || '-'}`);
+      summaryLine('行程', isRoundTrip ? '往返' : '单程');
+      summaryLine('出发', form.depart_date.value);
+      if (isRoundTrip) {
+        summaryLine('返程', returnDate.value);
+      }
+      summaryLine('日期弹性', selectedLabel('date_flexibility'));
+      summaryLine(
+        '最高可接受价',
+        maxBudgetMode === 'fixed' ? money(maxBudgetInput.value) : selectedLabel('max_budget_mode')
       );
-      addSummaryLine(`日期：${dateFlexText[checkedValue('date_flexibility')] || checkedValue('date_flexibility')}`);
-      if (maxBudgetMode === 'fixed' && maxBudget > 0) {
-        addSummaryLine(`最高可接受价：${money(maxBudget)}`);
-      } else if (maxBudgetMode !== 'fixed') {
-        addSummaryLine('最高可接受价：不确定，帮我判断');
+      summaryLine(
+        '理想入手价',
+        targetPriceMode === 'fixed' ? money(targetPriceInput.value) : selectedLabel('target_price_mode')
+      );
+      summaryLine('中转', selectedLabel('transfer_policy'));
+      summaryLine('行李', selectedLabel('baggage'));
+      if (checkedValue('companions') !== 'solo') {
+        summaryLine('同行', selectedLabel('companions'));
       }
-      if (targetPriceMode === 'fixed' && targetPrice > 0) {
-        addSummaryLine(`理想入手价：${money(targetPrice)}`);
-      } else if (targetPriceMode !== 'fixed') {
-        addSummaryLine(`理想入手价：${labels.targetPriceMode[targetPriceMode] || targetPriceMode}`);
-      }
-      addSummaryLine(`中转：${transferText[checkedValue('transfer_policy')] || checkedValue('transfer_policy')}`);
-      addSummaryLine(`行李：${baggageText[checkedValue('baggage')] || checkedValue('baggage')}`);
-      addSummaryLine(`主目标：${primaryText[checkedValue('primary_goal')] || checkedValue('primary_goal')}`);
-
-      if (advanced.style.display === 'block') {
-        const companions = checkedValue('companions');
-        if (companions && companions !== 'solo') {
-          addSummaryLine(`同行人员：${document.querySelector('input[name="companions"]:checked')?.parentElement.textContent.trim()}`);
+      if (checkedValue('monitor_mode') === 'precise') {
+        summaryLine('时间偏好', timePreferenceText());
+        if (checkedValue('time_preference') === 'custom') {
+          if (isRoundTrip) {
+            summaryLine('去程起飞时段', slotSummary('outbound_departure_slots', labels.departureSlots));
+            summaryLine('返程起飞时段', slotSummary('return_departure_slots', labels.departureSlots));
+          } else {
+            summaryLine('起飞时段', slotSummary('departure_slots', labels.departureSlots));
+          }
         }
-        if (isRoundTrip) {
-          addSummaryLine(`去程起飞时段：${slotSummary('outbound_departure_slots', labels.departureSlots)}`);
-          addSummaryLine(`返程起飞时段：${slotSummary('return_departure_slots', labels.departureSlots)}`);
-        } else {
-          addSummaryLine(`起飞时段：${slotSummary('departure_slots', labels.departureSlots)}`);
-        }
-      }
-
-      if (advancedRules.style.display === 'block') {
         if (checkedValue('transfer_policy') !== 'direct_only') {
-          const limit = document.querySelector('input[name="short_transfer_limit"]:checked');
-          addSummaryLine(`最长总行程：${limit ? limit.parentElement.textContent.trim() : '未设置'}`);
+          summaryLine('最长总行程', selectedLabel('short_transfer_limit'));
         }
-        const secondaryGoals = checkedValues('secondary_goals');
-        if (secondaryGoals.length) {
-          addSummaryLine(`附加关注：${secondaryGoals.length}项`);
+        if (checkedValue('transfer_policy') === 'price_first') {
+          summaryLine('过夜中转', selectedLabel('accept_overnight_transfer'));
+          summaryLine('非联程', selectedLabel('accept_self_transfer'));
         }
-        addSummaryLine(`提醒频率：${labels.frequency[checkedValue('notification_frequency')] || checkedValue('notification_frequency')}`);
       }
-
-      addSummaryLine('未填写的偏好将按普通出行默认处理。');
+      const secondary = selectedCheckboxLabels('secondary_goals');
+      summaryLine('提醒', secondary.length ? secondary.join('、') : selectedLabel('primary_goal'));
+      summaryLine('提醒频率', selectedLabel('notification_frequency'));
+      addSummaryLine('未填写的偏好将按普通出行默认处理');
       return;
-      }
-      summaryList.innerHTML = "";
-      const origin = selectedOrigin();
-      const destination = form.destination.value.trim().toUpperCase();
-      const maxBudgetMode = checkedValue('max_budget_mode');
-      const targetPriceMode = checkedValue('target_price_mode');
-      const maxBudget = Number(maxBudgetInput.value || 0);
-      const targetPrice = Number(targetPriceInput.value || 0);
-
-      addSummaryLine(`监控航线：${origin} → ${destination}`);
-      addSummaryLine(`出发日期：${form.depart_date.value}`);
-      if (checkedValue('round_trip') === 'true') {
-        addSummaryLine(`返程日期：${returnDate.value}`);
-      }
-      addSummaryLine(`出发日期可调整：${labels.dateFlex[checkedValue('date_flexibility')]}`);
-      if (maxBudgetMode === 'fixed') {
-        addSummaryLine(`最高可接受：¥${maxBudget.toLocaleString('zh-CN')}`);
-      } else {
-        addSummaryLine(`最高可接受：${labels.maxBudgetMode[maxBudgetMode]}`);
-      }
-      if (targetPriceMode === 'fixed') {
-        addSummaryLine(`理想入手价：¥${targetPrice.toLocaleString('zh-CN')}`);
-      } else {
-        addSummaryLine(`理想入手价：${labels.targetPriceMode[targetPriceMode]}`);
-      }
-      addSummaryLine(`中转策略：${labels.transfer[checkedValue('transfer_policy')]}`);
-      if (checkedValue('transfer_policy') === 'reasonable') {
-        const limit = document.querySelector('input[name="short_transfer_limit"]:checked');
-        addSummaryLine(`最长总行程时间：${limit ? limit.parentElement.textContent.trim() : '不超过直飞时间+3小时'}`);
-      }
-      if (checkedValue('round_trip') === 'true') {
-        addSummaryLine(`去程起飞时段：${slotSummary('outbound_departure_slots', labels.departureSlots)}`);
-        addSummaryLine(`去程到达时段：${slotSummary('outbound_arrival_slots', labels.arrivalSlots)}`);
-        addSummaryLine(`返程起飞时段：${slotSummary('return_departure_slots', labels.departureSlots)}`);
-        addSummaryLine(`返程到达时段：${slotSummary('return_arrival_slots', labels.arrivalSlots)}`);
-      } else {
-        addSummaryLine(`起飞时段：${slotSummary('departure_slots', labels.departureSlots)}`);
-        addSummaryLine(`到达时段：${slotSummary('arrival_slots', labels.arrivalSlots)}`);
-      }
-      addSummaryLine(`行李：${labels.baggage[checkedValue('baggage')]}`);
-      addSummaryLine(`主目标：${labels.primary[checkedValue('primary_goal')]}`);
-      addSummaryLine(`提醒频率：${labels.frequency[checkedValue('notification_frequency')]}`);
     }
 
     stepPrev.addEventListener('click', () => {
@@ -1096,14 +1300,14 @@ FORM_TEMPLATE = """
     window.addEventListener('resize', updateStepper);
 
     advancedToggle.addEventListener('click', () => {
-      const expanded = advanced.style.display === 'block';
-      advanced.style.display = expanded ? 'none' : 'block';
+      const expanded = advanced.classList.contains('open');
+      setSmartPanel(advanced, !expanded);
       advancedToggle.textContent = expanded ? '＋ 补充偏好，让推荐更准确' : '－ 收起补充偏好';
     });
 
     rulesToggle.addEventListener('click', () => {
-      const expanded = advancedRules.style.display === 'block';
-      advancedRules.style.display = expanded ? 'none' : 'block';
+      const expanded = advancedRules.classList.contains('open');
+      setSmartPanel(advancedRules, !expanded);
       rulesToggle.textContent = expanded ? '＋ 更细的筛选规则' : '－ 收起筛选规则';
     });
 
@@ -1142,6 +1346,9 @@ FORM_TEMPLATE = """
     targetPriceInput.addEventListener('input', validatePriceInputs);
     originSelect.addEventListener('change', updateOriginAirportHint);
     originManual.addEventListener('input', updateOriginAirportHint);
+    destinationInput.addEventListener('input', updateDestinationAirportHint);
+    modeRadios.forEach(radio => radio.addEventListener('change', applyMonitorMode));
+    timePreferenceRadios.forEach(radio => radio.addEventListener('change', toggleTimePreference));
     transferRadios.forEach(radio => radio.addEventListener('change', toggleShortTransferOptions));
     dateFlexRadios.forEach(radio => radio.addEventListener('change', updateDateFlexHint));
     secondaryGoalChecks.forEach(check => check.addEventListener('change', updateDateFlexHint));
@@ -1157,10 +1364,13 @@ FORM_TEMPLATE = """
     toggleShortTransferOptions();
     updateDateFlexHint();
     updateOriginAirportHint();
+    updateDestinationAirportHint();
     advanced.style.display = 'none';
     advancedToggle.textContent = '＋ 补充偏好，让推荐更准确';
     advancedRules.style.display = 'none';
     rulesToggle.textContent = '＋ 更细的筛选规则';
+    applyMonitorMode();
+    toggleTimePreference();
     applyDefaultSecondaryGoals();
     updateStepper();
     form.addEventListener('input', refreshSummaryIfFinalStep);
@@ -1345,6 +1555,29 @@ def parse_short_transfer_limit(value: str | None) -> tuple[int | None, int | Non
     return 3, None
 
 
+def parse_active_airports(raw: str | None, fallback: list[str]) -> list[str]:
+    airports = [
+        item.strip().upper()
+        for item in str(raw or "").split(",")
+        if item.strip()
+    ]
+    fallback_set = {item.upper() for item in fallback or []}
+    if fallback_set:
+        airports = [item for item in airports if item in fallback_set]
+    return airports or list(fallback or [])
+
+
+def time_slots_from_preference(form, field_name: str, default_slots: list[str]) -> list[str]:
+    preference = form.get("time_preference", "any")
+    if preference == "any":
+        return list(ALL_TIME_SLOTS)
+    if preference == "daytime":
+        return list(DAYTIME_TIME_SLOTS)
+    if preference == "no_redeye":
+        return list(DEFAULT_DEPARTURE_SLOTS)
+    return form.getlist(field_name) or list(default_slots)
+
+
 def first_push_text() -> str:
     next_time = datetime.now() + timedelta(minutes=10)
     return next_time.strftime("%Y-%m-%d %H:%M")
@@ -1357,6 +1590,19 @@ def build_subscription(form) -> dict:
     origin_input = origin_manual or ("" if origin_select == "OTHER" else origin_select)
     origin_info = resolve_location(origin_input)
     destination_info = resolve_location(normalize_destination(form.get("destination", "")))
+    origin_airports_active = parse_active_airports(
+        form.get("origin_airports_active"), origin_info["airports"]
+    )
+    destination_airports_active = parse_active_airports(
+        form.get("destination_airports_active"), destination_info["airports"]
+    )
+    excluded_airports = sorted(
+        (
+            set(origin_info["airports"])
+            | set(destination_info["airports"])
+        )
+        - (set(origin_airports_active) | set(destination_airports_active))
+    )
     max_budget_mode = form.get("max_budget_mode", "fixed")
     target_price_mode = form.get("target_price_mode", "fixed")
     target_price = parse_optional_budget(form.get("target_price"), target_price_mode)
@@ -1366,23 +1612,27 @@ def build_subscription(form) -> dict:
         max_budget = infer_max_budget(parse_int(form.get("max_budget"), 0), target_price)
     max_extra_duration_hours = None
     max_total_duration_hours = None
-    if form.get("transfer_policy", "reasonable") in {"reasonable", "short_ok"}:
+    if form.get("transfer_policy", "reasonable") in {"reasonable", "short_ok", "price_first"}:
         max_extra_duration_hours, max_total_duration_hours = parse_short_transfer_limit(
             form.get("short_transfer_limit") or "extra_6"
         )
-    departure_slots = form.getlist("departure_slots") or DEFAULT_DEPARTURE_SLOTS
-    arrival_slots = form.getlist("arrival_slots") or DEFAULT_ARRIVAL_SLOTS
-    outbound_departure_slots = (
-        form.getlist("outbound_departure_slots") or DEFAULT_DEPARTURE_SLOTS
+    departure_slots = time_slots_from_preference(
+        form, "departure_slots", DEFAULT_DEPARTURE_SLOTS
     )
-    outbound_arrival_slots = (
-        form.getlist("outbound_arrival_slots") or DEFAULT_ARRIVAL_SLOTS
+    arrival_slots = time_slots_from_preference(
+        form, "arrival_slots", DEFAULT_ARRIVAL_SLOTS
     )
-    return_departure_slots = (
-        form.getlist("return_departure_slots") or DEFAULT_DEPARTURE_SLOTS
+    outbound_departure_slots = time_slots_from_preference(
+        form, "outbound_departure_slots", DEFAULT_DEPARTURE_SLOTS
     )
-    return_arrival_slots = (
-        form.getlist("return_arrival_slots") or DEFAULT_ARRIVAL_SLOTS
+    outbound_arrival_slots = time_slots_from_preference(
+        form, "outbound_arrival_slots", DEFAULT_ARRIVAL_SLOTS
+    )
+    return_departure_slots = time_slots_from_preference(
+        form, "return_departure_slots", DEFAULT_DEPARTURE_SLOTS
+    )
+    return_arrival_slots = time_slots_from_preference(
+        form, "return_arrival_slots", DEFAULT_ARRIVAL_SLOTS
     )
     time_constraints = {
         "departure_slots": departure_slots,
@@ -1405,9 +1655,12 @@ def build_subscription(form) -> dict:
         "origin": origin_info["value"],
         "origin_type": origin_info["type"],
         "origin_airports": origin_info["airports"],
+        "origin_airports_active": origin_airports_active,
         "destination": destination_info["value"],
         "destination_type": destination_info["type"],
         "destination_airports": destination_info["airports"],
+        "destination_airports_active": destination_airports_active,
+        "excluded_airports": excluded_airports,
         "depart_date": form.get("depart_date", "").strip(),
         "return_date": form.get("return_date", "").strip() if round_trip else None,
         "round_trip": round_trip,
@@ -1423,9 +1676,14 @@ def build_subscription(form) -> dict:
             "max_total_duration_hours": max_total_duration_hours,
             "departure_time_policy": form.get("departure_time_policy", "no_redeye"),
             "arrival_time_policy": form.get("arrival_time_policy", "any"),
+            "time_preference": form.get("time_preference", "any"),
             **time_constraints,
             "baggage": form.get("baggage", "required"),
             "origin_airport_preference": form.get("origin_airport_preference", "all"),
+            "accept_overnight_transfer": parse_bool(
+                form.get("accept_overnight_transfer", "false")
+            ),
+            "accept_self_transfer": parse_bool(form.get("accept_self_transfer", "false")),
         },
         "soft_preferences": {
             "trip_type": form.get("trip_type", "tourism"),
@@ -1493,10 +1751,17 @@ def build_success_summary(subscription: dict) -> dict:
     if budget:
         exclusions.append(f"超出¥{budget:,}预算的方案")
 
-    origin_airports = subscription.get("origin_airports") or [subscription.get("origin")]
-    destination_airports = subscription.get("destination_airports") or [
+    origin_airports = (
+        subscription.get("origin_airports_active")
+        or subscription.get("origin_airports")
+        or [subscription.get("origin")]
+    )
+    destination_airports = (
+        subscription.get("destination_airports_active")
+        or subscription.get("destination_airports")
+        or [
         subscription.get("destination")
-    ]
+    ])
     coverage = ""
     if len(origin_airports) > 1 or len(destination_airports) > 1:
         origin_text = "、".join(format_airport(code) for code in origin_airports if code)
@@ -1515,7 +1780,12 @@ def build_success_summary(subscription: dict) -> dict:
 
 @app.get("/")
 def index():
-    return render_template_string(FORM_TEMPLATE, origins=COMMON_ORIGINS)
+    return render_template_string(
+        FORM_TEMPLATE,
+        origins=COMMON_ORIGINS,
+        city_airports=CITY_AIRPORTS,
+        airport_short_names=AIRPORT_SHORT_NAMES,
+    )
 
 
 @app.post("/subscribe")

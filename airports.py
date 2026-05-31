@@ -242,6 +242,61 @@ AIRPORT_CITY_EN = {
     "DWC": "Dubai",
 }
 
+AIRPORT_SHORT_NAMES = {
+    "PVG": "浦东",
+    "SHA": "虹桥",
+    "PEK": "首都",
+    "PKX": "大兴",
+    "CAN": "白云",
+    "SZX": "宝安",
+    "CTU": "天府",
+    "TFU": "天府",
+    "HGH": "萧山",
+    "NKG": "禄口",
+    "KIX": "关西",
+    "ITM": "伊丹",
+    "NRT": "成田",
+    "HND": "羽田",
+    "ICN": "仁川",
+    "GMP": "金浦",
+    "TPE": "桃园",
+    "TSA": "松山",
+    "HKG": "香港",
+    "BKK": "素万那普",
+    "DMK": "廊曼",
+    "SIN": "樟宜",
+    "MCO": "奥兰多",
+    "SFB": "桑福德",
+    "LAX": "洛杉矶",
+    "JFK": "肯尼迪",
+    "EWR": "纽瓦克",
+    "LGA": "拉瓜迪亚",
+    "SFO": "旧金山",
+    "OAK": "奥克兰",
+    "SJC": "圣何塞",
+    "ORD": "奥黑尔",
+    "MDW": "中途",
+    "DFW": "达拉斯",
+    "SEA": "西雅图",
+    "MIA": "迈阿密",
+    "FLL": "劳德代尔",
+    "ATL": "亚特兰大",
+    "YVR": "温哥华",
+    "YYZ": "皮尔逊",
+    "YTZ": "多伦多岛",
+    "LHR": "希思罗",
+    "LGW": "盖特威克",
+    "STN": "斯坦斯特德",
+    "CDG": "戴高乐",
+    "ORY": "奥利",
+    "FRA": "法兰克福",
+    "AMS": "阿姆斯特丹",
+    "DXB": "迪拜",
+    "DWC": "迪拜世界中心",
+    "DOH": "多哈",
+    "ABQ": "阿尔伯克基",
+}
+
 
 def get_airport_name(iata_code):
     """Return the Chinese airport name, falling back to the original IATA code."""
@@ -267,6 +322,14 @@ def get_airport_city_en(iata_code):
     if not code:
         return ""
     return AIRPORT_CITY_EN.get(code, code)
+
+
+def get_airport_short_name(iata_code):
+    """Return a compact Chinese airport label for UI tags."""
+    code = str(iata_code or "").strip().upper()
+    if not code:
+        return ""
+    return AIRPORT_SHORT_NAMES.get(code, AIRPORT_NAMES.get(code, code))
 
 
 def resolve_location(value):

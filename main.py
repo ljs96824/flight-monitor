@@ -141,6 +141,16 @@ def _normalize_subscription(item: dict) -> dict:
     destination_airports = (
         item.get("destination_airports") or destination_info["airports"]
     )
+    origin_airports_active = item.get("origin_airports_active") or origin_airports
+    destination_airports_active = (
+        item.get("destination_airports_active") or destination_airports
+    )
+    origin_airports = [
+        code for code in origin_airports_active if code in origin_airports
+    ] or origin_airports
+    destination_airports = [
+        code for code in destination_airports_active if code in destination_airports
+    ] or destination_airports
     origin_airport_preference = hard_constraints.get(
         "origin_airport_preference", item.get("origin_airport_preference", "all")
     )
@@ -219,10 +229,12 @@ def _normalize_subscription(item: dict) -> dict:
         "origin": origin_info["value"],
         "origin_type": item.get("origin_type") or origin_info["type"],
         "origin_airports": origin_airports,
+        "origin_airports_active": origin_airports,
         "origin_airport_preference": origin_airport_preference,
         "destination": destination_info["value"],
         "destination_type": item.get("destination_type") or destination_info["type"],
         "destination_airports": destination_airports,
+        "destination_airports_active": destination_airports,
         "depart_date": item.get("depart_date", ""),
         "budget": max_budget,
         "budget_mode": max_budget_mode,
