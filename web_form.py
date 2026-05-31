@@ -309,6 +309,47 @@ FORM_TEMPLATE = """
     .summary-default-rule {
       color: #188038;
     }
+    .pref-cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 10px;
+      margin: 12px 0 16px;
+    }
+    .pref-card {
+      border: 1px solid #dbe5f6;
+      border-radius: 8px;
+      background: #fff;
+      padding: 12px;
+    }
+    .pref-name {
+      font-weight: bold;
+      color: #1a73e8;
+      margin-bottom: 4px;
+    }
+    .pref-value {
+      min-height: 36px;
+      color: #555;
+      font-size: 13px;
+      margin-bottom: 8px;
+    }
+    .pref-card-detail {
+      display: none;
+      border-left: 3px solid #dbe5f6;
+      padding-left: 10px;
+      margin: 10px 0 14px;
+    }
+    .pref-card-detail.open {
+      display: block;
+    }
+    .quick-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 10px 0;
+    }
+    .quick-actions form {
+      display: inline;
+    }
     .secondary-button {
       background: #f5f7fb;
       color: #1a73e8;
@@ -499,6 +540,7 @@ FORM_TEMPLATE = """
   </div>
 
   <form id="subscription-form" method="post" action="{{ url_for('subscribe') }}">
+    <input type="hidden" id="subscription_index" name="subscription_index" value="{{ edit_index if edit_index is not none else '' }}">
     <div class="mode-toggle">
       <div class="mode-toggle-title">模式</div>
       <div class="choice">
@@ -623,9 +665,38 @@ FORM_TEMPLATE = """
       <button id="advanced-toggle" class="secondary-button precise-only" type="button">＋ 补充偏好，让推荐更准确</button>
       <div id="advanced-preferences" class="smart-panel precise-only">
       <fieldset>
-        <legend>补充偏好，让推荐更准确</legend>
+        <legend>提高推荐准确度</legend>
         <p class="hint">不填也可以，系统会按普通出行默认规则监控</p>
 
+        <div class="pref-cards">
+          <div class="pref-card">
+            <div class="pref-name">同行人员</div>
+            <div class="pref-value" data-pref-value="companions">未设置</div>
+            <button class="secondary-button pref-card-button" type="button" data-pref-target="companions">补充</button>
+          </div>
+          <div class="pref-card">
+            <div class="pref-name">时间偏好</div>
+            <div class="pref-value" data-pref-value="time">使用默认：避免红眼</div>
+            <button class="secondary-button pref-card-button" type="button" data-pref-target="time">修改</button>
+          </div>
+          <div class="pref-card">
+            <div class="pref-name">退改签</div>
+            <div class="pref-value" data-pref-value="refund">使用默认：便宜优先，提醒风险</div>
+            <button class="secondary-button pref-card-button" type="button" data-pref-target="refund">修改</button>
+          </div>
+          <div class="pref-card">
+            <div class="pref-name">航司偏好</div>
+            <div class="pref-value" data-pref-value="airline">使用默认：不限</div>
+            <button class="secondary-button pref-card-button" type="button" data-pref-target="airline">修改</button>
+          </div>
+          <div class="pref-card">
+            <div class="pref-name">非联程中转</div>
+            <div class="pref-value" data-pref-value="self_transfer">使用默认：不接受</div>
+            <button class="secondary-button pref-card-button" type="button" data-pref-target="self_transfer">修改</button>
+          </div>
+        </div>
+
+        <div id="pref-detail-companions" class="pref-card-detail">
         <label>同行人员</label>
         <div class="choice">
           <label><input type="radio" name="companions" value="solo" checked> 仅本人</label>
@@ -634,10 +705,12 @@ FORM_TEMPLATE = """
           <label><input type="radio" name="companions" value="with_elderly_child"> 老人和小孩都有</label>
         </div>
         <div id="auto-preference-notice" class="auto-notice"></div>
+        </div>
 
         <input type="hidden" name="departure_time_policy" value="any">
         <input type="hidden" name="trip_rigidity" value="confirmed">
 
+        <div id="pref-detail-time" class="pref-card-detail">
         <label>时间偏好</label>
         <div class="choice">
           <label><input type="radio" name="time_preference" value="any" checked> 不限制</label>
@@ -718,7 +791,9 @@ FORM_TEMPLATE = """
           </fieldset>
         </div>
         </div>
+        </div>
 
+        <div id="pref-detail-refund" class="pref-card-detail">
         <label>如果行程变化，你希望机票怎样？</label>
         <div class="choice">
           <label><input type="radio" name="refund_flexibility" value="not_needed"> 不重要，便宜优先</label>
@@ -744,6 +819,7 @@ FORM_TEMPLATE = """
           <option value="family_elder">家庭老人同行</option>
           <option value="other">其他</option>
         </select>
+        </div>
         <p class="hint">这些偏好会影响推荐排序，不会影响是否创建监控</p>
       </fieldset>
     </div>
@@ -772,6 +848,7 @@ FORM_TEMPLATE = """
             </div>
           </div>
 
+          <div id="pref-detail-self_transfer" class="pref-card-detail">
           <div id="self-transfer-options" class="sub-options">
             <label>是否接受非联程</label>
             <div class="choice">
@@ -779,7 +856,9 @@ FORM_TEMPLATE = """
               <label><input type="radio" name="accept_self_transfer" value="true"> 可以接受</label>
             </div>
           </div>
+          </div>
 
+          <div id="pref-detail-airline" class="pref-card-detail">
           <label>航司偏好</label>
           <div class="choice">
             <label><input type="radio" name="airline_policy" value="any" checked> 不限制</label>
@@ -790,6 +869,7 @@ FORM_TEMPLATE = """
 
           <label>不接受的航司</label>
           <input name="exclude_airlines" placeholder="选填，多个航司用逗号分隔，例如 Spirit, Frontier">
+          </div>
 
           <label>附加关注</label>
           <div class="choice">
@@ -909,6 +989,7 @@ FORM_TEMPLATE = """
     };
     const cityAirports = {{ city_airports|tojson }};
     const airportShortNames = {{ airport_short_names|tojson }};
+    const editSubscription = {{ edit_subscription|tojson }};
 
     const form = document.getElementById('subscription-form');
     const modeRadios = document.querySelectorAll('input[name="monitor_mode"]');
@@ -992,6 +1073,8 @@ FORM_TEMPLATE = """
     const stepPrev = document.getElementById('step-prev');
     const stepNext = document.getElementById('step-next');
     const stepTimePreferences = document.getElementById('step-time-preferences');
+    const prefCardButtons = document.querySelectorAll('.pref-card-button');
+    const prefCardDetails = document.querySelectorAll('.pref-card-detail');
     const stepTitles = ['行程信息', '价格底线', '监控目标', '完成'];
     let currentStep = 1;
 
@@ -1275,6 +1358,48 @@ FORM_TEMPLATE = """
       return input ? input.parentElement.textContent.trim() : '';
     }
 
+    function setPrefValue(key, value) {
+      const target = document.querySelector(`[data-pref-value="${key}"]`);
+      if (target) {
+        target.textContent = value || '未设置';
+      }
+    }
+
+    function updatePrefCards() {
+      const companions = checkedValue('companions');
+      setPrefValue('companions', companions === 'solo' ? '未设置' : selectedLabel('companions'));
+      const timePreference = checkedValue('time_preference');
+      setPrefValue(
+        'time',
+        timePreference === 'any' ? '使用默认：避免红眼' : selectedLabel('time_preference')
+      );
+      const refund = checkedValue('refund_flexibility');
+      setPrefValue(
+        'refund',
+        refund === 'preferred' ? '使用默认：便宜优先，提醒风险' : selectedLabel('refund_flexibility')
+      );
+      const airline = checkedValue('airline_policy');
+      setPrefValue('airline', airline === 'any' ? '使用默认：不限' : selectedLabel('airline_policy'));
+      setPrefValue(
+        'self_transfer',
+        checkedValue('accept_self_transfer') === 'true' ? '已设置：可以接受' : '使用默认：不接受'
+      );
+    }
+
+    function togglePrefDetail(key) {
+      const detail = document.getElementById(`pref-detail-${key}`);
+      if (!detail) return;
+      prefCardDetails.forEach(item => {
+        if (item !== detail) {
+          item.classList.remove('open');
+        }
+      });
+      detail.classList.toggle('open');
+      if (detail.classList.contains('open')) {
+        detail.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+      }
+    }
+
     function selectedCheckboxLabels(name) {
       return Array.from(document.querySelectorAll(`input[name="${name}"]:checked`))
         .map(input => input.parentElement.textContent.trim());
@@ -1418,6 +1543,52 @@ FORM_TEMPLATE = """
       input.checked = checked;
       if (mark) {
         input.closest('label')?.classList.add('auto-suggested');
+      }
+    }
+
+    function applyEditSubscription(data) {
+      if (!data || !Object.keys(data).length) return;
+      document.getElementById('subscription_index').value = data._index ?? document.getElementById('subscription_index').value;
+      if (data.origin_type === 'city' && originSelect.querySelector(`option[value="${data.origin}"]`)) {
+        originSelect.value = data.origin;
+      } else {
+        originSelect.value = 'OTHER';
+        originManual.value = data.origin || '';
+      }
+      destinationInput.value = data.destination || '';
+      setRadio('round_trip', String(Boolean(data.round_trip)));
+      form.depart_date.value = data.depart_date || '';
+      if (data.return_date) {
+        returnDate.value = data.return_date;
+      }
+      setRadio('date_flexibility', String(data.date_flexibility ?? 0));
+      const hard = data.hard_constraints || {};
+      const soft = data.soft_preferences || {};
+      const goals = data.notification_goals || {};
+      if (data.monitor_mode) setRadio('monitor_mode', data.monitor_mode);
+      if (hard.budget_strategy) setRadio('budget_strategy', hard.budget_strategy);
+      if (hard.max_budget) maxBudgetInput.value = hard.max_budget;
+      if (hard.target_price || soft.target_price) targetPriceInput.value = hard.target_price || soft.target_price;
+      if (hard.transfer_policy) setRadio('transfer_policy', hard.transfer_policy);
+      if (hard.baggage) setRadio('baggage', hard.baggage);
+      if (soft.companions) setRadio('companions', soft.companions);
+      if (soft.time_preference || hard.time_preference) setRadio('time_preference', soft.time_preference || hard.time_preference);
+      if (soft.refund_flexibility) setRadio('refund_flexibility', soft.refund_flexibility);
+      if (soft.price_sensitivity) setRadio('price_sensitivity', soft.price_sensitivity);
+      if (soft.trip_type && form.trip_type) form.trip_type.value = soft.trip_type;
+      if (soft.airline_policy) setRadio('airline_policy', soft.airline_policy);
+      if (soft.exclude_airlines) form.exclude_airlines.value = (soft.exclude_airlines || []).join(', ');
+      if (hard.accept_self_transfer !== undefined) setRadio('accept_self_transfer', String(Boolean(hard.accept_self_transfer)));
+      if (hard.accept_overnight_transfer !== undefined) setRadio('accept_overnight_transfer', String(Boolean(hard.accept_overnight_transfer)));
+      if (goals.primary) setRadio('primary_goal', goals.primary);
+      secondaryGoalChecks.forEach(check => {
+        check.checked = (goals.secondary || []).includes(check.value);
+      });
+      if (goals.method) setRadio('notification_method', goals.method);
+      if (goals.email) notificationEmailInput.value = goals.email;
+      if (goals.frequency) {
+        setRadio('notification_frequency', goals.frequency);
+        setRadio('notification_frequency_rule', goals.frequency);
       }
     }
 
@@ -1741,6 +1912,14 @@ FORM_TEMPLATE = """
       syncNotificationFrequencyToRule();
       refreshSummaryIfFinalStep();
     }));
+    prefCardButtons.forEach(button => {
+      button.addEventListener('click', () => togglePrefDetail(button.dataset.prefTarget));
+    });
+    ['companions', 'time_preference', 'refund_flexibility', 'airline_policy', 'accept_self_transfer'].forEach(name => {
+      document.querySelectorAll(`input[name="${name}"]`).forEach(input => {
+        input.addEventListener('change', updatePrefCards);
+      });
+    });
     openPreciseModeButton?.addEventListener('click', () => {
       setRadio('monitor_mode', 'precise');
       applyMonitorMode();
@@ -1763,6 +1942,7 @@ FORM_TEMPLATE = """
       }
     }));
     companionRadios.forEach(radio => radio.addEventListener('change', applyCompanionDefaults));
+    applyEditSubscription(editSubscription);
     toggleReturnDate();
     toggleBudgetRequired();
     toggleNotificationMethod();
@@ -1777,6 +1957,7 @@ FORM_TEMPLATE = """
     rulesToggle.textContent = '＋ 更细的筛选规则';
     applyMonitorMode();
     toggleTimePreference();
+    updatePrefCards();
     applyDefaultSecondaryGoals();
     setupSavedTemplatePrompt();
     updateStepper();
@@ -1834,6 +2015,17 @@ SUCCESS_TEMPLATE = """
     .card { background: #f7f9fc; border: 1px solid #dbe5f6; border-radius: 8px; padding: 18px; }
     ul { padding-left: 22px; }
     a { display: inline-block; margin-top: 18px; color: #1a73e8; font-weight: bold; }
+    .quick-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 4px; }
+    .quick-actions form { margin: 0; }
+    .quick-actions button {
+      border: 1px solid #c8d6f0;
+      border-radius: 999px;
+      background: #fff;
+      color: #1a73e8;
+      padding: 8px 12px;
+      cursor: pointer;
+    }
+    .secondary-link { margin-left: 12px; color: #555; font-weight: normal; }
   </style>
 </head>
 <body>
@@ -1870,6 +2062,35 @@ SUCCESS_TEMPLATE = """
     <p><b>订阅已保存。系统正在采集第一批数据，预计1-2分钟内收到首次推送。</b></p>
   </div>
   <a href="{{ url_for('index') }}">继续添加订阅</a>
+  {% if index is not none %}
+  <div class="card" style="margin-top:16px;">
+    <p><b>想让推荐更准确？你还可以补充（可选）：</b></p>
+    <p>这些不影响监控运行，只让推荐排序更贴合你的需求。</p>
+    <div class="quick-actions">
+      <form method="post" action="{{ url_for('quick_update_subscription', index=index) }}">
+        <input type="hidden" name="field" value="time_preference">
+        <input type="hidden" name="value" value="no_redeye">
+        <button type="submit">不接受红眼</button>
+      </form>
+      <form method="post" action="{{ url_for('quick_update_subscription', index=index) }}">
+        <input type="hidden" name="field" value="airline_policy">
+        <input type="hidden" name="value" value="prefer_full_service">
+        <button type="submit">偏好全服务航司</button>
+      </form>
+      <form method="post" action="{{ url_for('quick_update_subscription', index=index) }}">
+        <input type="hidden" name="field" value="accept_self_transfer">
+        <input type="hidden" name="value" value="false">
+        <button type="submit">不接受非联程</button>
+      </form>
+      <form method="post" action="{{ url_for('quick_update_subscription', index=index) }}">
+        <input type="hidden" name="field" value="refund_flexibility">
+        <input type="hidden" name="value" value="preferred">
+        <button type="submit">最好可改签</button>
+      </form>
+    </div>
+  </div>
+  <a class="secondary-link" href="{{ url_for('index', edit=index) }}">修改这条监控的偏好</a>
+  {% endif %}
 </body>
 </html>
 """
@@ -1885,14 +2106,53 @@ def load_subscriptions() -> list[dict]:
     return data if isinstance(data, list) else []
 
 
-def save_subscription(subscription: dict) -> None:
+def save_subscription(subscription: dict, index: int | None = None) -> int:
     SUBSCRIPTIONS_PATH.parent.mkdir(exist_ok=True)
     subscriptions = load_subscriptions()
-    subscriptions.append(subscription)
+    if index is not None and 0 <= index < len(subscriptions):
+        subscriptions[index] = subscription
+        saved_index = index
+    else:
+        subscriptions.append(subscription)
+        saved_index = len(subscriptions) - 1
     SUBSCRIPTIONS_PATH.write_text(
         json.dumps(subscriptions, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    return saved_index
+
+
+def update_subscription_preference(index: int, field: str, value: str) -> bool:
+    subscriptions = load_subscriptions()
+    if not (0 <= index < len(subscriptions)):
+        return False
+
+    subscription = subscriptions[index]
+    hard = subscription.setdefault("hard_constraints", {})
+    soft = subscription.setdefault("soft_preferences", {})
+
+    if field == "time_preference":
+        hard["time_preference"] = value
+        soft["time_preference"] = value
+        if value == "no_redeye":
+            hard["departure_time_policy"] = "no_redeye"
+            hard["arrival_time_policy"] = "no_midnight"
+        elif value == "daytime":
+            hard["departure_time_policy"] = "daytime"
+            hard["arrival_time_policy"] = "daytime_only"
+    elif field == "airline_policy":
+        soft["airline_policy"] = value
+    elif field == "accept_self_transfer":
+        accepted = parse_bool(value)
+        hard["accept_self_transfer"] = accepted
+        soft["allow_self_transfer"] = accepted
+    elif field == "refund_flexibility":
+        soft["refund_flexibility"] = value
+    else:
+        return False
+
+    save_subscription(subscription, index)
+    return True
 
 
 def run_single_subscription(subscription: dict) -> None:
@@ -2233,11 +2493,26 @@ def build_success_summary(subscription: dict) -> dict:
 
 @app.get("/")
 def index():
+    edit_subscription = None
+    edit_index = None
+    edit_arg = request.args.get("edit")
+    if edit_arg not in (None, ""):
+        try:
+            candidate_index = int(edit_arg)
+            subscriptions = load_subscriptions()
+            if 0 <= candidate_index < len(subscriptions):
+                edit_subscription = {**subscriptions[candidate_index], "_index": candidate_index}
+                edit_index = candidate_index
+        except ValueError:
+            edit_subscription = None
+            edit_index = None
     return render_template_string(
         FORM_TEMPLATE,
         origins=COMMON_ORIGINS,
         city_airports=CITY_AIRPORTS,
         airport_short_names=AIRPORT_SHORT_NAMES,
+        edit_subscription=edit_subscription or {},
+        edit_index=edit_index,
     )
 
 
@@ -2249,9 +2524,9 @@ def subscribe():
         print("[表单] 订阅构建完成")
 
         print("[表单] 开始保存订阅")
-        save_subscription(subscription)
-        subscriptions = load_subscriptions()
-        index = len(subscriptions) - 1
+        raw_index = request.form.get("subscription_index")
+        edit_index = int(raw_index) if str(raw_index).strip().isdigit() else None
+        index = save_subscription(subscription, edit_index)
         print(f"[表单] 订阅保存完成: index={index}")
 
         print("[表单] 开始触发后台采集")
@@ -2263,6 +2538,15 @@ def subscribe():
         print(f"[表单] 提交订阅失败: {exc}")
         traceback.print_exc()
         raise
+
+
+@app.post("/subscriptions/<int:index>/quick-update")
+def quick_update_subscription(index: int):
+    field = request.form.get("field", "")
+    value = request.form.get("value", "")
+    ok = update_subscription_preference(index, field, value)
+    print(f"[表单] 快捷更新偏好: index={index}, field={field}, ok={ok}")
+    return redirect(url_for("success", index=index))
 
 
 @app.get("/success")
@@ -2277,6 +2561,7 @@ def success():
         SUCCESS_TEMPLATE,
         summary=build_success_summary(subscription) if subscription else {},
         first_push_time=first_push_text(),
+        index=index if subscriptions else None,
     )
 
 

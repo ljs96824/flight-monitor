@@ -5153,10 +5153,80 @@ def _append_sorting_logic_section(lines: list[str], route_info: dict, is_round_t
     lines.append("")
 
 
-def _append_excluded_low_price_section(
+def _excluded_reason_details(item: dict) -> list[str]:
+    reason = str(item.get("reason") or "不符合当前要求")
+    details = [reason]
+
+    fare = item.get("fare_verification") or {}
+    for issue in fare.get("issues") or []:
+        if issue not in details:
+            details.append(issue)
+
+    availability = item.get("availability") or {}
+    if availability and availability.get("status") not in ("likely_available", "possibly_available"):
+        details.append("渠道可购买性未验证，需到支付页确认")
+
+    transfer = item.get("transfer_risk") or {}
+    for factor in transfer.get("factors") or []:
+        if factor not in details:
+            details.append(factor)
+
+    price_estimate = item.get("price_estimate") or {}
+    for extra in price_estimate.get("extra_items") or []:
+        name = extra.get("name")
+        amount = extra.get("amount")
+        note = extra.get("note")
+        if name and amount:
+            details.append(f"{name}约+{_price_text(amount)}{f'（{note}）' if note else ''}")
+
+    lower_reason = reason.lower()
+    if ("行李" in reason or "托运" in reason) and len(details) == 1:
+        details.append("不含托运行李或托运行李额度未确认")
+    if ("红眼" in reason or "凌晨" in reason) and len(details) == 1:
+        details.append("起飞或到达时间触发默认时间安全规则")
+    if ("非联程" in reason or "self" in lower_reason) and len(details) == 1:
+        details.append("可能需要自行转机和重新托运行李")
+    if ("过夜" in reason or "中转" in reason) and len(details) == 1:
+        details.append("中转时间或中转方式不符合当前偏好")
+
+    clean = []
+    for detail in details:
+        text = str(detail).strip()
+        if text and text not in clean:
+            clean.append(text)
+    return clean[:3]
+
+
+def _excluded_relax_hints(items: list[dict]) -> list[str]:
+    hints = []
+    mapping = [
+        (("红眼", "凌晨"), "允许红眼/凌晨航班"),
+        (("非联程", "self"), "允许非联程中转"),
+        (("过夜", "中转时间", "总时长"), "接受更长中转"),
+        (("行李", "托运"), "放宽托运行李要求"),
+        (("廉航",), "允许廉航方案"),
+    ]
+    for item in items:
+        text = " ".join(
+            str(part)
+            for part in [
+                item.get("reason"),
+                " ".join((item.get("transfer_risk") or {}).get("factors") or []),
+                " ".join((item.get("fare_verification") or {}).get("issues") or []),
+            ]
+            if part
+        ).lower()
+        for keys, hint in mapping:
+            if any(key.lower() in text for key in keys) and hint not in hints:
+                hints.append(hint)
+    return hints[:4]
+
+
+def _append_excluded_low_price_section_legacy(
     lines: list[str],
     analysis_result: dict,
     current_price,
+    route_info: dict | None = None,
     compact: bool = False,
 ) -> None:
     excluded = analysis_result.get("excluded_flights") or []
@@ -5180,6 +5250,49 @@ def _append_excluded_low_price_section(
         reason = item.get("reason") or "不符合当前要求"
         lines.append(f"- {_price_text(item.get('price'))} {combo}：{reason}")
     lines.append("💡 这些方案虽然更便宜，但不满足你的要求，所以未推荐")
+    lines.append("")
+
+
+def _append_excluded_low_price_section(
+    lines: list[str],
+    analysis_result: dict,
+    current_price,
+    route_info: dict | None = None,
+    compact: bool = False,
+) -> None:
+    excluded = analysis_result.get("excluded_flights") or []
+    current = _to_float(current_price)
+    cheaper = []
+    for item in excluded:
+        price = _to_float(item.get("price"))
+        if price is None or (current is not None and price >= current):
+            continue
+        cheaper.append(item)
+    cheaper = sorted(cheaper, key=lambda item: _to_float(item.get("price")) or 999999)
+
+    _section(lines, "<b>🚫 为什么没推荐更便宜的方案？</b>")
+    if not cheaper:
+        lines.append("暂无比主推方案更便宜但被排除的方案。")
+        lines.append("")
+        return
+
+    shown = cheaper[: 2 if compact else 3]
+    for item in shown:
+        combo = item.get("flight_combo") or "未命名方案"
+        price = _to_float(item.get("price"))
+        diff = max(0, current - price) if current is not None and price is not None else None
+        diff_text = f"（比推荐便宜{_price_text(diff)}）" if diff else ""
+        lines.append(f"{_price_text(price)}方案 {combo}{diff_text}：")
+        for detail in _excluded_reason_details(item):
+            lines.append(f"- {detail}")
+        lines.append("")
+
+    lines.append("这些方案虽然便宜，但触发了系统默认安全规则，所以未作为主推荐。")
+    hints = _excluded_relax_hints(shown)
+    if hints:
+        lines.append(f"如果你能接受这些条件，可在精准监控中调整：{' / '.join(hints)}")
+    form_url = _subscription_form_url(route_info)
+    lines.append(f'修改链接：<a href="{form_url}" target="_blank">打开订阅偏好</a>')
     lines.append("")
 
 
@@ -5448,7 +5561,7 @@ def _format_structured_html_message(
     _append_sorting_logic_section(lines, route_info, is_round_trip)
     lines.append("━━━ 以下为判断依据 ━━━")
     _append_core_reasons_section(lines, decision, confidence)
-    _append_excluded_low_price_section(lines, analysis_result, current, compact)
+    _append_excluded_low_price_section(lines, analysis_result, current, route_info, compact)
     _append_risk_section(
         lines,
         route_info,

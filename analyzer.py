@@ -2793,7 +2793,7 @@ def _apply_user_preferences(
     return kept, excluded, {"fallback": False}
 
 
-def _excluded_flight_summary(flights: list[dict]) -> list[dict]:
+def _excluded_flight_summary_legacy(flights: list[dict]) -> list[dict]:
     summaries = []
     for flight in flights or []:
         price = _to_float(flight.get("price"))
@@ -2806,6 +2806,35 @@ def _excluded_flight_summary(flights: list[dict]) -> list[dict]:
                 "airline_summary": flight.get("airline_summary")
                 or " / ".join(flight.get("airlines") or []),
                 "reason": flight.get("exclude_reason") or "不符合当前筛选条件",
+            }
+        )
+    return sorted(summaries, key=lambda item: item["price"])
+
+
+def _excluded_flight_summary(flights: list[dict]) -> list[dict]:
+    """Keep enough excluded-flight context for notification explanations."""
+    summaries = []
+    for flight in flights or []:
+        price = _to_float(flight.get("price"))
+        if price is None or price <= 0:
+            continue
+        summaries.append(
+            {
+                "price": price,
+                "flight_combo": flight.get("flight_combo") or "",
+                "airline_summary": flight.get("airline_summary")
+                or " / ".join(flight.get("airlines") or []),
+                "reason": flight.get("exclude_reason") or "不符合当前筛选条件",
+                "route_summary": flight.get("route_summary") or "",
+                "segments": flight.get("segments") or [],
+                "layovers": flight.get("layovers") or [],
+                "airlines": flight.get("airlines") or [],
+                "stops": flight.get("stops", 0),
+                "fare_verification": flight.get("fare_verification") or {},
+                "availability": flight.get("availability") or {},
+                "transfer_risk": flight.get("transfer_risk") or {},
+                "price_estimate": flight.get("price_estimate") or {},
+                "data_source": flight.get("data_source") or flight.get("source") or "",
             }
         )
     return sorted(summaries, key=lambda item: item["price"])
