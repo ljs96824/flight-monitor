@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from flask import Flask, redirect, render_template_string, request, url_for
 
 from airports import AIRPORT_SHORT_NAMES, CITY_AIRPORTS, format_airport, resolve_location
+from analyzer import apply_default_rules
 
 
 BASE_DIR = Path(__file__).parent
@@ -286,6 +287,27 @@ FORM_TEMPLATE = """
       background: #f7f9fc;
       color: #333;
       font-size: 14px;
+    }
+    .default-rules-note {
+      border: 1px solid #dbe5f6;
+      background: #f7fbff;
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin: 14px 0;
+      color: #333;
+      font-size: 14px;
+    }
+    .default-rules-note button {
+      margin-top: 8px;
+    }
+    .summary-section-title {
+      list-style: none;
+      margin: 10px 0 4px -18px;
+      font-weight: bold;
+      color: #1a73e8;
+    }
+    .summary-default-rule {
+      color: #188038;
     }
     .secondary-button {
       background: #f5f7fb;
@@ -803,8 +825,14 @@ FORM_TEMPLATE = """
       </div>
     </div>
 
+    <div id="quick-defaults-note" class="default-rules-note">
+      系统将使用默认安全偏好：避免红眼、优先含行李、避免高风险中转、仅重要变化提醒。
+      <br>
+      <button id="open-precise-mode" class="secondary-button" type="button">查看/修改默认偏好</button>
+    </div>
+
     <div class="submit-preview">
-      提交后将生成：当前是否值得买、推荐方案与备选方案、价格置信度、购买前检查清单。
+      提交后将生成：当前是否值得买的判断、推荐方案与备选方案、价格置信度拆解、购买前检查清单，以及为什么排除更便宜方案的解释。
     </div>
     <p id="missing-required-warning"></p>
     <button id="preview-button" type="button">开始监控</button>
@@ -835,7 +863,7 @@ FORM_TEMPLATE = """
       </fieldset>
       <p class="hint">开始后，系统会立即生成当前购买判断，并在价格进入低价区间、涨价风险升高或出现异常低价时提醒你。</p>
       <div class="submit-preview">
-        提交后将生成：当前是否值得买、推荐方案与备选方案、价格置信度、购买前检查清单。
+        提交后将生成：当前是否值得买的判断、推荐方案与备选方案、价格置信度拆解、购买前检查清单，以及为什么排除更便宜方案的解释。
       </div>
       <div class="choice">
         <label><input type="checkbox" id="remember-preferences" name="remember_preferences" value="true"> 记住这组偏好（下次自动填充）</label>
@@ -893,6 +921,8 @@ FORM_TEMPLATE = """
     const ignoreTemplateButton = document.getElementById('ignore-template-button');
     const clearTemplateButton = document.getElementById('clear-template-button');
     const missingRequiredWarning = document.getElementById('missing-required-warning');
+    const quickDefaultsNote = document.getElementById('quick-defaults-note');
+    const openPreciseModeButton = document.getElementById('open-precise-mode');
     const originSelect = document.getElementById('origin');
     const originManual = document.querySelector('input[name="origin_manual"]');
     const destinationInput = document.getElementById('destination');
@@ -1187,6 +1217,9 @@ FORM_TEMPLATE = """
       document.querySelectorAll('.precise-only').forEach(el => {
         el.style.display = precise ? 'block' : 'none';
       });
+      if (quickDefaultsNote) {
+        quickDefaultsNote.style.display = precise ? 'none' : 'block';
+      }
       [advancedToggle, rulesToggle].forEach(button => {
         if (button) {
           button.style.display = precise ? 'block' : 'none';
@@ -1442,10 +1475,39 @@ FORM_TEMPLATE = """
       autoPreferenceNotice.style.display = 'block';
     }
 
-    function addSummaryLine(text) {
+    function addSummaryLine(text, className = '') {
       const li = document.createElement('li');
       li.textContent = text;
+      if (className) {
+        li.className = className;
+      }
       summaryList.appendChild(li);
+    }
+
+    function addSummaryHeader(text) {
+      addSummaryLine(text, 'summary-section-title');
+    }
+
+    function systemDefaultRulesForSummary() {
+      const precise = checkedValue('monitor_mode') === 'precise';
+      const rules = [];
+      if (!precise || checkedValue('time_preference') === 'any') {
+        rules.push('✓ 不推荐红眼/凌晨到达');
+      }
+      if (!precise || checkedValue('baggage') === 'unknown') {
+        rules.push('✓ 优先含托运行李方案');
+      }
+      if (!precise) {
+        rules.push('✓ 不推荐非联程中转');
+      }
+      if (!precise) {
+        rules.push('✓ 不推荐过夜中转');
+      }
+      if (checkedValue('notification_frequency') === 'important_only') {
+        rules.push('✓ 只在重要变化时提醒');
+      }
+      rules.push('✓ 自动检测异常低价和涨价风险');
+      return [...new Set(rules)];
     }
 
     function buildSummary() {
@@ -1456,6 +1518,7 @@ FORM_TEMPLATE = """
       const maxBudgetMode = checkedValue('max_budget_mode');
       const targetPriceMode = checkedValue('target_price_mode');
 
+      addSummaryHeader('【你填写的条件】');
       summaryLine('路线', origin && destination ? `${origin} → ${destination}` : '');
       summaryLine('覆盖机场', `去${activeAirportText('origin') || '-'} | 到${activeAirportText('destination') || '-'}`);
       summaryLine('行程', isRoundTrip ? '往返' : '单程');
@@ -1502,6 +1565,15 @@ FORM_TEMPLATE = """
       summaryLine('提醒', secondary.length ? secondary.join('、') : selectedLabel('primary_goal'));
       summaryLine('提醒方式', selectedLabel('notification_method'));
       summaryLine('提醒频率', selectedLabel('notification_frequency'));
+      addSummaryHeader(
+        checkedValue('monitor_mode') === 'precise'
+          ? '【系统默认规则】'
+          : '【系统默认规则】（快速模式自动套用）'
+      );
+      systemDefaultRulesForSummary().forEach(rule => addSummaryLine(rule, 'summary-default-rule'));
+      if (checkedValue('monitor_mode') !== 'precise') {
+        addSummaryLine('你可以展开“精准监控”修改这些默认规则');
+      }
       addSummaryLine('未填写的偏好将按普通出行默认处理');
       return;
     }
@@ -1669,6 +1741,15 @@ FORM_TEMPLATE = """
       syncNotificationFrequencyToRule();
       refreshSummaryIfFinalStep();
     }));
+    openPreciseModeButton?.addEventListener('click', () => {
+      setRadio('monitor_mode', 'precise');
+      applyMonitorMode();
+      setSmartPanel(advanced, true);
+      setSmartPanel(advancedRules, true);
+      advancedToggle.textContent = '－ 收起补充偏好';
+      rulesToggle.textContent = '－ 收起筛选规则';
+      advanced.scrollIntoView({behavior: 'smooth', block: 'start'});
+    });
     transferRadios.forEach(radio => radio.addEventListener('change', () => {
       toggleShortTransferOptions();
       updateRequiredProgress();
@@ -1761,6 +1842,15 @@ SUCCESS_TEMPLATE = """
     <p><b>{{ summary.route }}</b></p>
     {% if summary.airport_coverage %}
     <p>{{ summary.airport_coverage }}</p>
+    {% endif %}
+
+    {% if summary.defaults_applied %}
+    <p><b>系统默认规则：</b></p>
+    <ul>
+      {% for item in summary.defaults_applied %}
+      <li>{{ item }}</li>
+      {% endfor %}
+    </ul>
     {% endif %}
 
     <p><b>系统会在以下情况提醒你：</b></p>
@@ -2015,6 +2105,7 @@ def build_subscription(form) -> dict:
         "destination_airports": destination_info["airports"],
         "destination_airports_active": destination_airports_active,
         "excluded_airports": excluded_airports,
+        "monitor_mode": form.get("monitor_mode", "quick"),
         "depart_date": form.get("depart_date", "").strip(),
         "return_date": form.get("return_date", "").strip() if round_trip else None,
         "round_trip": round_trip,
@@ -2044,6 +2135,7 @@ def build_subscription(form) -> dict:
         },
         "soft_preferences": {
             "trip_type": form.get("trip_type", "tourism"),
+            "time_preference": form.get("time_preference", "any"),
             "companions": form.get("companions", "solo"),
             "price_sensitivity": form.get("price_sensitivity", "low"),
             "trip_rigidity": form.get("trip_rigidity", "confirmed"),
@@ -2072,6 +2164,7 @@ def build_subscription(form) -> dict:
 
 
 def build_success_summary(subscription: dict) -> dict:
+    subscription_with_defaults = apply_default_rules(subscription)
     hard = subscription.get("hard_constraints", {})
     reminders = [
         "当前价格进入历史低价区间",
@@ -2132,6 +2225,7 @@ def build_success_summary(subscription: dict) -> dict:
     return {
         "route": f"{city_label(subscription.get('origin'))} → {city_label(subscription.get('destination'))}",
         "airport_coverage": coverage,
+        "defaults_applied": subscription_with_defaults.get("defaults_applied", []),
         "reminders": reminders,
         "exclusions": exclusions,
     }

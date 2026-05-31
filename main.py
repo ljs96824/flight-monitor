@@ -16,6 +16,7 @@ DATA_DIR.mkdir(exist_ok=True)
 load_dotenv(BASE_DIR / ".env", encoding="utf-8")
 
 from analyzer import (
+    apply_default_rules,
     analyze_all_flights,
     analyze_round_trip,
     price_position_description,
@@ -105,6 +106,7 @@ def _normalize_goals(notification_goals: dict | None, legacy_goals) -> list[str]
         "low_price_alert": "price_drop_alert",
         "buy_timing": "buy_timing",
         "price_risk_alert": "buy_timing",
+        "price_rise_alert": "buy_timing",
         "cheaper_date": "cheaper_date",
         "best_overall": "best_overall",
         "better_same_day": "best_overall",
@@ -224,7 +226,7 @@ def _normalize_subscription(item: dict) -> dict:
             if value.strip()
         ]
 
-    return {
+    normalized = {
         "name": item.get("name") or "网页订阅",
         "origin": origin_info["value"],
         "origin_type": item.get("origin_type") or origin_info["type"],
@@ -235,6 +237,7 @@ def _normalize_subscription(item: dict) -> dict:
         "destination_type": item.get("destination_type") or destination_info["type"],
         "destination_airports": destination_airports,
         "destination_airports_active": destination_airports,
+        "monitor_mode": item.get("monitor_mode", "quick"),
         "depart_date": item.get("depart_date", ""),
         "budget": max_budget,
         "budget_mode": max_budget_mode,
@@ -289,6 +292,11 @@ def _normalize_subscription(item: dict) -> dict:
         "cabin_classes": item.get("cabin_classes"),
         "priorities": item.get("priorities"),
     }
+    normalized = apply_default_rules(normalized)
+    normalized["goals"] = _normalize_goals(
+        normalized.get("notification_goals"), normalized.get("goals", [])
+    )
+    return normalized
 
 
 def normalize_subscription(item: dict) -> dict:
@@ -639,6 +647,7 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
         analysis["notification_goals"] = sub.get("notification_goals", {})
         analysis["hard_constraints"] = sub.get("hard_constraints", {})
         analysis["soft_preferences"] = sub.get("soft_preferences", {})
+        analysis["defaults_applied"] = sub.get("defaults_applied", [])
         analysis["nearby_dates"] = nearby_dates
         analysis["source_stats"] = data.get("source_stats", {})
         analysis["price_position"] = price_position_description(

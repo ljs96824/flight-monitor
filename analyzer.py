@@ -115,6 +115,68 @@ def _to_float(value) -> float | None:
         return None
 
 
+def apply_default_rules(subscription: dict) -> dict:
+    """Apply safe defaults so quick-mode users still get advanced protection."""
+    subscription = dict(subscription or {})
+    soft = dict(subscription.get("soft_preferences") or {})
+    goals = dict(subscription.get("notification_goals") or {})
+    hard = dict(subscription.get("hard_constraints") or {})
+    monitor_mode = subscription.get("monitor_mode", "quick")
+    quick_mode = monitor_mode != "precise"
+    defaults_applied = []
+
+    time_pref = soft.get("time_preference") or hard.get("time_preference")
+    if quick_mode or not time_pref:
+        soft["time_preference"] = "no_redeye"
+        hard["time_preference"] = "no_redeye"
+        hard["departure_time_policy"] = "no_redeye"
+        if not hard.get("arrival_time_policy") or hard.get("arrival_time_policy") == "any":
+            hard["arrival_time_policy"] = "no_midnight"
+        defaults_applied.append("不推荐红眼/凌晨到达")
+
+    if quick_mode and hard.get("baggage") == "required":
+        defaults_applied.append("优先含托运行李方案")
+    elif hard.get("baggage") in (None, "unknown"):
+        hard["baggage_default"] = "prefer_included"
+        defaults_applied.append("优先含托运行李方案")
+
+    if quick_mode:
+        soft["allow_self_transfer"] = False
+        hard.setdefault("accept_self_transfer", False)
+        defaults_applied.append("不推荐非联程中转")
+    elif "allow_self_transfer" not in soft and "accept_self_transfer" in hard:
+        soft["allow_self_transfer"] = bool(hard.get("accept_self_transfer"))
+    elif "allow_self_transfer" not in soft:
+        soft["allow_self_transfer"] = False
+        hard.setdefault("accept_self_transfer", False)
+        defaults_applied.append("不推荐非联程中转")
+
+    if quick_mode:
+        soft["allow_overnight_transfer"] = False
+        hard.setdefault("accept_overnight_transfer", False)
+        defaults_applied.append("不推荐过夜中转")
+    elif "allow_overnight_transfer" not in soft and "accept_overnight_transfer" in hard:
+        soft["allow_overnight_transfer"] = bool(hard.get("accept_overnight_transfer"))
+    elif "allow_overnight_transfer" not in soft:
+        soft["allow_overnight_transfer"] = False
+        hard.setdefault("accept_overnight_transfer", False)
+        defaults_applied.append("不推荐过夜中转")
+
+    if not goals.get("secondary"):
+        goals["secondary"] = ["low_price_alert", "price_rise_alert"]
+        defaults_applied.append("提醒异常低价和涨价风险")
+
+    if not goals.get("frequency"):
+        goals["frequency"] = "important_only"
+        defaults_applied.append("只在重要变化时提醒")
+
+    subscription["soft_preferences"] = soft
+    subscription["hard_constraints"] = hard
+    subscription["notification_goals"] = goals
+    subscription["defaults_applied"] = defaults_applied
+    return subscription
+
+
 def _snapshot_timestamp(snapshot_time: str | None) -> float | None:
     if not snapshot_time:
         return None
@@ -1768,6 +1830,21 @@ def _max_layover_minutes(flight: dict) -> int:
     )
 
 
+def _is_likely_self_transfer(flight: dict) -> bool:
+    if flight.get("self_transfer") or flight.get("separate_tickets"):
+        return True
+    if str(flight.get("ticketing", "")).lower() in {"self_transfer", "separate"}:
+        return True
+    airlines = [airline for airline in (flight.get("airlines") or []) if airline]
+    if not airlines:
+        airlines = [
+            segment.get("airline")
+            for segment in (flight.get("segments") or [])
+            if isinstance(segment, dict) and segment.get("airline")
+        ]
+    return int(flight.get("stops") or 0) > 0 and len(set(airlines)) > 1
+
+
 def _format_hours(minutes: int) -> str:
     hours = minutes // 60
     mins = minutes % 60
@@ -2459,6 +2536,12 @@ def _apply_user_preferences(
         price_tolerance = 100
     max_extra_duration_hours = _to_float(preferences.get("max_extra_duration_hours"))
     max_total_duration_hours = _to_float(preferences.get("max_total_duration_hours"))
+    allow_overnight_transfer = bool(preferences.get("allow_overnight_transfer"))
+    if "allow_overnight_transfer" not in preferences:
+        allow_overnight_transfer = bool(preferences.get("accept_overnight_transfer"))
+    allow_self_transfer = bool(preferences.get("allow_self_transfer"))
+    if "allow_self_transfer" not in preferences:
+        allow_self_transfer = bool(preferences.get("accept_self_transfer"))
     if transfer_policy == "reasonable" and max_extra_duration_hours is None and max_total_duration_hours is None:
         max_extra_duration_hours = 6
 
@@ -2567,6 +2650,13 @@ def _apply_user_preferences(
                 notes.append("合理中转可接受")
         elif transfer_policy in {"price_first", "cheap_ok"} and stops > 0:
             notes.append("价格优先，保留中转方案")
+
+        if stops > 0 and not allow_overnight_transfer and _max_layover_minutes(flight) > 480:
+            excluded.append({**flight, "exclude_reason": "系统默认不推荐过夜中转"})
+            continue
+        if stops > 0 and not allow_self_transfer and _is_likely_self_transfer(flight):
+            excluded.append({**flight, "exclude_reason": "系统默认不推荐疑似非联程中转"})
+            continue
 
         if red_eye == "reject" and _is_red_eye(flight):
             excluded.append({**flight, "exclude_reason": "用户不接受红眼/过早航班"})
