@@ -244,6 +244,12 @@ FORM_TEMPLATE = """
       font-size: 13px;
       margin: 6px 0 0;
     }
+    #missing-required-warning {
+      display: none;
+      color: #c5221f;
+      font-size: 14px;
+      margin: 10px 0 0;
+    }
     .template-banner {
       display: none;
       border: 1px solid #c8d6f0;
@@ -265,6 +271,19 @@ FORM_TEMPLATE = """
       background: #f7f9fc;
       padding: 10px 12px;
       margin: 12px 0;
+      color: #333;
+      font-size: 14px;
+    }
+    .required-progress.incomplete {
+      border-color: #f4b4ad;
+      background: #fff6f5;
+      color: #a50e0e;
+    }
+    .submit-preview {
+      border-left: 4px solid #1a73e8;
+      padding: 8px 12px;
+      margin: 14px 0 8px;
+      background: #f7f9fc;
       color: #333;
       font-size: 14px;
     }
@@ -444,9 +463,11 @@ FORM_TEMPLATE = """
   <p class="hint">先填基础需求即可；高级偏好可以按需展开。</p>
   <div id="saved-template-banner" class="template-banner">
     检测到上次的偏好设置，是否套用？
+    <div id="saved-template-summary" class="hint"></div>
     <div>
       <button id="apply-template-button" class="secondary-button" type="button">套用</button>
       <button id="ignore-template-button" class="secondary-button" type="button">忽略</button>
+      <button id="clear-template-button" class="secondary-button" type="button">清除已保存偏好</button>
     </div>
   </div>
 
@@ -577,8 +598,8 @@ FORM_TEMPLATE = """
         <label><input type="radio" name="primary_goal" value="best_overall" required> 帮我找最合适航班 <small style="color:gray">（不只看价格，综合时间/行李/中转）</small></label>
       </div>
 
-      <button id="advanced-toggle" class="secondary-button" type="button">＋ 补充偏好，让推荐更准确</button>
-      <div id="advanced-preferences" class="smart-panel">
+      <button id="advanced-toggle" class="secondary-button precise-only" type="button">＋ 补充偏好，让推荐更准确</button>
+      <div id="advanced-preferences" class="smart-panel precise-only">
       <fieldset>
         <legend>补充偏好，让推荐更准确</legend>
         <p class="hint">不填也可以，系统会按普通出行默认规则监控</p>
@@ -705,8 +726,8 @@ FORM_TEMPLATE = """
       </fieldset>
     </div>
 
-      <button id="rules-toggle" class="secondary-button" type="button">＋ 更细的筛选规则</button>
-      <div id="advanced-rules" class="smart-panel">
+      <button id="rules-toggle" class="secondary-button precise-only" type="button">＋ 更细的筛选规则</button>
+      <div id="advanced-rules" class="smart-panel precise-only">
         <fieldset>
           <legend>更细的筛选规则</legend>
           <p class="hint">适合有特定要求的用户，一般用户可跳过</p>
@@ -760,9 +781,9 @@ FORM_TEMPLATE = """
           <div id="advanced-frequency-copy" style="display:none">
           <label>提醒频率</label>
           <div class="choice">
-            <label><input type="radio" name="notification_frequency" value="important_only" checked> 仅重要变化时提醒（价格显著下降、即将涨价）</label>
-            <label><input type="radio" name="notification_frequency" value="daily_summary"> 每天汇总推送一次</label>
-            <label><input type="radio" name="notification_frequency" value="every_change"> 每次价格变化都提醒</label>
+            <label><input type="radio" name="notification_frequency_rule" value="important_only" checked> 仅重要变化时提醒（价格显著下降、即将涨价）</label>
+            <label><input type="radio" name="notification_frequency_rule" value="daily_summary"> 每天汇总推送一次</label>
+            <label><input type="radio" name="notification_frequency_rule" value="every_change"> 每次价格变化都提醒</label>
           </div>
           </div>
           <p class="hint">规则越严格，可能匹配的方案越少。如果没有结果，系统会提示你放宽哪些条件</p>
@@ -782,6 +803,10 @@ FORM_TEMPLATE = """
       </div>
     </div>
 
+    <div class="submit-preview">
+      提交后将生成：当前是否值得买、推荐方案与备选方案、价格置信度、购买前检查清单。
+    </div>
+    <p id="missing-required-warning"></p>
     <button id="preview-button" type="button">开始监控</button>
 
     <div id="summary-card">
@@ -809,6 +834,9 @@ FORM_TEMPLATE = """
         </div>
       </fieldset>
       <p class="hint">开始后，系统会立即生成当前购买判断，并在价格进入低价区间、涨价风险升高或出现异常低价时提醒你。</p>
+      <div class="submit-preview">
+        提交后将生成：当前是否值得买、推荐方案与备选方案、价格置信度、购买前检查清单。
+      </div>
       <div class="choice">
         <label><input type="checkbox" id="remember-preferences" name="remember_preferences" value="true"> 记住这组偏好（下次自动填充）</label>
       </div>
@@ -860,8 +888,11 @@ FORM_TEMPLATE = """
     const budgetAmountFields = document.getElementById('budget-amount-fields');
     const requiredProgress = document.getElementById('required-progress');
     const savedTemplateBanner = document.getElementById('saved-template-banner');
+    const savedTemplateSummary = document.getElementById('saved-template-summary');
     const applyTemplateButton = document.getElementById('apply-template-button');
     const ignoreTemplateButton = document.getElementById('ignore-template-button');
+    const clearTemplateButton = document.getElementById('clear-template-button');
+    const missingRequiredWarning = document.getElementById('missing-required-warning');
     const originSelect = document.getElementById('origin');
     const originManual = document.querySelector('input[name="origin_manual"]');
     const destinationInput = document.getElementById('destination');
@@ -902,6 +933,8 @@ FORM_TEMPLATE = """
     const summaryList = document.getElementById('summary-list');
     const editButton = document.getElementById('edit-button');
     const notificationMethodRadios = document.querySelectorAll('input[name="notification_method"]');
+    const notificationFrequencyRadios = document.querySelectorAll('input[name="notification_frequency"]');
+    const notificationFrequencyRuleRadios = document.querySelectorAll('input[name="notification_frequency_rule"]');
     const notificationEmailInput = document.getElementById('notification_email');
     const emailReminderWrap = document.getElementById('email-reminder-wrap');
     const pageOnlyHint = document.getElementById('page-only-hint');
@@ -999,7 +1032,7 @@ FORM_TEMPLATE = """
         {done: Boolean(form.depart_date.value), label: '出发日期'},
         {done: !isRoundTrip || Boolean(returnDate.value), label: '返程日期'},
         {done: Boolean(checkedValue('date_flexibility')), label: '日期弹性'},
-        {done: Boolean(strategy) && (strategy !== 'explicit' || Boolean(maxBudgetInput.value || targetPriceInput.value)), label: '价格策略'},
+        {done: Boolean(strategy), label: '价格策略'},
         {done: Boolean(checkedValue('transfer_policy')), label: '中转接受程度'},
         {done: Boolean(checkedValue('baggage')), label: '托运行李'},
         {done: Boolean(checkedValue('primary_goal')), label: '主目标'}
@@ -1012,14 +1045,26 @@ FORM_TEMPLATE = """
         requiredProgress.textContent = missing.length
           ? `已完成 ${done}/10 个基础项；还需填写：${missing.join('、')}`
           : '已完成 10/10 个基础项';
+        requiredProgress.classList.toggle('incomplete', missing.length > 0);
       }
       if (previewButton) {
         previewButton.textContent = missing.length ? `请先填写${missing[0]}` : '开始监控';
+        previewButton.disabled = missing.length > 0;
+      }
+      if (missingRequiredWarning) {
+        missingRequiredWarning.style.display = missing.length ? 'block' : 'none';
+        missingRequiredWarning.textContent = missing.length
+          ? `请先填写：${missing.join('、')}`
+          : '';
       }
       return missing;
     }
 
     function refreshSummaryIfFinalStep() {
+      if (summaryCard && summaryCard.style.display === 'block') {
+        buildSummary();
+        return;
+      }
       if (isMobileStepper() && currentStep === stepTitles.length) {
         buildSummary();
       }
@@ -1139,6 +1184,9 @@ FORM_TEMPLATE = """
 
     function applyMonitorMode() {
       const precise = checkedValue('monitor_mode') === 'precise';
+      document.querySelectorAll('.precise-only').forEach(el => {
+        el.style.display = precise ? 'block' : 'none';
+      });
       [advancedToggle, rulesToggle].forEach(button => {
         if (button) {
           button.style.display = precise ? 'block' : 'none';
@@ -1176,13 +1224,17 @@ FORM_TEMPLATE = """
     }
 
     function timePreferenceText() {
+      return timePreferenceTextFromValue(checkedValue('time_preference'));
+    }
+
+    function timePreferenceTextFromValue(value) {
       const map = {
         any: '不限制',
         daytime: '白天优先',
         no_redeye: '不接受红眼',
         custom: '自定义时间段'
       };
-      return map[checkedValue('time_preference')] || '';
+      return map[value] || '';
     }
 
     function selectedLabel(name) {
@@ -1247,6 +1299,20 @@ FORM_TEMPLATE = """
       }
       if (pageOnlyHint) {
         pageOnlyHint.style.display = method === 'page_only' ? 'block' : 'none';
+      }
+    }
+
+    function syncNotificationFrequencyFromRule() {
+      const value = checkedValue('notification_frequency_rule');
+      if (value) {
+        setRadio('notification_frequency', value);
+      }
+    }
+
+    function syncNotificationFrequencyToRule() {
+      const value = checkedValue('notification_frequency');
+      if (value) {
+        setRadio('notification_frequency_rule', value);
       }
     }
 
@@ -1481,6 +1547,9 @@ FORM_TEMPLATE = """
       ].forEach(name => {
         if (data[name]) setRadio(name, data[name]);
       });
+      if (data.notification_frequency) {
+        setRadio('notification_frequency_rule', data.notification_frequency);
+      }
       if (form.trip_type && data.trip_type) {
         form.trip_type.value = data.trip_type;
       }
@@ -1498,12 +1567,27 @@ FORM_TEMPLATE = """
       try {
         const raw = localStorage.getItem('flightMonitorPreferenceTemplate');
         if (!raw || !savedTemplateBanner) return;
+        const data = JSON.parse(raw);
+        const summaryParts = [
+          timePreferenceTextFromValue(data.time_preference),
+          data.baggage === 'required' ? '必须托运行李' : '',
+          labels.frequency[data.notification_frequency] || ''
+        ].filter(Boolean);
+        if (savedTemplateSummary) {
+          savedTemplateSummary.textContent = summaryParts.length
+            ? `已保存默认偏好：${summaryParts.join(' | ')}`
+            : '已保存默认偏好';
+        }
         savedTemplateBanner.style.display = 'block';
         applyTemplateButton?.addEventListener('click', () => {
-          applyPreferenceTemplate(JSON.parse(raw));
+          applyPreferenceTemplate(data);
           savedTemplateBanner.style.display = 'none';
         });
         ignoreTemplateButton?.addEventListener('click', () => {
+          savedTemplateBanner.style.display = 'none';
+        });
+        clearTemplateButton?.addEventListener('click', () => {
+          localStorage.removeItem('flightMonitorPreferenceTemplate');
           savedTemplateBanner.style.display = 'none';
         });
       } catch (err) {
@@ -1577,6 +1661,14 @@ FORM_TEMPLATE = """
     modeRadios.forEach(radio => radio.addEventListener('change', applyMonitorMode));
     timePreferenceRadios.forEach(radio => radio.addEventListener('change', toggleTimePreference));
     notificationMethodRadios.forEach(radio => radio.addEventListener('change', toggleNotificationMethod));
+    notificationFrequencyRuleRadios.forEach(radio => radio.addEventListener('change', () => {
+      syncNotificationFrequencyFromRule();
+      refreshSummaryIfFinalStep();
+    }));
+    notificationFrequencyRadios.forEach(radio => radio.addEventListener('change', () => {
+      syncNotificationFrequencyToRule();
+      refreshSummaryIfFinalStep();
+    }));
     transferRadios.forEach(radio => radio.addEventListener('change', () => {
       toggleShortTransferOptions();
       updateRequiredProgress();
