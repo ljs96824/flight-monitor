@@ -6,6 +6,7 @@ import os
 import re
 import json
 import time
+import html
 from datetime import date, datetime
 from pathlib import Path
 from urllib.parse import quote, quote_plus
@@ -32,8 +33,10 @@ from analyzer import (
     waiting_risk_description,
 )
 from storage import (
+    get_lowest_price_history,
     get_last_push_price,
     get_last_push_snapshot,
+    get_roundtrip_price_history,
     save_last_push_price,
     save_push_snapshot,
 )
@@ -2908,6 +2911,240 @@ def _history_prices(price_history) -> list[float]:
     return prices
 
 
+def _chart_date_label(value) -> str:
+    raw = str(value or "")
+    if not raw:
+        return ""
+    if re.fullmatch(r"\d+(?:\.\d+)?", raw):
+        try:
+            raw = datetime.fromtimestamp(float(raw)).isoformat()
+        except (OSError, OverflowError, ValueError):
+            pass
+    raw_date = raw[:10]
+    try:
+        parsed = date.fromisoformat(raw_date)
+        return f"{parsed.month}/{parsed.day}"
+    except ValueError:
+        return raw[:5] if len(raw) > 5 else raw
+
+
+def _normalize_chart_history(price_history) -> list[dict]:
+    rows = []
+    for index, item in enumerate(price_history or []):
+        if isinstance(item, dict):
+            price = (
+                item.get("price")
+                or item.get("min_price")
+                or item.get("total")
+                or item.get("roundtrip_lowest")
+            )
+            label = item.get("date") or item.get("timestamp") or item.get("snapshot_time")
+        elif isinstance(item, (list, tuple)) and len(item) >= 2:
+            label, price = item[0], item[1]
+        else:
+            label, price = index + 1, item
+        value = _to_float(price)
+        if value and value > 0:
+            rows.append({"date": _chart_date_label(label) or str(index + 1), "price": value})
+    return rows
+
+
+def _low_zone_bounds(low_zone, prices: list[float]) -> tuple[float | None, float | None]:
+    if isinstance(low_zone, dict):
+        low = _to_float(low_zone.get("min") or low_zone.get("low") or low_zone.get("min_price"))
+        high = _to_float(low_zone.get("max") or low_zone.get("high") or low_zone.get("max_price"))
+    elif isinstance(low_zone, (list, tuple)) and len(low_zone) >= 2:
+        low = _to_float(low_zone[0])
+        high = _to_float(low_zone[1])
+    else:
+        low = high = None
+    if low is not None and high is not None:
+        return min(low, high), max(low, high)
+    if prices:
+        sorted_prices = sorted(prices)
+        cutoff_index = max(0, min(len(sorted_prices) - 1, int((len(sorted_prices) - 1) * 0.3)))
+        return min(sorted_prices), sorted_prices[cutoff_index]
+    return None, None
+
+
+def build_trend_linechart_svg(price_history, ideal_price, max_price, current_price, low_zone):
+    """Build a lightweight inline SVG line chart for PushPlus/email."""
+    rows = _normalize_chart_history(price_history)[-14:]
+    current = _to_float(current_price)
+    if current and (not rows or abs(rows[-1]["price"] - current) > 1):
+        rows.append({"date": "当前", "price": current})
+    if len(rows) < 2:
+        return ""
+
+    prices = [row["price"] for row in rows]
+    ideal = _to_float(ideal_price)
+    ceiling = _to_float(max_price)
+    low_min, low_max = _low_zone_bounds(low_zone, prices)
+
+    domain_values = prices[:]
+    if ideal:
+        domain_values.append(ideal)
+    if low_min:
+        domain_values.append(low_min)
+    if low_max:
+        domain_values.append(low_max)
+    y_min = min(domain_values)
+    y_max = max(domain_values)
+    if y_max <= y_min:
+        y_max = y_min + 1
+    padding = max((y_max - y_min) * 0.12, 100)
+    y_min = max(0, y_min - padding)
+    y_max = y_max + padding
+
+    width, height = 350, 140
+    left, right, top, bottom = 42, 14, 12, 28
+    chart_w = width - left - right
+    chart_h = height - top - bottom
+
+    def x_at(index: int) -> float:
+        if len(rows) == 1:
+            return left + chart_w
+        return left + (chart_w * index / (len(rows) - 1))
+
+    def y_at(value: float) -> float:
+        return top + (y_max - value) / (y_max - y_min) * chart_h
+
+    points = " ".join(f"{x_at(i):.1f},{y_at(row['price']):.1f}" for i, row in enumerate(rows))
+    current_color = "#16a34a" if ideal and rows[-1]["price"] <= ideal else "#2563eb"
+    parts = [
+        f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="价格走势折线图">',
+        '<rect x="0" y="0" width="350" height="140" fill="#ffffff"/>',
+        f'<line x1="{left}" y1="{top + chart_h}" x2="{width - right}" y2="{top + chart_h}" stroke="#d1d5db" stroke-width="1"/>',
+        f'<line x1="{left}" y1="{top}" x2="{left}" y2="{top + chart_h}" stroke="#d1d5db" stroke-width="1"/>',
+        f'<text x="4" y="{y_at(y_max - padding):.1f}" font-size="10" fill="#6b7280">{_price_text(y_max - padding)}</text>',
+        f'<text x="4" y="{y_at(y_min + padding):.1f}" font-size="10" fill="#6b7280">{_price_text(y_min + padding)}</text>',
+    ]
+
+    if low_min is not None and low_max is not None:
+        rect_y1 = max(top, min(top + chart_h, y_at(low_max)))
+        rect_y2 = max(top, min(top + chart_h, y_at(low_min)))
+        parts.append(
+            f'<rect x="{left}" y="{rect_y1:.1f}" width="{chart_w}" height="{max(2, rect_y2 - rect_y1):.1f}" fill="#dcfce7" opacity="0.65"/>'
+        )
+
+    if ideal and y_min <= ideal <= y_max:
+        y = y_at(ideal)
+        parts.extend([
+            f'<line x1="{left}" y1="{y:.1f}" x2="{width - right}" y2="{y:.1f}" stroke="#16a34a" stroke-width="1.3" stroke-dasharray="5 4"/>',
+            f'<text x="{width - right - 76}" y="{max(11, y - 4):.1f}" font-size="10" fill="#15803d">理想价 {_price_text(ideal)}</text>',
+        ])
+
+    if ceiling and y_min <= ceiling <= y_max:
+        y = y_at(ceiling)
+        parts.extend([
+            f'<line x1="{left}" y1="{y:.1f}" x2="{width - right}" y2="{y:.1f}" stroke="#dc2626" stroke-width="1.1" stroke-dasharray="5 4"/>',
+            f'<text x="{width - right - 96}" y="{min(height - bottom, y + 11):.1f}" font-size="10" fill="#b91c1c">最高可接受 {_price_text(ceiling)}</text>',
+        ])
+
+    parts.extend([
+        f'<polyline points="{points}" fill="none" stroke="#2563eb" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>',
+        f'<circle cx="{x_at(len(rows) - 1):.1f}" cy="{y_at(rows[-1]["price"]):.1f}" r="4.5" fill="{current_color}" stroke="#ffffff" stroke-width="1.5"/>',
+        f'<text x="{min(width - 78, x_at(len(rows) - 1) + 6):.1f}" y="{max(12, y_at(rows[-1]["price"]) - 7):.1f}" font-size="11" fill="{current_color}">当前 {_price_text(rows[-1]["price"])}</text>',
+        f'<text x="{left}" y="{height - 8}" font-size="10" fill="#6b7280">{rows[0]["date"]}</text>',
+        f'<text x="{width - right - 36}" y="{height - 8}" font-size="10" fill="#6b7280">{rows[-1]["date"]}</text>',
+        '</svg>',
+    ])
+    return "".join(parts)
+
+
+def _trend_linechart_summary(price_history, ideal_price, current_price, low_zone) -> str:
+    rows = _normalize_chart_history(price_history)[-14:]
+    current = _to_float(current_price)
+    if current and (not rows or abs(rows[-1]["price"] - current) > 1):
+        rows.append({"date": "当前", "price": current})
+    if len(rows) < 2:
+        return "走势数据仍在积累，当前判断以最新采集价和购买页验证为准。"
+    first = rows[0]["price"]
+    last = rows[-1]["price"]
+    diff = last - first
+    window = min(len(rows), 14)
+    ideal = _to_float(ideal_price)
+    low_min, low_max = _low_zone_bounds(low_zone, [row["price"] for row in rows])
+    if abs(diff) < 1:
+        trend_text = f"近{window}次采集价格基本持平"
+    elif diff < 0:
+        trend_text = f"近{window}次采集价格下降约{_price_text(abs(diff))}"
+    else:
+        trend_text = f"近{window}次采集价格上涨约{_price_text(diff)}"
+    if ideal and last <= ideal:
+        position = "当前价格已低于理想入手价，建议验证支付页价格。"
+    elif ideal and last <= ideal * 1.05:
+        position = "当前价格已接近理想入手价，建议验证支付页价格。"
+    elif low_max and last <= low_max:
+        position = "当前价格处在历史低价区间，可重点关注。"
+    else:
+        position = "当前价格仍高于历史低价区间，建议继续观察。"
+    return f"{trend_text}，{position}"
+
+
+def _trend_fallback_line(price_history, width: int = 5) -> str:
+    rows = _normalize_chart_history(price_history)
+    prices = [row["price"] for row in rows[-width:]]
+    return " → ".join(_price_text(price) for price in prices)
+
+
+def _chart_history_for_message(
+    route_info: dict,
+    analysis_result: dict,
+    price_insights: dict | None,
+    is_round_trip: bool,
+) -> list:
+    if is_round_trip:
+        round_trip = analysis_result.get("round_trip_analysis") or {}
+        history = round_trip.get("history") or round_trip.get("price_history") or []
+        if history:
+            return history
+        route, depart_date, return_date = _last_push_route_parts(route_info, True)
+        if route and depart_date and return_date:
+            try:
+                return get_roundtrip_price_history(route, depart_date, return_date, limit=14)
+            except Exception as exc:
+                print(f"[图表] 读取往返历史失败: {exc}")
+        return []
+
+    history = (price_insights or {}).get("price_history") or analysis_result.get("price_history") or []
+    if history:
+        return history
+    route, depart_date, _ = _last_push_route_parts(route_info, False)
+    if route and depart_date:
+        try:
+            return get_lowest_price_history(route, depart_date, limit=14)
+        except Exception as exc:
+            print(f"[图表] 读取单程历史失败: {exc}")
+    return []
+
+
+def _append_push_trend_linechart(
+    lines: list[str],
+    analysis_result: dict,
+    route_info: dict,
+    price_insights: dict | None,
+    is_round_trip: bool,
+    current,
+    target,
+    max_budget,
+) -> None:
+    history = _chart_history_for_message(route_info, analysis_result, price_insights, is_round_trip)
+    rows = _normalize_chart_history(history)
+    if len(rows) < 2:
+        return
+    low_zone = _low_zone_bounds(None, [row["price"] for row in rows])
+    svg = build_trend_linechart_svg(rows, target, max_budget, current, low_zone)
+    if not svg:
+        return
+    lines.append(svg)
+    lines.append(_trend_linechart_summary(rows, target, current, low_zone))
+    fallback = _trend_fallback_line(rows)
+    if fallback:
+        lines.append(f"文字走势：{fallback}")
+    lines.append("")
+
+
 def _trend_arrow_line(price_history, width: int = 4) -> str:
     prices = _history_prices(price_history)
     if len(prices) < 2:
@@ -4259,6 +4496,138 @@ def _roundtrip_bar(price: float, min_price: float, max_price: float) -> str:
     return "█" * max(4, min(width, level))
 
 
+def _append_css_bar_chart(lines: list[str], title: str, rows: list[dict]) -> None:
+    chart_rows = []
+    for row in rows or []:
+        value = _to_float(row.get("value"))
+        if value is None or value <= 0:
+            continue
+        chart_rows.append({**row, "value": value})
+    if not chart_rows:
+        return
+    max_value = max(row["value"] for row in chart_rows)
+    min_value = min(row["value"] for row in chart_rows)
+    lines.append(f"<b>{title}</b>")
+    for row in chart_rows:
+        width = 100 if max_value <= 0 else max(12, min(100, row["value"] / max_value * 100))
+        color = row.get("color")
+        if not color:
+            if row.get("highlight") == "low":
+                color = "#16a34a"
+            elif row.get("highlight") == "selected":
+                color = "#2563eb"
+            elif row["value"] == min_value:
+                color = "#16a34a"
+            else:
+                color = "#9ca3af"
+        label = html.escape(str(row.get("label") or ""))
+        note = html.escape(str(row.get("note") or ""))
+        lines.append(
+            '<div style="margin:8px 0;">'
+            f'<div style="font-size:13px;color:#374151;">{label} {_price_text(row["value"])} {note}</div>'
+            '<div style="background:#e5e7eb;height:20px;border-radius:3px;overflow:hidden;">'
+            f'<div style="background:{color};height:20px;width:{width:.1f}%;border-radius:3px;"></div>'
+            '</div></div>'
+        )
+    lines.append("")
+
+
+def _append_nearby_dates_bar_chart(lines: list[str], nearby_dates, is_round_trip: bool = False) -> None:
+    items = list((nearby_dates or {}).values()) if isinstance(nearby_dates, dict) else list(nearby_dates or [])
+    prices = [
+        _to_float(item.get("roundtrip_total") or item.get("total") or item.get("min_price"))
+        for item in items
+        if isinstance(item, dict)
+    ]
+    valid_prices = [price for price in prices if price and price > 0]
+    if not valid_prices:
+        return
+    cheapest = min(valid_prices)
+    rows = []
+    for item in sorted(items, key=lambda value: str(value.get("date", ""))):
+        price = _to_float(item.get("roundtrip_total") or item.get("total") or item.get("min_price"))
+        if not price:
+            continue
+        date_text = str(item.get("date", ""))
+        try:
+            parsed = date.fromisoformat(date_text)
+            label = f"{parsed.month}/{parsed.day}"
+        except ValueError:
+            label = date_text
+        notes = []
+        highlight = ""
+        if abs(price - cheapest) < 1:
+            notes.append("← 最低")
+            highlight = "low"
+        if item.get("selected"):
+            notes.append("(你选的)")
+            highlight = highlight or "selected"
+        rows.append({"label": label, "value": price, "note": " ".join(notes), "highlight": highlight})
+    title = "📊 前后日期最低价（往返总价）" if is_round_trip else "📊 前后日期最低价"
+    _append_css_bar_chart(lines, title, rows)
+
+
+def _append_channel_price_bar_chart(lines: list[str], flight: dict | None) -> None:
+    options = _verified_booking_options(flight)
+    if len(options) < 2:
+        return
+    prices = [_option_price(option) for option in options]
+    prices = [price for price in prices if price]
+    if not prices:
+        return
+    cheapest = min(prices)
+    rows = []
+    for option in options[:6]:
+        price = _option_price(option)
+        if not price:
+            continue
+        rows.append(
+            {
+                "label": str(option.get("platform") or "购买渠道"),
+                "value": price,
+                "note": "← 最低" if abs(price - cheapest) < 1 else "",
+                "highlight": "low" if abs(price - cheapest) < 1 else "",
+            }
+        )
+    _append_css_bar_chart(lines, "📊 不同渠道报价对比", rows)
+
+
+def _append_option_price_bar_chart(
+    lines: list[str],
+    analysis_result: dict,
+    is_round_trip: bool,
+    route_info: dict,
+) -> None:
+    rows = []
+    if is_round_trip:
+        for index, combo in enumerate(_round_trip_combinations(analysis_result)[:3], start=1):
+            total = _to_float(combo.get("total_price"))
+            if total is None:
+                continue
+            rows.append(
+                {
+                    "label": f"方案{chr(64 + index)}",
+                    "value": total,
+                    "note": f"风险{_combo_grade(combo)}级",
+                    "highlight": "selected" if index == 1 else "",
+                }
+            )
+    else:
+        for index, flight in enumerate(_single_flights_for_sections(analysis_result)[:3], start=1):
+            price = _to_float(flight.get("price"))
+            if price is None:
+                continue
+            rows.append(
+                {
+                    "label": f"方案{chr(64 + index)}",
+                    "value": price,
+                    "note": _status_risk_label(flight),
+                    "highlight": "selected" if index == 1 else "",
+                }
+            )
+    _append_css_bar_chart(lines, "📊 方案价格对比", rows)
+
+
 def _append_roundtrip_trend_chart(lines: list[str], round_trip: dict) -> None:
     analysis = round_trip.get("price_analysis") or {}
     rows = analysis.get("trend_chart") or round_trip.get("history") or []
@@ -4334,7 +4703,7 @@ def _append_round_trip_block(
 
     _append_roundtrip_price_reference(lines, round_trip, route_info)
     _append_roundtrip_price_analysis(lines, round_trip)
-    _append_roundtrip_trend_chart(lines, round_trip)
+    _append_option_price_bar_chart(lines, outbound_analysis, True, route_info)
 
     if top_combinations:
         lines.append("<b>🔄 往返最优组合 Top3</b>")
@@ -5725,7 +6094,14 @@ def _append_detailed_analysis_section(
     _section(lines, "<b>📈 详细分析</b>")
     if is_round_trip:
         round_trip = analysis_result.get("round_trip_analysis") or {}
-        _append_roundtrip_trend_chart(lines, round_trip)
+        nearby_dates = route_info.get("nearby_dates") or analysis_result.get("nearby_dates")
+        _append_nearby_dates_bar_chart(lines, nearby_dates, is_round_trip=True)
+        _append_option_price_bar_chart(lines, analysis_result, True, route_info)
+        top_combinations = _round_trip_combinations(analysis_result)
+        if top_combinations:
+            first_combo = top_combinations[0]
+            _append_channel_price_bar_chart(lines, first_combo.get("outbound"))
+            _append_channel_price_bar_chart(lines, first_combo.get("return"))
         if not compact:
             _append_roundtrip_price_reference(lines, round_trip, route_info)
             _append_roundtrip_price_analysis(lines, round_trip)
@@ -5752,8 +6128,13 @@ def _append_detailed_analysis_section(
             else None
         )
         history = price_insights.get("price_history") if price_insights else None
-        trend = generate_trend_summary(history, current_min)
-        arrow_line = _trend_arrow_line(history)
+        nearby_dates = route_info.get("nearby_dates") or analysis_result.get("nearby_dates")
+        _append_nearby_dates_bar_chart(lines, nearby_dates, is_round_trip=False)
+        _append_option_price_bar_chart(lines, analysis_result, False, route_info)
+        first_flight = next(iter(_single_flights_for_sections(analysis_result) or []), None)
+        _append_channel_price_bar_chart(lines, first_flight)
+        trend = {}
+        arrow_line = ""
         if arrow_line:
             lines.append(f"价格走势：{arrow_line}")
         elif trend.get("available"):
@@ -5843,6 +6224,16 @@ def _format_structured_html_message(
         max_budget,
         analysis_result,
         is_round_trip,
+    )
+    _append_push_trend_linechart(
+        lines,
+        analysis_result,
+        route_info,
+        price_insights,
+        is_round_trip,
+        current,
+        target,
+        max_budget,
     )
 
     primary_flight = None
