@@ -201,14 +201,14 @@ DISCLAIMER = "以上内容基于历史价格数据分析，仅供参考。\n实�
 
 
 def format_price(price) -> str:
-    """楼8,200 鏍煎紡"""
+    """Format a CNY price."""
     try:
         value = float(price)
     except (TypeError, ValueError):
-        return "鏆傛棤鎶ヤ环"
+        return "暂无报价"
     if value <= 0:
-        return "鏆傛棤鎶ヤ环"
-    return f"楼{value:,.0f}"
+        return "暂无报价"
+    return f"¥{value:,.0f}"
 
 
 def _has_valid_price(price) -> bool:
@@ -345,6 +345,17 @@ def _flight_price_text(flight: dict) -> str:
     source = _compact_source_label(flight)
     collected_at = _collected_time_text(flight)
     return f"{price_part} (来源:{source}, 采集于{collected_at})"
+
+
+def _compact_source_label(flight: dict | None) -> str:
+    source = str((flight or {}).get("data_source") or (flight or {}).get("source") or "unknown")
+    labels = []
+    for part in source.split("+"):
+        key = part.strip()
+        if not key:
+            continue
+        labels.append(SOURCE_LABELS.get(key, key))
+    return "+".join(labels) if labels else "unknown"
 
 
 def _price_estimate_data(flight: dict) -> dict:
@@ -3979,6 +3990,29 @@ def _payload_plan_leg(flight: dict | None, date_str: str | None = None, prefix: 
     )
 
 
+def _round_trip_airline_text(flight: dict | None) -> str:
+    flight = flight or {}
+    airlines = flight.get("airlines") or []
+    if airlines:
+        return " / ".join(str(item) for item in airlines if item)
+    segments = flight.get("segments") or []
+    names = []
+    for segment in segments:
+        name = segment.get("airline") or ""
+        if name and name not in names:
+            names.append(name)
+    return " / ".join(names)
+
+
+def _round_trip_stops_text(flight: dict | None) -> str:
+    flight = flight or {}
+    try:
+        stops = int(flight.get("stops") if flight.get("stops") is not None else 0)
+    except (TypeError, ValueError):
+        stops = 0
+    return "直飞" if stops <= 0 else f"中转{stops}次"
+
+
 def format_flight_detail(flight: dict | None, date_str: str | None = None, prefix: str = "") -> str:
     """Format one flight consistently for recommendation and alternative cards."""
     return _payload_plan_leg(flight, date_str, prefix)
@@ -4001,6 +4035,120 @@ def _payload_channel_rows(flight: dict | None) -> list[dict]:
     return rows
 
 
+def _pushplus_baggage_line_for_flight(flight: dict | None) -> str:
+    flight = flight or {}
+    estimate = flight.get("price_estimate") or {}
+    for item in estimate.get("extra_items") or []:
+        name = str(item.get("name") or "")
+        amount = _to_float(item.get("amount"))
+        if "托运" in name or "行李" in name:
+            if amount:
+                return f"行李:不含托运,需额外购买约{_price_text(amount)}"
+            return "行李:不含托运,需额外购买"
+
+    fare_rules = flight.get("fare_rules") or {}
+    baggage = fare_rules.get("baggage") or {}
+    pieces = baggage.get("checked_pieces") or 0
+    kg = baggage.get("checked_kg") or 0
+    if pieces:
+        return f"行李:已含{pieces}件托运"
+    if kg:
+        return f"行李:已含托运{kg}kg"
+
+    extra = flight.get("extra") or {}
+    detail = extra.get("baggage_detail") or {}
+    checked = detail.get("checked") or {}
+    if checked.get("quantity"):
+        return f"行李:已含{checked.get('quantity')}件托运"
+    if extra.get("baggage") or flight.get("has_baggage_info"):
+        return "行李:已含托运"
+    return "行李:支付页需确认"
+
+
+def _pushplus_baggage_line_for_combo(outbound: dict | None, return_flight: dict | None) -> str:
+    lines = [_pushplus_baggage_line_for_flight(outbound), _pushplus_baggage_line_for_flight(return_flight)]
+    if any("不含托运" in line for line in lines):
+        return next(line for line in lines if "不含托运" in line)
+    if all("已含" in line for line in lines):
+        return "行李:去回程已含托运"
+    return "行李:支付页需确认"
+
+
+def _pushplus_link_candidates(link_text: str, max_links: int = 2) -> list[tuple[str, str]]:
+    anchors = re.findall(r'<a\s+href="([^"]+)"[^>]*>(.*?)</a>', str(link_text or ""), flags=re.I)
+    clean = [(html.unescape(name).strip(), url) for url, name in anchors if url and name]
+    priority = ["携程", "飞猪", "去哪儿", "航司", "官网", "Trip.com"]
+    ordered: list[tuple[str, str]] = []
+    for key in priority:
+        for name, url in clean:
+            if key in name and (name, url) not in ordered:
+                ordered.append((name, url))
+    for item in clean:
+        if item not in ordered:
+            ordered.append(item)
+    return ordered[:max_links]
+
+
+def _pushplus_plan_booking_links(plan: dict | None, max_links: int = 2) -> list[tuple[str, str]]:
+    plan = plan or {}
+    links = plan.get("links") or {}
+    if isinstance(links, dict):
+        if links.get("main"):
+            return _pushplus_link_candidates(links.get("main"), max_links)
+        candidates = []
+        for key in ("outbound", "return"):
+            candidates.extend(_pushplus_link_candidates(links.get(key, ""), max_links))
+        unique = []
+        for item in candidates:
+            if item not in unique:
+                unique.append(item)
+        return unique[:max_links]
+    return _pushplus_link_candidates(str(links), max_links)
+
+
+def _pushplus_channel_section(payload: dict, plan: dict | None) -> list[str]:
+    detail_url = str(payload.get("detail_url") or "")
+    detail_link = (
+        f'<a href="{html.escape(detail_url, quote=True)}" target="_blank">{html.escape(detail_url)}</a>'
+        if detail_url
+        else "详情页暂未生成"
+    )
+    age = _to_float(payload.get("freshness_minutes"))
+    baggage_line = str((plan or {}).get("baggage_line") or "")
+    fare_known = "支付页需确认" not in baggage_line
+    availability_ok = (
+        (age is None or age < 120)
+        and (plan or {}).get("risk") != "风险高"
+        and fare_known
+    )
+    links = _pushplus_plan_booking_links(plan, 2) if availability_ok else []
+    if not links:
+        return [
+            "当前价格接近低价区间,但暂未发现已验证购买渠道。",
+            f"查看详情继续监控:{detail_link}",
+        ]
+
+    lines = ["购买渠道:点击验证最终价格"]
+    for index, (name, url) in enumerate(links, start=1):
+        label = f"{index}. {name}" if len(links) > 1 else name
+        lines.append(f'{label}: <a href="{html.escape(url, quote=True)}" target="_blank">{html.escape(url)}</a>')
+    lines.append("更多渠道见详情页")
+    lines.append(f"完整分析:{detail_link}")
+    return lines
+
+
+def _pushplus_freshness_line(payload: dict) -> str:
+    age = _to_float(payload.get("freshness_minutes"))
+    if age is not None and age > 120:
+        return "⚠️ 该价格已超过2小时未验证,仅供参考"
+    collected = str(payload.get("collected_at") or "").strip()
+    if collected:
+        time_text = _time_only(collected) or collected
+    else:
+        time_text = "刚刚"
+    return f"价格更新:{time_text},建议30分钟内验证"
+
+
 def _payload_combo_plan(combo: dict, route_info: dict, index: int, variant: str) -> dict:
     outbound = combo.get("outbound") or {}
     return_flight = combo.get("return") or {}
@@ -4009,7 +4157,7 @@ def _payload_combo_plan(combo: dict, route_info: dict, index: int, variant: str)
     outbound_date = route_info.get("depart_date")
     return_date = route_info.get("return_date")
     return {
-        "label": f"鏂规{chr(65 + index)}",
+        "label": f"方案{chr(65 + index)}",
         "variant": variant,
         "is_roundtrip": True,
         "price": total,
@@ -4018,9 +4166,10 @@ def _payload_combo_plan(combo: dict, route_info: dict, index: int, variant: str)
         "return_price": _to_float(return_flight.get("price")),
         "outbound_line": format_flight_detail(outbound, outbound_date, "去程"),
         "return_line": format_flight_detail(return_flight, return_date, "返程"),
-        "outbound_push_line": _pushplus_leg_summary(outbound, "鍘荤▼"),
-        "return_push_line": _pushplus_leg_summary(return_flight, "杩旂▼"),
-        "summary": f"寰€杩旀€讳环 {_price_text(total)}",
+        "outbound_push_line": _pushplus_leg_summary(outbound, "去程"),
+        "return_push_line": _pushplus_leg_summary(return_flight, "返程"),
+        "summary": f"往返总价 {_price_text(total)}",
+        "baggage_line": _pushplus_baggage_line_for_combo(outbound, return_flight),
         "tags": _round_trip_combo_tags(combo, route_info, None),
         "risk": _combo_grade(combo),
         "buy_condition": _combo_human_recommendation(combo, route_info),
@@ -4034,13 +4183,14 @@ def _payload_combo_plan(combo: dict, route_info: dict, index: int, variant: str)
 
 def _payload_single_plan(flight: dict, route_info: dict, analysis_result: dict, index: int, variant: str) -> dict:
     return {
-        "label": f"鏂规{chr(65 + index)}",
+        "label": f"方案{chr(65 + index)}",
         "variant": variant,
         "is_roundtrip": False,
         "price": _to_float(flight.get("price")),
         "estimated_price": _to_float((flight.get("price_estimate") or {}).get("transaction_price") or flight.get("price")),
         "summary": format_flight_detail(flight, route_info.get("depart_date"), "去程"),
-        "main_push_line": _pushplus_leg_summary(flight, "鍘荤▼"),
+        "main_push_line": _pushplus_leg_summary(flight, "去程"),
+        "baggage_line": _pushplus_baggage_line_for_flight(flight),
         "tags": _flight_status_tags(flight, route_info, analysis_result),
         "risk": _status_risk_label(flight),
         "buy_condition": _human_recommendation_text(flight, route_info, analysis_result),
@@ -4480,16 +4630,23 @@ def _pushplus_plan_lines(payload: dict) -> list[str]:
         second = plans[1] or {}
         if second.get("variant") in {"更稳", "全服务", "推荐"} or second.get("risk") == "A":
             primary.append(second)
-    lines = ["", "推荐方案:"]
+    detail_lines: list[str] = []
     for index, plan in enumerate(primary[:2]):
-        if index:
-            lines.append("")
         if plan.get("is_roundtrip"):
-            lines.append(html.escape(str(plan.get("outbound_push_line") or "")))
-            lines.append(html.escape(str(plan.get("return_push_line") or "")))
+            current = [
+                html.escape(str(plan.get("outbound_push_line") or "")),
+                html.escape(str(plan.get("return_push_line") or "")),
+            ]
         else:
-            lines.append(html.escape(str(plan.get("main_push_line") or "")))
-    return [line for line in lines if line != "" or len(lines) > 1]
+            current = [html.escape(str(plan.get("main_push_line") or ""))]
+        current = [line for line in current if line.strip()]
+        if current:
+            if detail_lines:
+                detail_lines.append("")
+            detail_lines.extend(current)
+    if not detail_lines:
+        return []
+    return ["", "推荐方案:"] + detail_lines
 
 
 def render_pushplus(payload: dict) -> str:
@@ -4500,12 +4657,8 @@ def render_pushplus(payload: dict) -> str:
     price_text = _payload_price(payload.get("current_price"))
     recommendation = html.escape(str(payload.get("recommendation") or "可以观察"))
     buy_condition = html.escape(str(payload.get("buy_condition") or "以支付页最终价和票规为准"))
-    detail_url = str(payload.get("detail_url") or "")
-    detail_link = (
-        f'<a href="{html.escape(detail_url, quote=True)}" target="_blank">{html.escape(detail_url)}</a>'
-        if detail_url
-        else "详情页暂未生成"
-    )
+    primary_plan = (payload.get("recommended_plans") or [{}])[0] or {}
+    baggage_line = html.escape(str(primary_plan.get("baggage_line") or "行李:支付页需确认"))
 
     reasons = [str(item) for item in (payload.get("trigger_reason") or []) if item]
     diff = _to_float((payload.get("diff_from_last") or {}).get("diff"))
@@ -4517,43 +4670,24 @@ def render_pushplus(payload: dict) -> str:
         reasons.append(f"接近理想价{_price_text(ideal)}")
     reason_text = "，".join(dict.fromkeys(reasons[:2])) or "当前价格触发监控条件"
 
-    risks = [str(item) for item in (payload.get("buy_risk") or payload.get("limits") or []) if item]
-    risk_text = "最终支付价和票规需确认"
-    if risks:
-        risk_text = "，".join(dict.fromkeys((["最终支付价和票规需确认"] + risks)[:2]))
-
-    if payload.get("frequency") == "price_change":
-        lines = [
-            f"<b>【{route}】{price_text}</b>",
-            f"结论:{recommendation}",
-            f"条件:{buy_condition}",
-        ]
-        lines.extend(_pushplus_plan_lines(payload))
-        lines.extend(
-            [
-                f"原因:{html.escape(reason_text)}",
-                "风险:最终价、行李和机型以下单页为准",
-                f"详情:{detail_link}",
-            ]
-        )
-        return "<br>".join(lines)
-
     lines = [
-        f"<b>【{push_type}】{route} {price_text}</b>",
+        f"<b>【{push_type}】{route}</b>",
         "",
+        f"当前含税参考价:{price_text}",
+        baggage_line,
         f"结论:{recommendation}",
-        f"条件:{buy_condition}",
+        f"购买条件:{buy_condition}",
     ]
     lines.extend(_pushplus_plan_lines(payload))
     lines.extend(
         [
             "",
-            "提醒原因:",
-            html.escape(reason_text),
+            f"提醒原因:{html.escape(reason_text)}",
             "",
-            "风险:最终价、行李和机型以下单页为准",
+            *_pushplus_channel_section(payload, primary_plan),
             "",
-            f"详情:{detail_link}",
+            _pushplus_freshness_line(payload),
+            "提示:最终价、库存、行李、退改签和机型以下单页为准",
         ]
     )
     return "<br>".join(lines)
