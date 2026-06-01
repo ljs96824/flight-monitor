@@ -18,6 +18,7 @@ from analyzer import apply_default_rules
 BASE_DIR = Path(__file__).parent
 SUBSCRIPTIONS_PATH = BASE_DIR / "data" / "subscriptions.json"
 FEEDBACK_PATH = BASE_DIR / "data" / "feedback.json"
+PAGE_RESULTS_PATH = BASE_DIR / "data" / "page_results.json"
 load_dotenv(BASE_DIR / ".env", encoding="utf-8")
 
 app = Flask(__name__)
@@ -2581,6 +2582,50 @@ def save_feedback(record: dict) -> None:
     )
 
 
+def load_page_results() -> list[dict]:
+    if not PAGE_RESULTS_PATH.exists():
+        return []
+    try:
+        data = json.loads(PAGE_RESULTS_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return []
+    return data if isinstance(data, list) else []
+
+
+DETAIL_TEMPLATE = """
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>航班监控详情</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin:0; background:#f8fafc; color:#111827; }
+    main { max-width: 820px; margin: 0 auto; padding: 20px 14px 40px; }
+    .panel { background:white; border:1px solid #e5e7eb; border-radius:10px; padding:16px; }
+    .muted { color:#6b7280; font-size:13px; }
+    a { color:#2563eb; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>航班监控详情</h1>
+  {% if result %}
+    <p class="muted">订阅：{{ result.subscription_id }} | 生成时间：{{ result.created_at }}</p>
+    <div class="panel">{{ result.html|safe }}</div>
+  {% else %}
+    <div class="panel">
+      <p>暂未找到这条订阅的详情。</p>
+      <p class="muted">如果刚收到 PushPlus 提醒，请稍等下一次本地采集同步后再打开。</p>
+      <p><a href="/">返回订阅表单</a></p>
+    </div>
+  {% endif %}
+</main>
+</body>
+</html>
+"""
+
+
 def update_subscription_preference(index: int, field: str, value: str) -> bool:
     subscriptions = load_subscriptions()
     if not (0 <= index < len(subscriptions)):
@@ -3236,6 +3281,21 @@ def feedback():
         saved=False,
         subscription_id=subscription_id,
     )
+
+
+@app.route("/detail")
+def detail():
+    subscription_id = request.args.get("sub", "")
+    results = load_page_results()
+    matched = None
+    if subscription_id:
+        for item in reversed(results):
+            if str(item.get("subscription_id", "")) == str(subscription_id):
+                matched = item
+                break
+    elif results:
+        matched = results[-1]
+    return render_template_string(DETAIL_TEMPLATE, result=matched)
 
 
 if __name__ == "__main__":

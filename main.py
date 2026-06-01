@@ -27,7 +27,13 @@ from analyzer import (
 from collector import _normalize_detail_flight, save_raw_response
 from email_notifier import send_email
 from health_check import system_health_check
-from notifier import format_html_message, send
+from notifier import (
+    build_notification_payload,
+    persist_notification_payload,
+    render_email,
+    render_pushplus,
+    send,
+)
 from sources.aggregator import FlightAggregator, build_default_sources
 from storage import (
     get_roundtrip_price_history,
@@ -328,7 +334,7 @@ def _email_subject(html_content: str, route_info: dict) -> str:
     return subject[:120]
 
 
-def _save_result_for_page(subscription_id: str, html_content: str) -> None:
+def _save_result_for_page(subscription_id: str, html_content: str, payload: dict | None = None) -> None:
     path = DATA_DIR / "page_results.json"
     try:
         records = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
@@ -339,6 +345,7 @@ def _save_result_for_page(subscription_id: str, html_content: str) -> None:
             "subscription_id": subscription_id,
             "created_at": datetime.now().isoformat(timespec="seconds"),
             "html": html_content,
+            "payload": payload or {},
         }
     )
     path.write_text(json.dumps(records[-100:], ensure_ascii=False, indent=2), encoding="utf-8")
@@ -358,14 +365,23 @@ def _deliver_notification(sub: dict, route: str, message_kwargs: dict) -> bool:
     method = notification_goals.get("method", "pushplus")
     email = notification_goals.get("email", "").strip()
     subscription_id = _subscription_identifier(sub, route)
+    route_info = dict(message_kwargs.get("route_info") or {})
+    route_info["subscription_id"] = subscription_id
+    message_kwargs = {**message_kwargs, "route_info": route_info}
+    payload = build_notification_payload(
+        analysis_result=message_kwargs.get("analysis_result"),
+        outbound_analysis=message_kwargs.get("outbound_analysis"),
+        return_analysis=message_kwargs.get("return_analysis"),
+        route_info=route_info,
+        subscription=sub,
+        price_history=route_info.get("lowest_price_history"),
+        source_stats=message_kwargs.get("source_stats"),
+        price_insights=message_kwargs.get("price_insights"),
+    )
+    subject, full_html = render_email(payload)
 
     if method == "page_only":
-        html_content = format_html_message(
-            **message_kwargs,
-            detail_level="full",
-            enforce_pushplus_limit=False,
-        )
-        _save_result_for_page(subscription_id, html_content)
+        _save_result_for_page(subscription_id, full_html, payload)
         print("[推送] 用户选择仅页面查看，已保存页面结果")
         return True
 
@@ -374,24 +390,29 @@ def _deliver_notification(sub: dict, route: str, message_kwargs: dict) -> bool:
         if not email:
             print("[邮件] 用户选择邮箱推送但未填写邮箱")
         else:
-            email_content = format_html_message(
-                **message_kwargs,
-                detail_level="full",
-                enforce_pushplus_limit=False,
-            )
             sent = send_email(
                 email,
-                _email_subject(email_content, message_kwargs.get("route_info", {})),
-                email_content,
+                subject,
+                full_html,
             ) or sent
 
     if method in {"pushplus", "both"}:
-        push_content = format_html_message(**message_kwargs)
-        sent = send(push_content) or sent
+        push_content = render_pushplus(payload)
+        sent = send(
+            push_content,
+            title=f"【{payload.get('push_type', '价格提醒')}】{payload.get('route', route)}",
+        ) or sent
 
     if method not in {"email", "pushplus", "both", "page_only"}:
-        push_content = format_html_message(**message_kwargs)
-        sent = send(push_content) or sent
+        push_content = render_pushplus(payload)
+        sent = send(
+            push_content,
+            title=f"【{payload.get('push_type', '价格提醒')}】{payload.get('route', route)}",
+        ) or sent
+
+    if sent:
+        _save_result_for_page(subscription_id, full_html, payload)
+        persist_notification_payload(payload)
 
     return sent
 
@@ -865,7 +886,7 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
                     history=roundtrip_history,
                 )
                 analysis["round_trip"] = True
-                print("[往返] return_analysis 已传入 format_html_message")
+                print("[往返] return_analysis 已传入 notification payload")
             else:
                 print("[往返] 返程采集为空，无法生成 return_analysis")
             print(f"[DEBUG] 返程analysis是否存在: {return_analysis is not None}")

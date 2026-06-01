@@ -28,6 +28,13 @@ PROVIDERS = {
 }
 
 
+def render_email(payload: dict):
+    """Render the full email HTML from the unified notification payload."""
+    from notifier import render_email as _render_email
+
+    return _render_email(payload)
+
+
 def _smtp_config() -> dict:
     """Resolve SMTP provider config, keeping SMTP_HOST/SMTP_PORT as overrides."""
     provider = os.getenv("SMTP_PROVIDER", "qq").strip().lower()

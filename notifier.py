@@ -6394,6 +6394,502 @@ def _format_structured_html_message(
     return "<br>".join(lines)
 
 
+def _payload_route_text(route_info: dict) -> str:
+    origin = route_info.get("origin_city") or get_airport_city(route_info.get("origin", "")) or route_info.get("origin", "")
+    dest = route_info.get("destination_city") or get_airport_city(route_info.get("destination", "")) or route_info.get("destination", "")
+    return f"{origin} → {dest}"
+
+
+def _payload_route_airports(route_info: dict) -> str:
+    origins = route_info.get("origin_airports") or [route_info.get("origin")]
+    dests = route_info.get("destination_airports") or [route_info.get("destination")]
+    origin_text = "/".join(str(item) for item in origins if item)
+    dest_text = "/".join(str(item) for item in dests if item)
+    return f"{origin_text} → {dest_text}".strip(" →")
+
+
+def _payload_plan_leg(flight: dict | None, date_str: str | None = None, prefix: str = "") -> str:
+    flight = flight or {}
+    label = f"{prefix}: " if prefix else ""
+    return (
+        f"{label}{_compact_flight_numbers(flight)} {_round_trip_airline_text(flight)} | "
+        f"{_flight_combo_time_text(flight, date_str)} | {_round_trip_stops_text(flight)} | "
+        f"{_flight_price_text(flight)}"
+    )
+
+
+def _payload_booking_links_for_flight(flight: dict | None, route_info: dict, date_str: str | None, limit: int = 6) -> str:
+    flight = flight or {}
+    links = _compact_link_text(_combo_full_booking_links(flight, date_str or route_info.get("depart_date")), limit)
+    if links:
+        return links
+    return _flight_link_text(flight, route_info, limit)
+
+
+def _payload_channel_rows(flight: dict | None) -> list[dict]:
+    rows = []
+    for option in _verified_booking_options(flight)[:6]:
+        price = _option_price(option)
+        if price:
+            rows.append({"label": str(option.get("platform") or "购买渠道"), "value": price})
+    return rows
+
+
+def _payload_combo_plan(combo: dict, route_info: dict, index: int, variant: str) -> dict:
+    outbound = combo.get("outbound") or {}
+    return_flight = combo.get("return") or {}
+    total = _to_float(combo.get("total_price"))
+    transaction_total = _combo_transaction_total(combo)
+    outbound_date = route_info.get("depart_date")
+    return_date = route_info.get("return_date")
+    return {
+        "label": f"方案{chr(65 + index)}",
+        "variant": variant,
+        "is_roundtrip": True,
+        "price": total,
+        "estimated_price": transaction_total,
+        "outbound_price": _to_float(outbound.get("price")),
+        "return_price": _to_float(return_flight.get("price")),
+        "outbound_line": _payload_plan_leg(outbound, outbound_date, "去"),
+        "return_line": _payload_plan_leg(return_flight, return_date, "回"),
+        "summary": f"往返总价 {_price_text(total)}",
+        "tags": _round_trip_combo_tags(combo, route_info, None),
+        "risk": _combo_grade(combo),
+        "buy_condition": _combo_human_recommendation(combo, route_info),
+        "links": {
+            "outbound": _payload_booking_links_for_flight(outbound, route_info, outbound_date, 6),
+            "return": _payload_booking_links_for_flight(return_flight, route_info, return_date, 6),
+        },
+        "channel_prices": _payload_channel_rows(outbound) or _payload_channel_rows(return_flight),
+    }
+
+
+def _payload_single_plan(flight: dict, route_info: dict, analysis_result: dict, index: int, variant: str) -> dict:
+    return {
+        "label": f"方案{chr(65 + index)}",
+        "variant": variant,
+        "is_roundtrip": False,
+        "price": _to_float(flight.get("price")),
+        "estimated_price": _to_float((flight.get("price_estimate") or {}).get("transaction_price") or flight.get("price")),
+        "summary": _payload_plan_leg(flight, route_info.get("depart_date")),
+        "tags": _flight_status_tags(flight, route_info, analysis_result),
+        "risk": _status_risk_label(flight),
+        "buy_condition": _human_recommendation_text(flight, route_info, analysis_result),
+        "links": {"main": _payload_booking_links_for_flight(flight, route_info, route_info.get("depart_date"), 6)},
+        "channel_prices": _payload_channel_rows(flight),
+    }
+
+
+def _payload_nearby_date_rows(route_info: dict, analysis_result: dict, is_roundtrip: bool) -> list[dict]:
+    nearby = route_info.get("nearby_dates") or analysis_result.get("nearby_dates") or []
+    items = list(nearby.values()) if isinstance(nearby, dict) else list(nearby or [])
+    rows = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        value = _to_float(item.get("roundtrip_total") or item.get("total") or item.get("min_price"))
+        if not value:
+            continue
+        rows.append({
+            "label": str(item.get("date") or ""),
+            "value": value,
+            "selected": bool(item.get("selected")),
+        })
+    return rows
+
+
+def _payload_action_range(current, target, max_budget) -> dict:
+    current = _to_float(current)
+    target = _to_float(target)
+    max_budget = _to_float(max_budget)
+    ranges = []
+    if target:
+        ranges.append({"label": "强烈建议验证并购买", "min": None, "max": target})
+        ranges.append({"label": "值得购买", "min": target, "max": target * 1.05})
+    if target and max_budget:
+        mid = (target + max_budget) / 2
+        ranges.append({"label": "可以考虑", "min": target * 1.05, "max": mid})
+        ranges.append({"label": "仅刚需建议", "min": mid, "max": max_budget})
+        ranges.append({"label": "不建议购买", "min": max_budget, "max": None})
+    elif max_budget:
+        ranges.append({"label": "预算内", "min": None, "max": max_budget})
+        ranges.append({"label": "超预算", "min": max_budget, "max": None})
+    return {"current": current, "target": target, "max": max_budget, "ranges": ranges, "current_label": _action_zone_label(current, target, max_budget)}
+
+
+def _judgment_limit_items(
+    route_info: dict,
+    analysis_result: dict,
+    price_insights: dict | None,
+    is_round_trip: bool,
+    return_analysis: dict | None = None,
+) -> list[str]:
+    limits = ["显示价格仍需支付页最终确认"]
+    if not _route_is_domestic(route_info):
+        limits.append("国际航线票规可能存在渠道差异")
+    if _has_transfer_options(analysis_result, return_analysis):
+        limits.append("如涉及中转，需确认是否联程及是否需要过境签")
+    history_count = _history_count_for_limits(analysis_result, price_insights, is_round_trip)
+    if history_count >= 14:
+        limits.append("历史价格反映相似区间，不代表未来必然重复")
+    else:
+        limits.append("历史样本仍在积累，价格区间判断会随数据增多而更新")
+    return limits
+
+
+def _purchase_checklist_items(route_info: dict, analysis_result: dict) -> list[str]:
+    checklist = [
+        "支付页最终价格是否在可接受范围内",
+        "是否含税费和燃油费",
+        "是否含托运行李（如需要）",
+        "退改签规则是否可接受",
+        "中转是否为联程票（如有中转）",
+        "出发和到达时间是否正确",
+    ]
+    companions = _preference_value(route_info, analysis_result, "companions", "solo")
+    if companions in {"with_elderly", "with_child", "with_elderly_child", "with_both"}:
+        checklist.extend(["是否避免红眼和凌晨到达", "中转时间是否充裕（建议≥2小时）"])
+    return checklist
+
+
+def _sorting_logic_items(route_info: dict, is_round_trip: bool) -> list[str]:
+    max_budget = _to_float(route_info.get("max_budget") or route_info.get("budget"))
+    target = _to_float(route_info.get("target_price"))
+    if is_round_trip:
+        max_budget = max_budget * 2 if max_budget else None
+        target = target * 2 if target else None
+    return [
+        f"不超过最高预算 {_price_text(max_budget) if max_budget else '当前配置'}",
+        "满足托运行李要求",
+        "尽量直飞/低中转风险",
+        f"接近理想入手价 {_price_text(target) if target else '合理价格'}",
+        "购买渠道可靠",
+    ]
+
+
+def build_notification_payload(
+    analysis_result,
+    outbound_analysis=None,
+    return_analysis=None,
+    route_info=None,
+    subscription=None,
+    price_history=None,
+    source_stats=None,
+    price_insights=None,
+) -> dict:
+    """Build one normalized notification payload for every delivery channel."""
+    route_info = dict(route_info or {})
+    subscription = subscription or {}
+    if subscription:
+        route_info.setdefault("subscription_id", subscription.get("subscription_id") or subscription.get("id") or subscription.get("_index"))
+    analysis_result = analysis_result or outbound_analysis or {}
+    outbound_analysis = outbound_analysis or analysis_result
+    return_analysis = return_analysis or analysis_result.get("return_analysis") or {}
+    is_roundtrip = bool(route_info.get("round_trip"))
+    source_stats = source_stats or route_info.get("source_stats") or analysis_result.get("source_stats")
+    decision, confidence, current, target, max_budget = _decision_context(
+        analysis_result,
+        route_info,
+        source_stats,
+        price_insights,
+        is_roundtrip,
+    )
+    route_key, depart_key, return_key = _last_push_route_parts(route_info, is_roundtrip)
+    last_push = get_last_push_price(route_key, depart_key, return_key)
+    last_snapshot = get_last_push_snapshot(route_key, depart_key, return_key)
+    history = (
+        _chart_history_for_message(route_info, analysis_result, price_insights, is_roundtrip)
+        if is_roundtrip
+        else price_history or _chart_history_for_message(route_info, analysis_result, price_insights, is_roundtrip)
+    )
+    push_meta = determine_push_type(
+        current,
+        target,
+        max_budget,
+        _price_history_for_push(price_insights, analysis_result, is_roundtrip),
+        analysis_result.get("days_to_dept"),
+        (last_push or {}).get("price"),
+        analysis_result,
+    )
+    verify_limit = _to_float(current)
+    verify_limit = verify_limit * 1.05 if verify_limit else None
+    risk = (
+        (analysis_result.get("round_trip_analysis") or {}).get("buy_vs_wait_risk")
+        if is_roundtrip
+        else analysis_result.get("buy_vs_wait_risk")
+    ) or {}
+
+    if is_roundtrip:
+        all_items = [_payload_combo_plan(combo, route_info, index, "推荐" if index < 2 else "备选") for index, combo in enumerate(_round_trip_combinations(analysis_result)[:5])]
+    else:
+        flights = _single_flights_for_sections(analysis_result)
+        all_items = [_payload_single_plan(flight, route_info, analysis_result, index, "推荐" if index < 2 else "备选") for index, flight in enumerate(flights[:5])]
+
+    primary_flight = None
+    if is_roundtrip:
+        combos = _round_trip_combinations(analysis_result)
+        primary_flight = (combos[0].get("outbound") or {}) if combos else {}
+    else:
+        flights = _single_flights_for_sections(analysis_result)
+        primary_flight = flights[0] if flights else {}
+
+    change = (push_meta or {}).get("price_change") or {}
+    fallback_line = _trend_fallback_line(history)
+    trend_summary = _trend_linechart_summary(history, target, current, None) if history else ""
+    form_url = _subscription_edit_url(route_info)
+    feedback_url = _feedback_url(route_info)
+    detail_url = f"{_subscription_form_url(route_info).rstrip('/')}/detail?sub={quote(str(route_info.get('subscription_id') or route_key))}"
+    payload = {
+        "push_type": (push_meta or {}).get("type") or "价格提醒",
+        "route": _payload_route_text(route_info),
+        "route_airports": _payload_route_airports(route_info),
+        "trip_type": "round_trip" if is_roundtrip else "one_way",
+        "is_roundtrip": is_roundtrip,
+        "current_price": current,
+        "ideal_price": target,
+        "max_price": max_budget,
+        "last_push_price": (last_push or {}).get("price"),
+        "recommendation": decision.get("conclusion") or "可以观察",
+        "confidence": confidence.get("overall") or decision.get("confidence") or "中",
+        "confidence_dimensions": confidence.get("dimensions") or {},
+        "confidence_details": confidence.get("details") or {},
+        "buy_condition": f"支付页≤{_price_text(verify_limit)}且含托运行李" if verify_limit else "以支付页最终价和票规为准",
+        "action_range": _payload_action_range(current, target, max_budget),
+        "trigger_reason": (push_meta or {}).get("reasons") or (decision.get("reasons") or [])[:3],
+        "recommended_plans": all_items[:2],
+        "alternative_plans": all_items[2:5],
+        "excluded_plans": analysis_result.get("excluded_flights") or [],
+        "buy_risk": risk.get("buy_risks") or ["可能遇到支付页跳价", "票规需确认（行李/退改）", "不同渠道售后政策不同"],
+        "wait_risk": risk.get("wait_risks") or ["可能错过当前低价", "临近出发价格通常上涨", "理想价再次出现不确定"],
+        "risk_summary": risk.get("summary") or "",
+        "limits": _judgment_limit_items(route_info, analysis_result, price_insights, is_roundtrip, return_analysis),
+        "price_history": _normalize_chart_history(history),
+        "trend_summary": trend_summary,
+        "trend_fallback": fallback_line,
+        "checklist": _purchase_checklist_items(route_info, analysis_result),
+        "sorting_logic": _sorting_logic_items(route_info, is_roundtrip),
+        "diff_from_last": {
+            "last_price": change.get("last") or (last_push or {}).get("price"),
+            "diff": change.get("diff"),
+            "last_snapshot": last_snapshot or {},
+        },
+        "freshness_minutes": ((primary_flight or {}).get("availability") or {}).get("age_minutes"),
+        "nearby_date_prices": _payload_nearby_date_rows(route_info, analysis_result, is_roundtrip),
+        "plan_price_rows": [{"label": item.get("label"), "value": item.get("price"), "note": item.get("risk", "")} for item in all_items[:5] if item.get("price")],
+        "channel_price_rows": (all_items[0].get("channel_prices") if all_items else []),
+        "detail_url": detail_url,
+        "form_url": form_url,
+        "feedback_url": feedback_url,
+        "source_stats": source_stats or {},
+        "collected_at": _message_collected_time(analysis_result, route_info),
+        "snapshot": {
+            "route": route_key,
+            "depart_date": depart_key,
+            "return_date": return_key,
+            "channels": _snapshot_channels(primary_flight),
+            "fare_status": _snapshot_fare_status(primary_flight),
+        },
+    }
+    return payload
+
+
+def _payload_price(value) -> str:
+    return _price_text(value)
+
+
+def render_pushplus(payload: dict) -> str:
+    """Render the short action-oriented PushPlus message from a payload."""
+    payload = payload or {}
+    lines = [
+        f"<b>【{html.escape(str(payload.get('push_type') or '价格提醒'))}】{html.escape(str(payload.get('route') or '航班监控'))}</b>",
+        "",
+        f"当前价：{_payload_price(payload.get('current_price'))}{'（往返）' if payload.get('is_roundtrip') else ''}",
+        f"建议：{html.escape(str(payload.get('recommendation') or '可以观察'))}",
+        f"购买条件：{html.escape(str(payload.get('buy_condition') or '以支付页为准'))}",
+        f"置信度：{html.escape(str(payload.get('confidence') or '中'))}",
+        "",
+        "<b>为什么提醒：</b>",
+        "，".join(str(item) for item in (payload.get("trigger_reason") or [])[:3]) or "当前价格触发监控条件",
+    ]
+    risks = payload.get("buy_risk") or payload.get("limits") or []
+    if risks:
+        lines.extend(["", "<b>主要风险：</b>", "；".join(str(item) for item in risks[:2])])
+    fallback = payload.get("trend_fallback")
+    diff = _to_float((payload.get("diff_from_last") or {}).get("diff"))
+    if fallback:
+        trend_text = f"近7天：{fallback}"
+        if diff is not None:
+            trend_text += f"，{'下降' if diff < 0 else '上涨' if diff > 0 else '持平'}{_price_text(abs(diff)) if diff else ''}"
+        lines.extend(["", trend_text])
+    links = [
+        f'<a href="{payload.get("detail_url", "")}" target="_blank">查看详情</a>',
+        f'<a href="{payload.get("form_url", "")}" target="_blank">修改偏好</a>',
+        f'<a href="{payload.get("feedback_url", "")}" target="_blank">反馈</a>',
+    ]
+    first_plan = (payload.get("recommended_plans") or [{}])[0]
+    plan_links = first_plan.get("links") or {}
+    if isinstance(plan_links, dict):
+        first_link = plan_links.get("outbound") or plan_links.get("main")
+        if first_link:
+            links.insert(0, first_link)
+    lines.extend(["", "下一步：" + " | ".join(link for link in links if link)])
+    return "<br>".join(lines)
+
+
+def _render_payload_plan_card(plan: dict, compact: bool = False) -> str:
+    title = html.escape(f"{plan.get('label', '方案')} ｜ {plan.get('variant', '')}".strip())
+    lines = [f'<div style="{CARD_STYLE}">', f'<div style="font-weight:bold;color:#2563eb;">{title}</div>']
+    if plan.get("is_roundtrip"):
+        lines.append(f"<div>往返总价：{_price_text(plan.get('price'))} | 预估实付：{_price_text(plan.get('estimated_price'))}</div>")
+        lines.append(f"<div>{html.escape(str(plan.get('outbound_line') or ''))}</div>")
+        lines.append(f"<div>{html.escape(str(plan.get('return_line') or ''))}</div>")
+        links = plan.get("links") or {}
+        if links.get("outbound"):
+            lines.append(f"<div>去程购买：{links['outbound']}</div>")
+        if links.get("return"):
+            lines.append(f"<div>返程购买：{links['return']}</div>")
+    else:
+        lines.append(f"<div>价格：{_price_text(plan.get('price'))} | 预估实付：{_price_text(plan.get('estimated_price'))}</div>")
+        lines.append(f"<div>{html.escape(str(plan.get('summary') or ''))}</div>")
+        links = (plan.get("links") or {}).get("main")
+        if links:
+            lines.append(f"<div>购买：{links}</div>")
+    lines.append(f"<div>标签：{html.escape(str(plan.get('tags') or ''))}</div>")
+    if not compact:
+        lines.append(f'<div style="{ACTION_STYLE}">操作建议：{html.escape(str(plan.get("buy_condition") or "以支付页为准"))}</div>')
+    lines.append("</div>")
+    return "".join(lines)
+
+
+def _payload_bar_html(title: str, rows: list[dict]) -> str:
+    lines: list[str] = []
+    _append_css_bar_chart(lines, title, rows)
+    return "<br>".join(lines)
+
+
+def render_email(payload: dict) -> tuple[str, str]:
+    """Render the full HTML email report from a normalized payload."""
+    payload = payload or {}
+    subject = (
+        f"【{payload.get('push_type') or '价格提醒'}】{payload.get('route') or '航班监控'} "
+        f"{_price_text(payload.get('current_price'))}，{payload.get('recommendation') or '请查看'}"
+    )
+    lines = [
+        f"<h2>【{html.escape(str(payload.get('push_type') or '价格提醒'))}】{html.escape(str(payload.get('route') or '航班监控'))}</h2>",
+        f"<p><b>当前判断：</b>{html.escape(str(payload.get('recommendation') or '可以观察'))}<br>",
+        f"<b>当前价：</b>{_price_text(payload.get('current_price'))}　"
+        f"<b>购买条件：</b>{html.escape(str(payload.get('buy_condition') or '以支付页为准'))}<br>",
+        f"<b>置信度：</b>{html.escape(str(payload.get('confidence') or '中'))}</p>",
+    ]
+    for plan in payload.get("recommended_plans") or []:
+        lines.append(_render_payload_plan_card(plan))
+    lines.append("<h3>为什么提醒你</h3>")
+    lines.extend(f"<div>- {html.escape(str(reason))}</div>" for reason in (payload.get("trigger_reason") or [])[:5])
+
+    svg = build_trend_linechart_svg(
+        payload.get("price_history") or [],
+        payload.get("ideal_price"),
+        payload.get("max_price"),
+        payload.get("current_price"),
+        None,
+    )
+    lines.append("<h3>价格走势</h3>")
+    if svg:
+        lines.append(svg)
+    if payload.get("trend_summary"):
+        lines.append(f"<p>{html.escape(str(payload['trend_summary']))}</p>")
+    if payload.get("trend_fallback"):
+        lines.append(f"<p>文字走势：{html.escape(str(payload['trend_fallback']))}</p>")
+
+    action = payload.get("action_range") or {}
+    if action.get("ranges"):
+        lines.append('<div style="border-left:4px solid #16a34a;padding:8px;margin:8px 0;background:#f0fdf4;">')
+        lines.append("<b>你的价格行动区间</b>")
+        for row in action["ranges"]:
+            left = "-∞" if row.get("min") is None else _price_text(row.get("min"))
+            right = "+∞" if row.get("max") is None else _price_text(row.get("max"))
+            lines.append(f"<div>{left} - {right}：{html.escape(str(row.get('label')))}</div>")
+        lines.append(f"<div>当前落在【{html.escape(str(action.get('current_label') or '待判断'))}】区间</div></div>")
+
+    lines.append("<h3>风险拆分</h3>")
+    lines.append("<b>如果现在买：</b>")
+    lines.extend(f"<div>- {html.escape(str(item))}</div>" for item in (payload.get("buy_risk") or [])[:5])
+    lines.append("<b>如果继续等：</b>")
+    lines.extend(f"<div>- {html.escape(str(item))}</div>" for item in (payload.get("wait_risk") or [])[:5])
+
+    excluded = payload.get("excluded_plans") or []
+    if excluded:
+        lines.append("<h3>为什么不推荐更便宜方案</h3>")
+        for item in excluded[:5]:
+            if isinstance(item, dict):
+                lines.append(f"<div>- {_price_text(item.get('price'))}方案：{html.escape(str(item.get('reason') or item.get('reasons') or '不符合当前规则'))}</div>")
+
+    dims = payload.get("confidence_dimensions") or {}
+    if dims:
+        lines.append("<h3>置信度拆解</h3>")
+        details = payload.get("confidence_details") or {}
+        for name, level in dims.items():
+            detail = details.get(name)
+            suffix = f"（{html.escape(str(detail))}）" if detail else ""
+            lines.append(f"<div>{html.escape(str(name))}：{html.escape(str(level))}{suffix}</div>")
+
+    checklist = payload.get("checklist") or []
+    if checklist:
+        lines.append("<h3>购买前检查清单</h3>")
+        lines.extend(f"<div>□ {html.escape(str(item))}</div>" for item in checklist)
+
+    alternatives = payload.get("alternative_plans") or []
+    if alternatives:
+        lines.append("<h3>备选方案</h3>")
+        for plan in alternatives[:3]:
+            lines.append(_render_payload_plan_card(plan, compact=True))
+
+    lines.append("<h3>详细分析</h3>")
+    if payload.get("nearby_date_prices"):
+        lines.append(_payload_bar_html("📊 前后日期最低价", payload["nearby_date_prices"]))
+    if payload.get("channel_price_rows"):
+        lines.append(_payload_bar_html("📊 不同渠道报价对比", payload["channel_price_rows"]))
+    if payload.get("plan_price_rows"):
+        lines.append(_payload_bar_html("📊 方案价格对比", payload["plan_price_rows"]))
+
+    lines.append("<h3>操作链接</h3>")
+    lines.append(f'<div><a href="{payload.get("detail_url", "")}" target="_blank">查看网页详情</a> | '
+                 f'<a href="{payload.get("form_url", "")}" target="_blank">修改监控偏好</a> | '
+                 f'<a href="{payload.get("feedback_url", "")}" target="_blank">反馈买不到/价格不对</a></div>')
+    lines.append(f"<p>数据采集于 {html.escape(str(payload.get('collected_at') or ''))}。最终价格以购买平台支付页为准。</p>")
+    return subject, "<br>".join(lines)
+
+
+def persist_notification_payload(payload: dict) -> None:
+    """Persist latest push price/snapshot after a channel has accepted the message."""
+    payload = payload or {}
+    snapshot = payload.get("snapshot") or {}
+    route = snapshot.get("route")
+    depart_date = snapshot.get("depart_date")
+    if not route or not depart_date:
+        return
+    now = datetime.now().isoformat(timespec="seconds")
+    save_last_push_price(
+        route,
+        depart_date,
+        snapshot.get("return_date"),
+        payload.get("current_price"),
+        payload.get("push_type"),
+        now,
+    )
+    save_push_snapshot(
+        route,
+        depart_date,
+        snapshot.get("return_date"),
+        payload.get("current_price"),
+        payload.get("confidence"),
+        snapshot.get("channels") or [],
+        snapshot.get("fare_status") or "",
+        payload.get("push_type"),
+        now,
+    )
+
+
 def format_html_message(
     analysis_result=None,
     route_info=None,
