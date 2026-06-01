@@ -719,27 +719,27 @@ FORM_TEMPLATE = """
         <div class="pref-cards">
           <div class="pref-card">
             <div class="pref-name">同行人员</div>
-            <div class="pref-value" data-pref-value="companions">未设置</div>
+            <div class="pref-value" id="pref-value-companion" data-pref-value="companions">未设置</div>
             <button class="secondary-button pref-card-button" type="button" data-pref-target="companions">补充</button>
           </div>
           <div class="pref-card">
             <div class="pref-name">时间偏好</div>
-            <div class="pref-value" data-pref-value="time">使用默认：避免红眼</div>
+            <div class="pref-value" id="pref-value-time" data-pref-value="time">使用默认：避免红眼</div>
             <button class="secondary-button pref-card-button" type="button" data-pref-target="time">修改</button>
           </div>
           <div class="pref-card">
             <div class="pref-name">退改签</div>
-            <div class="pref-value" data-pref-value="refund">使用默认：便宜优先，提醒风险</div>
+            <div class="pref-value" id="pref-value-refund" data-pref-value="refund">使用默认：便宜优先，提醒风险</div>
             <button class="secondary-button pref-card-button" type="button" data-pref-target="refund">修改</button>
           </div>
           <div class="pref-card">
             <div class="pref-name">航司偏好</div>
-            <div class="pref-value" data-pref-value="airline">使用默认：不限</div>
+            <div class="pref-value" id="pref-value-airline" data-pref-value="airline">使用默认：不限</div>
             <button class="secondary-button pref-card-button" type="button" data-pref-target="airline">修改</button>
           </div>
           <div class="pref-card">
             <div class="pref-name">非联程中转</div>
-            <div class="pref-value" data-pref-value="self_transfer">使用默认：不接受</div>
+            <div class="pref-value" id="pref-value-self-transfer" data-pref-value="self_transfer">使用默认：不接受</div>
             <button class="secondary-button pref-card-button" type="button" data-pref-target="self_transfer">修改</button>
           </div>
         </div>
@@ -1506,20 +1506,37 @@ FORM_TEMPLATE = """
       });
     }
 
-    function updateAirportSelection(kind) {
-      const value = kind === 'origin' ? selectedOrigin() : destinationInput.value.trim();
+    function normalizeAirportList(value) {
+      if (Array.isArray(value)) {
+        return value.map(item => String(item || '').trim().toUpperCase()).filter(Boolean);
+      }
+      if (typeof value === 'string') {
+        return value.split(',').map(item => item.trim().toUpperCase()).filter(Boolean);
+      }
+      return [];
+    }
+
+    function updateAirportTags(kind, value, activeAirports) {
       const airports = resolveAirportsForInput(value);
+      const savedActive = normalizeAirportList(activeAirports)
+        .filter(code => airports.includes(code));
       airportState[kind].all = airports;
-      airportState[kind].active = airports.slice();
+      airportState[kind].active = savedActive.length ? savedActive : airports.slice();
       renderAirportTags(kind);
+      refreshSummaryIfFinalStep();
     }
 
-    function updateOriginAirportHint() {
-      updateAirportSelection('origin');
+    function updateAirportSelection(kind, activeAirports) {
+      const value = kind === 'origin' ? selectedOrigin() : destinationInput.value.trim();
+      updateAirportTags(kind, value, activeAirports);
     }
 
-    function updateDestinationAirportHint() {
-      updateAirportSelection('destination');
+    function updateOriginAirportHint(activeAirports) {
+      updateAirportSelection('origin', activeAirports);
+    }
+
+    function updateDestinationAirportHint(activeAirports) {
+      updateAirportSelection('destination', activeAirports);
     }
 
     function activeAirportText(kind) {
@@ -1611,32 +1628,73 @@ FORM_TEMPLATE = """
       return input ? input.parentElement.textContent.trim() : '';
     }
 
+    const prefCardLabelMaps = {
+      companions: {
+        solo: '未设置',
+        with_elderly: '有老人同行',
+        with_child: '有小孩同行',
+        with_elderly_child: '老人和小孩都有',
+        with_both: '老人和小孩都有'
+      },
+      time_preference: {
+        any: '使用默认：避免红眼',
+        unlimited: '使用默认：避免红眼',
+        daytime: '白天优先',
+        no_redeye: '不接受红眼/凌晨到达',
+        custom: '自定义时间段'
+      },
+      refund_flexibility: {
+        not_needed: '便宜优先',
+        preferred: '使用默认：便宜优先，提醒风险',
+        required: '必须能退票或改签',
+        must_refundable: '必须能退票或改签',
+        unknown: '不确定'
+      },
+      airline_policy: {
+        any: '使用默认：不限',
+        prefer_full_service: '偏好全服务航司',
+        no_lcc: '不接受廉航',
+        exclude_airlines: '已设置不接受航司'
+      },
+      accept_self_transfer: {
+        false: '使用默认：不接受',
+        true: '已设置：可以接受'
+      }
+    };
+
     function setPrefValue(key, value) {
-      const target = document.querySelector(`[data-pref-value="${key}"]`);
+      const idMap = {
+        companions: 'pref-value-companion',
+        time: 'pref-value-time',
+        refund: 'pref-value-refund',
+        airline: 'pref-value-airline',
+        self_transfer: 'pref-value-self-transfer'
+      };
+      const target = document.getElementById(idMap[key]) || document.querySelector(`[data-pref-value="${key}"]`);
       if (target) {
         target.textContent = value || '未设置';
       }
     }
 
+    function mappedPrefLabel(name, fallback) {
+      const value = checkedValue(name);
+      const map = prefCardLabelMaps[name] || {};
+      if (!value) {
+        return fallback || '未设置';
+      }
+      return map[value] || selectedLabel(name) || value;
+    }
+
+    function syncPrefCards() {
+      setPrefValue('companions', mappedPrefLabel('companions', '未设置'));
+      setPrefValue('time', mappedPrefLabel('time_preference', '使用默认：避免红眼'));
+      setPrefValue('refund', mappedPrefLabel('refund_flexibility', '使用默认：便宜优先，提醒风险'));
+      setPrefValue('airline', mappedPrefLabel('airline_policy', '使用默认：不限'));
+      setPrefValue('self_transfer', mappedPrefLabel('accept_self_transfer', '使用默认：不接受'));
+    }
+
     function updatePrefCards() {
-      const companions = checkedValue('companions');
-      setPrefValue('companions', companions === 'solo' ? '未设置' : selectedLabel('companions'));
-      const timePreference = checkedValue('time_preference');
-      setPrefValue(
-        'time',
-        timePreference === 'unlimited' ? '使用默认：避免红眼' : selectedLabel('time_preference')
-      );
-      const refund = checkedValue('refund_flexibility');
-      setPrefValue(
-        'refund',
-        refund === 'preferred' ? '使用默认：便宜优先，提醒风险' : selectedLabel('refund_flexibility')
-      );
-      const airline = checkedValue('airline_policy');
-      setPrefValue('airline', airline === 'any' ? '使用默认：不限' : selectedLabel('airline_policy'));
-      setPrefValue(
-        'self_transfer',
-        checkedValue('accept_self_transfer') === 'true' ? '已设置：可以接受' : '使用默认：不接受'
-      );
+      syncPrefCards();
     }
 
     function togglePrefDetail(key) {
@@ -1651,6 +1709,7 @@ FORM_TEMPLATE = """
       if (detail.classList.contains('open')) {
         detail.scrollIntoView({behavior: 'smooth', block: 'nearest'});
       }
+      syncPrefCards();
     }
 
     function selectedCheckboxLabels(name) {
@@ -1827,6 +1886,8 @@ FORM_TEMPLATE = """
         originManual.value = data.origin || '';
       }
       destinationInput.value = data.destination || '';
+      updateOriginAirportHint(data.origin_airports_active || data.origin_airports);
+      updateDestinationAirportHint(data.destination_airports_active || data.destination_airports || data.dest_airports);
       setRadio('round_trip', String(Boolean(data.round_trip)));
       form.depart_date.value = data.depart_date || '';
       if (data.return_date) {
@@ -2125,8 +2186,30 @@ FORM_TEMPLATE = """
       };
     }
 
+    function applyLocationFromTemplate(data) {
+      if (data.origin) {
+        if (originSelect.querySelector(`option[value="${data.origin}"]`)) {
+          originSelect.value = data.origin;
+          originManual.value = '';
+        } else {
+          originSelect.value = 'OTHER';
+          originManual.value = data.origin;
+        }
+        originSelect.dispatchEvent(new Event('change', {bubbles: true}));
+        originManual.dispatchEvent(new Event('input', {bubbles: true}));
+        updateOriginAirportHint(data.origin_airports_active || data.origin_airports);
+      }
+      if (data.destination) {
+        destinationInput.value = data.destination;
+        destinationInput.dispatchEvent(new Event('input', {bubbles: true}));
+        destinationInput.dispatchEvent(new Event('change', {bubbles: true}));
+        updateDestinationAirportHint(data.destination_airports_active || data.destination_airports || data.dest_airports);
+      }
+    }
+
     function applyPreferenceTemplate(data) {
       if (!data) return;
+      applyLocationFromTemplate(data);
       [
         'monitor_mode',
         'budget_strategy',
@@ -2159,6 +2242,7 @@ FORM_TEMPLATE = """
       toggleNotificationMethod();
       toggleReturnDate();
       updateRequiredProgress();
+      syncPrefCards();
     }
 
     function setupSavedTemplatePrompt() {
@@ -2257,6 +2341,7 @@ FORM_TEMPLATE = """
     originSelect.addEventListener('change', () => { updateOriginAirportHint(); updateRequiredProgress(); });
     originManual.addEventListener('input', () => { updateOriginAirportHint(); updateRequiredProgress(); });
     destinationInput.addEventListener('input', () => { updateDestinationAirportHint(); updateRequiredProgress(); });
+    destinationInput.addEventListener('change', () => { updateDestinationAirportHint(); updateRequiredProgress(); });
     modeRadios.forEach(radio => radio.addEventListener('change', applyMonitorMode));
     timePreferenceRadios.forEach(radio => radio.addEventListener('change', toggleTimePreference));
     preciseTimeToggle?.addEventListener('click', () => {
@@ -2287,8 +2372,11 @@ FORM_TEMPLATE = """
     });
     ['companions', 'time_preference', 'refund_flexibility', 'airline_policy', 'accept_self_transfer'].forEach(name => {
       document.querySelectorAll(`input[name="${name}"]`).forEach(input => {
-        input.addEventListener('change', updatePrefCards);
+        input.addEventListener('change', syncPrefCards);
       });
+    });
+    document.querySelectorAll('.pref-card-detail input, .pref-card-detail select').forEach(input => {
+      input.addEventListener('change', syncPrefCards);
     });
     openPreciseModeButton?.addEventListener('click', () => {
       setRadio('monitor_mode', 'precise');
@@ -2321,8 +2409,8 @@ FORM_TEMPLATE = """
     toggleShortTransferOptions();
     updateConditionalFields();
     updateDateFlexHint();
-    updateOriginAirportHint();
-    updateDestinationAirportHint();
+    updateOriginAirportHint(editSubscription.origin_airports_active || editSubscription.origin_airports);
+    updateDestinationAirportHint(editSubscription.destination_airports_active || editSubscription.destination_airports || editSubscription.dest_airports);
     updateRequiredProgress();
     updateStrictRulesWarning();
     advanced.style.display = 'none';
@@ -2344,6 +2432,7 @@ FORM_TEMPLATE = """
       updateConditionalFields();
       updateRequiredProgress();
       updateStrictRulesWarning();
+      syncPrefCards();
       refreshSummaryIfFinalStep();
     });
     form.addEventListener('submit', event => {
