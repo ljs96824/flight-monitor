@@ -6636,6 +6636,18 @@ def build_notification_payload(
     change = (push_meta or {}).get("price_change") or {}
     fallback_line = _trend_fallback_line(history)
     trend_summary = _trend_linechart_summary(history, target, current, None) if history else ""
+    goals = (
+        route_info.get("notification_goals")
+        or analysis_result.get("notification_goals")
+        or subscription.get("notification_goals")
+        or {}
+    )
+    frequency = "important_only"
+    if isinstance(goals, dict):
+        frequency = {
+            "daily_summary": "daily_digest",
+            "every_change": "price_change",
+        }.get(goals.get("frequency") or "important_only", goals.get("frequency") or "important_only")
     form_url = _subscription_edit_url(route_info)
     feedback_url = _feedback_url(route_info)
     detail_url = f"{_subscription_form_url(route_info).rstrip('/')}/detail?sub={quote(str(route_info.get('subscription_id') or route_key))}"
@@ -6674,6 +6686,7 @@ def build_notification_payload(
             "last_snapshot": last_snapshot or {},
         },
         "freshness_minutes": ((primary_flight or {}).get("availability") or {}).get("age_minutes"),
+        "frequency": frequency,
         "nearby_date_prices": _payload_nearby_date_rows(route_info, analysis_result, is_roundtrip),
         "plan_price_rows": [{"label": item.get("label"), "value": item.get("price"), "note": item.get("risk", "")} for item in all_items[:5] if item.get("price")],
         "channel_price_rows": (all_items[0].get("channel_prices") if all_items else []),
@@ -6697,8 +6710,8 @@ def _payload_price(value) -> str:
     return _price_text(value)
 
 
-def render_pushplus(payload: dict) -> str:
-    """Render the short action-oriented PushPlus message from a payload."""
+def _render_pushplus_legacy(payload: dict) -> str:
+    """Legacy PushPlus renderer kept for compatibility; render_pushplus below is used."""
     payload = payload or {}
     lines = [
         f"<b>【{html.escape(str(payload.get('push_type') or '价格提醒'))}】{html.escape(str(payload.get('route') or '航班监控'))}</b>",
@@ -6734,6 +6747,63 @@ def render_pushplus(payload: dict) -> str:
             links.insert(0, first_link)
     lines.extend(["", "下一步：" + " | ".join(link for link in links if link)])
     return "<br>".join(lines)
+
+
+def render_pushplus(payload: dict) -> str:
+    """Render the strictly short PushPlus message from the unified payload."""
+    payload = payload or {}
+    push_type = html.escape(str(payload.get("push_type") or "价格提醒"))
+    route = html.escape(str(payload.get("route") or "航班监控"))
+    price_text = _payload_price(payload.get("current_price"))
+    recommendation = html.escape(str(payload.get("recommendation") or "可以观察"))
+    buy_condition = html.escape(str(payload.get("buy_condition") or "以支付页最终价和票规为准"))
+    detail_url = str(payload.get("detail_url") or "")
+    detail_link = (
+        f'<a href="{html.escape(detail_url, quote=True)}" target="_blank">{html.escape(detail_url)}</a>'
+        if detail_url
+        else "详情页暂未生成"
+    )
+
+    reasons = [str(item) for item in (payload.get("trigger_reason") or []) if item]
+    diff = _to_float((payload.get("diff_from_last") or {}).get("diff"))
+    if diff is not None and diff != 0:
+        reasons.append(f"比上次{'降' if diff < 0 else '涨'}{_price_text(abs(diff))}")
+    current = _to_float(payload.get("current_price"))
+    ideal = _to_float(payload.get("ideal_price"))
+    if current is not None and ideal and current <= ideal * 1.05:
+        reasons.append(f"接近理想价{_price_text(ideal)}")
+    reason_text = "，".join(dict.fromkeys(reasons[:2])) or "当前价格触发监控条件"
+
+    risks = [str(item) for item in (payload.get("buy_risk") or payload.get("limits") or []) if item]
+    risk_text = "最终支付价和票规需确认"
+    if risks:
+        risk_text = "，".join(dict.fromkeys((["最终支付价和票规需确认"] + risks)[:2]))
+
+    if payload.get("frequency") == "price_change":
+        return "<br>".join(
+            [
+                f"<b>【{route}】{price_text}</b>",
+                f"结论:{recommendation}",
+                f"条件:{buy_condition}",
+                f"原因:{html.escape(reason_text)}",
+                f"查看详情:{detail_link}",
+            ]
+        )
+
+    return "<br>".join(
+        [
+            f"<b>【{push_type}】{route} {price_text}</b>",
+            "",
+            f"当前价:{price_text}",
+            f"结论:{recommendation}",
+            f"购买条件:{buy_condition}",
+            "",
+            f"为什么提醒:{html.escape(reason_text)}",
+            f"主要风险:{html.escape(risk_text)}",
+            "",
+            f"查看详情:{detail_link}",
+        ]
+    )
 
 
 def _render_payload_plan_card(plan: dict, compact: bool = False) -> str:
