@@ -1499,7 +1499,7 @@ def _round_trip_aircraft_text(flight: dict) -> str:
     aircraft = ""
     if segments:
         aircraft = segments[0].get("aircraft") or ""
-    return str(aircraft).strip() or "鏈煡"
+    return str(aircraft).strip() or "机型待确认"
 
 
 def _round_trip_score_text(flight: dict) -> str:
@@ -3479,6 +3479,43 @@ def _excluded_reason_details(item: dict) -> list[str]:
     return clean[:3]
 
 
+def _excluded_item_flight(item: dict) -> dict:
+    flight = item.get("flight") if isinstance(item, dict) else None
+    if isinstance(flight, dict) and flight:
+        merged = dict(flight)
+        for key in (
+            "price",
+            "flight_combo",
+            "airline_summary",
+            "route_summary",
+            "segments",
+            "layovers",
+            "airlines",
+            "stops",
+            "fare_verification",
+            "availability",
+            "transfer_risk",
+            "price_estimate",
+            "data_source",
+        ):
+            if key in item and item.get(key) not in (None, "", []):
+                merged.setdefault(key, item.get(key))
+        return merged
+    return dict(item or {})
+
+
+def _excluded_flight_detail_text(item: dict, route_info: dict | None = None) -> str:
+    flight = _excluded_item_flight(item)
+    date_str = (route_info or {}).get("depart_date")
+    detail = format_flight_detail(flight, date_str, "去程")
+    if not detail or "航班信息待确认" in detail:
+        combo = item.get("flight_combo") or flight.get("flight_combo") or ""
+        if combo:
+            return f"去程:{combo}｜航班信息待确认"
+        return "去程:航班信息待确认"
+    return detail
+
+
 def _excluded_relax_hints(items: list[dict]) -> list[str]:
     hints = []
     mapping = [
@@ -3565,6 +3602,14 @@ def _append_excluded_low_price_section(
         diff = max(0, current - price) if current is not None and price is not None else None
         diff_text = f"（比推荐便宜{_price_text(diff)}）" if diff else ""
         lines.append(f"{_price_text(price)}方案 {combo}{diff_text}：")
+        lines.append(_excluded_flight_detail_text(item, route_info))
+        reason_lines = _excluded_reason_details(item)
+        if reason_lines:
+            lines.append(f"排除原因：{reason_lines[0]}")
+            for detail in reason_lines[1:]:
+                lines.append(f"- {detail}")
+        lines.append("")
+        continue
         for detail in _excluded_reason_details(item):
             lines.append(f"- {detail}")
         lines.append("")
@@ -3983,10 +4028,12 @@ def _payload_plan_leg(flight: dict | None, date_str: str | None = None, prefix: 
     label = f"{prefix}: " if prefix else ""
     if not flight.get("segments") and not flight.get("flight_combo"):
         return f"{label}航班信息待确认"
+    aircraft = _round_trip_aircraft_text(flight)
+    aircraft_part = "" if aircraft in {"机型待确认", "未知", "请查询航司官网"} else f" | {aircraft}"
     return (
         f"{label}{_compact_flight_numbers(flight)} {_round_trip_airline_text(flight)} | "
         f"{_flight_combo_time_text(flight, date_str)} | {_round_trip_stops_text(flight)} | "
-        f"{_flight_price_text(flight)}"
+        f"{_flight_price_text(flight)}{aircraft_part}"
     )
 
 
@@ -4781,10 +4828,25 @@ def render_email(payload: dict) -> tuple[str, str]:
     excluded = payload.get("excluded_plans") or []
     if excluded:
         lines.append("<h3>为什么不推荐更便宜方案</h3>")
-        for item in excluded[:5]:
+        current_price = _to_float(payload.get("current_price"))
+        cheaper = []
+        for item in excluded:
             if isinstance(item, dict):
-                reason = item.get("reason") or item.get("reasons") or "不符合当前规则"
-                lines.append(f"<div>- {_price_text(item.get('price'))}方案：{html.escape(str(reason))}</div>")
+                price = _to_float(item.get("price"))
+                if price is not None and (current_price is None or price < current_price):
+                    cheaper.append(item)
+        for item in sorted(cheaper, key=lambda row: _to_float(row.get("price")) or 999999)[:3]:
+            reason_lines = _excluded_reason_details(item)
+            reason = reason_lines[0] if reason_lines else (item.get("reason") or "不符合当前规则")
+            price = _to_float(item.get("price"))
+            diff = max(0, current_price - price) if current_price is not None and price is not None else None
+            diff_text = f"（比推荐便宜{_price_text(diff)}）" if diff else ""
+            lines.append(f"<div><b>{_price_text(price)}{diff_text}</b></div>")
+            lines.append(f"<div>{html.escape(_excluded_flight_detail_text(item))}</div>")
+            lines.append(f"<div>排除原因：{html.escape(str(reason))}</div>")
+            for extra in reason_lines[1:3]:
+                lines.append(f"<div>- {html.escape(str(extra))}</div>")
+            lines.append("<br>")
 
     dims = payload.get("confidence_dimensions") or {}
     if dims:

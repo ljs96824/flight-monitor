@@ -9,97 +9,44 @@ from datetime import date, datetime, time, timedelta
 from price_estimator import calc_transaction_price
 from storage import get_all_history, get_latest_alternatives, get_target_history
 
-
 IATA_CITY_NAMES = {
-    # 中国大陆 / 港澳台
     "PVG": "上海浦东",
     "SHA": "上海虹桥",
     "PEK": "北京首都",
     "PKX": "北京大兴",
-    "CAN": "广州",
-    "SZX": "深圳",
-    "CTU": "成都双流",
+    "CAN": "广州白云",
+    "SZX": "深圳宝安",
+    "CTU": "成都天府",
     "TFU": "成都天府",
-    "CKG": "重庆",
-    "HGH": "杭州",
-    "NKG": "南京",
-    "XIY": "西安",
-    "WUH": "武汉",
-    "XMN": "厦门",
-    "TAO": "青岛",
-    "CSX": "长沙",
-    "KMG": "昆明",
-    "FOC": "福州",
-    "DLC": "大连",
-    "TSN": "天津",
-    "HKG": "香港",
-    "MFM": "澳门",
-    "TPE": "台北桃园",
-    "TSA": "台北松山",
-    # 日本 / 韩国 / 东南亚
+    "HGH": "杭州萧山",
+    "NKG": "南京禄口",
+    "KIX": "大阪关西",
+    "ITM": "大阪伊丹",
     "NRT": "东京成田",
     "HND": "东京羽田",
-    "KIX": "大阪关西",
-    "NGO": "名古屋",
-    "FUK": "福冈",
     "ICN": "首尔仁川",
-    "GMP": "首尔金浦",
-    "SIN": "新加坡",
+    "TPE": "台北桃园",
+    "HKG": "香港",
     "BKK": "曼谷",
-    "DMK": "曼谷廊曼",
-    "KUL": "吉隆坡",
-    "MNL": "马尼拉",
-    "SGN": "胡志明",
-    "HAN": "河内",
-    "DEL": "德里",
-    # 北美
-    "MCO": "奥兰多",
-    "DFW": "达拉斯",
-    "MIA": "迈阿密",
+    "SIN": "新加坡",
     "LAX": "洛杉矶",
-    "SFO": "旧金山",
-    "SEA": "西雅图",
     "JFK": "纽约肯尼迪",
-    "EWR": "纽约纽瓦克",
-    "LGA": "纽约拉瓜迪亚",
-    "ORD": "芝加哥",
+    "SFO": "旧金山",
+    "ORD": "芝加哥奥黑尔",
+    "DFW": "达拉斯沃斯堡",
+    "MCO": "奥兰多",
+    "MIA": "迈阿密",
     "ATL": "亚特兰大",
-    "DTW": "底特律",
-    "MSP": "明尼阿波利斯",
-    "BOS": "波士顿",
-    "IAD": "华盛顿杜勒斯",
-    "DCA": "华盛顿里根",
-    "PHL": "费城",
-    "CLT": "夏洛特",
-    "PHX": "凤凰城",
-    "LAS": "拉斯维加斯",
-    "DEN": "丹佛",
-    "IAH": "休斯敦",
-    "HOU": "休斯敦霍比",
-    "AUS": "奥斯汀",
-    "SAN": "圣迭戈",
-    "SJC": "圣何塞",
-    "PDX": "波特兰",
-    "YYZ": "多伦多",
+    "SEA": "西雅图",
     "YVR": "温哥华",
-    "YUL": "蒙特利尔",
-    "YYC": "卡尔加里",
-    # 欧洲 / 中东
+    "YYZ": "多伦多皮尔逊",
     "LHR": "伦敦希思罗",
-    "LGW": "伦敦盖特威克",
     "CDG": "巴黎戴高乐",
-    "AMS": "阿姆斯特丹",
     "FRA": "法兰克福",
-    "MUC": "慕尼黑",
-    "ZRH": "苏黎世",
-    "VIE": "维也纳",
-    "MAD": "马德里",
-    "BCN": "巴塞罗那",
-    "FCO": "罗马",
-    "IST": "伊斯坦布尔",
-    "DOH": "多哈",
+    "AMS": "阿姆斯特丹",
     "DXB": "迪拜",
-    "AUH": "阿布扎比",
+    "DOH": "多哈",
+    "ABQ": "阿尔伯克基",
 }
 
 
@@ -540,7 +487,7 @@ def get_future_price_changes(
 
 
 def timing_analysis(price_history, current_price, days_to_dept) -> dict:
-    """买票时机预测"""
+    """涔扮エ鏃舵満棰勬祴"""
     if _to_float(current_price) is None:
         return {"confidence": "low", "data_insufficient": True}
 
@@ -575,7 +522,7 @@ def timing_analysis(price_history, current_price, days_to_dept) -> dict:
 
 
 def weekday_analysis(db_path, route, depart_date) -> dict:
-    """分析不同星期几的价格差异"""
+    """鍒嗘瀽涓嶅悓鏄熸湡鍑犵殑浠锋牸宸紓"""
     _ = db_path
     history = get_all_history(route, depart_date)
 
@@ -601,7 +548,7 @@ def weekday_analysis(db_path, route, depart_date) -> dict:
     if sum(len(prices) for prices in weekday_prices.values()) < 14:
         return {"data_insufficient": True}
 
-    weekday_names = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+    weekday_names = ["鍛ㄤ竴", "鍛ㄤ簩", "鍛ㄤ笁", "鍛ㄥ洓", "鍛ㄤ簲", "鍛ㄥ叚", "鍛ㄦ棩"]
     stats = {}
     for day, prices in weekday_prices.items():
         stats[weekday_names[day]] = {
@@ -625,7 +572,7 @@ def weekday_analysis(db_path, route, depart_date) -> dict:
 def airline_competition_analysis(
     flights: list[dict], historical_flights: list[dict] = None
 ) -> dict:
-    """航司竞争态势分析"""
+    """鑸徃绔炰簤鎬佸娍鍒嗘瀽"""
     _ = historical_flights
     from collections import defaultdict
 
@@ -635,9 +582,10 @@ def airline_competition_analysis(
         if price is None:
             continue
 
-        airline = flight.get("airline_summary") or "未知"
+        airline = flight.get("airline_summary") or "鏈煡"
         airline_prices[airline].append(
             {
+                "flight": dict(flight),
                 "price": price,
                 "combo": flight.get("flight_combo", ""),
                 "duration": flight.get("total_hours"),
@@ -672,7 +620,7 @@ def airline_competition_analysis(
 
 
 def comfort_score(flight: dict) -> dict:
-    """计算航班舒适度评分（0-10）"""
+    """计算航班舒适度评分（0-10）。"""
     score = 10.0
     penalties = []
     bonuses = []
@@ -682,17 +630,17 @@ def comfort_score(flight: dict) -> dict:
         score -= 1
     elif stops == 2:
         score -= 3
-        penalties.append("需转机2次")
+        penalties.append("需要转机2次")
     elif stops >= 3:
         score -= 5
-        penalties.append(f"需转机{stops}次")
+        penalties.append(f"需要转机{stops}次")
 
     for layover in flight.get("layovers", []) or []:
         wait = int(layover.get("wait_minutes") or 0)
         city = layover.get("city", "中转地")
         if wait > 480:
             score -= 2
-            penalties.append(f"在{city}等待超过8小时，可能需过夜")
+            penalties.append(f"在{city}等待超过8小时，可能需要过夜")
         elif wait > 240:
             score -= 1
             penalties.append(f"在{city}等待较长")
@@ -730,7 +678,7 @@ def comfort_score(flight: dict) -> dict:
 def detect_anomaly(
     flight: dict, price_insights: dict, all_prices: list[float]
 ) -> dict:
-    """检测价格是否异常偏低"""
+    """检测价格是否异常偏低。"""
     price = _to_float(flight.get("price"))
     if price is None:
         return {"is_anomaly": False}
@@ -752,23 +700,23 @@ def detect_anomaly(
         discount_pct = round((1 - price / avg_price) * 100) if avg_price else 0
         return {
             "is_anomaly": True,
-            "type": "极端低价",
+            "type": "鏋佺浣庝环",
             "discount_pct": discount_pct,
-            "message": f"比正常价格低{discount_pct}%，可能是系统错误或限时促销",
+            "message": f"姣旀甯镐环鏍间綆{discount_pct}%锛屽彲鑳芥槸绯荤粺閿欒鎴栭檺鏃朵績閿€",
         }
 
     if price < typical_low:
         return {
             "is_anomaly": False,
             "is_good_deal": True,
-            "message": "低于市场正常价格区间",
+            "message": "浣庝簬甯傚満姝ｅ父浠锋牸鍖洪棿",
         }
 
     return {"is_anomaly": False, "is_good_deal": False}
 
 
 def generate_sparkline(prices: list, width: int = 14) -> str:
-    """用Unicode方块字符生成迷你趋势图。"""
+    """Generate a compact Unicode price sparkline."""
     if not prices or len(prices) < 2:
         return ""
 
@@ -821,24 +769,24 @@ def generate_trend_summary(price_history_data, current_price) -> dict:
 
     recent = prices[-5:] if len(prices) >= 5 else prices
     if recent[-1] > recent[0] * 1.03:
-        recent_trend = "📈 近期上涨中"
+        recent_trend = "近期上涨"
     elif recent[-1] < recent[0] * 0.97:
-        recent_trend = "📉 近期下降中"
+        recent_trend = "近期下降"
     else:
-        recent_trend = "➡️ 近期平稳"
+        recent_trend = "近期平稳"
 
     current = _to_float(current_price)
     if current is None:
         current = prices[-1]
 
     if current <= min_price * 1.05:
-        position = "接近历史最低 🟢"
+        position = "接近历史最低"
     elif current >= max_price * 0.95:
-        position = "接近历史最高 🔴"
+        position = "接近历史最高"
     elif current < avg_price:
-        position = "低于平均水平 🟡"
+        position = "低于平均水平"
     else:
-        position = "高于平均水平 🟠"
+        position = "高于平均水平"
 
     return {
         "available": True,
@@ -853,7 +801,7 @@ def generate_trend_summary(price_history_data, current_price) -> dict:
 
 
 def price_position_description(current_price, price_history):
-    """用历史数据计算当前价格的位置描述"""
+    """鐢ㄥ巻鍙叉暟鎹绠楀綋鍓嶄环鏍肩殑浣嶇疆鎻忚堪"""
     if not price_history or len(price_history) < 5:
         return None
 
@@ -900,7 +848,7 @@ def price_position_description(current_price, price_history):
 
 
 def waiting_risk_description(price_history, current_price, days_to_dept):
-    """计算继续等待一周的风险收益"""
+    """璁＄畻缁х画绛夊緟涓€鍛ㄧ殑椋庨櫓鏀剁泭"""
     if not price_history or len(price_history) < 10:
         return None
 
@@ -1147,7 +1095,7 @@ def detect_price_anomalies(flights, price_history=None):
                     "z_score": round(z_score, 2),
                     "message": (
                         f"{combo or '该方案'} 当前¥{price:,.0f}，"
-                        f"均值¥{avg_price:,.0f}，Z-score={z_score:.2f}"
+                        f"均价¥{avg_price:,.0f}，Z-score={z_score:.2f}"
                     ),
                 },
                 seen,
@@ -1263,7 +1211,7 @@ def detect_price_anomalies(flights, price_history=None):
 def calculate_price_references(
     current_price, price_history, own_history, days_to_dept, current_flights
 ):
-    """计算五层历史最低价参考"""
+    """计算五层历史最低价参考。"""
     result = {}
 
     if price_history:
@@ -1337,16 +1285,16 @@ def calculate_price_references(
 
 
 def multi_window_analysis(current_price, own_history, google_history, days_to_dept):
-    """多时间窗口纵向分析"""
+    """多时间窗口纵向分析。"""
     result = {}
 
-    # 窗口一：短期趋势（3-7天）
+    # 绐楀彛涓€锛氱煭鏈熻秼鍔匡紙3-7澶╋級
     if own_history and len(own_history) >= 4:
         recent = [
             record["price"]
             for record in own_history[-14:]
             if record.get("price")
-        ]  # 最近7天×每天2次=14条
+        ]  # 鏈€杩?澶┟楁瘡澶?娆?14鏉?
         if len(recent) >= 4:
             split_index = len(recent) // 2
             first_half = sum(recent[:split_index]) / split_index
@@ -1369,7 +1317,7 @@ def multi_window_analysis(current_price, own_history, google_history, days_to_de
                 "data_points": len(recent),
             }
 
-    # 窗口二：中期位置（14-30天）
+    # 绐楀彛浜岋細涓湡浣嶇疆锛?4-30澶╋級
     if own_history and len(own_history) >= 10:
         month_prices = [record["price"] for record in own_history if record.get("price")]
         if month_prices:
@@ -1388,7 +1336,7 @@ def multi_window_analysis(current_price, own_history, google_history, days_to_de
                 "vs_avg": current_price - avg_price,
             }
 
-    # 窗口三：长期分位（30-60天，用Google数据）
+    # 绐楀彛涓夛細闀挎湡鍒嗕綅锛?0-60澶╋紝鐢℅oogle鏁版嵁锛?
     if google_history:
         if isinstance(google_history[0], (list, tuple)):
             prices = [price for _, price in google_history if price and price > 0]
@@ -1414,7 +1362,7 @@ def multi_window_analysis(current_price, own_history, google_history, days_to_de
 def nearby_dates_comparison(
     origin, dest, center_date, fetch_function, days_range=2
 ):
-    """查询出发日前后几天的最低价，帮用户发现更便宜的日期"""
+    """鏌ヨ鍑哄彂鏃ュ墠鍚庡嚑澶╃殑鏈€浣庝环锛屽府鐢ㄦ埛鍙戠幇鏇翠究瀹滅殑鏃ユ湡"""
     from datetime import datetime, timedelta
 
     center = datetime.strptime(center_date, "%Y-%m-%d")
@@ -1423,7 +1371,7 @@ def nearby_dates_comparison(
     for offset in range(-days_range, days_range + 1):
         check_date = center + timedelta(days=offset)
         date_str = check_date.strftime("%Y-%m-%d")
-        weekday_names = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+        weekday_names = ["鍛ㄤ竴", "鍛ㄤ簩", "鍛ㄤ笁", "鍛ㄥ洓", "鍛ㄤ簲", "鍛ㄥ叚", "鍛ㄦ棩"]
         weekday = weekday_names[check_date.weekday()]
 
         results[date_str] = {
@@ -1437,7 +1385,7 @@ def nearby_dates_comparison(
 
 
 def compare_flights(flight_a: dict, flight_b: dict) -> dict:
-    """生成两个方案之间的直接对比"""
+    """Generate a direct comparison between two flight options."""
     price_diff = flight_a["price"] - flight_b["price"]
     time_diff = flight_a["total_duration_min"] - flight_b["total_duration_min"]
     stops_diff = flight_a["stops"] - flight_b["stops"]
@@ -1496,8 +1444,8 @@ SCORE_WEIGHTS = {
 LCC_AIRLINES = [
     "Spirit",
     "Frontier",
-    "春秋航空",
-    "九元航空",
+    "鏄ョ鑸┖",
+    "涔濆厓鑸┖",
     "Ryanair",
     "EasyJet",
     "AirAsia",
@@ -1510,11 +1458,11 @@ LCC_AIRLINES = [
 
 FULL_SERVICE_AIRLINES = [
     "Air China",
-    "中国国航",
+    "涓浗鍥借埅",
     "China Eastern",
-    "东方航空",
+    "涓滄柟鑸┖",
     "China Southern",
-    "南方航空",
+    "鍗楁柟鑸┖",
     "United",
     "Delta",
     "American",
@@ -1530,7 +1478,7 @@ FULL_SERVICE_AIRLINES = [
 def overall_score(
     flight: dict, all_prices: list, all_durations: list, mode: str = "balanced"
 ) -> dict:
-    """综合评分 0-10"""
+    """缁煎悎璇勫垎 0-10"""
     clean_prices = [_to_float(price) for price in all_prices or []]
     clean_prices = [price for price in clean_prices if price is not None]
     clean_durations = [_to_float(duration) for duration in all_durations or []]
@@ -1593,9 +1541,9 @@ def overall_score(
 
 
 def transfer_risk(flight: dict) -> dict:
-    """转机风险评级：green/yellow/red"""
+    """Transfer risk grade: green/yellow/red."""
     if (flight.get("stops") or 0) == 0:
-        return {"level": "green", "label": "✅ 直飞", "notes": []}
+        return {"level": "green", "label": "直飞", "notes": []}
 
     risks = []
     level = "green"
@@ -1626,20 +1574,20 @@ def transfer_risk(flight: dict) -> dict:
         airport = layover.get("airport", "")
 
         if wait < 75:
-            risks.append(f"⚠️ {city}转机仅{wait}分钟，国际航班可能不够")
+            risks.append(f"{city}转机仅{wait}分钟，国际航班可能不够")
             raise_level("red")
         elif wait < 120:
-            risks.append(f"🟡 {city}转机{wait // 60}小时{wait % 60}分钟，需快速通关")
+            risks.append(f"{city}转机{wait // 60}小时{wait % 60}分钟，需快速通关")
             raise_level("yellow")
         elif wait > 600:
-            risks.append(f"🟡 {city}转机超过10小时，需要在机场过夜或外出住宿")
+            risks.append(f"{city}转机超过10小时，可能需要在机场过夜或外出住宿")
             raise_level("yellow")
         elif wait > 360:
-            risks.append(f"🟡 {city}等待较长（{wait // 60}小时），建议了解机场休息设施")
+            risks.append(f"{city}等待较长（{wait // 60}小时），建议了解机场休息设施")
             raise_level("yellow")
 
         if airport in us_airports:
-            risks.append(f"ℹ️ 在美国{city}转机需要办理入境手续、提取行李重新托运")
+            risks.append(f"在美国{city}转机通常需要办理入境手续、提取行李重新托运")
 
     airlines = {
         segment.get("airline", "")
@@ -1647,10 +1595,10 @@ def transfer_risk(flight: dict) -> dict:
         if segment.get("airline")
     }
     if len(airlines) > 1:
-        risks.append(f"ℹ️ 涉及{len(airlines)}家航司（{'、'.join(sorted(airlines))}），行李可能无法直挂")
+        risks.append(f"涉及{len(airlines)}家航司（{'、'.join(sorted(airlines))}），行李可能无法直挂")
         raise_level("yellow")
 
-    label_map = {"green": "✅ 转机安全", "yellow": "🟡 需注意", "red": "🔴 风险较高"}
+    label_map = {"green": "转机安全", "yellow": "需注意", "red": "风险较高"}
     return {"level": level, "label": label_map[level], "notes": risks}
 
 
@@ -1688,7 +1636,7 @@ def calc_transfer_risk(flight: dict) -> dict:
     unique_airlines = sorted({airline for airline in airlines if airline})
     if len(unique_airlines) > 1:
         risk_score += 25
-        risk_factors.append(f"跨航司({'/'.join(unique_airlines)})，可能非联程")
+        risk_factors.append(f"跨航司（{'/'.join(unique_airlines)}），可能非联程")
 
     international_transfer_airports = {
         "NRT", "HND", "ICN", "TPE", "HKG", "SIN", "BKK", "KUL", "DOH",
@@ -1702,13 +1650,13 @@ def calc_transfer_risk(flight: dict) -> dict:
 
     if risk_score >= 50:
         level = "high"
-        label = "🔴 高风险"
+        label = "高风险"
     elif risk_score >= 25:
         level = "medium"
-        label = "🟡 中风险"
+        label = "中风险"
     else:
         level = "low"
-        label = "🟢 低风险"
+        label = "低风险"
 
     return {
         "level": level,
@@ -1800,7 +1748,7 @@ def generate_signal_v2(
     reason = _reason(pct, threshold, movement, volatility, wait_val, google_level)
 
     if movement == "fare_class_jump" and days_to_dept < 21:
-        return "buy_now", f"检测到不可逆涨价，建议立即购买；{reason}"
+        return "buy_now", f"检测到不可逆涨价，建议立即购买：{reason}"
 
     if pct is not None and pct < threshold and wait_val > 0:
         return "strong_buy", reason
@@ -2084,7 +2032,7 @@ def _priority_boundary_notes(flight: dict, priorities: dict) -> list[str]:
         notes.append("转机次数刚好到上限")
 
     if priorities.get("no_overnight") and 360 <= max_wait <= 480:
-        notes.append("转机等待较长但不过夜")
+        notes.append("杞満绛夊緟杈冮暱浣嗕笉杩囧")
 
     return notes
 
@@ -2114,12 +2062,12 @@ def _last_arrival_hour(flight: dict) -> int | None:
 
 
 TIME_SLOT_LABELS = {
-    "early_morning": "早班",
-    "morning": "上午",
-    "afternoon": "下午",
-    "evening": "傍晚",
-    "night": "晚班",
-    "redeye": "红眼",
+    "early_morning": "鏃╃彮",
+    "morning": "涓婂崍",
+    "afternoon": "涓嬪崍",
+    "evening": "鍌嶆櫄",
+    "night": "鏅氱彮",
+    "redeye": "绾㈢溂",
 }
 
 
@@ -2296,11 +2244,11 @@ def match_time_preference(flight: dict, soft_prefs: dict) -> tuple[bool, str]:
             (dep_hour is None or 6 <= dep_hour < 20)
             and (arr_hour is None or 6 <= arr_hour < 20)
         )
-        return True, "白天航班" if is_daytime else "非白天，排序降权"
+        return True, "鐧藉ぉ鑸彮" if is_daytime else "闈炵櫧澶╋紝鎺掑簭闄嶆潈"
 
     if mode == "no_redeye":
         if dep_red_eye or arr_red_eye:
-            return False, "红眼/凌晨航班，已排除"
+            return False, "绾㈢溂/鍑屾櫒鑸彮锛屽凡鎺掗櫎"
         return True, ""
 
     if mode == "custom":
@@ -2310,7 +2258,7 @@ def match_time_preference(flight: dict, soft_prefs: dict) -> tuple[bool, str]:
         arr_ok = _matches_time_windows(arr_hour, arr_windows)
         if dep_ok and arr_ok:
             return True, ""
-        return False, "不在你设置的可接受时段内"
+        return False, "涓嶅湪浣犺缃殑鍙帴鍙楁椂娈靛唴"
 
     return True, ""
 
@@ -2429,11 +2377,11 @@ def verify_fare_rules(flight, hard_constraints):
 
     if baggage_req == "required":
         if checked_pieces > 0 or checked_kg > 0:
-            matches.append(f"✅ 含托运行李 {checked_kg}kg/{checked_pieces}件")
+            matches.append(f"含托运行李 {checked_kg}kg/{checked_pieces}件")
         elif fare_rules:
-            issues.append("⚠️ 不含免费托运行李，需额外购买")
+            issues.append("不含免费托运行李，需额外购买")
         else:
-            issues.append("❓ 托运行李信息未确认，购买前请核实")
+            issues.append("托运行李信息未确认，购买前请核实")
 
     refund_pref = hard_constraints.get("refund_flexibility", "unknown")
     refund_info = fare_rules.get("refund", {}) or {}
@@ -2442,40 +2390,40 @@ def verify_fare_rules(flight, hard_constraints):
     if refund_pref == "must_refundable":
         if refund_info.get("allowed"):
             fee = refund_info.get("fee", "未知")
-            matches.append(f"✅ 可退票（手续费: {fee}）")
+            matches.append(f"可退票（手续费: {fee}）")
         elif refund_info:
-            issues.append("⚠️ 该票不可退，与你的要求不符")
+            issues.append("该票不可退，与你的要求不符")
         else:
-            issues.append("❓ 退票规则未确认，购买前请核实")
+            issues.append("退票规则未确认，购买前请核实")
 
     if refund_pref in ("preferred", "must_refundable"):
         if change_info.get("allowed"):
-            matches.append("✅ 可改签")
+            matches.append("可改签")
         elif change_info:
-            issues.append("⚠️ 该票不可改签")
+            issues.append("该票不可改签")
         else:
-            issues.append("❓ 改签规则未确认")
+            issues.append("改签规则未确认")
 
     cabin = flight.get("cabin_class", "economy")
     if cabin in ("basic_economy", "light"):
-        issues.append("⚠️ 基础经济舱/轻选舱，可能不含行李、不可选座、不可退改")
+        issues.append("基础经济舱/轻选舱，可能不含行李、不可选座、不可退改")
 
     airlines = flight.get("airlines", []) or []
     if flight.get("stops", 0) > 0:
         if len(set(airlines)) > 1:
-            issues.append("⚠️ 跨航司中转，可能为非联程票，需确认")
+            issues.append("跨航司中转，可能为非联程票，需确认")
         else:
-            matches.append("✅ 同航司中转，大概率联程票")
+            matches.append("同航司中转，大概率联程票")
 
     if not issues:
         match_level = "full"
-        match_label = "🟢 票规完全匹配"
+        match_label = "票规完全匹配"
     elif len(issues) <= len(matches):
         match_level = "partial"
-        match_label = "🟡 票规部分匹配"
+        match_label = "票规部分匹配"
     else:
         match_level = "mismatch"
-        match_label = "🔴 票规需确认"
+        match_label = "票规需确认"
 
     return {
         "level": match_level,
@@ -2487,7 +2435,7 @@ def verify_fare_rules(flight, hard_constraints):
 
 def estimate_availability(flight, collected_at=None):
     status = "unknown"
-    label = "❓ 未验证"
+    label = "未验证"
 
     age_minutes = _collected_minutes_ago(
         {**flight, "collected_at": collected_at or flight.get("collected_at")}
@@ -2501,17 +2449,17 @@ def estimate_availability(flight, collected_at=None):
 
     if age_minutes <= 30 and source_count >= 2 and price > 0:
         status = "likely_available"
-        label = "🟢 大概率可购买"
+        label = "大概率可购买"
     elif age_minutes <= 120 and price > 0:
         status = "possibly_available"
-        label = "🟡 可能可购买"
+        label = "可能可购买"
     elif age_minutes > 120:
         status = "needs_refresh"
-        label = "🟠 建议刷新确认"
+        label = "建议刷新确认"
 
     if price <= 0:
         status = "invalid"
-        label = "🔴 价格异常"
+        label = "价格异常"
 
     return {
         "status": status,
@@ -2560,16 +2508,16 @@ def calc_execution_risk(flight):
 
     if score >= 50:
         risk_level = "high"
-        risk_label = "🔴 执行风险高"
+        risk_label = "执行风险高"
         advice = "该方案存在较多不确定因素，建议谨慎对待或等待更可靠的方案"
     elif score >= 25:
         risk_level = "medium"
-        risk_label = "🟡 执行风险中等"
+        risk_label = "执行风险中等"
         advice = "建议购买前仔细核对支付页的价格、行李和退改规则"
     else:
         risk_level = "low"
-        risk_label = "🟢 执行风险低"
-        advice = "该方案信息较完整，可信度较高"
+        risk_label = "执行风险低"
+        advice = "璇ユ柟妗堜俊鎭緝瀹屾暣锛屽彲淇″害杈冮珮"
 
     flight["execution_risk"] = {
         "level": risk_level,
@@ -2598,10 +2546,10 @@ def calc_execution_grade(flight: dict, hard_constraints=None) -> dict:
 
     if price <= 0 or price_advice.get("level") == "over_budget":
         grade = "D"
-        grade_label = "❌ 不推荐"
+        grade_label = "D级 - 不推荐"
     elif companions in {"with_elderly", "with_child", "with_elderly_child", "with_both"} and transfer.get("level") == "high":
         grade = "D"
-        grade_label = "❌ 不推荐（中转风险高，不适合老人/小孩）"
+        grade_label = "D级 - 不推荐（中转风险高，不适合老人/小孩）"
         reasons.append("中转风险高，不适合老人/小孩")
     elif risk.get("level") == "low" and price_advice.get("level") in {"below_target", "within_tolerance"}:
         grade = "A"
@@ -2959,11 +2907,11 @@ def _matched_constraint_reasons(analysis_result: dict) -> list[str]:
     reasons = []
     first = flights[0] if flights else {}
     if first.get("stops", 0) == 0:
-        reasons.append("符合你设置的直飞条件")
+        reasons.append("绗﹀悎浣犺缃殑鐩撮鏉′欢")
     fare = first.get("fare_verification") or {}
     matches = " ".join(fare.get("matches") or [])
-    if "托运" in matches or "行李" in matches:
-        reasons.append("符合你设置的托运行李要求")
+    if "鎵樿繍" in matches or "琛屾潕" in matches:
+        reasons.append("绗﹀悎浣犺缃殑鎵樿繍琛屾潕瑕佹眰")
     return reasons
 
 
@@ -3082,7 +3030,7 @@ def _apply_user_preferences(
             excluded.append({**flight, "exclude_reason": "用户不接受廉航"})
             continue
         if exclude_airlines and _contains_any_airline(flight, exclude_airlines):
-            excluded.append({**flight, "exclude_reason": "命中用户排除航司"})
+            excluded.append({**flight, "exclude_reason": "鍛戒腑鐢ㄦ埛鎺掗櫎鑸徃"})
             continue
         if airline_policy == "prefer_full_service":
             if _contains_any_airline(flight, FULL_SERVICE_AIRLINES):
@@ -3092,7 +3040,7 @@ def _apply_user_preferences(
                 notes.append("偏好全服务航司")
             elif _contains_any_airline(flight, LCC_AIRLINES):
                 penalty += 2
-                penalties.append("非全服务航司")
+                penalties.append("闈炲叏鏈嶅姟鑸徃")
 
         if max_budget and max_budget > 0 and price > max_budget:
             excluded.append({**flight, "exclude_reason": "\u8d85\u8fc7\u6700\u9ad8\u53ef\u63a5\u53d7\u4ef7\u683c"})
@@ -3108,7 +3056,7 @@ def _apply_user_preferences(
                 penalties.append(f"\u8ddd\u79bb\u7406\u60f3\u5165\u624b\u4ef7\u00a5{price - target_price:,.0f}")
 
         if direct_required and stops > 0:
-            excluded_flight = {**flight, "exclude_reason": "用户设置必须直飞"}
+            excluded_flight = {**flight, "exclude_reason": "鐢ㄦ埛璁剧疆蹇呴』鐩撮"}
             excluded.append(excluded_flight)
             direct_reference_candidates.append(flight)
             continue
@@ -3141,11 +3089,11 @@ def _apply_user_preferences(
             excluded.append({**flight, "exclude_reason": "系统默认不推荐过夜中转"})
             continue
         if stops > 0 and not allow_self_transfer and _is_likely_self_transfer(flight):
-            excluded.append({**flight, "exclude_reason": "系统默认不推荐疑似非联程中转"})
+            excluded.append({**flight, "exclude_reason": "绯荤粺榛樿涓嶆帹鑽愮枒浼奸潪鑱旂▼涓浆"})
             continue
 
         if red_eye == "reject" and _is_red_eye(flight):
-            excluded.append({**flight, "exclude_reason": "用户不接受红眼/过早航班"})
+            excluded.append({**flight, "exclude_reason": "鐢ㄦ埛涓嶆帴鍙楃孩鐪?杩囨棭鑸彮"})
             continue
         if red_eye in {"accept", "flexible", "cheap_ok"} and _is_red_eye(flight):
             penalty += 2 if red_eye in {"accept", "flexible"} else 1
@@ -3159,14 +3107,14 @@ def _apply_user_preferences(
                 notes.append("含免费托运")
             else:
                 penalty += 3
-                penalties.append("托运行李需官网确认")
+                penalties.append("鎵樿繍琛屾潕闇€瀹樼綉纭")
 
         if refund_flexibility == "preferred":
             if _has_refund_change_flexibility(flight):
                 notes.append("退改签较灵活")
             else:
                 penalty += 1
-                penalties.append("退改签需确认")
+                penalties.append("閫€鏀圭闇€纭")
         elif refund_flexibility == "required":
             if _has_refund_change_flexibility(flight, required=True):
                 notes.append("满足可退改")
@@ -3287,6 +3235,7 @@ def _excluded_flight_summary_legacy(flights: list[dict]) -> list[dict]:
             continue
         summaries.append(
             {
+                "flight": dict(flight),
                 "price": price,
                 "flight_combo": flight.get("flight_combo") or "",
                 "airline_summary": flight.get("airline_summary")
@@ -3306,6 +3255,7 @@ def _excluded_flight_summary(flights: list[dict]) -> list[dict]:
             continue
         summaries.append(
             {
+                "flight": dict(flight),
                 "price": price,
                 "flight_combo": flight.get("flight_combo") or "",
                 "airline_summary": flight.get("airline_summary")
@@ -3373,16 +3323,16 @@ def price_tolerance_advice(
 
     if current <= target:
         level = "below_target"
-        label = "🔥 低于理想价！强烈建议确认购买"
+        label = "低于理想价，建议确认购买"
     elif current <= buy_upper:
         level = "within_tolerance"
-        label = "✅ 在可接受浮动范围内，建议购买"
+        label = "在可接受浮动范围内，建议购买"
     elif max_budget_value and current <= max_budget_value:
         level = "within_budget"
-        label = "📊 高于理想区间，仅刚需建议购买"
+        label = "高于理想区间，仅刚需建议购买"
     else:
         level = "over_budget"
-        label = "❌ 超出最高预算，不推荐"
+        label = "超出最高预算，不推荐"
 
     return {
         "level": level,
@@ -3425,7 +3375,7 @@ def analyze_all_flights(
     user_preferences=None,
     hard_constraints=None,
 ) -> dict:
-    """对所有航班方案做多维度分析和排名"""
+    """Analyze and rank all flight options."""
     if not flights:
         return {"error": "no_flights"}
 
@@ -3495,13 +3445,13 @@ def analyze_all_flights(
             "excluded_flights": _excluded_flight_summary(excluded_flights),
         }
 
-    # 1. 按价格排名
+    # 1. 鎸変环鏍兼帓鍚?
     by_price = sorted(usable_flights, key=lambda f: _to_float(f.get("price")) or float("inf"))
 
-    # 2. 按总时长排名
+    # 2. 鎸夋€绘椂闀挎帓鍚?
     by_duration = sorted(usable_flights, key=lambda f: f["total_duration_min"])
 
-    # 3. 按性价比排名（综合得分）
+    # 3. 鎸夋€т环姣旀帓鍚嶏紙缁煎悎寰楀垎锛?
     valid_prices = [
         float(f["price"])
         for f in usable_flights
@@ -3598,7 +3548,7 @@ def analyze_all_flights(
             else:
                 qualified_flights.append(flight)
 
-    # 4. 按使用场景筛选推荐方案
+    # 4. 鎸変娇鐢ㄥ満鏅瓫閫夋帹鑽愭柟妗?
     fastest_duration = by_duration[0]["total_duration_min"]
 
     def comfortable_layovers(flight: dict) -> bool:
@@ -3638,21 +3588,21 @@ def analyze_all_flights(
 
     recommendations = [
         {
-            "tag": "💰 预算有限选这个",
+            "tag": "预算有限选这个",
             "desc": "价格最低，但路上时间较长",
             "reason": "价格最低，但路上时间较长",
             "flight": by_price[0],
         },
         {
-            "tag": "⏱️ 赶时间选这个",
-            "desc": "到达最快，价格稍高",
-            "reason": "到达最快，价格稍高",
+            "tag": "赶时间选这个",
+            "desc": "鍒拌揪鏈€蹇紝浠锋牸绋嶉珮",
+            "reason": "鍒拌揪鏈€蹇紝浠锋牸绋嶉珮",
             "flight": by_duration[0],
         },
         {
-            "tag": "🛋️ 怕折腾选这个",
-            "desc": "转机最轻松，不用在机场过夜",
-            "reason": "转机最轻松，不用在机场过夜",
+            "tag": "怕折腾选这个",
+            "desc": "杞満鏈€杞绘澗锛屼笉鐢ㄥ湪鏈哄満杩囧",
+            "reason": "杞満鏈€杞绘澗锛屼笉鐢ㄥ湪鏈哄満杩囧",
             "flight": most_comfortable,
         },
     ]
@@ -3854,7 +3804,7 @@ def _mix_match_tip(combinations: list[dict]) -> str:
     outbound = best.get("outbound") or {}
     return_flight = best.get("return") or {}
     return (
-        "💡 如果去程和返程分开买不同航司，总价可能更低："
+        "如果去程和返程分开买不同航司，总价可能更低："
         f"最优混搭：去程{outbound.get('flight_combo', '')}¥{best.get('outbound_price'):,.0f} + "
         f"返程{return_flight.get('flight_combo', '')}¥{best.get('return_price'):,.0f} = ¥{best_total:,.0f}，"
         f"比最优同航司组合便宜¥{diff:,.0f}"
@@ -3876,13 +3826,13 @@ def analyze_roundtrip_trend(history: list[dict] | None) -> dict:
     if len(recent) >= 2:
         if recent[-1] < recent[0]:
             direction = "连续下降中" if all(recent[i] <= recent[i - 1] for i in range(1, len(recent))) else "整体下降"
-            icon = "📉"
+            icon = ""
         elif recent[-1] > recent[0]:
             direction = "连续上涨中" if all(recent[i] >= recent[i - 1] for i in range(1, len(recent))) else "整体上涨"
-            icon = "📈"
+            icon = ""
         else:
             direction = "基本持平"
-            icon = "➡️"
+            icon = ""
     else:
         direction = "数据积累中"
         icon = ""
@@ -4019,15 +3969,15 @@ def analyze_roundtrip_prices(
     if len(recent) >= 2:
         change_pct = round((recent[-1] - recent[0]) / recent[0] * 100, 1) if recent[0] else 0
         if all(recent[i] <= recent[i - 1] for i in range(1, len(recent))) and recent[-1] < recent[0]:
-            trend = "📉 持续下降中"
+            trend = "持续下降中"
         elif all(recent[i] >= recent[i - 1] for i in range(1, len(recent))) and recent[-1] > recent[0]:
-            trend = "📈 持续上涨中"
+            trend = "持续上涨中"
         elif recent[-1] < recent[0]:
-            trend = "📉 下降中"
+            trend = "下降中"
         elif recent[-1] > recent[0]:
-            trend = "📈 上涨中"
+            trend = "上涨中"
         else:
-            trend = "➡️ 基本持平"
+            trend = "基本持平"
 
         previous_row = chart_rows[-2] if len(chart_rows) >= 2 else {}
         outbound_previous = _roundtrip_row_value(previous_row, "outbound")
@@ -4093,17 +4043,17 @@ def analyze_roundtrip_prices(
     advice = ""
     if target and current_total <= target * 2:
         advice = (
-            f"⭐ 往返购买建议：往返总价¥{current_total:,.0f}已低于理想价¥{target * 2:,.0f}，"
+            f"往返总价¥{current_total:,.0f}已低于理想价¥{target * 2:,.0f}，"
             "且处于近期低位。可以考虑锁定，继续等待的降幅空间有限。"
         )
     elif max_b and current_total <= max_b * 2:
         advice = (
-            f"⭐ 往返购买建议：往返总价¥{current_total:,.0f}在最高预算内，"
+            f"往返总价¥{current_total:,.0f}在最高预算内，"
             "但仍高于理想价，可结合出行确定性继续观察。"
         )
     elif max_b and current_total > max_b * 2:
         advice = (
-            f"⭐ 往返购买建议：往返总价¥{current_total:,.0f}超出最高预算，"
+            f"往返总价¥{current_total:,.0f}超出最高预算，"
             "可等待下一轮价格变化或扩大日期范围。"
         )
 
@@ -4126,11 +4076,11 @@ def _roundtrip_budget_advice(roundtrip_lowest, target_price=None, max_budget=Non
     if total is None:
         return ""
     if target and total <= target * 2:
-        return f"🔥 往返总价¥{total:,.0f}已低于理想总价¥{target * 2:,.0f}，建议锁定"
+        return f"往返总价¥{total:,.0f}已低于理想总价¥{target * 2:,.0f}，建议锁定"
     if max_b and total <= max_b * 2:
-        return f"📊 往返总价在预算内但高于理想价，可继续观望"
+        return "往返总价在预算内但高于理想价，可继续观望"
     if max_b and total > max_b * 2:
-        return f"⏳ 往返总价超出预算，建议等待降价"
+        return "往返总价超出预算，建议等待降价"
     return ""
 
 
@@ -4179,11 +4129,11 @@ def analyze_round_trip(
     if outbound_min is not None and return_min is not None:
         total = outbound_min + return_min
         if outbound_min < return_min * 0.8:
-            insight = f"去程好价但返程偏贵，总价¥{total:,.0f}"
+            insight = f"鍘荤▼濂戒环浣嗚繑绋嬪亸璐碉紝鎬讳环楼{total:,.0f}"
         elif return_min < outbound_min * 0.8:
-            insight = f"返程好价但去程偏贵，总价¥{total:,.0f}"
+            insight = f"杩旂▼濂戒环浣嗗幓绋嬪亸璐碉紝鎬讳环楼{total:,.0f}"
         else:
-            insight = f"去程和返程价格相对均衡，总价¥{total:,.0f}"
+            insight = f"鍘荤▼鍜岃繑绋嬩环鏍肩浉瀵瑰潎琛★紝鎬讳环楼{total:,.0f}"
 
     trend = analyze_roundtrip_trend(history)
     previous = trend.get("previous") if trend.get("available") else None
@@ -4251,7 +4201,7 @@ def analyze_round_trip(
 
 
 def select_recommendations(economy_flights, business_flights, mode: str = "balanced"):
-    """筛选推送方案：经济舱最多4个 + 商务舱1个。"""
+    """Select push options: up to four economy options and one business option."""
     def max_layover_minutes(flight: dict) -> int:
         return max(
             (int(layover.get("wait_minutes") or 0) for layover in flight.get("layovers", [])),
@@ -4309,3 +4259,6 @@ def select_recommendations(economy_flights, business_flights, mode: str = "balan
         )
 
     return eco_recs, business_rec
+
+
+
