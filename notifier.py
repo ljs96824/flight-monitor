@@ -6452,6 +6452,8 @@ def _payload_combo_plan(combo: dict, route_info: dict, index: int, variant: str)
         "return_price": _to_float(return_flight.get("price")),
         "outbound_line": _payload_plan_leg(outbound, outbound_date, "去"),
         "return_line": _payload_plan_leg(return_flight, return_date, "回"),
+        "outbound_push_line": _pushplus_leg_summary(outbound, "去程"),
+        "return_push_line": _pushplus_leg_summary(return_flight, "返程"),
         "summary": f"往返总价 {_price_text(total)}",
         "tags": _round_trip_combo_tags(combo, route_info, None),
         "risk": _combo_grade(combo),
@@ -6472,6 +6474,7 @@ def _payload_single_plan(flight: dict, route_info: dict, analysis_result: dict, 
         "price": _to_float(flight.get("price")),
         "estimated_price": _to_float((flight.get("price_estimate") or {}).get("transaction_price") or flight.get("price")),
         "summary": _payload_plan_leg(flight, route_info.get("depart_date")),
+        "main_push_line": _pushplus_leg_summary(flight, "去程"),
         "tags": _flight_status_tags(flight, route_info, analysis_result),
         "risk": _status_risk_label(flight),
         "buy_condition": _human_recommendation_text(flight, route_info, analysis_result),
@@ -6749,6 +6752,94 @@ def _render_pushplus_legacy(payload: dict) -> str:
     return "<br>".join(lines)
 
 
+def _pushplus_duration_text(flight: dict) -> str:
+    minutes = _to_float(flight.get("total_duration_min"))
+    if minutes is None:
+        hours = _to_float(flight.get("total_hours"))
+        minutes = hours * 60 if hours is not None else None
+    if minutes is None:
+        return ""
+    minutes = int(round(minutes))
+    return f"{minutes // 60}h{minutes % 60:02d}m"
+
+
+def _pushplus_aircraft_text(flight: dict) -> str:
+    segments = flight.get("segments") or []
+    aircraft = ""
+    if segments:
+        aircraft = str(segments[0].get("aircraft") or "").strip()
+    if not aircraft or aircraft in {"未知", "请查询航司官网", "unknown", "Unknown"}:
+        return ""
+    return aircraft
+
+
+def _pushplus_transfer_point(flight: dict) -> str:
+    layovers = flight.get("layovers") or []
+    if layovers:
+        first = layovers[0] or {}
+        airport = first.get("airport") or ""
+        return airport or first.get("city") or ""
+    segments = flight.get("segments") or []
+    if len(segments) >= 2:
+        return segments[0].get("arr_airport") or segments[0].get("arr_city") or ""
+    return ""
+
+
+def _pushplus_leg_summary(flight: dict | None, label: str) -> str:
+    flight = flight or {}
+    segments = flight.get("segments") or []
+    try:
+        stops = int(flight.get("stops") if flight.get("stops") is not None else max(len(segments) - 1, 0))
+    except (TypeError, ValueError):
+        stops = max(len(segments) - 1, 0)
+    first = segments[0] if segments else {}
+    last = segments[-1] if segments else {}
+    dep_time = _time_only(first.get("dep_time")) or "待确认"
+    arr_time = _time_only(last.get("arr_time")) or "待确认"
+
+    if stops <= 0:
+        parts = [
+            _compact_flight_numbers(flight),
+            f"{dep_time}-{arr_time}",
+            "直飞",
+        ]
+        aircraft = _pushplus_aircraft_text(flight)
+        if aircraft:
+            parts.append(aircraft)
+        return f"{label}:" + "｜".join(part for part in parts if part)
+
+    dep_airport = first.get("dep_airport") or ""
+    arr_airport = last.get("arr_airport") or ""
+    transfer = _pushplus_transfer_point(flight)
+    transfer_text = f"中转{stops}次 {transfer}".strip()
+    duration = _pushplus_duration_text(flight)
+    return (
+        f"{label}:{dep_airport} {dep_time} → {arr_airport} {arr_time}｜"
+        f"{transfer_text}｜总时长{duration or '待确认'}"
+    )
+
+
+def _pushplus_plan_lines(payload: dict) -> list[str]:
+    plans = payload.get("recommended_plans") or []
+    if not plans:
+        return []
+    primary = plans[:1]
+    if len(plans) > 1:
+        second = plans[1] or {}
+        if second.get("variant") in {"更稳", "全服务", "推荐"} or second.get("risk") == "A":
+            primary.append(second)
+    lines = ["", "推荐方案:"]
+    for index, plan in enumerate(primary[:2]):
+        if index:
+            lines.append("")
+        if plan.get("is_roundtrip"):
+            lines.append(html.escape(str(plan.get("outbound_push_line") or "")))
+            lines.append(html.escape(str(plan.get("return_push_line") or "")))
+        else:
+            lines.append(html.escape(str(plan.get("main_push_line") or "")))
+    return [line for line in lines if line != "" or len(lines) > 1]
+
+
 def render_pushplus(payload: dict) -> str:
     """Render the strictly short PushPlus message from the unified payload."""
     payload = payload or {}
@@ -6780,30 +6871,40 @@ def render_pushplus(payload: dict) -> str:
         risk_text = "，".join(dict.fromkeys((["最终支付价和票规需确认"] + risks)[:2]))
 
     if payload.get("frequency") == "price_change":
-        return "<br>".join(
+        lines = [
+            f"<b>【{route}】{price_text}</b>",
+            f"结论:{recommendation}",
+            f"条件:{buy_condition}",
+        ]
+        lines.extend(_pushplus_plan_lines(payload))
+        lines.extend(
             [
-                f"<b>【{route}】{price_text}</b>",
-                f"结论:{recommendation}",
-                f"条件:{buy_condition}",
                 f"原因:{html.escape(reason_text)}",
-                f"查看详情:{detail_link}",
+                "风险:最终价、行李和机型以下单页为准",
+                f"详情:{detail_link}",
             ]
         )
+        return "<br>".join(lines)
 
-    return "<br>".join(
+    lines = [
+        f"<b>【{push_type}】{route} {price_text}</b>",
+        "",
+        f"结论:{recommendation}",
+        f"条件:{buy_condition}",
+    ]
+    lines.extend(_pushplus_plan_lines(payload))
+    lines.extend(
         [
-            f"<b>【{push_type}】{route} {price_text}</b>",
             "",
-            f"当前价:{price_text}",
-            f"结论:{recommendation}",
-            f"购买条件:{buy_condition}",
+            "提醒原因:",
+            html.escape(reason_text),
             "",
-            f"为什么提醒:{html.escape(reason_text)}",
-            f"主要风险:{html.escape(risk_text)}",
+            "风险:最终价、行李和机型以下单页为准",
             "",
-            f"查看详情:{detail_link}",
+            f"详情:{detail_link}",
         ]
     )
+    return "<br>".join(lines)
 
 
 def _render_payload_plan_card(plan: dict, compact: bool = False) -> str:
