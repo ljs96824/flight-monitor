@@ -25,12 +25,11 @@ from analyzer import (
     waiting_risk_description,
 )
 from collector import _normalize_detail_flight, save_raw_response
-from email_notifier import send_email
+from email_notifier import render_email, send_email
 from health_check import system_health_check
 from notifier import (
     build_notification_payload,
     persist_notification_payload,
-    render_email,
     render_pushplus,
     send,
 )
@@ -378,7 +377,12 @@ def _deliver_notification(sub: dict, route: str, message_kwargs: dict) -> bool:
         source_stats=message_kwargs.get("source_stats"),
         price_insights=message_kwargs.get("price_insights"),
     )
-    subject, full_html = render_email(payload)
+    email_rendered = render_email(payload)
+    if len(email_rendered) == 3:
+        subject, full_html, inline_images = email_rendered
+    else:
+        subject, full_html = email_rendered
+        inline_images = {}
 
     if method == "page_only":
         _save_result_for_page(subscription_id, full_html, payload)
@@ -394,6 +398,7 @@ def _deliver_notification(sub: dict, route: str, message_kwargs: dict) -> bool:
                 email,
                 subject,
                 full_html,
+                inline_images,
             ) or sent
 
     if method in {"pushplus", "both"}:

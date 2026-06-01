@@ -5,7 +5,9 @@ from __future__ import annotations
 import os
 import socket
 import smtplib
+import io
 from email.header import Header
+from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -32,7 +34,63 @@ def render_email(payload: dict):
     """Render the full email HTML from the unified notification payload."""
     from notifier import render_email as _render_email
 
-    return _render_email(payload)
+    subject, html = _render_email(payload)
+    image = build_trend_png(
+        payload.get("price_history") or [],
+        payload.get("ideal_price"),
+        payload.get("max_price"),
+        payload.get("current_price"),
+    )
+    inline_images = {"trendchart": image} if image else {}
+    return subject, html, inline_images
+
+
+def build_trend_png(price_history, ideal_price=None, max_price=None, current_price=None):
+    """Build a PNG trend chart for email CID embedding."""
+    rows = [
+        item for item in (price_history or [])
+        if isinstance(item, dict) and item.get("price") and item.get("price") > 0
+    ][-14:]
+    prices = [row["price"] for row in rows]
+    if len(rows) < 3 or len(set(round(float(price), 2) for price in prices)) < 2:
+        return None
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        print("[邮件] matplotlib 未安装，跳过趋势图 PNG")
+        return None
+
+    dates = [str(row.get("date") or "") for row in rows]
+    ideal = float(ideal_price) if ideal_price else None
+    current = float(current_price) if current_price else prices[-1]
+
+    plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "Arial Unicode MS", "DejaVu Sans"]
+    plt.rcParams["axes.unicode_minus"] = False
+    fig, ax = plt.subplots(figsize=(5, 2.2), dpi=100)
+    ax.plot(dates, prices, color="#3b82f6", marker="o", linewidth=2)
+    if ideal:
+        ax.axhline(ideal, color="#16a34a", linestyle="--", linewidth=1.2, label="理想价")
+    current_color = "#16a34a" if ideal and current <= ideal else "#3b82f6"
+    ax.scatter([dates[-1]], [prices[-1]], color=current_color, zorder=5, s=60)
+    ax.set_title("近期价格走势", fontsize=11)
+    if ideal:
+        ax.legend(fontsize=8)
+    ax.grid(axis="y", color="#e5e7eb", linewidth=0.8)
+    ax.tick_params(axis="x", labelrotation=0, labelsize=8)
+    ax.tick_params(axis="y", labelsize=8)
+    if len(dates) > 6:
+        for index, label in enumerate(ax.get_xticklabels()):
+            if index not in {0, len(dates) - 1, len(dates) // 2}:
+                label.set_visible(False)
+    plt.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png")
+    plt.close(fig)
+    buf.seek(0)
+    return buf.read()
 
 
 def _smtp_config() -> dict:
@@ -53,7 +111,7 @@ def _smtp_config() -> dict:
     return config
 
 
-def send_email(to_email: str, subject: str, html_content: str) -> bool:
+def send_email(to_email: str, subject: str, html_content: str, inline_images: dict | None = None) -> bool:
     """Send one HTML email through the configured SMTP account."""
     config = _smtp_config()
     smtp_user = os.getenv("SMTP_USER", "")
@@ -73,11 +131,20 @@ def send_email(to_email: str, subject: str, html_content: str) -> bool:
         print("[邮件] SMTP_USER 或 SMTP_PASS 未配置")
         return False
 
-    msg = MIMEMultipart("alternative")
+    msg = MIMEMultipart("related")
     msg["Subject"] = str(Header(subject or "航班监控通知", "utf-8"))
     msg["From"] = smtp_user
     msg["To"] = to_email
-    msg.attach(MIMEText(html_content or "", "html", "utf-8"))
+    alternative = MIMEMultipart("alternative")
+    alternative.attach(MIMEText(html_content or "", "html", "utf-8"))
+    msg.attach(alternative)
+    for cid, image_bytes in (inline_images or {}).items():
+        if not image_bytes:
+            continue
+        img = MIMEImage(image_bytes)
+        img.add_header("Content-ID", f"<{cid}>")
+        img.add_header("Content-Disposition", "inline")
+        msg.attach(img)
 
     server = None
     try:
