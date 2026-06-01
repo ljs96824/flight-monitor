@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from analyzer import (
     waiting_risk_description,
 )
 from collector import _normalize_detail_flight, save_raw_response
+from email_notifier import send_email
 from health_check import system_health_check
 from notifier import format_html_message, send
 from sources.aggregator import FlightAggregator, build_default_sources
@@ -302,6 +304,94 @@ def _normalize_subscription(item: dict) -> dict:
 def normalize_subscription(item: dict) -> dict:
     """Public wrapper used by web_form for immediate single-subscription runs."""
     return _normalize_subscription(item)
+
+
+def _message_subject(html_content: str, fallback: str = "航班监控通知") -> str:
+    text = re.sub(r"<[^>]+>", "", html_content or "").replace("&nbsp;", " ").strip()
+    first_line = re.split(r"(?:<br>|\n)", text, maxsplit=1)[0].strip()
+    return first_line[:100] if first_line else fallback
+
+
+def _email_subject(html_content: str, route_info: dict) -> str:
+    subject = _message_subject(html_content)
+    target = route_info.get("target_price")
+    try:
+        target_value = float(target) if target else None
+    except (TypeError, ValueError):
+        target_value = None
+    if target_value:
+        if route_info.get("round_trip"):
+            target_value *= 2
+        subject = f"{subject} (理想¥{target_value:,.0f})"
+    return subject[:120]
+
+
+def _save_result_for_page(subscription_id: str, html_content: str) -> None:
+    path = DATA_DIR / "page_results.json"
+    try:
+        records = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+    except json.JSONDecodeError:
+        records = []
+    records.append(
+        {
+            "subscription_id": subscription_id,
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+            "html": html_content,
+        }
+    )
+    path.write_text(json.dumps(records[-100:], ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _subscription_identifier(sub: dict, route: str) -> str:
+    return str(
+        sub.get("subscription_id")
+        or sub.get("id")
+        or sub.get("_index")
+        or f"{route}|{sub.get('depart_date', '')}|{sub.get('return_date', '')}"
+    )
+
+
+def _deliver_notification(sub: dict, route: str, message_kwargs: dict) -> bool:
+    notification_goals = sub.get("notification_goals", {}) or {}
+    method = notification_goals.get("method", "pushplus")
+    email = notification_goals.get("email", "").strip()
+    subscription_id = _subscription_identifier(sub, route)
+
+    if method == "page_only":
+        html_content = format_html_message(
+            **message_kwargs,
+            detail_level="full",
+            enforce_pushplus_limit=False,
+        )
+        _save_result_for_page(subscription_id, html_content)
+        print("[推送] 用户选择仅页面查看，已保存页面结果")
+        return True
+
+    sent = False
+    if method in {"email", "both"}:
+        if not email:
+            print("[邮件] 用户选择邮箱推送但未填写邮箱")
+        else:
+            email_content = format_html_message(
+                **message_kwargs,
+                detail_level="full",
+                enforce_pushplus_limit=False,
+            )
+            sent = send_email(
+                email,
+                _email_subject(email_content, message_kwargs.get("route_info", {})),
+                email_content,
+            ) or sent
+
+    if method in {"pushplus", "both"}:
+        push_content = format_html_message(**message_kwargs)
+        sent = send(push_content) or sent
+
+    if method not in {"email", "pushplus", "both", "page_only"}:
+        push_content = format_html_message(**message_kwargs)
+        sent = send(push_content) or sent
+
+    return sent
 
 
 def load_file_subscriptions() -> list[dict]:
@@ -857,15 +947,9 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
             "price_insights": data.get("price_insights"),
         }
         print(f"[DEBUG] 传给notifier的参数keys: {list(message_kwargs.keys())}")
-        msg = format_html_message(**message_kwargs)
-        notification_goals = sub.get("notification_goals", {}) or {}
-        notification_method = notification_goals.get("method", "pushplus")
-        if notification_method == "page_only":
-            print("[推送] 用户选择仅页面查看，跳过主动推送")
-            return True
-        if notification_method == "email":
-            print("[推送] 邮件功能待接入，暂时使用PushPlus推送")
-        send(msg)
+        if not _deliver_notification(sub, route, message_kwargs):
+            logging.warning(f"{route} 未能完成任何主动推送")
+            return False
         logging.info(f"{route} 已推送方案对比表")
         return True
 

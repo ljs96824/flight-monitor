@@ -916,8 +916,8 @@ FORM_TEMPLATE = """
           <label>提醒频率</label>
           <div class="choice">
             <label><input type="radio" name="notification_frequency_rule" value="important_only" checked> 仅重要变化时提醒（价格显著下降、即将涨价）</label>
-            <label><input type="radio" name="notification_frequency_rule" value="daily_summary"> 每天汇总推送一次</label>
-            <label><input type="radio" name="notification_frequency_rule" value="every_change"> 每次价格变化都提醒</label>
+            <label><input type="radio" name="notification_frequency_rule" value="daily_digest"> 每天汇总推送一次</label>
+            <label><input type="radio" name="notification_frequency_rule" value="price_change"> 每次价格变化都提醒</label>
           </div>
           </div>
           <p class="hint">规则越严格，可能匹配的方案越少。如果没有结果，系统会提示你放宽哪些条件</p>
@@ -958,19 +958,22 @@ FORM_TEMPLATE = """
         <div class="choice">
           <label><input type="radio" name="notification_method" value="email"> 邮箱</label>
           <label><input type="radio" name="notification_method" value="pushplus" checked> PushPlus微信推送</label>
+          <label><input type="radio" name="notification_method" value="both"> 邮箱 + 微信(PushPlus)都接收</label>
           <label><input type="radio" name="notification_method" value="page_only"> 暂时只在页面查看</label>
         </div>
         <div id="email-reminder-wrap">
           <label for="notification_email">邮箱地址</label>
           <input id="notification_email" name="notification_email" type="email" placeholder="you@example.com">
+          <p class="hint">支持任意邮箱。注意：Gmail在国内需翻墙才能查看，推荐用QQ/163/Outlook</p>
+          <p id="email-error" class="inline-warning"></p>
         </div>
         <p id="page-only-hint" class="hint">你可以稍后在订阅列表查看监控结果</p>
 
         <label>提醒频率</label>
         <div class="choice">
           <label><input type="radio" name="notification_frequency" value="important_only" checked> 仅重要变化提醒</label>
-          <label><input type="radio" name="notification_frequency" value="daily_summary"> 每天汇总一次</label>
-          <label><input type="radio" name="notification_frequency" value="every_change"> 价格变化就提醒</label>
+          <label><input type="radio" name="notification_frequency" value="daily_digest"> 每天汇总一次</label>
+          <label><input type="radio" name="notification_frequency" value="price_change"> 价格变化就提醒</label>
         </div>
       </fieldset>
       <p class="hint">开始后，系统会立即生成当前购买判断，并在价格进入低价区间、涨价风险升高或出现异常低价时提醒你。</p>
@@ -1013,7 +1016,7 @@ FORM_TEMPLATE = """
       },
       baggage: {"required": "必须托运", "not_needed": "不需要托运", "unknown": "不确定"},
       primary: {"price_drop_alert": "找到合适价格时提醒我", "buy_timing": "判断现在该不该买", "cheaper_date": "帮我找更便宜的日期", "best_overall": "帮我找最合适航班"},
-      frequency: {"important_only": "仅重要变化时提醒", "daily_summary": "每天汇总推送一次", "every_change": "每次价格变化都提醒"}
+      frequency: {"important_only": "仅重要变化时提醒", "daily_digest": "每天汇总推送一次", "price_change": "每次价格变化都提醒"}
     };
     const goalDefaults = {
       price_drop_alert: ["low_price_alert", "price_risk_alert"],
@@ -1084,6 +1087,7 @@ FORM_TEMPLATE = """
     const notificationFrequencyRuleRadios = document.querySelectorAll('input[name="notification_frequency_rule"]');
     const notificationEmailInput = document.getElementById('notification_email');
     const emailReminderWrap = document.getElementById('email-reminder-wrap');
+    const emailError = document.getElementById('email-error');
     const pageOnlyHint = document.getElementById('page-only-hint');
     const rememberPreferences = document.getElementById('remember-preferences');
     const transferRadios = document.querySelectorAll('input[name="transfer_policy"]');
@@ -1489,15 +1493,33 @@ FORM_TEMPLATE = """
 
     function toggleNotificationMethod() {
       const method = checkedValue('notification_method') || 'pushplus';
+      const needsEmail = method === 'email' || method === 'both';
       if (emailReminderWrap) {
-        emailReminderWrap.style.display = method === 'email' ? 'block' : 'none';
+        emailReminderWrap.style.display = needsEmail ? 'block' : 'none';
       }
       if (notificationEmailInput) {
-        notificationEmailInput.required = method === 'email';
+        notificationEmailInput.required = needsEmail;
       }
       if (pageOnlyHint) {
         pageOnlyHint.style.display = method === 'page_only' ? 'block' : 'none';
       }
+      validateEmailField(false);
+    }
+
+    function validateEmailField(showAlert) {
+      const method = checkedValue('notification_method') || 'pushplus';
+      const needsEmail = method === 'email' || method === 'both';
+      const value = notificationEmailInput ? notificationEmailInput.value.trim() : '';
+      const ok = !needsEmail || /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(value);
+      if (emailError) {
+        emailError.textContent = ok ? '' : (value ? '邮箱格式不正确，请检查' : '请填写接收邮箱');
+        emailError.style.display = ok ? 'none' : 'block';
+      }
+      if (!ok && showAlert) {
+        alert(value ? '邮箱格式不正确，请检查' : '请填写接收邮箱');
+        notificationEmailInput?.focus();
+      }
+      return ok;
     }
 
     function syncNotificationFrequencyFromRule() {
@@ -1775,7 +1797,11 @@ FORM_TEMPLATE = """
       }
       const secondary = selectedCheckboxLabels('secondary_goals');
       summaryLine('提醒', secondary.length ? secondary.join('、') : selectedLabel('primary_goal'));
-      summaryLine('提醒方式', selectedLabel('notification_method'));
+      const methodText = selectedLabel('notification_method');
+      const emailText = notificationEmailInput && notificationEmailInput.value.trim()
+        ? ` ${notificationEmailInput.value.trim()}`
+        : '';
+      summaryLine('提醒方式', methodText ? `${methodText}${emailText}` : '');
       summaryLine('提醒频率', selectedLabel('notification_frequency'));
       addSummaryHeader(
         checkedValue('monitor_mode') === 'precise'
@@ -1948,7 +1974,14 @@ FORM_TEMPLATE = """
       if (!preciseTimeOptions) return;
       preciseTimeOptions.style.display = preciseTimeOptions.style.display === 'block' ? 'none' : 'block';
     });
-    notificationMethodRadios.forEach(radio => radio.addEventListener('change', toggleNotificationMethod));
+    notificationMethodRadios.forEach(radio => radio.addEventListener('change', () => {
+      toggleNotificationMethod();
+      refreshSummaryIfFinalStep();
+    }));
+    notificationEmailInput?.addEventListener('input', () => {
+      validateEmailField(false);
+      refreshSummaryIfFinalStep();
+    });
     notificationFrequencyRuleRadios.forEach(radio => radio.addEventListener('change', () => {
       syncNotificationFrequencyFromRule();
       refreshSummaryIfFinalStep();
@@ -2019,6 +2052,10 @@ FORM_TEMPLATE = """
         event.preventDefault();
         alert('理想入手价应低于最高可接受价，请确认是否填反了');
         targetPriceInput.focus();
+        return;
+      }
+      if (!validateEmailField(true)) {
+        event.preventDefault();
         return;
       }
       if (summaryCard.style.display !== 'block') {
@@ -2587,6 +2624,15 @@ def build_subscription(form) -> dict:
                 "return_arrival_time_windows": return_arrival_time_windows,
             }
         )
+    frequency_aliases = {
+        "daily_summary": "daily_digest",
+        "every_change": "price_change",
+    }
+    notification_frequency = frequency_aliases.get(
+        form.get("notification_frequency", "important_only"),
+        form.get("notification_frequency", "important_only"),
+    )
+
     return {
         "origin": origin_info["value"],
         "origin_type": origin_info["type"],
@@ -2657,7 +2703,7 @@ def build_subscription(form) -> dict:
             "secondary": form.getlist("secondary_goals"),
             "method": form.get("notification_method", "pushplus"),
             "email": form.get("notification_email", "").strip(),
-            "frequency": form.get("notification_frequency", "important_only"),
+            "frequency": notification_frequency,
         },
         "status": "active",
         "created_at": datetime.now().isoformat(),

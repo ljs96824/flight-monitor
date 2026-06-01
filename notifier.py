@@ -5137,7 +5137,11 @@ def _notification_frequency(route_info: dict, analysis_result: dict) -> str:
         or {}
     )
     if isinstance(goals, dict):
-        return goals.get("frequency") or "important_only"
+        value = goals.get("frequency") or "important_only"
+        return {
+            "daily_summary": "daily_digest",
+            "every_change": "price_change",
+        }.get(value, value)
     return "important_only"
 
 
@@ -6007,6 +6011,7 @@ def format_html_message(
     outbound_analysis=None,
     return_analysis=None,
     detail_level=None,
+    enforce_pushplus_limit=True,
 ):
     """生成压缩版HTML消息：经济舱3-4个方案 + 商务舱1个方案。"""
     message = _format_structured_html_message(
@@ -6020,7 +6025,7 @@ def format_html_message(
         detail_level=detail_level,
         persist_snapshot=False,
     )
-    if len(message) > PUSHPLUS_COMPACT_CHARS:
+    if enforce_pushplus_limit and len(message) > PUSHPLUS_COMPACT_CHARS:
         message = _format_structured_html_message(
             analysis_result=analysis_result,
             route_info=route_info,
