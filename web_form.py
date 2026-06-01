@@ -322,6 +322,39 @@ FORM_TEMPLATE = """
     .summary-default-rule {
       color: #188038;
     }
+    .summary-advanced-rule {
+      color: #5f3dc4;
+    }
+    .module-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin: 8px 0 6px;
+    }
+    .module-heading label,
+    .module-heading strong {
+      margin: 0;
+    }
+    .reset-module {
+      border: 0;
+      background: transparent;
+      color: #1a73e8;
+      padding: 0;
+      font-size: 13px;
+      text-decoration: underline;
+      cursor: pointer;
+    }
+    .strict-warning {
+      display: none;
+      border: 1px solid #f4c542;
+      background: #fff8e1;
+      color: #7a4f00;
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin: 10px 0;
+      font-size: 14px;
+    }
     .pref-cards {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -725,7 +758,10 @@ FORM_TEMPLATE = """
         <input type="hidden" name="trip_rigidity" value="confirmed">
 
         <div id="pref-detail-time" class="pref-card-detail">
-        <label>时间偏好</label>
+        <div class="module-heading">
+          <label>时间偏好</label>
+          <button class="reset-module" type="button" data-reset-module="time">恢复默认</button>
+        </div>
         <div class="choice">
           <label><input type="radio" name="time_preference" value="unlimited" checked> 不限制</label>
           <label><input type="radio" name="time_preference" value="daytime"> 白天优先</label>
@@ -734,6 +770,7 @@ FORM_TEMPLATE = """
         </div>
 
         <div id="custom-time-options" data-show-if="time_preference=custom">
+        <p class="hint">这些设置不是必填项。保持默认时，系统会按普通出行规则处理。</p>
         <fieldset id="single-time-preferences" class="time-preferences time-outbound">
           <strong>时段偏好</strong>
           <label>偏好哪些时段起飞？（可多选）</label>
@@ -862,6 +899,12 @@ FORM_TEMPLATE = """
           <legend>更细的筛选规则</legend>
           <p class="hint">适合有特定要求的用户，一般用户可跳过</p>
 
+          <div id="transfer-rules-module">
+          <div class="module-heading">
+            <strong>中转规则</strong>
+            <button class="reset-module" type="button" data-reset-module="transfer">恢复默认</button>
+          </div>
+          <p class="hint">这些设置不是必填项。保持默认时，系统会按普通出行规则处理。</p>
           <div id="short-transfer-options" class="sub-options" data-show-if="transfer_policy=reasonable|price_first">
             <label>最长可接受总行程时间</label>
             <div class="choice">
@@ -889,9 +932,14 @@ FORM_TEMPLATE = """
             </div>
           </div>
           </div>
+          </div>
 
           <div id="pref-detail-airline" class="pref-card-detail">
-          <label>航司偏好</label>
+          <div class="module-heading">
+            <label>航司偏好</label>
+            <button class="reset-module" type="button" data-reset-module="airline">恢复默认</button>
+          </div>
+          <p class="hint">这些设置不是必填项。保持默认时，系统会按普通出行规则处理。</p>
           <div class="choice">
             <label><input type="radio" name="airline_policy" value="any" checked> 不限制</label>
             <label><input type="radio" name="airline_policy" value="prefer_full_service"> 偏好全服务航司</label>
@@ -911,8 +959,13 @@ FORM_TEMPLATE = """
           </div>
           </div>
 
+          <div class="module-heading">
+            <label>提醒规则</label>
+            <button class="reset-module" type="button" data-reset-module="alerts">恢复默认</button>
+          </div>
+          <p class="hint">这些设置不是必填项。保持默认时，系统会按普通出行规则处理。</p>
           <label>附加关注</label>
-          <div class="choice">
+          <div id="alerts-secondary-options" class="choice">
             <label><input type="checkbox" name="secondary_goals" value="low_price_alert"> 异常低价提醒</label>
             <label><input type="checkbox" name="secondary_goals" value="price_risk_alert"> 涨价风险提醒</label>
             <label><input type="checkbox" name="secondary_goals" value="cheaper_date"> 前后日期更便宜提醒</label>
@@ -972,6 +1025,7 @@ FORM_TEMPLATE = """
       提交后将生成：当前是否值得买的判断、推荐方案与备选方案、价格置信度拆解、购买前检查清单，以及为什么排除更便宜方案的解释。
     </div>
     <p id="missing-required-warning"></p>
+    <div id="strict-rules-warning" class="strict-warning"></div>
     <button id="preview-button" type="button">开始监控</button>
 
     <div id="summary-card">
@@ -1064,6 +1118,7 @@ FORM_TEMPLATE = """
     const ignoreTemplateButton = document.getElementById('ignore-template-button');
     const clearTemplateButton = document.getElementById('clear-template-button');
     const missingRequiredWarning = document.getElementById('missing-required-warning');
+    const strictRulesWarning = document.getElementById('strict-rules-warning');
     const quickDefaultsNote = document.getElementById('quick-defaults-note');
     const openPreciseModeButton = document.getElementById('open-precise-mode');
     const originSelect = document.getElementById('origin');
@@ -1140,6 +1195,7 @@ FORM_TEMPLATE = """
     const stepTimePreferences = document.getElementById('step-time-preferences');
     const prefCardButtons = document.querySelectorAll('.pref-card-button');
     const prefCardDetails = document.querySelectorAll('.pref-card-detail');
+    const resetModuleButtons = document.querySelectorAll('.reset-module');
     const stepTitles = ['行程信息', '价格底线', '监控目标', '完成'];
     let currentStep = 1;
 
@@ -1168,6 +1224,116 @@ FORM_TEMPLATE = """
     document.querySelectorAll('input, select').forEach(input => {
       input.addEventListener('change', updateConditionalFields);
     });
+
+    const moduleInputContainers = {
+      time: ['pref-detail-time'],
+      transfer: ['transfer-rules-module'],
+      airline: ['pref-detail-airline'],
+      alerts: ['alerts-secondary-options', 'advanced-frequency-copy']
+    };
+
+    function moduleInputs(moduleName) {
+      return (moduleInputContainers[moduleName] || [])
+        .flatMap(id => Array.from(document.querySelectorAll(`#${id} input, #${id} select`)));
+    }
+
+    function captureModuleDefaults() {
+      Object.keys(moduleInputContainers).forEach(moduleName => {
+        moduleInputs(moduleName).forEach(input => {
+          input.dataset.default = (input.type === 'radio' || input.type === 'checkbox')
+            ? String(input.checked)
+            : input.value;
+        });
+      });
+    }
+
+    function resetInputToDefault(input) {
+      if (!input || input.dataset.default === undefined) {
+        return;
+      }
+      if (input.type === 'radio' || input.type === 'checkbox') {
+        input.checked = input.dataset.default === 'true';
+      } else {
+        input.value = input.dataset.default;
+      }
+    }
+
+    function resetModule(moduleName) {
+      moduleInputs(moduleName).forEach(resetInputToDefault);
+      if (moduleName === 'alerts') {
+        const mainFrequency = document.querySelector('input[name="notification_frequency"][value="important_only"]');
+        if (mainFrequency) mainFrequency.checked = true;
+      }
+      if (moduleName === 'time' && preciseTimeOptions) {
+        preciseTimeOptions.style.display = 'none';
+      }
+      updateConditionalFields();
+      toggleTimePreference();
+      toggleShortTransferOptions();
+      syncNotificationFrequencyFromRule();
+      updatePrefCards();
+      updateStrictRulesWarning();
+      refreshSummaryIfFinalStep();
+    }
+
+    function selectedCount(name) {
+      return document.querySelectorAll(`input[name="${name}"]:checked`).length;
+    }
+
+    function hasNarrowCustomTimeWindow() {
+      if (checkedValue('time_preference') !== 'custom') {
+        return false;
+      }
+      const isRoundTrip = checkedValue('round_trip') === 'true';
+      const fields = isRoundTrip
+        ? ['outbound_departure_slots', 'outbound_arrival_slots', 'return_departure_slots', 'return_arrival_slots']
+        : ['departure_slots', 'arrival_slots'];
+      return fields.some(name => {
+        const count = selectedCount(name);
+        return count > 0 && count <= 2;
+      });
+    }
+
+    function customTimeExcludesRedeye() {
+      if (checkedValue('time_preference') !== 'custom') {
+        return false;
+      }
+      const isRoundTrip = checkedValue('round_trip') === 'true';
+      const fields = isRoundTrip
+        ? ['outbound_departure_slots', 'outbound_arrival_slots', 'return_departure_slots', 'return_arrival_slots']
+        : ['departure_slots', 'arrival_slots'];
+      return fields.every(name => !Array.from(document.querySelectorAll(`input[name="${name}"]:checked`))
+        .some(input => input.value === 'redeye'));
+    }
+
+    function strictRuleStatus() {
+      let score = 0;
+      if (checkedValue('transfer_policy') === 'direct_only') score += 1;
+      if (checkedValue('baggage') === 'required') score += 1;
+      if (checkedValue('time_preference') === 'no_redeye' || customTimeExcludesRedeye()) score += 1;
+      if (checkedValue('airline_policy') === 'no_lcc') score += 1;
+      const maxBudget = Number(maxBudgetInput.value || 0);
+      const targetPrice = Number(targetPriceInput.value || 0);
+      if (maxBudget > 0 && targetPrice > 0 && targetPrice < maxBudget * 0.5) score += 1;
+      if (hasNarrowCustomTimeWindow()) score += 1;
+      if (checkedValue('date_flexibility') === '0') score += 1;
+      return score;
+    }
+
+    function updateStrictRulesWarning() {
+      if (!strictRulesWarning) return;
+      const score = strictRuleStatus();
+      if (score >= 6) {
+        strictRulesWarning.textContent = '⚠️ 当前规则非常严格，可能很难匹配到方案。建议至少放宽其中1-2项以获得更多推荐。';
+        strictRulesWarning.style.display = 'block';
+      } else if (score >= 4) {
+        strictRulesWarning.textContent = '⚠️ 当前规则较严格，可能减少可推荐方案。如果长期没有结果，可考虑放宽中转、时间或价格限制。';
+        strictRulesWarning.style.display = 'block';
+      } else {
+        strictRulesWarning.textContent = '';
+        strictRulesWarning.style.display = 'none';
+      }
+    }
 
     function isMobileStepper() {
       return window.matchMedia('(max-width: 720px)').matches;
@@ -1767,23 +1933,101 @@ FORM_TEMPLATE = """
     function systemDefaultRulesForSummary() {
       const precise = checkedValue('monitor_mode') === 'precise';
       const rules = [];
-      if (!precise || checkedValue('time_preference') === 'unlimited') {
+      if (!precise || !moduleIsDirty('time')) {
         rules.push('✓ 不推荐红眼/凌晨到达');
       }
       if (!precise || checkedValue('baggage') === 'unknown') {
         rules.push('✓ 优先含托运行李方案');
       }
-      if (!precise) {
+      if (!precise || !moduleIsDirty('transfer')) {
         rules.push('✓ 不推荐非联程中转');
       }
-      if (!precise) {
+      if (!precise || !moduleIsDirty('transfer')) {
         rules.push('✓ 不推荐过夜中转');
       }
-      if (checkedValue('notification_frequency') === 'important_only') {
+      if (!moduleIsDirty('alerts') || checkedValue('notification_frequency') === 'important_only') {
         rules.push('✓ 只在重要变化时提醒');
       }
       rules.push('✓ 自动检测异常低价和涨价风险');
       return [...new Set(rules)];
+    }
+
+    function inputCurrentState(input) {
+      return (input.type === 'radio' || input.type === 'checkbox')
+        ? String(input.checked)
+        : input.value;
+    }
+
+    function moduleIsDirty(moduleName) {
+      return moduleInputs(moduleName).some(input => (
+        input.dataset.default !== undefined && inputCurrentState(input) !== input.dataset.default
+      ));
+    }
+
+    function addAdvancedRule(label, value) {
+      if (value) {
+        addSummaryLine(`${label}: ${value}`, 'summary-advanced-rule');
+        return true;
+      }
+      return false;
+    }
+
+    function customTimeSummary() {
+      const isRoundTrip = checkedValue('round_trip') === 'true';
+      if (isRoundTrip) {
+        return [
+          `去程起飞 ${slotSummary('outbound_departure_slots', labels.departureSlots)}`,
+          `去程到达 ${slotSummary('outbound_arrival_slots', labels.arrivalSlots)}`,
+          `返程起飞 ${slotSummary('return_departure_slots', labels.departureSlots)}`,
+          `返程到达 ${slotSummary('return_arrival_slots', labels.arrivalSlots)}`
+        ].join('；');
+      }
+      return [
+        `起飞 ${slotSummary('departure_slots', labels.departureSlots)}`,
+        `到达 ${slotSummary('arrival_slots', labels.arrivalSlots)}`
+      ].join('；');
+    }
+
+    function addPreciseRulesForSummary() {
+      if (checkedValue('monitor_mode') !== 'precise') {
+        return;
+      }
+      const lines = [];
+      if (moduleIsDirty('time')) {
+        const timeText = checkedValue('time_preference') === 'custom'
+          ? customTimeSummary()
+          : timePreferenceText();
+        lines.push(['时间', timeText]);
+      }
+      if (moduleIsDirty('transfer')) {
+        const parts = [];
+        if (checkedValue('transfer_policy') !== 'direct_only') {
+          parts.push(`总时长 ${selectedLabel('short_transfer_limit')}`);
+        }
+        parts.push(`过夜中转 ${selectedLabel('accept_overnight_transfer')}`);
+        parts.push(`非联程 ${selectedLabel('accept_self_transfer')}`);
+        lines.push(['中转', parts.join('，')]);
+      }
+      if (moduleIsDirty('airline')) {
+        const blocked = selectedCheckboxLabels('blocked_airlines_common');
+        const typed = document.querySelector('input[name="exclude_airlines"]')?.value.trim();
+        const blockedText = [typed, ...blocked].filter(Boolean).join('、');
+        lines.push(['航司', blockedText ? `不接受 ${blockedText}` : selectedLabel('airline_policy')]);
+      }
+      if (moduleIsDirty('alerts')) {
+        let text = selectedLabel('notification_frequency_rule') || selectedLabel('notification_frequency');
+        if (checkedValue('notification_frequency_rule') === 'price_change') {
+          text += `，${selectedLabel('price_change_threshold')}`;
+        } else if (checkedValue('notification_frequency_rule') === 'daily_digest') {
+          text += `，${selectedLabel('digest_time')}`;
+        }
+        lines.push(['提醒', text]);
+      }
+      if (!lines.length) {
+        return;
+      }
+      addSummaryHeader('【精准规则】（你自定义的）');
+      lines.forEach(([label, value]) => addAdvancedRule(label, value));
     }
 
     function buildSummary() {
@@ -1845,6 +2089,7 @@ FORM_TEMPLATE = """
         : '';
       summaryLine('提醒方式', methodText ? `${methodText}${emailText}` : '');
       summaryLine('提醒频率', selectedLabel('notification_frequency'));
+      addPreciseRulesForSummary();
       addSummaryHeader(
         checkedValue('monitor_mode') === 'precise'
           ? '【系统默认规则】'
@@ -2036,6 +2281,9 @@ FORM_TEMPLATE = """
     prefCardButtons.forEach(button => {
       button.addEventListener('click', () => togglePrefDetail(button.dataset.prefTarget));
     });
+    resetModuleButtons.forEach(button => {
+      button.addEventListener('click', () => resetModule(button.dataset.resetModule));
+    });
     ['companions', 'time_preference', 'refund_flexibility', 'airline_policy', 'accept_self_transfer'].forEach(name => {
       document.querySelectorAll(`input[name="${name}"]`).forEach(input => {
         input.addEventListener('change', updatePrefCards);
@@ -2064,6 +2312,7 @@ FORM_TEMPLATE = """
       }
     }));
     companionRadios.forEach(radio => radio.addEventListener('change', applyCompanionDefaults));
+    captureModuleDefaults();
     applyEditSubscription(editSubscription);
     toggleReturnDate();
     toggleBudgetRequired();
@@ -2074,6 +2323,7 @@ FORM_TEMPLATE = """
     updateOriginAirportHint();
     updateDestinationAirportHint();
     updateRequiredProgress();
+    updateStrictRulesWarning();
     advanced.style.display = 'none';
     advancedToggle.textContent = '＋ 补充偏好，让推荐更准确';
     advancedRules.style.display = 'none';
@@ -2086,11 +2336,13 @@ FORM_TEMPLATE = """
     updateStepper();
     form.addEventListener('input', () => {
       updateRequiredProgress();
+      updateStrictRulesWarning();
       refreshSummaryIfFinalStep();
     });
     form.addEventListener('change', () => {
       updateConditionalFields();
       updateRequiredProgress();
+      updateStrictRulesWarning();
       refreshSummaryIfFinalStep();
     });
     form.addEventListener('submit', event => {
