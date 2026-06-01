@@ -288,6 +288,33 @@ def _status_risk_label(flight: dict | None) -> str:
     return {"low": "风险低", "medium": "风险中", "high": "风险高"}.get(risk, "风险中")
 
 
+def _status_availability_label(flight: dict | None) -> str:
+    """Return a compact availability label from a flight dict."""
+    flight = flight or {}
+    availability = flight.get("availability") or {}
+    if not isinstance(availability, dict):
+        return ""
+
+    status = availability.get("status")
+    if status == "likely_available":
+        return "可购买"
+    if status == "possibly_available":
+        return "可买性待确认"
+    if status == "needs_refresh":
+        return "需刷新"
+    if status == "invalid":
+        return "价格异常"
+
+    label = str(availability.get("label") or "").strip()
+    if "刷新" in label:
+        return "需刷新"
+    if "大概率" in label or "可购买" in label:
+        return "可购买"
+    if label:
+        return label
+    return ""
+
+
 def _human_recommendation_text(flight: dict | None, route_info: dict | None = None, analysis_result: dict | None = None) -> str:
     price = _to_float((flight or {}).get("price"))
     target = _to_float(_preference_value(route_info, analysis_result, "target_price"))
@@ -2747,9 +2774,14 @@ def _round_trip_combo_tags(combo: dict, route_info: dict, confidence: dict | Non
 
     legs = [combo.get("outbound") or {}, combo.get("return") or {}]
     availability_labels = [_status_availability_label(flight) for flight in legs if flight]
+    availability_labels = [label for label in availability_labels if label]
     if "需刷新" in availability_labels:
         availability = "需刷新"
-    elif availability_labels and all(label == "可购买" for label in availability_labels):
+    elif (
+        availability_labels
+        and len(availability_labels) == len([flight for flight in legs if flight])
+        and all(label == "可购买" for label in availability_labels)
+    ):
         availability = "可购买"
     else:
         availability = "可买性待确认"

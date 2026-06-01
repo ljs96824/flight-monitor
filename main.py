@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import re
+import traceback
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -360,66 +361,91 @@ def _subscription_identifier(sub: dict, route: str) -> str:
 
 
 def _deliver_notification(sub: dict, route: str, message_kwargs: dict) -> bool:
-    notification_goals = sub.get("notification_goals", {}) or {}
-    method = notification_goals.get("method", "pushplus")
-    email = notification_goals.get("email", "").strip()
-    subscription_id = _subscription_identifier(sub, route)
-    route_info = dict(message_kwargs.get("route_info") or {})
-    route_info["subscription_id"] = subscription_id
-    message_kwargs = {**message_kwargs, "route_info": route_info}
-    payload = build_notification_payload(
-        analysis_result=message_kwargs.get("analysis_result"),
-        outbound_analysis=message_kwargs.get("outbound_analysis"),
-        return_analysis=message_kwargs.get("return_analysis"),
-        route_info=route_info,
-        subscription=sub,
-        price_history=route_info.get("lowest_price_history"),
-        source_stats=message_kwargs.get("source_stats"),
-        price_insights=message_kwargs.get("price_insights"),
-    )
-    email_rendered = render_email(payload)
-    if len(email_rendered) == 3:
-        subject, full_html, inline_images = email_rendered
-    else:
-        subject, full_html = email_rendered
-        inline_images = {}
+    try:
+        notification_goals = sub.get("notification_goals", {}) or {}
+        method = notification_goals.get("method", "pushplus")
+        email = notification_goals.get("email", "").strip()
+        subscription_id = _subscription_identifier(sub, route)
+        route_info = dict(message_kwargs.get("route_info") or {})
+        route_info["subscription_id"] = subscription_id
+        message_kwargs = {**message_kwargs, "route_info": route_info}
 
-    if method == "page_only":
-        _save_result_for_page(subscription_id, full_html, payload)
-        print("[推送] 用户选择仅页面查看，已保存页面结果")
-        return True
+        print("[推送] 开始构建payload")
+        payload = build_notification_payload(
+            analysis_result=message_kwargs.get("analysis_result"),
+            outbound_analysis=message_kwargs.get("outbound_analysis"),
+            return_analysis=message_kwargs.get("return_analysis"),
+            route_info=route_info,
+            subscription=sub,
+            price_history=route_info.get("lowest_price_history"),
+            source_stats=message_kwargs.get("source_stats"),
+            price_insights=message_kwargs.get("price_insights"),
+        )
+        print("[推送] payload构建完成")
 
-    sent = False
-    if method in {"email", "both"}:
-        if not email:
-            print("[邮件] 用户选择邮箱推送但未填写邮箱")
+        print("[推送] 开始渲染邮件/详情HTML")
+        if method in {"email", "both"}:
+            print("[推送] 邮件方式已启用，开始生成折线图PNG/邮件HTML")
+        email_rendered = render_email(payload)
+        if len(email_rendered) == 3:
+            subject, full_html, inline_images = email_rendered
         else:
-            sent = send_email(
-                email,
-                subject,
-                full_html,
-                inline_images,
+            subject, full_html = email_rendered
+            inline_images = {}
+        print("[推送] 邮件/详情HTML渲染完成")
+
+        if method == "page_only":
+            print("[推送] 开始保存页面结果")
+            _save_result_for_page(subscription_id, full_html, payload)
+            print("[推送] 用户选择仅页面查看，已保存页面结果")
+            return True
+
+        sent = False
+        if method in {"email", "both"}:
+            if not email:
+                print("[邮件] 用户选择邮箱推送但未填写邮箱")
+            else:
+                print("[推送] 开始发送邮件")
+                sent = send_email(
+                    email,
+                    subject,
+                    full_html,
+                    inline_images,
+                ) or sent
+                print(f"[推送] 邮件发送完成: sent={sent}")
+
+        if method in {"pushplus", "both"}:
+            print("[推送] 开始渲染PushPlus短版")
+            push_content = render_pushplus(payload)
+            print("[推送] PushPlus短版渲染完成，开始发送")
+            sent = send(
+                push_content,
+                title=f"【{payload.get('push_type', '价格提醒')}】{payload.get('route', route)}",
             ) or sent
+            print(f"[推送] PushPlus发送完成: sent={sent}")
 
-    if method in {"pushplus", "both"}:
-        push_content = render_pushplus(payload)
-        sent = send(
-            push_content,
-            title=f"【{payload.get('push_type', '价格提醒')}】{payload.get('route', route)}",
-        ) or sent
+        if method not in {"email", "pushplus", "both", "page_only"}:
+            print(f"[推送] 未识别的推送方式 {method!r}，按PushPlus兜底")
+            push_content = render_pushplus(payload)
+            sent = send(
+                push_content,
+                title=f"【{payload.get('push_type', '价格提醒')}】{payload.get('route', route)}",
+            ) or sent
+            print(f"[推送] 兜底PushPlus发送完成: sent={sent}")
 
-    if method not in {"email", "pushplus", "both", "page_only"}:
-        push_content = render_pushplus(payload)
-        sent = send(
-            push_content,
-            title=f"【{payload.get('push_type', '价格提醒')}】{payload.get('route', route)}",
-        ) or sent
+        if sent:
+            print("[推送] 开始保存推送payload/页面详情")
+            _save_result_for_page(subscription_id, full_html, payload)
+            persist_notification_payload(payload)
+            print("[推送] 发送完成")
+        else:
+            print(f"[推送] 发送结果为False，method={method}, email={'yes' if email else 'no'}")
 
-    if sent:
-        _save_result_for_page(subscription_id, full_html, payload)
-        persist_notification_payload(payload)
-
-    return sent
+        return sent
+    except Exception as e:
+        print(f"[推送失败] {type(e).__name__}: {e}")
+        print(traceback.format_exc())
+        return False
 
 
 def load_file_subscriptions() -> list[dict]:
@@ -982,6 +1008,8 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
         return True
 
     except Exception as e:
+        print(f"[处理失败] {type(e).__name__}: {e}")
+        print(traceback.format_exc())
         logging.error(f"{route} 处理失败: {e}", exc_info=True)
         return False
 
