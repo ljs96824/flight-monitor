@@ -116,9 +116,176 @@ def _to_float(value) -> float | None:
         return None
 
 
+def _set_if_missing(target: dict, key: str, value) -> None:
+    if key not in target and value not in (None, ""):
+        target[key] = value
+
+
+def migrate_old_subscription(subscription: dict) -> dict:
+    """Normalize legacy flat subscriptions into the four-section V3 shape."""
+    sub = dict(subscription or {})
+    hard = dict(sub.get("hard_constraints") or {})
+    soft = dict(sub.get("soft_preferences") or {})
+    goals = dict(sub.get("notification_goals") or {})
+    basic = dict(sub.get("basic") or {})
+    constraints = dict(sub.get("constraints") or {})
+    preferences = dict(sub.get("preferences") or {})
+    advanced = dict(sub.get("advanced_rules") or {})
+
+    if not basic:
+        basic = {
+            "origin": sub.get("origin"),
+            "origin_airports": sub.get("origin_airports") or [],
+            "origin_airports_active": sub.get("origin_airports_active")
+            or sub.get("origin_airports")
+            or [],
+            "destination": sub.get("destination"),
+            "dest_airports": sub.get("destination_airports") or sub.get("dest_airports") or [],
+            "destination_airports": sub.get("destination_airports") or [],
+            "destination_airports_active": sub.get("destination_airports_active")
+            or sub.get("destination_airports")
+            or [],
+            "trip_type": "round_trip" if sub.get("round_trip") else "one_way",
+            "departure_date": sub.get("depart_date") or sub.get("departure_date"),
+            "return_date": sub.get("return_date"),
+        }
+
+    if not constraints:
+        budget_strategy = (
+            hard.get("budget_strategy")
+            or sub.get("budget_strategy")
+            or ("explicit" if hard.get("max_budget") or sub.get("max_budget") else "auto_judge")
+        )
+        constraints = {
+            "budget_strategy": budget_strategy,
+            "max_price": hard.get("max_budget") or sub.get("max_budget") or sub.get("budget"),
+            "ideal_price": hard.get("target_price")
+            or soft.get("target_price")
+            or sub.get("target_price"),
+            "date_flexibility_days": sub.get("date_flexibility", 0),
+            "transfer_policy": hard.get("transfer_policy")
+            or sub.get("transfer_policy")
+            or sub.get("direct_only")
+            or "reasonable",
+            "checked_baggage_required": (
+                hard.get("baggage") == "required"
+                or sub.get("need_baggage") == "required"
+            ),
+        }
+
+    if not preferences:
+        preferences = {
+            "travelers": soft.get("companions") or sub.get("companions", "solo"),
+            "time_pref": soft.get("time_preference_mode")
+            or soft.get("time_preference")
+            or hard.get("time_preference_mode")
+            or hard.get("time_preference")
+            or "unlimited",
+            "refund_policy": soft.get("refund_flexibility")
+            or hard.get("refund_flexibility")
+            or sub.get("refund_flexibility", "preferred"),
+            "price_sensitivity": soft.get("price_sensitivity")
+            or sub.get("price_sensitivity", "low"),
+            "travel_type": soft.get("trip_type") or sub.get("trip_type", "tourism"),
+        }
+
+    if not advanced:
+        advanced = {
+            "time_windows": {
+                "departure": soft.get("departure_time_windows") or [],
+                "arrival": soft.get("arrival_time_windows") or [],
+                "outbound_departure": soft.get("outbound_departure_time_windows") or [],
+                "outbound_arrival": soft.get("outbound_arrival_time_windows") or [],
+                "return_departure": soft.get("return_departure_time_windows") or [],
+                "return_arrival": soft.get("return_arrival_time_windows") or [],
+                "hourly": {},
+            },
+            "transfer": {
+                "max_total_duration": hard.get("max_total_duration_hours"),
+                "max_extra_duration_hours": hard.get("max_extra_duration_hours"),
+                "overnight_transfer": hard.get("accept_overnight_transfer"),
+                "self_transfer": hard.get("accept_self_transfer"),
+            },
+            "airlines": {
+                "preference": soft.get("airline_policy")
+                or hard.get("airline_policy")
+                or sub.get("airline_policy", "any"),
+                "blocked": soft.get("exclude_airlines")
+                or hard.get("exclude_airlines")
+                or sub.get("exclude_airlines")
+                or [],
+            },
+            "alerts": {
+                "frequency": goals.get("frequency") or sub.get("notification_frequency"),
+                "types": goals.get("secondary") or sub.get("secondary_goals") or [],
+                "price_change_threshold": goals.get("price_change_threshold"),
+                "digest_time": goals.get("digest_time"),
+            },
+        }
+
+    sub["basic"] = basic
+    sub["constraints"] = constraints
+    sub["preferences"] = preferences
+    sub["advanced_rules"] = advanced
+
+    _set_if_missing(sub, "origin", basic.get("origin"))
+    _set_if_missing(sub, "origin_airports", basic.get("origin_airports"))
+    _set_if_missing(sub, "origin_airports_active", basic.get("origin_airports_active"))
+    _set_if_missing(sub, "destination", basic.get("destination"))
+    _set_if_missing(sub, "destination_airports", basic.get("destination_airports") or basic.get("dest_airports"))
+    _set_if_missing(sub, "destination_airports_active", basic.get("destination_airports_active"))
+    _set_if_missing(sub, "depart_date", basic.get("departure_date"))
+    _set_if_missing(sub, "return_date", basic.get("return_date"))
+    if "round_trip" not in sub:
+        sub["round_trip"] = basic.get("trip_type") == "round_trip"
+
+    _set_if_missing(hard, "budget_strategy", constraints.get("budget_strategy"))
+    _set_if_missing(hard, "max_budget", constraints.get("max_price"))
+    _set_if_missing(hard, "target_price", constraints.get("ideal_price"))
+    _set_if_missing(hard, "transfer_policy", constraints.get("transfer_policy"))
+    _set_if_missing(hard, "baggage", "required" if constraints.get("checked_baggage_required") else "unknown")
+    _set_if_missing(hard, "date_flexibility", constraints.get("date_flexibility_days"))
+
+    transfer_rules = advanced.get("transfer") or {}
+    _set_if_missing(hard, "max_total_duration_hours", transfer_rules.get("max_total_duration"))
+    _set_if_missing(hard, "max_extra_duration_hours", transfer_rules.get("max_extra_duration_hours"))
+    _set_if_missing(hard, "accept_overnight_transfer", transfer_rules.get("overnight_transfer"))
+    _set_if_missing(hard, "accept_self_transfer", transfer_rules.get("self_transfer"))
+
+    _set_if_missing(soft, "companions", preferences.get("travelers"))
+    _set_if_missing(soft, "time_preference", preferences.get("time_pref"))
+    _set_if_missing(soft, "time_preference_mode", preferences.get("time_pref"))
+    _set_if_missing(soft, "refund_flexibility", preferences.get("refund_policy"))
+    _set_if_missing(soft, "price_sensitivity", preferences.get("price_sensitivity"))
+    _set_if_missing(soft, "trip_type", preferences.get("travel_type"))
+
+    time_windows = advanced.get("time_windows") or {}
+    _set_if_missing(soft, "departure_time_windows", time_windows.get("departure"))
+    _set_if_missing(soft, "arrival_time_windows", time_windows.get("arrival"))
+    _set_if_missing(soft, "outbound_departure_time_windows", time_windows.get("outbound_departure"))
+    _set_if_missing(soft, "outbound_arrival_time_windows", time_windows.get("outbound_arrival"))
+    _set_if_missing(soft, "return_departure_time_windows", time_windows.get("return_departure"))
+    _set_if_missing(soft, "return_arrival_time_windows", time_windows.get("return_arrival"))
+
+    airline_rules = advanced.get("airlines") or {}
+    _set_if_missing(soft, "airline_policy", airline_rules.get("preference"))
+    _set_if_missing(soft, "exclude_airlines", airline_rules.get("blocked"))
+
+    alert_rules = advanced.get("alerts") or {}
+    _set_if_missing(goals, "frequency", alert_rules.get("frequency"))
+    _set_if_missing(goals, "secondary", alert_rules.get("types"))
+    _set_if_missing(goals, "price_change_threshold", alert_rules.get("price_change_threshold"))
+    _set_if_missing(goals, "digest_time", alert_rules.get("digest_time"))
+
+    sub["hard_constraints"] = hard
+    sub["soft_preferences"] = soft
+    sub["notification_goals"] = goals
+    return sub
+
+
 def apply_default_rules(subscription: dict) -> dict:
     """Apply safe defaults so quick-mode users still get advanced protection."""
-    subscription = dict(subscription or {})
+    subscription = migrate_old_subscription(subscription or {})
     soft = dict(subscription.get("soft_preferences") or {})
     goals = dict(subscription.get("notification_goals") or {})
     hard = dict(subscription.get("hard_constraints") or {})

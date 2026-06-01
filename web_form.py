@@ -594,7 +594,7 @@ FORM_TEMPLATE = """
       <label for="depart_date">出发日期</label>
       <input id="depart_date" name="depart_date" type="date" required>
 
-      <div id="return-date-wrap">
+      <div id="return-date-wrap" data-show-if="round_trip=true">
         <label for="return_date">返程日期</label>
         <input id="return_date" name="return_date" type="date">
 
@@ -628,7 +628,7 @@ FORM_TEMPLATE = """
         <label><input type="radio" name="budget_strategy" value="low_price_alert"> 只要进入低价区间就提醒</label>
       </div>
 
-      <div id="budget-amount-fields">
+      <div id="budget-amount-fields" data-show-if="budget_strategy=explicit">
       <label>最高可接受价格（超过这个价通常不考虑）</label>
       <input id="max_budget" name="max_budget" type="number" min="1" step="1" placeholder="例如 8000">
       <p class="hint">超过这个价通常不考虑</p>
@@ -733,7 +733,7 @@ FORM_TEMPLATE = """
           <label><input type="radio" name="time_preference" value="custom"> 自定义时间段</label>
         </div>
 
-        <div id="custom-time-options">
+        <div id="custom-time-options" data-show-if="time_preference=custom">
         <fieldset id="single-time-preferences" class="time-preferences time-outbound">
           <strong>时段偏好</strong>
           <label>偏好哪些时段起飞？（可多选）</label>
@@ -759,7 +759,7 @@ FORM_TEMPLATE = """
           </div>
         </fieldset>
 
-        <div id="round-trip-time-preferences">
+        <div id="round-trip-time-preferences" data-show-if="round_trip=true">
           <fieldset class="time-preferences time-outbound">
             <strong>━━ 去程时段偏好 ━━</strong>
             <label>去程偏好哪些时段起飞？</label>
@@ -862,7 +862,7 @@ FORM_TEMPLATE = """
           <legend>更细的筛选规则</legend>
           <p class="hint">适合有特定要求的用户，一般用户可跳过</p>
 
-          <div id="short-transfer-options" class="sub-options">
+          <div id="short-transfer-options" class="sub-options" data-show-if="transfer_policy=reasonable|price_first">
             <label>最长可接受总行程时间</label>
             <div class="choice">
               <label><input type="radio" name="short_transfer_limit" value="extra_3"> 不超过直飞时间+3小时</label>
@@ -872,7 +872,7 @@ FORM_TEMPLATE = """
             </div>
           </div>
 
-          <div id="overnight-transfer-options" class="sub-options">
+          <div id="overnight-transfer-options" class="sub-options" data-show-if="transfer_policy=price_first">
             <label>是否接受过夜中转</label>
             <div class="choice">
               <label><input type="radio" name="accept_overnight_transfer" value="false" checked> 不接受</label>
@@ -881,7 +881,7 @@ FORM_TEMPLATE = """
           </div>
 
           <div id="pref-detail-self_transfer" class="pref-card-detail">
-          <div id="self-transfer-options" class="sub-options">
+          <div id="self-transfer-options" class="sub-options" data-show-if="transfer_policy=price_first">
             <label>是否接受非联程</label>
             <div class="choice">
               <label><input type="radio" name="accept_self_transfer" value="false" checked> 不接受</label>
@@ -899,8 +899,16 @@ FORM_TEMPLATE = """
             <label><input type="radio" name="airline_policy" value="exclude_airlines"> 有不接受的航司吗？</label>
           </div>
 
-          <label>不接受的航司</label>
-          <input name="exclude_airlines" placeholder="选填，多个航司用逗号分隔，例如 Spirit, Frontier">
+          <div data-show-if="airline_policy=exclude_airlines">
+            <label>不接受的航司</label>
+            <input name="exclude_airlines" placeholder="选填，多个航司用逗号分隔，例如 Spirit, Frontier">
+            <div class="choice">
+              <label><input type="checkbox" name="blocked_airlines_common" value="Spirit"> Spirit</label>
+              <label><input type="checkbox" name="blocked_airlines_common" value="Frontier"> Frontier</label>
+              <label><input type="checkbox" name="blocked_airlines_common" value="春秋航空"> 春秋航空</label>
+              <label><input type="checkbox" name="blocked_airlines_common" value="乐桃航空"> 乐桃航空</label>
+            </div>
+          </div>
           </div>
 
           <label>附加关注</label>
@@ -918,6 +926,23 @@ FORM_TEMPLATE = """
             <label><input type="radio" name="notification_frequency_rule" value="important_only" checked> 仅重要变化时提醒（价格显著下降、即将涨价）</label>
             <label><input type="radio" name="notification_frequency_rule" value="daily_digest"> 每天汇总推送一次</label>
             <label><input type="radio" name="notification_frequency_rule" value="price_change"> 每次价格变化都提醒</label>
+          </div>
+          <div class="sub-options" data-show-if="notification_frequency_rule=price_change">
+            <label>什么算价格变化？</label>
+            <div class="choice">
+              <label><input type="radio" name="price_change_threshold" value="any"> 每次变化</label>
+              <label><input type="radio" name="price_change_threshold" value="down_100" checked> 降超100元</label>
+              <label><input type="radio" name="price_change_threshold" value="down_300"> 降超300元</label>
+              <label><input type="radio" name="price_change_threshold" value="low_zone"> 进入低价区间</label>
+            </div>
+          </div>
+          <div class="sub-options" data-show-if="notification_frequency_rule=daily_digest">
+            <label>汇总时间</label>
+            <div class="choice">
+              <label><input type="radio" name="digest_time" value="09:00" checked> 早9点</label>
+              <label><input type="radio" name="digest_time" value="12:00"> 中午12点</label>
+              <label><input type="radio" name="digest_time" value="20:00"> 晚8点</label>
+            </div>
           </div>
           </div>
           <p class="hint">规则越严格，可能匹配的方案越少。如果没有结果，系统会提示你放宽哪些条件</p>
@@ -961,13 +986,13 @@ FORM_TEMPLATE = """
           <label><input type="radio" name="notification_method" value="both"> 邮箱 + 微信(PushPlus)都接收</label>
           <label><input type="radio" name="notification_method" value="page_only"> 暂时只在页面查看</label>
         </div>
-        <div id="email-reminder-wrap">
+        <div id="email-reminder-wrap" data-show-if="notification_method=email|both">
           <label for="notification_email">邮箱地址</label>
           <input id="notification_email" name="notification_email" type="email" placeholder="you@example.com">
           <p class="hint">支持任意邮箱。注意：Gmail在国内需翻墙才能查看，推荐用QQ/163/Outlook</p>
           <p id="email-error" class="inline-warning"></p>
         </div>
-        <p id="page-only-hint" class="hint">你可以稍后在订阅列表查看监控结果</p>
+        <p id="page-only-hint" class="hint" data-show-if="notification_method=page_only">你可以稍后在订阅列表查看监控结果</p>
 
         <label>提醒频率</label>
         <div class="choice">
@@ -1124,8 +1149,25 @@ FORM_TEMPLATE = """
 
     function checkedValue(name) {
       const selected = document.querySelector(`input[name="${name}"]:checked`);
-      return selected ? selected.value : "";
+      if (selected) return selected.value;
+      const field = document.querySelector(`[name="${name}"]`);
+      return field ? field.value : "";
     }
+
+    function updateConditionalFields() {
+      document.querySelectorAll('[data-show-if]').forEach(el => {
+        const rule = el.dataset.showIf || '';
+        const [field, rawValue] = rule.split('=');
+        const values = String(rawValue || '').split('|');
+        const current = checkedValue(field);
+        const shouldShow = field && values.includes(current);
+        el.style.display = shouldShow ? 'block' : 'none';
+      });
+    }
+
+    document.querySelectorAll('input, select').forEach(input => {
+      input.addEventListener('change', updateConditionalFields);
+    });
 
     function isMobileStepper() {
       return window.matchMedia('(max-width: 720px)').matches;
@@ -1957,6 +1999,7 @@ FORM_TEMPLATE = """
 
     tripRadios.forEach(radio => radio.addEventListener('change', () => {
       toggleReturnDate();
+      updateConditionalFields();
       updateStepper();
       updateRequiredProgress();
     }));
@@ -2009,6 +2052,7 @@ FORM_TEMPLATE = """
     });
     transferRadios.forEach(radio => radio.addEventListener('change', () => {
       toggleShortTransferOptions();
+      updateConditionalFields();
       updateRequiredProgress();
     }));
     dateFlexRadios.forEach(radio => radio.addEventListener('change', updateDateFlexHint));
@@ -2025,6 +2069,7 @@ FORM_TEMPLATE = """
     toggleBudgetRequired();
     toggleNotificationMethod();
     toggleShortTransferOptions();
+    updateConditionalFields();
     updateDateFlexHint();
     updateOriginAirportHint();
     updateDestinationAirportHint();
@@ -2044,6 +2089,7 @@ FORM_TEMPLATE = """
       refreshSummaryIfFinalStep();
     });
     form.addEventListener('change', () => {
+      updateConditionalFields();
       updateRequiredProgress();
       refreshSummaryIfFinalStep();
     });
@@ -2632,8 +2678,75 @@ def build_subscription(form) -> dict:
         form.get("notification_frequency", "important_only"),
         form.get("notification_frequency", "important_only"),
     )
+    blocked_airlines = [
+        item.strip()
+        for item in form.get("exclude_airlines", "").replace("，", ",").split(",")
+        if item.strip()
+    ]
+    for item in form.getlist("blocked_airlines_common"):
+        if item and item not in blocked_airlines:
+            blocked_airlines.append(item)
 
     return {
+        "basic": {
+            "origin": origin_info["value"],
+            "origin_airports": origin_info["airports"],
+            "origin_airports_active": origin_airports_active,
+            "destination": destination_info["value"],
+            "dest_airports": destination_info["airports"],
+            "destination_airports": destination_info["airports"],
+            "destination_airports_active": destination_airports_active,
+            "trip_type": "round_trip" if round_trip else "one_way",
+            "departure_date": form.get("depart_date", "").strip(),
+            "return_date": form.get("return_date", "").strip() if round_trip else None,
+        },
+        "constraints": {
+            "budget_strategy": budget_strategy,
+            "max_price": max_budget,
+            "ideal_price": target_price,
+            "date_flexibility_days": parse_int(form.get("date_flexibility"), 0),
+            "transfer_policy": form.get("transfer_policy", "reasonable"),
+            "checked_baggage_required": form.get("baggage", "required") == "required",
+        },
+        "preferences": {
+            "travelers": form.get("companions", "solo"),
+            "time_pref": time_mode,
+            "refund_policy": form.get("refund_flexibility", "preferred"),
+            "price_sensitivity": form.get("price_sensitivity", "low"),
+            "travel_type": form.get("trip_type", "tourism"),
+        },
+        "advanced_rules": {
+            "time_windows": {
+                "departure": departure_time_windows,
+                "arrival": arrival_time_windows,
+                "outbound_departure": outbound_departure_time_windows,
+                "outbound_arrival": outbound_arrival_time_windows,
+                "return_departure": return_departure_time_windows,
+                "return_arrival": return_arrival_time_windows,
+                "hourly": {
+                    "departure_start": form.get("departure_time_start", ""),
+                    "departure_end": form.get("departure_time_end", ""),
+                    "arrival_start": form.get("arrival_time_start", ""),
+                    "arrival_end": form.get("arrival_time_end", ""),
+                },
+            },
+            "transfer": {
+                "max_total_duration": max_total_duration_hours,
+                "max_extra_duration_hours": max_extra_duration_hours,
+                "overnight_transfer": parse_bool(form.get("accept_overnight_transfer", "false")),
+                "self_transfer": parse_bool(form.get("accept_self_transfer", "false")),
+            },
+            "airlines": {
+                "preference": form.get("airline_policy", "any"),
+                "blocked": blocked_airlines,
+            },
+            "alerts": {
+                "frequency": notification_frequency,
+                "types": form.getlist("secondary_goals"),
+                "price_change_threshold": form.get("price_change_threshold", "down_100"),
+                "digest_time": form.get("digest_time", "09:00"),
+            },
+        },
         "origin": origin_info["value"],
         "origin_type": origin_info["type"],
         "origin_airports": origin_info["airports"],
@@ -2688,11 +2801,7 @@ def build_subscription(form) -> dict:
             "trip_rigidity": form.get("trip_rigidity", "confirmed"),
             "refund_flexibility": form.get("refund_flexibility", "preferred"),
             "airline_policy": form.get("airline_policy", "any"),
-            "exclude_airlines": [
-                item.strip()
-                for item in form.get("exclude_airlines", "").replace("，", ",").split(",")
-                if item.strip()
-            ],
+            "exclude_airlines": blocked_airlines,
             "target_price": target_price,
             "target_price_mode": target_price_mode,
             "price_tolerance": price_tolerance,

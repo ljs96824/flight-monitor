@@ -20,6 +20,7 @@ from analyzer import (
     apply_default_rules,
     analyze_all_flights,
     analyze_round_trip,
+    migrate_old_subscription,
     price_position_description,
     waiting_risk_description,
 )
@@ -134,6 +135,7 @@ def _normalize_goals(notification_goals: dict | None, legacy_goals) -> list[str]
 
 
 def _normalize_subscription(item: dict) -> dict:
+    item = migrate_old_subscription(item)
     hard_constraints = item.get("hard_constraints") or {}
     soft_preferences = item.get("soft_preferences") or {}
     notification_goals = item.get("notification_goals") or {}
