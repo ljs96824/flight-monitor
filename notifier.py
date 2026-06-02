@@ -4498,6 +4498,73 @@ def _payload_action_range(current, target, max_budget) -> dict:
     return {"current": current, "target": target, "max": max_budget, "ranges": ranges, "current_label": _action_zone_label(current, target, max_budget)}
 
 
+def _payload_verify_price(display_price) -> float | None:
+    display = _to_float(display_price)
+    return round(display * 1.05) if display else None
+
+
+def _payload_price_policy_decision(display_price, transaction_price, verify_price, target_price, fallback="可以观察") -> dict:
+    display = _to_float(display_price)
+    transaction = _to_float(transaction_price)
+    verify = _to_float(verify_price)
+    target = _to_float(target_price)
+
+    if transaction is not None and verify is not None and transaction <= verify:
+        return {
+            "conclusion": "可以购买前验证",
+            "reason": "预估实付价不高于本次验证购买价",
+            "push_type_hint": None,
+        }
+    if display is not None and verify is not None and display <= verify and transaction is not None and transaction > verify:
+        return {
+            "conclusion": "值得验证，不建议直接下单",
+            "reason": "搜索参考价达标，但预估实付价高于验证购买价",
+            "push_type_hint": "值得验证",
+        }
+    if target is not None and display is not None and display > target:
+        return {
+            "conclusion": "继续观察",
+            "reason": "搜索参考价仍高于理想入手价",
+            "push_type_hint": None,
+        }
+    return {
+        "conclusion": fallback or "可以观察",
+        "reason": "",
+        "push_type_hint": None,
+    }
+
+
+def _payload_primary_price_values(current, primary_plan) -> dict:
+    display = _to_float(primary_plan.get("price") if primary_plan else None) or _to_float(current)
+    transaction = _to_float(primary_plan.get("estimated_price") if primary_plan else None) or display
+    verify = _payload_verify_price(display)
+    return {
+        "display_price": display,
+        "transaction_price": transaction,
+        "verify_price": verify,
+    }
+
+
+def _payload_dedupe_text(items) -> list[str]:
+    result = []
+    for item in items or []:
+        text = str(item or "").strip()
+        if text and text not in result:
+            result.append(text)
+    return result
+
+
+def _email_subject(payload: dict) -> str:
+    push_type = payload.get("push_type") or "价格提醒"
+    route = payload.get("route") or "航班监控"
+    display = _price_text(payload.get("display_price") or payload.get("current_price"))
+    transaction = _to_float(payload.get("transaction_price"))
+    verify = _to_float(payload.get("verify_price"))
+    if transaction is not None and verify is not None and transaction > verify:
+        return f"【{push_type}】{route} 搜索价{display}，需确认实付价"
+    return f"【{push_type}】{route} {display}，{payload.get('recommendation') or '请查看'}"
+
+
 def _judgment_limit_items(
     route_info: dict,
     analysis_result: dict,
@@ -4583,17 +4650,6 @@ def build_notification_payload(
         if is_roundtrip
         else price_history or _chart_history_for_message(route_info, analysis_result, price_insights, is_roundtrip)
     )
-    push_meta = determine_push_type(
-        current,
-        target,
-        max_budget,
-        _price_history_for_push(price_insights, analysis_result, is_roundtrip),
-        analysis_result.get("days_to_dept"),
-        (last_push or {}).get("price"),
-        analysis_result,
-    )
-    verify_limit = _to_float(current)
-    verify_limit = verify_limit * 1.05 if verify_limit else None
     risk = (
         (analysis_result.get("round_trip_analysis") or {}).get("buy_vs_wait_risk")
         if is_roundtrip
@@ -4620,9 +4676,41 @@ def build_notification_payload(
         flights = _single_flights_for_sections(analysis_result)
         primary_flight = flights[0] if flights else {}
 
+    primary_plan = all_items[0] if all_items else {}
+    price_values = _payload_primary_price_values(current, primary_plan)
+    display_price = price_values.get("display_price")
+    transaction_price = price_values.get("transaction_price")
+    verify_limit = price_values.get("verify_price")
+    price_policy = _payload_price_policy_decision(
+        display_price,
+        transaction_price,
+        verify_limit,
+        target,
+        decision.get("conclusion") or "可以观察",
+    )
+    push_analysis = dict(analysis_result)
+    push_analysis["decision_prices"] = {
+        "display_price": display_price,
+        "transaction_price": transaction_price,
+        "verify_price": verify_limit,
+    }
+    push_meta = determine_push_type(
+        display_price,
+        target,
+        max_budget,
+        _price_history_for_push(price_insights, analysis_result, is_roundtrip),
+        analysis_result.get("days_to_dept"),
+        (last_push or {}).get("price"),
+        push_analysis,
+    )
+    if price_policy.get("push_type_hint"):
+        push_meta["type"] = price_policy["push_type_hint"]
+    if price_policy.get("reason"):
+        push_meta["reasons"] = _payload_dedupe_text([price_policy["reason"]] + (push_meta.get("reasons") or []))[:4]
+
     change = (push_meta or {}).get("price_change") or {}
     fallback_line = _trend_fallback_line(history)
-    trend_summary = _trend_linechart_summary(history, target, current, None) if history else ""
+    trend_summary = _trend_linechart_summary(history, target, display_price, None) if history else ""
     goals = (
         route_info.get("notification_goals")
         or analysis_result.get("notification_goals")
@@ -4644,16 +4732,20 @@ def build_notification_payload(
         "route_airports": _payload_route_airports(route_info),
         "trip_type": "round_trip" if is_roundtrip else "one_way",
         "is_roundtrip": is_roundtrip,
-        "current_price": current,
+        "current_price": display_price,
+        "display_price": display_price,
+        "transaction_price": transaction_price,
+        "verify_price": verify_limit,
         "ideal_price": target,
         "max_price": max_budget,
         "last_push_price": (last_push or {}).get("price"),
-        "recommendation": decision.get("conclusion") or "可以观察",
+        "recommendation": price_policy.get("conclusion") or decision.get("conclusion") or "可以观察",
+        "price_policy_reason": price_policy.get("reason") or "",
         "confidence": confidence.get("overall") or decision.get("confidence") or "中",
         "confidence_dimensions": confidence.get("dimensions") or {},
         "confidence_details": confidence.get("details") or {},
         "buy_condition": f"支付页≤{_price_text(verify_limit)}且含托运行李" if verify_limit else "以支付页最终价和票规为准",
-        "action_range": _payload_action_range(current, target, max_budget),
+        "action_range": _payload_action_range(display_price, target, max_budget),
         "trigger_reason": (push_meta or {}).get("reasons") or (decision.get("reasons") or [])[:3],
         "recommended_plans": all_items[:2],
         "alternative_plans": all_items[2:5],
@@ -4895,7 +4987,9 @@ def render_pushplus(payload: dict) -> str:
     payload = payload or {}
     push_type = html.escape(str(payload.get("push_type") or "价格提醒"))
     route = html.escape(str(payload.get("route") or "航班监控"))
-    price_text = _payload_price(payload.get("current_price"))
+    display_text = _payload_price(payload.get("display_price") or payload.get("current_price"))
+    transaction_text = _payload_price(payload.get("transaction_price"))
+    verify_text = _payload_price(payload.get("verify_price"))
     recommendation = html.escape(str(payload.get("recommendation") or "可以观察"))
     buy_condition = html.escape(str(payload.get("buy_condition") or "以支付页最终价和票规为准"))
     primary_plan = (payload.get("recommended_plans") or [{}])[0] or {}
@@ -4914,7 +5008,9 @@ def render_pushplus(payload: dict) -> str:
     lines = [
         f"<b>【{push_type}】{route}</b>",
         "",
-        f"当前含税参考价:{price_text}",
+        f"搜索参考价:{display_text}",
+        f"预估实付价:{transaction_text}",
+        f"本次验证价:支付页≤{verify_text}",
         baggage_line,
         f"结论:{recommendation}",
         f"购买条件:{buy_condition}",
@@ -4968,23 +5064,53 @@ def _payload_bar_html(title: str, rows: list[dict]) -> str:
 def render_email(payload: dict) -> tuple[str, str]:
     """Render the full HTML email report from a normalized payload."""
     payload = payload or {}
-    subject = (
-        f"【{payload.get('push_type') or '价格提醒'}】{payload.get('route') or '航班监控'} "
-        f"{_price_text(payload.get('current_price'))}，{payload.get('recommendation') or '请查看'}"
-    )
+    subject = _email_subject(payload)
+    verify_text = f"支付页≤{_price_text(payload.get('verify_price'))}" if payload.get("verify_price") else "以支付页为准"
+    price_reason = str(payload.get("price_policy_reason") or "请以预估实付价和支付页最终价为准")
+    baggage_line = ""
+    primary_plan = (payload.get("recommended_plans") or [{}])[0] or {}
+    if primary_plan.get("baggage_line"):
+        baggage_line = f"<br><b>行李状态：</b>{html.escape(str(primary_plan.get('baggage_line')))}"
+        if "确认" in str(primary_plan.get("baggage_line")) or "不含" in str(primary_plan.get("baggage_line")):
+            baggage_line += "<br>当前价格可能不含托运行李；若支付页加行李后超过本次方案验证价，则不建议购买。"
     lines = [
         f"<h2>【{html.escape(str(payload.get('push_type') or '价格提醒'))}】{html.escape(str(payload.get('route') or '航班监控'))}</h2>",
-        f"<p><b>当前判断：</b>{html.escape(str(payload.get('recommendation') or '可以观察'))}</p>",
-        f"<p><b>当前价：</b>{_price_text(payload.get('current_price'))}<br>",
+        '<div style="border:1px solid #ddd;border-radius:8px;padding:12px;margin:8px 0;background:#f8fafc;">',
+        f"<div><b>当前判断：</b>{html.escape(str(payload.get('recommendation') or '可以观察'))}</div>",
+        f"<div><b>原因：</b>{html.escape(price_reason)}</div>",
+        f"<div><b>搜索参考价：</b>{_price_text(payload.get('display_price') or payload.get('current_price'))}</div>",
+        f"<div><b>预估实付价：</b>{_price_text(payload.get('transaction_price'))}</div>",
+        f"<div><b>本次方案验证价：</b>{html.escape(verify_text)}</div>",
+        f"<div><b>你的理想入手价：</b>{_price_text(payload.get('ideal_price'))}</div>",
+        f"<div><b>最高可接受价：</b>{_price_text(payload.get('max_price'))}</div>",
+        f"<div><b>验证购买条件：</b>{html.escape(str(payload.get('buy_condition') or '以支付页为准'))}</div>",
+        f"<div><b>置信度：</b>{html.escape(str(payload.get('confidence') or '中'))}</div>",
+        f"<div><b>主要风险：</b>行李/退改签待确认，购买链路需验证{baggage_line}</div>",
+        "</div>",
+        f"<p>",
         f"<b>采集：</b>{html.escape(_payload_freshness_text(payload))}"
         f" | {payload.get('source_count') or 1}个数据源<br>",
-        f"<b>购买条件：</b>{html.escape(str(payload.get('buy_condition') or '以支付页为准'))}<br>",
-        f"<b>置信度：</b>{html.escape(str(payload.get('confidence') or '中'))}</p>",
+        f"<b>口径说明：</b>结论以预估实付价和支付页最终价为准，搜索参考价只用于发现低价线索。</p>",
     ]
     for plan in payload.get("recommended_plans") or []:
         lines.append(_render_payload_plan_card(plan))
     lines.append("<h3>为什么提醒你</h3>")
     lines.extend(f"<div>- {html.escape(str(reason))}</div>" for reason in (payload.get("trigger_reason") or [])[:5])
+
+    diff = _to_float((payload.get("diff_from_last") or {}).get("diff"))
+    trend_summary_text = str(payload.get("trend_summary") or "").strip()
+    if diff is not None or trend_summary_text:
+        lines.append("<h3>价格变化说明</h3>")
+        if diff is not None:
+            if diff < 0:
+                lines.append(f"<div>较上次提醒：下降{_price_text(abs(diff))}</div>")
+            elif diff > 0:
+                lines.append(f"<div>较上次提醒：上涨{_price_text(diff)}</div>")
+            else:
+                lines.append("<div>较上次提醒：价格持平</div>")
+        if trend_summary_text:
+            lines.append(f"<div>近14次采集趋势：{html.escape(trend_summary_text)}</div>")
+        lines.append(f"<div>本次提醒主要由“{html.escape(str(payload.get('push_type') or '价格变化'))}”触发。</div>")
 
     history_rows = payload.get("price_history") or []
     unique_prices = {
@@ -5003,7 +5129,10 @@ def render_email(payload: dict) -> tuple[str, str]:
     action = payload.get("action_range") or {}
     if action.get("ranges"):
         lines.append('<div style="border-left:4px solid #16a34a;padding:8px;margin:8px 0;background:#f0fdf4;">')
-        lines.append("<b>你的价格行动区间</b>")
+        lines.append("<b>理想价/预算参考区间</b>")
+        lines.append(f"<div>本次方案验证价：{html.escape(verify_text)}（系统按本次搜索参考价加浮动算出）</div>")
+        lines.append(f"<div>你的理想入手价：{_price_text(payload.get('ideal_price'))}</div>")
+        lines.append(f"<div>最高可接受价：{_price_text(payload.get('max_price'))}</div>")
         for row in action["ranges"]:
             text = row.get("text")
             if not text:
@@ -5011,7 +5140,7 @@ def render_email(payload: dict) -> tuple[str, str]:
                 right = "+∞" if row.get("max") is None else _price_text(row.get("max"))
                 text = f"{left} - {right}"
             lines.append(f"<div>{html.escape(str(text))}：{html.escape(str(row.get('label')))}</div>")
-        lines.append(f"<div>当前落在【{html.escape(str(action.get('current_label') or '待判断'))}】区间</div></div>")
+        lines.append(f"<div>搜索参考价落在【{html.escape(str(action.get('current_label') or '待判断'))}】区间；是否购买仍以本次方案验证价为准。</div></div>")
 
     lines.append("<h3>风险拆分</h3>")
     lines.append("<b>如果现在买：</b>")

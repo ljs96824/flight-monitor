@@ -2678,6 +2678,67 @@ def calc_confidence(flight: dict, source_stats=None, price_history=None) -> dict
     return {"overall": overall, "dimensions": dimensions, "details": details}
 
 
+def calc_confidence(flight: dict, source_stats=None, price_history=None) -> dict:
+    """Break decision confidence into clean user-readable dimensions."""
+    flight = flight or {}
+    source_stats = source_stats or {}
+    dimensions = {}
+    details = {}
+
+    raw_age = (flight.get("availability") or {}).get("age_minutes")
+    try:
+        age = int(raw_age) if raw_age is not None else None
+    except (TypeError, ValueError):
+        age = None
+    dimensions["价格新鲜度"] = "高" if age is not None and age <= 30 else "中" if age is not None and age <= 120 else "低"
+    details["价格新鲜度"] = f"{age}分钟前采集" if age is not None else "采集时间未知"
+
+    history_count = len(price_history) if price_history else 0
+    dimensions["历史样本量"] = "高" if history_count >= 14 else "中" if history_count >= 5 else "低"
+    details["历史样本量"] = f"近期{history_count}次采集"
+
+    source_count = (flight.get("availability") or {}).get("source_count", 0)
+    if not source_count:
+        data_source = str(flight.get("data_source") or flight.get("source") or "")
+        source_count = len([item for item in data_source.split("+") if item])
+    if not source_count and source_stats:
+        source_count = sum(
+            1
+            for value in source_stats.values()
+            if isinstance(value, dict) and "成功" in str(value.get("status", ""))
+        )
+    dimensions["渠道一致性"] = "高" if source_count >= 3 else "中" if source_count >= 2 else "低"
+    details["渠道一致性"] = f"{source_count}个数据源可交叉验证" if source_count else "数据源不足"
+
+    fare = flight.get("fare_verification") or {}
+    fare_level = fare.get("level")
+    dimensions["票规完整度"] = "高" if fare_level == "full" else "中" if fare_level == "partial" else "低"
+    details["票规完整度"] = "票规已确认" if fare_level == "full" else "行李/退改签仍需支付页确认"
+
+    avail = flight.get("availability") or {}
+    avail_status = avail.get("status", "unknown")
+    if avail_status == "likely_available":
+        dimensions["可购买性"] = "中高"
+        details["可购买性"] = "有多个渠道可验证，但最终价格和票规以支付页为准"
+    elif avail_status == "possibly_available":
+        dimensions["可购买性"] = "中"
+        details["可购买性"] = "需要到支付页确认最终价、库存和票规"
+    else:
+        dimensions["可购买性"] = "低"
+        details["可购买性"] = "购买链路尚未验证"
+
+    high_count = sum(1 for value in dimensions.values() if value == "高")
+    medium_or_better = sum(1 for value in dimensions.values() if value in {"高", "中高", "中"})
+    if high_count >= 4:
+        overall = "高"
+    elif medium_or_better >= 4:
+        overall = "中高"
+    else:
+        overall = "中"
+
+    return {"overall": overall, "dimensions": dimensions, "details": details}
+
+
 def generate_decision_summary(
     lowest_price,
     target_price,
@@ -2843,6 +2904,118 @@ def determine_push_type(
         price_change = {
             "last": last_price,
             "current": current,
+            "diff": diff,
+            "direction": "down" if diff < 0 else "up" if diff > 0 else "flat",
+        }
+
+    return {
+        "type": push_type,
+        "reasons": _dedupe_text(reasons)[:4],
+        "price_change": price_change,
+        "percentile": percentile,
+        "historical_30_price": historical_30,
+    }
+
+
+def determine_push_type(
+    current_price,
+    target_price=None,
+    max_budget=None,
+    price_history=None,
+    days_to_dept=None,
+    last_push_price=None,
+    analysis_result=None,
+) -> dict:
+    """Determine push type using explicit display/transaction/verification price roles."""
+    current = _to_float(current_price)
+    target = _to_float(target_price)
+    max_b = _to_float(max_budget)
+    last_price = _to_float(last_push_price)
+    analysis_result = analysis_result or {}
+    decision_prices = analysis_result.get("decision_prices") or {}
+    display_price = _to_float(decision_prices.get("display_price")) or current
+    transaction_price = _to_float(decision_prices.get("transaction_price"))
+    verify_price = _to_float(decision_prices.get("verify_price"))
+    prices = sorted(_flatten_price_history(price_history))
+
+    percentile = None
+    historical_30 = None
+    if display_price is not None and prices:
+        below = sum(1 for price in prices if price < display_price)
+        percentile = round(below / len(prices) * 100)
+        index = min(len(prices) - 1, max(0, round((len(prices) - 1) * 0.30)))
+        historical_30 = prices[index]
+
+    availability_high = False
+    for flight in (analysis_result.get("all_flights") or [])[:3]:
+        avail = (flight or {}).get("availability") or {}
+        if avail.get("status") == "likely_available":
+            availability_high = True
+            break
+
+    display_reaches_target = bool(target and display_price is not None and display_price <= target)
+    display_reaches_verify = bool(verify_price and display_price is not None and display_price <= verify_price)
+    transaction_reaches_verify = bool(
+        verify_price and transaction_price is not None and transaction_price <= verify_price
+    )
+    transaction_over_verify = bool(
+        verify_price and transaction_price is not None and transaction_price > verify_price
+    )
+
+    push_type = "同日更优方案"
+    if display_price is None:
+        push_type = "价格已失效"
+    elif _has_stale_primary_price(analysis_result):
+        push_type = "价格已失效"
+    elif historical_30 and display_price <= historical_30 and transaction_reaches_verify and availability_high:
+        push_type = "异常低价"
+    elif display_reaches_verify and transaction_over_verify:
+        push_type = "值得验证"
+    elif display_reaches_target:
+        push_type = "进入低价区间"
+    elif _has_cheaper_nearby_date(analysis_result, display_price):
+        push_type = "前后日期更便宜"
+    elif _has_better_same_day_option(analysis_result):
+        push_type = "同日更优方案"
+    elif last_price and display_price is not None and display_price < last_price:
+        push_type = "价格下降"
+    elif _is_price_rise_risk(days_to_dept, analysis_result):
+        push_type = "涨价风险"
+
+    reasons = []
+    if display_reaches_verify and transaction_over_verify:
+        reasons.append("搜索参考价达标，但预估实付价高于验证购买价")
+    if target and display_price is not None:
+        if display_price <= target:
+            reasons.append("搜索参考价进入你的理想入手区间")
+        else:
+            reasons.append(f"搜索参考价距离理想入手价还差¥{display_price - target:,.0f}")
+    if last_price and display_price is not None:
+        diff = display_price - last_price
+        if diff < 0:
+            reasons.append(f"较上次提醒：下降¥{abs(diff):,.0f}")
+        elif diff > 0:
+            reasons.append(f"较上次提醒：上涨¥{diff:,.0f}")
+        else:
+            reasons.append("与上次提醒价格持平")
+    if percentile is not None:
+        if percentile <= 0:
+            reasons.append(f"当前搜索价低于近{len(prices)}次相似采集记录，处于近期低位")
+        elif percentile <= 30:
+            reasons.append("当前搜索价处于相似历史样本低价区间")
+        elif percentile >= 70:
+            reasons.append("当前搜索价高于大多数相似历史样本")
+    reasons.extend(_matched_constraint_reasons(analysis_result))
+    if _is_price_rise_risk(days_to_dept, analysis_result):
+        days_text = f"{days_to_dept}天" if days_to_dept is not None else "临近出发"
+        reasons.append(f"距出发{days_text}，低价继续变化的风险上升")
+
+    price_change = None
+    if last_price and display_price is not None:
+        diff = display_price - last_price
+        price_change = {
+            "last": last_price,
+            "current": display_price,
             "diff": diff,
             "direction": "down" if diff < 0 else "up" if diff > 0 else "flat",
         }
