@@ -2032,7 +2032,7 @@ def _priority_boundary_notes(flight: dict, priorities: dict) -> list[str]:
         notes.append("转机次数刚好到上限")
 
     if priorities.get("no_overnight") and 360 <= max_wait <= 480:
-        notes.append("杞満绛夊緟杈冮暱浣嗕笉杩囧")
+        notes.append("转机等待较长但不过夜")
 
     return notes
 
@@ -2244,11 +2244,11 @@ def match_time_preference(flight: dict, soft_prefs: dict) -> tuple[bool, str]:
             (dep_hour is None or 6 <= dep_hour < 20)
             and (arr_hour is None or 6 <= arr_hour < 20)
         )
-        return True, "鐧藉ぉ鑸彮" if is_daytime else "闈炵櫧澶╋紝鎺掑簭闄嶆潈"
+        return True, "白天航班" if is_daytime else "非白天，排序降权"
 
     if mode == "no_redeye":
         if dep_red_eye or arr_red_eye:
-            return False, "绾㈢溂/鍑屾櫒鑸彮锛屽凡鎺掗櫎"
+            return False, "红眼/凌晨航班，已排除"
         return True, ""
 
     if mode == "custom":
@@ -2258,7 +2258,7 @@ def match_time_preference(flight: dict, soft_prefs: dict) -> tuple[bool, str]:
         arr_ok = _matches_time_windows(arr_hour, arr_windows)
         if dep_ok and arr_ok:
             return True, ""
-        return False, "涓嶅湪浣犺缃殑鍙帴鍙楁椂娈靛唴"
+        return False, "不在你设置的可接受时段内"
 
     return True, ""
 
@@ -2517,7 +2517,7 @@ def calc_execution_risk(flight):
     else:
         risk_level = "low"
         risk_label = "执行风险低"
-        advice = "璇ユ柟妗堜俊鎭緝瀹屾暣锛屽彲淇″害杈冮珮"
+        advice = "该方案信息较完整，可信度较高"
 
     flight["execution_risk"] = {
         "level": risk_level,
@@ -2907,11 +2907,11 @@ def _matched_constraint_reasons(analysis_result: dict) -> list[str]:
     reasons = []
     first = flights[0] if flights else {}
     if first.get("stops", 0) == 0:
-        reasons.append("绗﹀悎浣犺缃殑鐩撮鏉′欢")
+        reasons.append("符合你设置的直飞条件")
     fare = first.get("fare_verification") or {}
     matches = " ".join(fare.get("matches") or [])
-    if "鎵樿繍" in matches or "琛屾潕" in matches:
-        reasons.append("绗﹀悎浣犺缃殑鎵樿繍琛屾潕瑕佹眰")
+    if "托运" in matches or "行李" in matches:
+        reasons.append("符合你设置的托运行李要求")
     return reasons
 
 
@@ -3030,7 +3030,7 @@ def _apply_user_preferences(
             excluded.append({**flight, "exclude_reason": "用户不接受廉航"})
             continue
         if exclude_airlines and _contains_any_airline(flight, exclude_airlines):
-            excluded.append({**flight, "exclude_reason": "鍛戒腑鐢ㄦ埛鎺掗櫎鑸徃"})
+            excluded.append({**flight, "exclude_reason": "命中用户排除航司"})
             continue
         if airline_policy == "prefer_full_service":
             if _contains_any_airline(flight, FULL_SERVICE_AIRLINES):
@@ -3040,7 +3040,7 @@ def _apply_user_preferences(
                 notes.append("偏好全服务航司")
             elif _contains_any_airline(flight, LCC_AIRLINES):
                 penalty += 2
-                penalties.append("闈炲叏鏈嶅姟鑸徃")
+                penalties.append("非全服务航司")
 
         if max_budget and max_budget > 0 and price > max_budget:
             excluded.append({**flight, "exclude_reason": "\u8d85\u8fc7\u6700\u9ad8\u53ef\u63a5\u53d7\u4ef7\u683c"})
@@ -3056,7 +3056,7 @@ def _apply_user_preferences(
                 penalties.append(f"\u8ddd\u79bb\u7406\u60f3\u5165\u624b\u4ef7\u00a5{price - target_price:,.0f}")
 
         if direct_required and stops > 0:
-            excluded_flight = {**flight, "exclude_reason": "鐢ㄦ埛璁剧疆蹇呴』鐩撮"}
+            excluded_flight = {**flight, "exclude_reason": "用户设置必须直飞"}
             excluded.append(excluded_flight)
             direct_reference_candidates.append(flight)
             continue
@@ -3089,11 +3089,11 @@ def _apply_user_preferences(
             excluded.append({**flight, "exclude_reason": "系统默认不推荐过夜中转"})
             continue
         if stops > 0 and not allow_self_transfer and _is_likely_self_transfer(flight):
-            excluded.append({**flight, "exclude_reason": "绯荤粺榛樿涓嶆帹鑽愮枒浼奸潪鑱旂▼涓浆"})
+            excluded.append({**flight, "exclude_reason": "系统默认不推荐疑似非联程中转"})
             continue
 
         if red_eye == "reject" and _is_red_eye(flight):
-            excluded.append({**flight, "exclude_reason": "鐢ㄦ埛涓嶆帴鍙楃孩鐪?杩囨棭鑸彮"})
+            excluded.append({**flight, "exclude_reason": "用户不接受红眼/过早航班"})
             continue
         if red_eye in {"accept", "flexible", "cheap_ok"} and _is_red_eye(flight):
             penalty += 2 if red_eye in {"accept", "flexible"} else 1
@@ -3107,14 +3107,14 @@ def _apply_user_preferences(
                 notes.append("含免费托运")
             else:
                 penalty += 3
-                penalties.append("鎵樿繍琛屾潕闇€瀹樼綉纭")
+                penalties.append("托运行李需官网确认")
 
         if refund_flexibility == "preferred":
             if _has_refund_change_flexibility(flight):
                 notes.append("退改签较灵活")
             else:
                 penalty += 1
-                penalties.append("閫€鏀圭闇€纭")
+                penalties.append("退改签需确认")
         elif refund_flexibility == "required":
             if _has_refund_change_flexibility(flight, required=True):
                 notes.append("满足可退改")
