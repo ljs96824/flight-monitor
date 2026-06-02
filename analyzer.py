@@ -2354,14 +2354,38 @@ def _collected_minutes_ago(flight: dict) -> float | None:
         or flight.get("snapshot_time")
         or flight.get("fetched_at")
     )
-    if not raw_value:
-        return None
-    try:
-        collected_at = datetime.fromisoformat(str(raw_value).replace("Z", "+00:00"))
-    except ValueError:
+    collected_at = _parse_collected_at(raw_value)
+    if collected_at is None:
+        if raw_value:
+            print(f"[采集时间解析失败] collected_at={repr(raw_value)}, 错误=无法识别格式")
         return None
     now = datetime.now(collected_at.tzinfo) if collected_at.tzinfo else datetime.now()
     return max(0, (now - collected_at).total_seconds() / 60)
+
+
+def _parse_collected_at(value) -> datetime | None:
+    if not value:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+
+    candidates = [text]
+    if text.endswith("Z"):
+        candidates.append(text[:-1] + "+00:00")
+
+    for candidate in candidates:
+        try:
+            return datetime.fromisoformat(candidate)
+        except ValueError:
+            pass
+
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y/%m/%d %H:%M:%S"):
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            pass
+    return None
 
 
 def verify_fare_rules(flight, hard_constraints):
@@ -2440,14 +2464,15 @@ def estimate_availability(flight, collected_at=None):
     age_minutes = _collected_minutes_ago(
         {**flight, "collected_at": collected_at or flight.get("collected_at")}
     )
-    if age_minutes is None:
-        age_minutes = 9999
 
     sources = flight.get("data_source", "") or flight.get("source", "")
     source_count = len([source for source in str(sources).split("+") if source])
     price = _to_float(flight.get("price")) or 0
 
-    if age_minutes <= 30 and source_count >= 2 and price > 0:
+    if age_minutes is None:
+        status = "unknown"
+        label = "采集时间未知，建议刷新确认"
+    elif age_minutes <= 30 and source_count >= 2 and price > 0:
         status = "likely_available"
         label = "大概率可购买"
     elif age_minutes <= 120 and price > 0:
@@ -2464,7 +2489,7 @@ def estimate_availability(flight, collected_at=None):
     return {
         "status": status,
         "label": label,
-        "age_minutes": int(age_minutes),
+        "age_minutes": int(age_minutes) if age_minutes is not None else None,
         "source_count": source_count,
     }
 
@@ -2474,8 +2499,11 @@ def calc_execution_risk(flight):
     factors = []
 
     avail = flight.get("availability", {}) or {}
-    age = avail.get("age_minutes", 9999)
-    if age > 120:
+    age = avail.get("age_minutes")
+    if age is None:
+        score += 15
+        factors.append("采集时间未知")
+    elif age > 120:
         score += 30
         factors.append("价格超过2小时未验证")
     elif age > 30:
@@ -2592,13 +2620,17 @@ def calc_confidence(flight: dict, source_stats=None, price_history=None) -> dict
     dimensions = {}
     details = {}
 
-    age = (flight.get("availability") or {}).get("age_minutes", 9999)
+    raw_age = (flight.get("availability") or {}).get("age_minutes")
     try:
-        age = int(age)
+        age = int(raw_age) if raw_age is not None else None
     except (TypeError, ValueError):
-        age = 9999
-    dimensions["价格新鲜度"] = "高" if age <= 30 else "中" if age <= 120 else "低"
-    details["价格新鲜度"] = f"{age}分钟前采集" if age < 9999 else "采集时间未知"
+        age = None
+    dimensions["价格新鲜度"] = (
+        "高" if age is not None and age <= 30
+        else "中" if age is not None and age <= 120
+        else "低"
+    )
+    details["价格新鲜度"] = f"{age}分钟前采集" if age is not None else "采集时间未知"
 
     history_count = len(price_history) if price_history else 0
     dimensions["历史样本量"] = "高" if history_count >= 14 else "中" if history_count >= 5 else "低"

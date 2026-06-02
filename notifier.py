@@ -4228,6 +4228,17 @@ def _pushplus_freshness_line(payload: dict) -> str:
     return f"价格更新:{time_text},建议30分钟内验证"
 
 
+def _payload_freshness_text(payload: dict) -> str:
+    age = _to_float(payload.get("freshness_minutes"))
+    if age is None:
+        return "采集时间待确认"
+    if age < 1:
+        return "刚刚采集"
+    if age < 60:
+        return f"{int(age)}分钟前采集"
+    return f"{int(age // 60)}小时前采集"
+
+
 def _payload_combo_plan(combo: dict, route_info: dict, index: int, variant: str) -> dict:
     outbound = combo.get("outbound") or {}
     return_flight = combo.get("return") or {}
@@ -4814,7 +4825,7 @@ def render_email(payload: dict) -> tuple[str, str]:
         f"<h2>【{html.escape(str(payload.get('push_type') or '价格提醒'))}】{html.escape(str(payload.get('route') or '航班监控'))}</h2>",
         f"<p><b>当前判断：</b>{html.escape(str(payload.get('recommendation') or '可以观察'))}</p>",
         f"<p><b>当前价：</b>{_price_text(payload.get('current_price'))}<br>",
-        f"<b>采集：</b>{payload.get('freshness_minutes') if payload.get('freshness_minutes') is not None else '待确认'}分钟前"
+        f"<b>采集：</b>{html.escape(_payload_freshness_text(payload))}"
         f" | {payload.get('source_count') or 1}个数据源<br>",
         f"<b>购买条件：</b>{html.escape(str(payload.get('buy_condition') or '以支付页为准'))}<br>",
         f"<b>置信度：</b>{html.escape(str(payload.get('confidence') or '中'))}</p>",

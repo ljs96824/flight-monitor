@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime
 
 from sources.base import FlightSource
 
@@ -147,6 +148,7 @@ class FlightAggregator:
         cabin_classes=None,
     ) -> dict | None:
         cabin_classes = _normalize_cabin_classes(cabin_classes)
+        run_collected_at = datetime.now().isoformat(timespec="seconds")
         source_stats = {}
         all_flights = []
         successful_results = []
@@ -174,6 +176,11 @@ class FlightAggregator:
                     )
 
                     for flight in flights:
+                        flight["collected_at"] = (
+                            flight.get("collected_at")
+                            or result.get("collected_at")
+                            or run_collected_at
+                        )
                         if not flight.get("source"):
                             flight["source"] = source_name
                         if not flight.get("data_source"):
@@ -263,6 +270,7 @@ class FlightAggregator:
 
         unique_flights = list(seen.values())
         for flight in unique_flights:
+            flight["collected_at"] = flight.get("collected_at") or run_collected_at
             normalized_combo = _flight_key(flight)
             sources = sources_by_combo.get(normalized_combo, [])
             if sources:
@@ -361,6 +369,7 @@ class FlightAggregator:
             "source_errors": source_errors,
             "price_anomalies": self._find_price_anomalies(successful_results),
             "raw_by_source": raw_by_source,
+            "collected_at": run_collected_at,
         }
 
     def _merge_flights(self, results: list[dict]) -> list[dict]:

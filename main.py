@@ -596,6 +596,7 @@ def collect_for_airport_matrix(
         "raw_by_source": {},
         "sources_used": "",
         "source": "",
+        "collected_at": datetime.now().isoformat(timespec="seconds"),
     }
     sources_used = []
 
@@ -622,6 +623,8 @@ def collect_for_airport_matrix(
         merged["flights"].extend(data.get("flights", []))
         if not merged["price_insights"] and data.get("price_insights"):
             merged["price_insights"] = data["price_insights"]
+        if not merged.get("collected_at") and data.get("collected_at"):
+            merged["collected_at"] = data["collected_at"]
         _merge_source_stats(merged["source_stats"], data.get("source_stats", {}))
         merged["source_errors"].extend(data.get("source_errors", []))
         merged["raw_by_source"].update(data.get("raw_by_source", {}))
@@ -745,12 +748,15 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
             logging.error(f"{route} 采集返回空")
             return False
 
+        run_collected_at = data.get("collected_at") or datetime.now().isoformat(timespec="seconds")
         normalized_flights = [
             _normalize_detail_flight(
                 flight, flight.get("data_source") or flight.get("source")
             )
             for flight in data.get("flights", [])
         ]
+        for flight in normalized_flights:
+            flight["collected_at"] = flight.get("collected_at") or run_collected_at
         flights = [
             flight
             for flight in normalized_flights
@@ -800,6 +806,7 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
         analysis["hard_constraints"] = sub.get("hard_constraints", {})
         analysis["soft_preferences"] = sub.get("soft_preferences", {})
         analysis["defaults_applied"] = sub.get("defaults_applied", [])
+        analysis["collected_at"] = run_collected_at
         analysis["nearby_dates"] = nearby_dates
         analysis["source_stats"] = data.get("source_stats", {})
         analysis["price_position"] = price_position_description(
@@ -830,12 +837,15 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
                 return_date,
                 cabin_classes=sub.get("cabin_classes"),
             )
+            return_collected_at = (return_data or {}).get("collected_at") or datetime.now().isoformat(timespec="seconds")
             normalized_return_flights = [
                 _normalize_detail_flight(
                     flight, flight.get("data_source") or flight.get("source")
                 )
                 for flight in (return_data or {}).get("flights", [])
             ]
+            for flight in normalized_return_flights:
+                flight["collected_at"] = flight.get("collected_at") or return_collected_at
             return_flights = [
                 flight
                 for flight in normalized_return_flights
@@ -897,6 +907,7 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
                 return_analysis["days_to_dept"] = (
                     date.fromisoformat(return_date) - date.today()
                 ).days
+                return_analysis["collected_at"] = return_collected_at
                 return_analysis["nearby_dates"] = return_nearby_dates
                 analysis["return_analysis"] = return_analysis
                 round_trip_analysis = analyze_round_trip(
@@ -1004,6 +1015,7 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
                 "previous_prices": previous_prices,
                 "lowest_price_history": lowest_price_history,
                 "source_stats": data.get("source_stats", {}),
+                "collected_at": run_collected_at,
             },
             "source_stats": data.get("source_stats"),
             "price_insights": data.get("price_insights"),
