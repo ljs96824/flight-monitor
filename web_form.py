@@ -259,6 +259,15 @@ FORM_TEMPLATE = """
       font-size: 13px;
       margin: 6px 0 0;
     }
+    .server-error {
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      border-radius: 8px;
+      color: #b91c1c;
+      font-size: 14px;
+      margin: 0 0 14px;
+      padding: 10px 12px;
+    }
     #missing-required-warning {
       display: none;
       color: #c5221f;
@@ -589,6 +598,9 @@ FORM_TEMPLATE = """
 
   <form id="subscription-form" method="post" action="{{ url_for('subscribe') }}">
     <input type="hidden" id="subscription_index" name="subscription_index" value="{{ edit_index if edit_index is not none else '' }}">
+    {% if form_error %}
+      <div class="server-error">{{ form_error }}</div>
+    {% endif %}
     <div class="mode-toggle">
       <div class="mode-toggle-title">模式</div>
       <div class="choice">
@@ -2950,6 +2962,14 @@ def build_subscription(form) -> dict:
     origin_input = origin_manual or ("" if origin_select == "OTHER" else origin_select)
     origin_info = resolve_location(origin_input)
     destination_info = resolve_location(normalize_destination(form.get("destination", "")))
+    if origin_info.get("type") == "unknown":
+        raise ValueError(
+            f"无法识别地点 {origin_info.get('value')},请输入机场三字码或已支持的城市"
+        )
+    if destination_info.get("type") == "unknown":
+        raise ValueError(
+            f"无法识别地点 {destination_info.get('value')},请输入机场三字码或已支持的城市"
+        )
     origin_airports_active = parse_active_airports(
         form.get("origin_airports_active"), origin_info["airports"]
     )
@@ -3295,6 +3315,7 @@ def index():
         airport_short_names=AIRPORT_SHORT_NAMES,
         edit_subscription=edit_subscription or {},
         edit_index=edit_index,
+        form_error="",
     )
 
 
@@ -3316,6 +3337,17 @@ def subscribe():
         print("[表单] 后台采集触发完成")
 
         return redirect(url_for("success", index=index))
+    except ValueError as exc:
+        print(f"[表单] 提交订阅失败: {exc}")
+        return render_template_string(
+            FORM_TEMPLATE,
+            origins=COMMON_ORIGINS,
+            city_airports=CITY_AIRPORTS,
+            airport_short_names=AIRPORT_SHORT_NAMES,
+            edit_subscription={},
+            edit_index=None,
+            form_error=str(exc),
+        ), 400
     except Exception as exc:
         print(f"[表单] 提交订阅失败: {exc}")
         traceback.print_exc()

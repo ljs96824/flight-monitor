@@ -1,0 +1,543 @@
+{
+  "airports": {
+    "ABQ": {
+      "format_airport": "阿尔伯克基(ABQ)",
+      "get_airport_city": "阿尔伯克基",
+      "get_airport_city_en": "Albuquerque",
+      "get_airport_name": "阿尔伯克基",
+      "get_airport_short_name": "阿尔伯克基",
+      "get_airport_timezone": "当地"
+    },
+    "AMS": {
+      "format_airport": "阿姆斯特丹(AMS)",
+      "get_airport_city": "阿姆斯特丹",
+      "get_airport_city_en": "Amsterdam",
+      "get_airport_name": "阿姆斯特丹",
+      "get_airport_short_name": "阿姆斯特丹",
+      "get_airport_timezone": "当地"
+    },
+    "ATL": {
+      "format_airport": "亚特兰大(ATL)",
+      "get_airport_city": "亚特兰大",
+      "get_airport_city_en": "Atlanta",
+      "get_airport_name": "亚特兰大",
+      "get_airport_short_name": "亚特兰大",
+      "get_airport_timezone": "美东"
+    },
+    "BKK": {
+      "format_airport": "曼谷素万那普(BKK)",
+      "get_airport_city": "曼谷",
+      "get_airport_city_en": "Bangkok",
+      "get_airport_name": "曼谷素万那普",
+      "get_airport_short_name": "素万那普",
+      "get_airport_timezone": "曼谷"
+    },
+    "CAN": {
+      "format_airport": "广州白云(CAN)",
+      "get_airport_city": "广州",
+      "get_airport_city_en": "Guangzhou",
+      "get_airport_name": "广州白云",
+      "get_airport_short_name": "白云",
+      "get_airport_timezone": "北京"
+    },
+    "CDG": {
+      "format_airport": "巴黎戴高乐(CDG)",
+      "get_airport_city": "巴黎",
+      "get_airport_city_en": "Paris",
+      "get_airport_name": "巴黎戴高乐",
+      "get_airport_short_name": "戴高乐",
+      "get_airport_timezone": "巴黎"
+    },
+    "CTU": {
+      "format_airport": "成都天府(CTU)",
+      "get_airport_city": "成都",
+      "get_airport_city_en": "Chengdu",
+      "get_airport_name": "成都天府",
+      "get_airport_short_name": "天府",
+      "get_airport_timezone": "当地"
+    },
+    "DCA": {
+      "format_airport": "华盛顿里根(DCA)",
+      "get_airport_city": "华盛顿",
+      "get_airport_city_en": "Washington",
+      "get_airport_name": "华盛顿里根",
+      "get_airport_short_name": "华盛顿里根",
+      "get_airport_timezone": "美东"
+    },
+    "DFW": {
+      "format_airport": "达拉斯沃斯堡(DFW)",
+      "get_airport_city": "达拉斯",
+      "get_airport_city_en": "Dallas",
+      "get_airport_name": "达拉斯沃斯堡",
+      "get_airport_short_name": "达拉斯",
+      "get_airport_timezone": "美中"
+    },
+    "DMK": {
+      "format_airport": "曼谷廊曼(DMK)",
+      "get_airport_city": "曼谷",
+      "get_airport_city_en": "Bangkok",
+      "get_airport_name": "曼谷廊曼",
+      "get_airport_short_name": "廊曼",
+      "get_airport_timezone": "曼谷"
+    },
+    "DOH": {
+      "format_airport": "多哈(DOH)",
+      "get_airport_city": "多哈",
+      "get_airport_city_en": "Doha",
+      "get_airport_name": "多哈",
+      "get_airport_short_name": "多哈",
+      "get_airport_timezone": "多哈"
+    },
+    "DWC": {
+      "format_airport": "迪拜世界中心(DWC)",
+      "get_airport_city": "迪拜",
+      "get_airport_city_en": "Dubai",
+      "get_airport_name": "迪拜世界中心",
+      "get_airport_short_name": "迪拜世界中心",
+      "get_airport_timezone": "迪拜"
+    },
+    "DXB": {
+      "format_airport": "迪拜(DXB)",
+      "get_airport_city": "迪拜",
+      "get_airport_city_en": "Dubai",
+      "get_airport_name": "迪拜",
+      "get_airport_short_name": "迪拜",
+      "get_airport_timezone": "迪拜"
+    },
+    "EWR": {
+      "format_airport": "纽约纽瓦克(EWR)",
+      "get_airport_city": "纽约",
+      "get_airport_city_en": "New York",
+      "get_airport_name": "纽约纽瓦克",
+      "get_airport_short_name": "纽瓦克",
+      "get_airport_timezone": "美东"
+    },
+    "FLL": {
+      "format_airport": "劳德代尔堡(FLL)",
+      "get_airport_city": "迈阿密",
+      "get_airport_city_en": "Miami",
+      "get_airport_name": "劳德代尔堡",
+      "get_airport_short_name": "劳德代尔",
+      "get_airport_timezone": "美东"
+    },
+    "FRA": {
+      "format_airport": "法兰克福(FRA)",
+      "get_airport_city": "法兰克福",
+      "get_airport_city_en": "Frankfurt",
+      "get_airport_name": "法兰克福",
+      "get_airport_short_name": "法兰克福",
+      "get_airport_timezone": "法兰克福"
+    },
+    "GMP": {
+      "format_airport": "首尔金浦(GMP)",
+      "get_airport_city": "首尔",
+      "get_airport_city_en": "Seoul",
+      "get_airport_name": "首尔金浦",
+      "get_airport_short_name": "金浦",
+      "get_airport_timezone": "韩国"
+    },
+    "HGH": {
+      "format_airport": "杭州萧山(HGH)",
+      "get_airport_city": "杭州",
+      "get_airport_city_en": "Hangzhou",
+      "get_airport_name": "杭州萧山",
+      "get_airport_short_name": "萧山",
+      "get_airport_timezone": "当地"
+    },
+    "HKG": {
+      "format_airport": "香港(HKG)",
+      "get_airport_city": "香港",
+      "get_airport_city_en": "Hong Kong",
+      "get_airport_name": "香港",
+      "get_airport_short_name": "香港",
+      "get_airport_timezone": "香港"
+    },
+    "HND": {
+      "format_airport": "东京羽田(HND)",
+      "get_airport_city": "东京",
+      "get_airport_city_en": "Tokyo",
+      "get_airport_name": "东京羽田",
+      "get_airport_short_name": "羽田",
+      "get_airport_timezone": "日本"
+    },
+    "IAD": {
+      "format_airport": "华盛顿杜勒斯(IAD)",
+      "get_airport_city": "华盛顿",
+      "get_airport_city_en": "Washington",
+      "get_airport_name": "华盛顿杜勒斯",
+      "get_airport_short_name": "华盛顿杜勒斯",
+      "get_airport_timezone": "美东"
+    },
+    "ICN": {
+      "format_airport": "首尔仁川(ICN)",
+      "get_airport_city": "首尔",
+      "get_airport_city_en": "Seoul",
+      "get_airport_name": "首尔仁川",
+      "get_airport_short_name": "仁川",
+      "get_airport_timezone": "韩国"
+    },
+    "ITM": {
+      "format_airport": "大阪伊丹(ITM)",
+      "get_airport_city": "大阪",
+      "get_airport_city_en": "Osaka",
+      "get_airport_name": "大阪伊丹",
+      "get_airport_short_name": "伊丹",
+      "get_airport_timezone": "日本"
+    },
+    "JFK": {
+      "format_airport": "纽约肯尼迪(JFK)",
+      "get_airport_city": "纽约",
+      "get_airport_city_en": "New York",
+      "get_airport_name": "纽约肯尼迪",
+      "get_airport_short_name": "肯尼迪",
+      "get_airport_timezone": "美东"
+    },
+    "KIX": {
+      "format_airport": "关西国际机场(KIX)",
+      "get_airport_city": "大阪",
+      "get_airport_city_en": "Osaka",
+      "get_airport_name": "关西国际机场",
+      "get_airport_short_name": "关西",
+      "get_airport_timezone": "日本"
+    },
+    "LAX": {
+      "format_airport": "洛杉矶(LAX)",
+      "get_airport_city": "洛杉矶",
+      "get_airport_city_en": "Los Angeles",
+      "get_airport_name": "洛杉矶",
+      "get_airport_short_name": "洛杉矶",
+      "get_airport_timezone": "美西"
+    },
+    "LGA": {
+      "format_airport": "纽约拉瓜迪亚(LGA)",
+      "get_airport_city": "纽约",
+      "get_airport_city_en": "New York",
+      "get_airport_name": "纽约拉瓜迪亚",
+      "get_airport_short_name": "拉瓜迪亚",
+      "get_airport_timezone": "美东"
+    },
+    "LGW": {
+      "format_airport": "伦敦盖特威克(LGW)",
+      "get_airport_city": "伦敦",
+      "get_airport_city_en": "London",
+      "get_airport_name": "伦敦盖特威克",
+      "get_airport_short_name": "盖特威克",
+      "get_airport_timezone": "伦敦"
+    },
+    "LHR": {
+      "format_airport": "伦敦希思罗(LHR)",
+      "get_airport_city": "伦敦",
+      "get_airport_city_en": "London",
+      "get_airport_name": "伦敦希思罗",
+      "get_airport_short_name": "希思罗",
+      "get_airport_timezone": "伦敦"
+    },
+    "MCO": {
+      "format_airport": "奥兰多(MCO)",
+      "get_airport_city": "奥兰多",
+      "get_airport_city_en": "Orlando",
+      "get_airport_name": "奥兰多",
+      "get_airport_short_name": "奥兰多",
+      "get_airport_timezone": "美东"
+    },
+    "MDW": {
+      "format_airport": "芝加哥中途(MDW)",
+      "get_airport_city": "芝加哥",
+      "get_airport_city_en": "Chicago",
+      "get_airport_name": "芝加哥中途",
+      "get_airport_short_name": "中途",
+      "get_airport_timezone": "美中"
+    },
+    "MIA": {
+      "format_airport": "迈阿密(MIA)",
+      "get_airport_city": "迈阿密",
+      "get_airport_city_en": "Miami",
+      "get_airport_name": "迈阿密",
+      "get_airport_short_name": "迈阿密",
+      "get_airport_timezone": "美东"
+    },
+    "NKG": {
+      "format_airport": "南京禄口(NKG)",
+      "get_airport_city": "南京",
+      "get_airport_city_en": "Nanjing",
+      "get_airport_name": "南京禄口",
+      "get_airport_short_name": "禄口",
+      "get_airport_timezone": "当地"
+    },
+    "NRT": {
+      "format_airport": "东京成田(NRT)",
+      "get_airport_city": "东京",
+      "get_airport_city_en": "Tokyo",
+      "get_airport_name": "东京成田",
+      "get_airport_short_name": "成田",
+      "get_airport_timezone": "日本"
+    },
+    "OAK": {
+      "format_airport": "奥克兰(OAK)",
+      "get_airport_city": "旧金山",
+      "get_airport_city_en": "San Francisco",
+      "get_airport_name": "奥克兰",
+      "get_airport_short_name": "奥克兰",
+      "get_airport_timezone": "美西"
+    },
+    "ORD": {
+      "format_airport": "芝加哥奥黑尔(ORD)",
+      "get_airport_city": "芝加哥",
+      "get_airport_city_en": "Chicago",
+      "get_airport_name": "芝加哥奥黑尔",
+      "get_airport_short_name": "奥黑尔",
+      "get_airport_timezone": "美中"
+    },
+    "ORY": {
+      "format_airport": "巴黎奥利(ORY)",
+      "get_airport_city": "巴黎",
+      "get_airport_city_en": "Paris",
+      "get_airport_name": "巴黎奥利",
+      "get_airport_short_name": "奥利",
+      "get_airport_timezone": "巴黎"
+    },
+    "PEK": {
+      "format_airport": "北京首都(PEK)",
+      "get_airport_city": "北京",
+      "get_airport_city_en": "Beijing",
+      "get_airport_name": "北京首都",
+      "get_airport_short_name": "首都",
+      "get_airport_timezone": "北京"
+    },
+    "PKX": {
+      "format_airport": "北京大兴(PKX)",
+      "get_airport_city": "北京",
+      "get_airport_city_en": "Beijing",
+      "get_airport_name": "北京大兴",
+      "get_airport_short_name": "大兴",
+      "get_airport_timezone": "当地"
+    },
+    "PVG": {
+      "format_airport": "上海浦东(PVG)",
+      "get_airport_city": "上海",
+      "get_airport_city_en": "Shanghai",
+      "get_airport_name": "上海浦东",
+      "get_airport_short_name": "浦东",
+      "get_airport_timezone": "北京"
+    },
+    "SEA": {
+      "format_airport": "西雅图(SEA)",
+      "get_airport_city": "西雅图",
+      "get_airport_city_en": "Seattle",
+      "get_airport_name": "西雅图",
+      "get_airport_short_name": "西雅图",
+      "get_airport_timezone": "美西"
+    },
+    "SFB": {
+      "format_airport": "奥兰多桑福德(SFB)",
+      "get_airport_city": "奥兰多",
+      "get_airport_city_en": "Orlando",
+      "get_airport_name": "奥兰多桑福德",
+      "get_airport_short_name": "桑福德",
+      "get_airport_timezone": "美东"
+    },
+    "SFO": {
+      "format_airport": "旧金山(SFO)",
+      "get_airport_city": "旧金山",
+      "get_airport_city_en": "San Francisco",
+      "get_airport_name": "旧金山",
+      "get_airport_short_name": "旧金山",
+      "get_airport_timezone": "美西"
+    },
+    "SHA": {
+      "format_airport": "上海虹桥(SHA)",
+      "get_airport_city": "上海",
+      "get_airport_city_en": "Shanghai",
+      "get_airport_name": "上海虹桥",
+      "get_airport_short_name": "虹桥",
+      "get_airport_timezone": "北京"
+    },
+    "SIN": {
+      "format_airport": "新加坡樟宜(SIN)",
+      "get_airport_city": "新加坡",
+      "get_airport_city_en": "Singapore",
+      "get_airport_name": "新加坡樟宜",
+      "get_airport_short_name": "樟宜",
+      "get_airport_timezone": "新加坡"
+    },
+    "SJC": {
+      "format_airport": "圣何塞(SJC)",
+      "get_airport_city": "旧金山",
+      "get_airport_city_en": "San Francisco",
+      "get_airport_name": "圣何塞",
+      "get_airport_short_name": "圣何塞",
+      "get_airport_timezone": "美西"
+    },
+    "STN": {
+      "format_airport": "伦敦斯坦斯特德(STN)",
+      "get_airport_city": "伦敦",
+      "get_airport_city_en": "London",
+      "get_airport_name": "伦敦斯坦斯特德",
+      "get_airport_short_name": "斯坦斯特德",
+      "get_airport_timezone": "伦敦"
+    },
+    "SZX": {
+      "format_airport": "深圳宝安(SZX)",
+      "get_airport_city": "深圳",
+      "get_airport_city_en": "Shenzhen",
+      "get_airport_name": "深圳宝安",
+      "get_airport_short_name": "宝安",
+      "get_airport_timezone": "当地"
+    },
+    "TFU": {
+      "format_airport": "成都天府(TFU)",
+      "get_airport_city": "成都",
+      "get_airport_city_en": "Chengdu",
+      "get_airport_name": "成都天府",
+      "get_airport_short_name": "天府",
+      "get_airport_timezone": "北京"
+    },
+    "TPE": {
+      "format_airport": "台北桃园(TPE)",
+      "get_airport_city": "台北",
+      "get_airport_city_en": "Taipei",
+      "get_airport_name": "台北桃园",
+      "get_airport_short_name": "桃园",
+      "get_airport_timezone": "台北"
+    },
+    "TSA": {
+      "format_airport": "台北松山(TSA)",
+      "get_airport_city": "台北",
+      "get_airport_city_en": "Taipei",
+      "get_airport_name": "台北松山",
+      "get_airport_short_name": "松山",
+      "get_airport_timezone": "台北"
+    },
+    "YTZ": {
+      "format_airport": "多伦多岛(YTZ)",
+      "get_airport_city": "多伦多",
+      "get_airport_city_en": "Toronto",
+      "get_airport_name": "多伦多岛",
+      "get_airport_short_name": "多伦多岛",
+      "get_airport_timezone": "美东"
+    },
+    "YVR": {
+      "format_airport": "温哥华(YVR)",
+      "get_airport_city": "温哥华",
+      "get_airport_city_en": "Vancouver",
+      "get_airport_name": "温哥华",
+      "get_airport_short_name": "温哥华",
+      "get_airport_timezone": "当地"
+    },
+    "YYZ": {
+      "format_airport": "多伦多皮尔逊(YYZ)",
+      "get_airport_city": "多伦多",
+      "get_airport_city_en": "Toronto",
+      "get_airport_name": "多伦多皮尔逊",
+      "get_airport_short_name": "皮尔逊",
+      "get_airport_timezone": "当地"
+    }
+  },
+  "city_airports": {
+    "上海": [
+      "PVG",
+      "SHA"
+    ],
+    "东京": [
+      "NRT",
+      "HND"
+    ],
+    "伦敦": [
+      "LHR",
+      "LGW",
+      "STN"
+    ],
+    "北京": [
+      "PEK",
+      "PKX"
+    ],
+    "华盛顿": [
+      "IAD",
+      "DCA"
+    ],
+    "南京": [
+      "NKG"
+    ],
+    "台北": [
+      "TPE",
+      "TSA"
+    ],
+    "多伦多": [
+      "YYZ",
+      "YTZ"
+    ],
+    "大阪": [
+      "KIX",
+      "ITM"
+    ],
+    "奥兰多": [
+      "MCO",
+      "SFB"
+    ],
+    "巴黎": [
+      "CDG",
+      "ORY"
+    ],
+    "广州": [
+      "CAN"
+    ],
+    "成都": [
+      "CTU",
+      "TFU"
+    ],
+    "新加坡": [
+      "SIN"
+    ],
+    "旧金山": [
+      "SFO",
+      "OAK",
+      "SJC"
+    ],
+    "曼谷": [
+      "BKK",
+      "DMK"
+    ],
+    "杭州": [
+      "HGH"
+    ],
+    "洛杉矶": [
+      "LAX"
+    ],
+    "深圳": [
+      "SZX"
+    ],
+    "温哥华": [
+      "YVR"
+    ],
+    "纽约": [
+      "JFK",
+      "EWR",
+      "LGA"
+    ],
+    "芝加哥": [
+      "ORD",
+      "MDW"
+    ],
+    "西雅图": [
+      "SEA"
+    ],
+    "迈阿密": [
+      "MIA",
+      "FLL"
+    ],
+    "迪拜": [
+      "DXB",
+      "DWC"
+    ],
+    "阿尔伯克基": [
+      "ABQ"
+    ],
+    "首尔": [
+      "ICN",
+      "GMP"
+    ],
+    "香港": [
+      "HKG"
+    ]
+  }
+}

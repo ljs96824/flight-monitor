@@ -1,301 +1,445 @@
 """Airport display name helpers."""
 
-AIRPORT_NAMES = {
-    "PVG": "上海浦东",
-    "SHA": "上海虹桥",
-    "PEK": "北京首都",
-    "PKX": "北京大兴",
-    "CAN": "广州白云",
-    "SZX": "深圳宝安",
-    "CTU": "成都天府",
-    "HGH": "杭州萧山",
-    "NKG": "南京禄口",
-    "KIX": "关西国际机场",
-    "ITM": "大阪伊丹",
-    "NRT": "东京成田",
-    "HND": "东京羽田",
-    "ICN": "首尔仁川",
-    "TPE": "台北桃园",
-    "HKG": "香港",
-    "BKK": "曼谷素万那普",
-    "SIN": "新加坡樟宜",
-    "LAX": "洛杉矶",
-    "JFK": "纽约肯尼迪",
-    "SFO": "旧金山",
-    "ORD": "芝加哥奥黑尔",
-    "DFW": "达拉斯沃斯堡",
-    "MCO": "奥兰多",
-    "MIA": "迈阿密",
-    "ATL": "亚特兰大",
-    "SEA": "西雅图",
-    "YVR": "温哥华",
-    "YYZ": "多伦多皮尔逊",
-    "LHR": "伦敦希思罗",
-    "CDG": "巴黎戴高乐",
-    "FRA": "法兰克福",
-    "AMS": "阿姆斯特丹",
-    "DXB": "迪拜",
-    "DOH": "多哈",
-    "ABQ": "阿尔伯克基",
-    "GMP": "首尔金浦",
-    "EWR": "纽约纽瓦克",
-    "LGA": "纽约拉瓜迪亚",
-    "OAK": "奥克兰",
-    "SJC": "圣何塞",
-    "LGW": "伦敦盖特威克",
-    "STN": "伦敦斯坦斯特德",
-    "ORY": "巴黎奥利",
-    "TSA": "台北松山",
-    "DMK": "曼谷廊曼",
-    "TFU": "成都天府",
-    "SFB": "奥兰多桑福德",
-    "MDW": "芝加哥中途",
-    "IAD": "华盛顿杜勒斯",
-    "DCA": "华盛顿里根",
-    "FLL": "劳德代尔堡",
-    "YTZ": "多伦多岛",
-    "DWC": "迪拜世界中心",
+from __future__ import annotations
+
+import re
+
+
+EXPECTED_AIRPORT_CODES = frozenset(
+    """
+    ABQ AMS ATL BKK CAN CDG CTU DCA DFW DMK DOH DWC DXB EWR FLL FRA
+    GMP HGH HKG HND IAD ICN ITM JFK KIX LAX LGA LGW LHR MCO MDW MIA
+    NKG NRT OAK ORD ORY PEK PKX PVG SEA SFB SFO SHA SIN SJC STN SZX
+    TFU TPE TSA YTZ YVR YYZ
+    """.split()
+)
+
+
+AIRPORTS = {
+    "PVG": {
+        "name": "上海浦东",
+        "short": "浦东",
+        "city": "上海",
+        "city_en": "Shanghai",
+        "tz": "北京",
+    },
+    "SHA": {
+        "name": "上海虹桥",
+        "short": "虹桥",
+        "city": "上海",
+        "city_en": "Shanghai",
+        "tz": "北京",
+    },
+    "PEK": {
+        "name": "北京首都",
+        "short": "首都",
+        "city": "北京",
+        "city_en": "Beijing",
+        "tz": "北京",
+    },
+    "PKX": {
+        "name": "北京大兴",
+        "short": "大兴",
+        "city": "北京",
+        "city_en": "Beijing",
+        "tz": "北京",
+    },
+    "NRT": {
+        "name": "东京成田",
+        "short": "成田",
+        "city": "东京",
+        "city_en": "Tokyo",
+        "tz": "日本",
+    },
+    "HND": {
+        "name": "东京羽田",
+        "short": "羽田",
+        "city": "东京",
+        "city_en": "Tokyo",
+        "tz": "日本",
+    },
+    "KIX": {
+        "name": "关西国际机场",
+        "short": "关西",
+        "city": "大阪",
+        "city_en": "Osaka",
+        "tz": "日本",
+    },
+    "ITM": {
+        "name": "大阪伊丹",
+        "short": "伊丹",
+        "city": "大阪",
+        "city_en": "Osaka",
+        "tz": "日本",
+    },
+    "ICN": {
+        "name": "首尔仁川",
+        "short": "仁川",
+        "city": "首尔",
+        "city_en": "Seoul",
+        "tz": "韩国",
+    },
+    "GMP": {
+        "name": "首尔金浦",
+        "short": "金浦",
+        "city": "首尔",
+        "city_en": "Seoul",
+        "tz": "韩国",
+    },
+    "JFK": {
+        "name": "纽约肯尼迪",
+        "short": "肯尼迪",
+        "city": "纽约",
+        "city_en": "New York",
+        "tz": "美东",
+    },
+    "EWR": {
+        "name": "纽约纽瓦克",
+        "short": "纽瓦克",
+        "city": "纽约",
+        "city_en": "New York",
+        "tz": "美东",
+    },
+    "LGA": {
+        "name": "纽约拉瓜迪亚",
+        "short": "拉瓜迪亚",
+        "city": "纽约",
+        "city_en": "New York",
+        "tz": "美东",
+    },
+    "LAX": {
+        "name": "洛杉矶",
+        "short": "洛杉矶",
+        "city": "洛杉矶",
+        "city_en": "Los Angeles",
+        "tz": "美西",
+    },
+    "SFO": {
+        "name": "旧金山",
+        "short": "旧金山",
+        "city": "旧金山",
+        "city_en": "San Francisco",
+        "tz": "美西",
+    },
+    "OAK": {
+        "name": "奥克兰",
+        "short": "奥克兰",
+        "city": "旧金山",
+        "city_en": "San Francisco",
+        "tz": "美西",
+    },
+    "SJC": {
+        "name": "圣何塞",
+        "short": "圣何塞",
+        "city": "旧金山",
+        "city_en": "San Francisco",
+        "tz": "美西",
+    },
+    "LHR": {
+        "name": "伦敦希思罗",
+        "short": "希思罗",
+        "city": "伦敦",
+        "city_en": "London",
+        "tz": "伦敦",
+    },
+    "LGW": {
+        "name": "伦敦盖特威克",
+        "short": "盖特威克",
+        "city": "伦敦",
+        "city_en": "London",
+        "tz": "伦敦",
+    },
+    "STN": {
+        "name": "伦敦斯坦斯特德",
+        "short": "斯坦斯特德",
+        "city": "伦敦",
+        "city_en": "London",
+        "tz": "伦敦",
+    },
+    "CDG": {
+        "name": "巴黎戴高乐",
+        "short": "戴高乐",
+        "city": "巴黎",
+        "city_en": "Paris",
+        "tz": "巴黎",
+    },
+    "ORY": {
+        "name": "巴黎奥利",
+        "short": "奥利",
+        "city": "巴黎",
+        "city_en": "Paris",
+        "tz": "巴黎",
+    },
+    "HKG": {
+        "name": "香港",
+        "short": "香港",
+        "city": "香港",
+        "city_en": "Hong Kong",
+        "tz": "香港",
+    },
+    "TPE": {
+        "name": "台北桃园",
+        "short": "桃园",
+        "city": "台北",
+        "city_en": "Taipei",
+        "tz": "台北",
+    },
+    "TSA": {
+        "name": "台北松山",
+        "short": "松山",
+        "city": "台北",
+        "city_en": "Taipei",
+        "tz": "台北",
+    },
+    "SIN": {
+        "name": "新加坡樟宜",
+        "short": "樟宜",
+        "city": "新加坡",
+        "city_en": "Singapore",
+        "tz": "新加坡",
+    },
+    "BKK": {
+        "name": "曼谷素万那普",
+        "short": "素万那普",
+        "city": "曼谷",
+        "city_en": "Bangkok",
+        "tz": "曼谷",
+    },
+    "DMK": {
+        "name": "曼谷廊曼",
+        "short": "廊曼",
+        "city": "曼谷",
+        "city_en": "Bangkok",
+        "tz": "曼谷",
+    },
+    "CAN": {
+        "name": "广州白云",
+        "short": "白云",
+        "city": "广州",
+        "city_en": "Guangzhou",
+        "tz": "北京",
+    },
+    "SZX": {
+        "name": "深圳宝安",
+        "short": "宝安",
+        "city": "深圳",
+        "city_en": "Shenzhen",
+        "tz": "北京",
+    },
+    "CTU": {
+        "name": "成都双流",
+        "short": "双流",
+        "city": "成都",
+        "city_en": "Chengdu",
+        "tz": "北京",
+    },
+    "TFU": {
+        "name": "成都天府",
+        "short": "天府",
+        "city": "成都",
+        "city_en": "Chengdu",
+        "tz": "北京",
+    },
+    "HGH": {
+        "name": "杭州萧山",
+        "short": "萧山",
+        "city": "杭州",
+        "city_en": "Hangzhou",
+        "tz": "北京",
+    },
+    "NKG": {
+        "name": "南京禄口",
+        "short": "禄口",
+        "city": "南京",
+        "city_en": "Nanjing",
+        "tz": "北京",
+    },
+    "MCO": {
+        "name": "奥兰多",
+        "short": "奥兰多",
+        "city": "奥兰多",
+        "city_en": "Orlando",
+        "tz": "美东",
+    },
+    "SFB": {
+        "name": "奥兰多桑福德",
+        "short": "桑福德",
+        "city": "奥兰多",
+        "city_en": "Orlando",
+        "tz": "美东",
+    },
+    "ORD": {
+        "name": "芝加哥奥黑尔",
+        "short": "奥黑尔",
+        "city": "芝加哥",
+        "city_en": "Chicago",
+        "tz": "美中",
+    },
+    "MDW": {
+        "name": "芝加哥中途",
+        "short": "中途",
+        "city": "芝加哥",
+        "city_en": "Chicago",
+        "tz": "美中",
+    },
+    "IAD": {
+        "name": "华盛顿杜勒斯",
+        "short": "杜勒斯",
+        "city": "华盛顿",
+        "city_en": "Washington",
+        "tz": "美东",
+    },
+    "DCA": {
+        "name": "华盛顿里根",
+        "short": "里根",
+        "city": "华盛顿",
+        "city_en": "Washington",
+        "tz": "美东",
+    },
+    "MIA": {
+        "name": "迈阿密",
+        "short": "迈阿密",
+        "city": "迈阿密",
+        "city_en": "Miami",
+        "tz": "美东",
+    },
+    "FLL": {
+        "name": "劳德代尔堡",
+        "short": "劳德代尔",
+        "city": "迈阿密",
+        "city_en": "Miami",
+        "tz": "美东",
+    },
+    "SEA": {
+        "name": "西雅图",
+        "short": "西雅图",
+        "city": "西雅图",
+        "city_en": "Seattle",
+        "tz": "美西",
+    },
+    "YYZ": {
+        "name": "多伦多皮尔逊",
+        "short": "皮尔逊",
+        "city": "多伦多",
+        "city_en": "Toronto",
+        "tz": "美东",
+    },
+    "YTZ": {
+        "name": "多伦多岛",
+        "short": "多伦多岛",
+        "city": "多伦多",
+        "city_en": "Toronto",
+        "tz": "美东",
+    },
+    "YVR": {
+        "name": "温哥华",
+        "short": "温哥华",
+        "city": "温哥华",
+        "city_en": "Vancouver",
+        "tz": "美西",
+    },
+    "DXB": {
+        "name": "迪拜",
+        "short": "迪拜",
+        "city": "迪拜",
+        "city_en": "Dubai",
+        "tz": "迪拜",
+    },
+    "DWC": {
+        "name": "迪拜世界中心",
+        "short": "迪拜世界中心",
+        "city": "迪拜",
+        "city_en": "Dubai",
+        "tz": "迪拜",
+    },
+    "ABQ": {
+        "name": "阿尔伯克基",
+        "short": "阿尔伯克基",
+        "city": "阿尔伯克基",
+        "city_en": "Albuquerque",
+        "tz": "美山",
+    },
+    "DFW": {
+        "name": "达拉斯沃斯堡",
+        "short": "达拉斯",
+        "city": "达拉斯",
+        "city_en": "Dallas",
+        "tz": "美中",
+    },
+    "ATL": {
+        "name": "亚特兰大",
+        "short": "亚特兰大",
+        "city": "亚特兰大",
+        "city_en": "Atlanta",
+        "tz": "美东",
+    },
+    "FRA": {
+        "name": "法兰克福",
+        "short": "法兰克福",
+        "city": "法兰克福",
+        "city_en": "Frankfurt",
+        "tz": "法兰克福",
+    },
+    "AMS": {
+        "name": "阿姆斯特丹",
+        "short": "阿姆斯特丹",
+        "city": "阿姆斯特丹",
+        "city_en": "Amsterdam",
+        "tz": "阿姆斯特丹",
+    },
+    "DOH": {
+        "name": "多哈",
+        "short": "多哈",
+        "city": "多哈",
+        "city_en": "Doha",
+        "tz": "多哈",
+    },
 }
 
 
-AIRPORT_TIMEZONE = {
-    "PVG": "北京",
-    "SHA": "北京",
-    "PEK": "北京",
-    "CAN": "北京",
-    "NRT": "日本",
-    "HND": "日本",
-    "KIX": "日本",
-    "ITM": "日本",
-    "ICN": "韩国",
-    "TPE": "台北",
-    "LAX": "美西",
-    "SFO": "美西",
-    "SEA": "美西",
-    "JFK": "美东",
-    "MCO": "美东",
-    "MIA": "美东",
-    "ATL": "美东",
-    "DFW": "美中",
-    "ORD": "美中",
-    "LHR": "伦敦",
-    "CDG": "巴黎",
-    "FRA": "法兰克福",
-    "DXB": "迪拜",
-    "DOH": "多哈",
-    "SIN": "新加坡",
-    "BKK": "曼谷",
-    "HKG": "香港",
-    "GMP": "韩国",
-    "EWR": "美东",
-    "LGA": "美东",
-    "OAK": "美西",
-    "SJC": "美西",
-    "LGW": "伦敦",
-    "STN": "伦敦",
-    "ORY": "巴黎",
-    "TSA": "台北",
-    "DMK": "曼谷",
-    "TFU": "北京",
-    "SFB": "美东",
-    "MDW": "美中",
-    "IAD": "美东",
-    "DCA": "美东",
-    "FLL": "美东",
-    "YTZ": "美东",
-    "DWC": "迪拜",
-}
+AIRPORT_NAMES = {code: item["name"] for code, item in AIRPORTS.items()}
+AIRPORT_SHORT_NAMES = {code: item["short"] for code, item in AIRPORTS.items()}
+AIRPORT_CITY = {code: item["city"] for code, item in AIRPORTS.items()}
+AIRPORT_CITY_EN = {code: item["city_en"] for code, item in AIRPORTS.items()}
+AIRPORT_TIMEZONE = {code: item["tz"] for code, item in AIRPORTS.items()}
 
-
-CITY_AIRPORTS = {
-    "上海": ["PVG", "SHA"],
-    "北京": ["PEK", "PKX"],
-    "东京": ["NRT", "HND"],
-    "大阪": ["KIX", "ITM"],
-    "首尔": ["ICN", "GMP"],
-    "纽约": ["JFK", "EWR", "LGA"],
-    "洛杉矶": ["LAX"],
-    "旧金山": ["SFO", "OAK", "SJC"],
-    "伦敦": ["LHR", "LGW", "STN"],
-    "巴黎": ["CDG", "ORY"],
-    "香港": ["HKG"],
-    "台北": ["TPE", "TSA"],
-    "新加坡": ["SIN"],
-    "曼谷": ["BKK", "DMK"],
-    "广州": ["CAN"],
-    "深圳": ["SZX"],
-    "成都": ["CTU", "TFU"],
-    "杭州": ["HGH"],
-    "南京": ["NKG"],
-    "奥兰多": ["MCO", "SFB"],
-    "芝加哥": ["ORD", "MDW"],
-    "华盛顿": ["IAD", "DCA"],
-    "迈阿密": ["MIA", "FLL"],
-    "西雅图": ["SEA"],
-    "多伦多": ["YYZ", "YTZ"],
-    "温哥华": ["YVR"],
-    "迪拜": ["DXB", "DWC"],
-    "阿尔伯克基": ["ABQ"],
-}
-
+CITY_AIRPORTS = {}
+for code, item in AIRPORTS.items():
+    CITY_AIRPORTS.setdefault(item["city"], []).append(code)
 
 AIRPORT_TO_CITY = {}
-for city, airports in CITY_AIRPORTS.items():
-    for code in airports:
+for city, airport_codes in CITY_AIRPORTS.items():
+    for code in airport_codes:
         AIRPORT_TO_CITY[code] = city
 
 
-AIRPORT_CITY = {
-    "PVG": "上海",
-    "SHA": "上海",
-    "PEK": "北京",
-    "PKX": "北京",
-    "CAN": "广州",
-    "SZX": "深圳",
-    "CTU": "成都",
-    "HGH": "杭州",
-    "NKG": "南京",
-    "KIX": "大阪",
-    "ITM": "大阪",
-    "NRT": "东京",
-    "HND": "东京",
-    "ICN": "首尔",
-    "TPE": "台北",
-    "HKG": "香港",
-    "BKK": "曼谷",
-    "SIN": "新加坡",
-    "LAX": "洛杉矶",
-    "JFK": "纽约",
-    "SFO": "旧金山",
-    "ORD": "芝加哥",
-    "DFW": "达拉斯",
-    "MCO": "奥兰多",
-    "MIA": "迈阿密",
-    "ATL": "亚特兰大",
-    "SEA": "西雅图",
-    "YVR": "温哥华",
-    "YYZ": "多伦多",
-    "LHR": "伦敦",
-    "CDG": "巴黎",
-    "FRA": "法兰克福",
-    "AMS": "阿姆斯特丹",
-    "DXB": "迪拜",
-    "DOH": "多哈",
-    "ABQ": "阿尔伯克基",
-}
+def validate_airports():
+    """Validate airport table completeness and derived mappings."""
+    assert set(AIRPORTS) == EXPECTED_AIRPORT_CODES, (
+        f"AIRPORTS code set changed: expected {len(EXPECTED_AIRPORT_CODES)}, "
+        f"got {len(AIRPORTS)}"
+    )
 
+    required_fields = {"name", "short", "city", "city_en", "tz"}
+    for code, item in AIRPORTS.items():
+        assert re.fullmatch(r"[A-Z]{2,4}", code), f"Invalid IATA code: {code}"
+        missing = required_fields - set(item)
+        assert not missing, f"{code} missing fields: {sorted(missing)}"
+        for field in required_fields:
+            assert str(item.get(field) or "").strip(), f"{code}.{field} is empty"
 
-AIRPORT_CITY_EN = {
-    "PVG": "Shanghai",
-    "SHA": "Shanghai",
-    "PEK": "Beijing",
-    "PKX": "Beijing",
-    "CAN": "Guangzhou",
-    "SZX": "Shenzhen",
-    "CTU": "Chengdu",
-    "HGH": "Hangzhou",
-    "NKG": "Nanjing",
-    "KIX": "Osaka",
-    "ITM": "Osaka",
-    "NRT": "Tokyo",
-    "HND": "Tokyo",
-    "ICN": "Seoul",
-    "TPE": "Taipei",
-    "HKG": "Hong Kong",
-    "BKK": "Bangkok",
-    "SIN": "Singapore",
-    "LAX": "Los Angeles",
-    "JFK": "New York",
-    "SFO": "San Francisco",
-    "ORD": "Chicago",
-    "DFW": "Dallas",
-    "MCO": "Orlando",
-    "MIA": "Miami",
-    "ATL": "Atlanta",
-    "SEA": "Seattle",
-    "YVR": "Vancouver",
-    "YYZ": "Toronto",
-    "LHR": "London",
-    "CDG": "Paris",
-    "FRA": "Frankfurt",
-    "AMS": "Amsterdam",
-    "DXB": "Dubai",
-    "DOH": "Doha",
-    "ABQ": "Albuquerque",
-    "GMP": "Seoul",
-    "EWR": "New York",
-    "LGA": "New York",
-    "OAK": "San Francisco",
-    "SJC": "San Francisco",
-    "LGW": "London",
-    "STN": "London",
-    "ORY": "Paris",
-    "TSA": "Taipei",
-    "DMK": "Bangkok",
-    "TFU": "Chengdu",
-    "SFB": "Orlando",
-    "MDW": "Chicago",
-    "IAD": "Washington",
-    "DCA": "Washington",
-    "FLL": "Miami",
-    "YTZ": "Toronto",
-    "DWC": "Dubai",
-}
+    for city, airport_codes in CITY_AIRPORTS.items():
+        assert airport_codes, f"{city} has empty airport list"
+        for code in airport_codes:
+            assert code in AIRPORTS, f"{city} references unknown airport {code}"
 
-AIRPORT_SHORT_NAMES = {
-    "PVG": "浦东",
-    "SHA": "虹桥",
-    "PEK": "首都",
-    "PKX": "大兴",
-    "CAN": "白云",
-    "SZX": "宝安",
-    "CTU": "天府",
-    "TFU": "天府",
-    "HGH": "萧山",
-    "NKG": "禄口",
-    "KIX": "关西",
-    "ITM": "伊丹",
-    "NRT": "成田",
-    "HND": "羽田",
-    "ICN": "仁川",
-    "GMP": "金浦",
-    "TPE": "桃园",
-    "TSA": "松山",
-    "HKG": "香港",
-    "BKK": "素万那普",
-    "DMK": "廊曼",
-    "SIN": "樟宜",
-    "MCO": "奥兰多",
-    "SFB": "桑福德",
-    "LAX": "洛杉矶",
-    "JFK": "肯尼迪",
-    "EWR": "纽瓦克",
-    "LGA": "拉瓜迪亚",
-    "SFO": "旧金山",
-    "OAK": "奥克兰",
-    "SJC": "圣何塞",
-    "ORD": "奥黑尔",
-    "MDW": "中途",
-    "DFW": "达拉斯",
-    "SEA": "西雅图",
-    "MIA": "迈阿密",
-    "FLL": "劳德代尔",
-    "ATL": "亚特兰大",
-    "YVR": "温哥华",
-    "YYZ": "皮尔逊",
-    "YTZ": "多伦多岛",
-    "LHR": "希思罗",
-    "LGW": "盖特威克",
-    "STN": "斯坦斯特德",
-    "CDG": "戴高乐",
-    "ORY": "奥利",
-    "FRA": "法兰克福",
-    "AMS": "阿姆斯特丹",
-    "DXB": "迪拜",
-    "DWC": "迪拜世界中心",
-    "DOH": "多哈",
-    "ABQ": "阿尔伯克基",
-}
+    for code in AIRPORTS:
+        assert code in AIRPORT_TO_CITY, f"{code} missing AIRPORT_TO_CITY mapping"
+        assert code in CITY_AIRPORTS[AIRPORT_TO_CITY[code]], (
+            f"{code} AIRPORT_TO_CITY mismatch"
+        )
+
+    return True
 
 
 def get_airport_name(iata_code):
@@ -342,7 +486,7 @@ def resolve_location(value):
         return {"value": text, "type": "city", "airports": CITY_AIRPORTS[text]}
     if 2 <= len(upper) <= 4 and upper.isascii() and upper.isalpha():
         return {"value": upper, "type": "airport", "airports": [upper]}
-    return {"value": upper, "type": "airport", "airports": [upper]}
+    return {"value": text, "type": "unknown", "airports": []}
 
 
 def get_airport_timezone(iata_code):
@@ -358,3 +502,8 @@ def format_airport(iata_code):
         return ""
     name = AIRPORT_NAMES.get(code)
     return f"{name}({code})" if name else code
+
+
+if __name__ == "__main__":
+    validate_airports()
+    print("airports validation passed")

@@ -149,6 +149,14 @@ def _normalize_subscription(item: dict) -> dict:
     round_trip = _as_bool(item.get("round_trip", hard_constraints.get("round_trip", False)))
     origin_info = resolve_location(item.get("origin", ""))
     destination_info = resolve_location(item.get("destination", ""))
+    if origin_info.get("type") == "unknown":
+        raise ValueError(
+            f"无法识别地点 {origin_info.get('value')},请输入机场三字码或已支持的城市"
+        )
+    if destination_info.get("type") == "unknown":
+        raise ValueError(
+            f"无法识别地点 {destination_info.get('value')},请输入机场三字码或已支持的城市"
+        )
     origin_airports = item.get("origin_airports") or origin_info["airports"]
     destination_airports = (
         item.get("destination_airports") or destination_info["airports"]
