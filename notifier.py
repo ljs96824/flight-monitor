@@ -2646,6 +2646,80 @@ ACTION_ZONE_STYLE = (
     "border-left:4px solid #16a34a;padding:8px;margin:8px 0;background:#f0fdf4;"
 )
 
+AIRLINE_NAMES = {
+    "9C": "春秋航空",
+    "MU": "东方航空",
+    "CA": "中国国际航空",
+    "CZ": "南方航空",
+    "HO": "吉祥航空",
+    "MM": "乐桃航空",
+    "NH": "全日空",
+    "JL": "日本航空",
+    "OZ": "韩亚航空",
+    "KE": "大韩航空",
+    "CI": "中华航空",
+    "BR": "长荣航空",
+    "PR": "菲律宾航空",
+    "MF": "厦门航空",
+    "SC": "山东航空",
+    "FM": "上海航空",
+    "ZH": "深圳航空",
+    "3U": "四川航空",
+    "HU": "海南航空",
+    "AA": "美国航空",
+    "UA": "美联航",
+    "DL": "达美航空",
+    "AC": "加拿大航空",
+}
+
+AIRPORT_SHORT_DISPLAY = {
+    "PVG": "浦东",
+    "SHA": "虹桥",
+    "KIX": "关西",
+    "ITM": "伊丹",
+    "NRT": "成田",
+    "HND": "羽田",
+    "ICN": "仁川",
+    "GMP": "金浦",
+    "PEK": "首都",
+    "PKX": "大兴",
+    "CAN": "白云",
+    "SZX": "宝安",
+    "HKG": "香港",
+    "TPE": "桃园",
+    "SIN": "樟宜",
+    "BKK": "素万那普",
+    "LAX": "洛杉矶",
+    "SFO": "旧金山",
+    "JFK": "肯尼迪",
+    "DFW": "达拉斯",
+    "MCO": "奥兰多",
+}
+
+AIRPORT_LOCAL_CITY = {
+    "PVG": "上海",
+    "SHA": "上海",
+    "KIX": "大阪",
+    "ITM": "大阪",
+    "NRT": "东京",
+    "HND": "东京",
+    "ICN": "首尔",
+    "GMP": "首尔",
+    "PEK": "北京",
+    "PKX": "北京",
+    "CAN": "广州",
+    "SZX": "深圳",
+    "HKG": "香港",
+    "TPE": "台北",
+    "SIN": "新加坡",
+    "BKK": "曼谷",
+    "LAX": "洛杉矶",
+    "SFO": "旧金山",
+    "JFK": "纽约",
+    "DFW": "达拉斯",
+    "MCO": "奥兰多",
+}
+
 
 def _compact_link_text(link_text: str, limit: int = 4) -> str:
     parts = [part for part in str(link_text or "").split(" | ") if part.strip()]
@@ -4057,16 +4131,10 @@ def _payload_route_airports(route_info: dict) -> str:
 
 def _payload_plan_leg(flight: dict | None, date_str: str | None = None, prefix: str = "") -> str:
     flight = flight or {}
-    label = f"{prefix}: " if prefix else ""
+    label = prefix or "航班"
     if not flight.get("segments") and not flight.get("flight_combo"):
-        return f"{label}航班信息待确认"
-    aircraft = _round_trip_aircraft_text(flight)
-    aircraft_part = "" if aircraft in {"机型待确认", "未知", "请查询航司官网"} else f" | {aircraft}"
-    return (
-        f"{label}{_compact_flight_numbers(flight)} {_round_trip_airline_text(flight)} | "
-        f"{_flight_combo_time_text(flight, date_str)} | {_round_trip_stops_text(flight)} | "
-        f"{_flight_price_text(flight)}{aircraft_part}"
-    )
+        return f"{label}:航班信息待确认"
+    return f"{_flight_local_time_summary(flight, label, compact=True)} | {_flight_price_text(flight)}"
 
 
 def _round_trip_airline_text(flight: dict | None) -> str:
@@ -4095,6 +4163,10 @@ def _round_trip_stops_text(flight: dict | None) -> str:
 def format_flight_detail(flight: dict | None, date_str: str | None = None, prefix: str = "") -> str:
     """Format one flight consistently for recommendation and alternative cards."""
     return _payload_plan_leg(flight, date_str, prefix)
+
+
+def _escape_multiline(value) -> str:
+    return html.escape(str(value or "")).replace("\n", "<br>")
 
 
 def _payload_booking_links_for_flight(flight: dict | None, route_info: dict, date_str: str | None, limit: int = 6) -> str:
@@ -4185,6 +4257,22 @@ def _pushplus_plan_booking_links(plan: dict | None, max_links: int = 2) -> list[
     return _pushplus_link_candidates(str(links), max_links)
 
 
+def _pushplus_link_line(link_text: str, max_links: int = 6) -> str:
+    links = _pushplus_link_candidates(link_text, max_links)
+    return " | ".join(
+        f'<a href="{html.escape(url, quote=True)}" target="_blank">{html.escape(name)}</a>'
+        for name, url in links
+    )
+
+
+def _pushplus_plan_flight_label(plan: dict, direction: str) -> str:
+    line = str(plan.get(f"{direction}_push_line") or plan.get("main_push_line") or "")
+    match = re.search(r"^(去程|返程):([^｜\n]+)", line)
+    if match:
+        return f"{match.group(1)} {match.group(2).strip()}"
+    return "去程" if direction in {"outbound", "main"} else "返程"
+
+
 def _pushplus_channel_section(payload: dict, plan: dict | None) -> list[str]:
     detail_url = str(payload.get("detail_url") or "")
     detail_link = (
@@ -4192,26 +4280,31 @@ def _pushplus_channel_section(payload: dict, plan: dict | None) -> list[str]:
         if detail_url
         else "详情页暂未生成"
     )
-    age = _to_float(payload.get("freshness_minutes"))
-    baggage_line = str((plan or {}).get("baggage_line") or "")
-    fare_known = "支付页需确认" not in baggage_line
-    availability_ok = (
-        (age is None or age < 120)
-        and (plan or {}).get("risk") != "风险高"
-        and fare_known
-    )
-    links = _pushplus_plan_booking_links(plan, 2) if availability_ok else []
-    if not links:
+    links = plan.get("links") if isinstance(plan, dict) else {}
+    lines = ["购买渠道:点击验证最终价格"]
+
+    if isinstance(links, dict) and plan.get("is_roundtrip"):
+        for direction in ("outbound", "return"):
+            line = _pushplus_link_line(links.get(direction, ""), 6)
+            if line:
+                lines.append(f"{_pushplus_plan_flight_label(plan, direction)}:")
+                lines.append(line)
+    elif isinstance(links, dict):
+        line = _pushplus_link_line(links.get("main", ""), 6)
+        if line:
+            lines.append(line)
+    else:
+        line = _pushplus_link_line(str(links or ""), 6)
+        if line:
+            lines.append(line)
+
+    if len(lines) == 1:
         return [
             "当前价格接近低价区间,但暂未发现已验证购买渠道。",
             f"查看详情继续监控:{detail_link}",
         ]
 
-    lines = ["购买渠道:点击验证最终价格"]
-    for index, (name, url) in enumerate(links, start=1):
-        label = f"{index}. {name}" if len(links) > 1 else name
-        lines.append(f'{label}: <a href="{html.escape(url, quote=True)}" target="_blank">{html.escape(url)}</a>')
-    lines.append("更多渠道见详情页")
+    lines.append("价格以各平台支付页为准")
     lines.append(f"完整分析:{detail_link}")
     return lines
 
@@ -4665,6 +4758,55 @@ def _pushplus_aircraft_text(flight: dict) -> str:
     return aircraft
 
 
+def _airline_code_from_flight_no(value: str) -> str:
+    match = re.match(r"\s*([A-Z0-9]{2})", str(value or "").replace(" ", "").upper())
+    return match.group(1) if match else ""
+
+
+def _flight_airline_name(flight: dict | None) -> str:
+    flight = flight or {}
+    segments = flight.get("segments") or []
+    codes = []
+    names = []
+    for segment in segments:
+        code = _airline_code_from_flight_no(segment.get("flight_no") or "")
+        if code and code not in codes:
+            codes.append(code)
+        name = str(segment.get("airline") or "").strip()
+        if name and name not in names:
+            names.append(name)
+    if not codes:
+        code = _airline_code_from_flight_no(flight.get("flight_combo") or "")
+        if code:
+            codes.append(code)
+    mapped = [AIRLINE_NAMES.get(code, code) for code in codes if code]
+    display = mapped or names or [str(flight.get("airline_summary") or "").strip()]
+    display = [item for item in display if item]
+    return "+".join(dict.fromkeys(display)) if display else "航司待确认"
+
+
+def _airport_short_label(code: str) -> str:
+    code = str(code or "").strip().upper()
+    if not code:
+        return "机场待确认"
+    name = AIRPORT_SHORT_DISPLAY.get(code)
+    if not name:
+        raw = get_airport_name(code)
+        name = raw if raw and raw != code else code
+    return f"{name}({code})"
+
+
+def _airport_local_city(code: str) -> str:
+    code = str(code or "").strip().upper()
+    return AIRPORT_LOCAL_CITY.get(code) or get_airport_city(code) or code or "当地"
+
+
+def _local_time_label(airport_code: str, time_value) -> str:
+    time_text = _time_only(time_value) or "待确认"
+    city = _airport_local_city(airport_code)
+    return f"{time_text}({city}当地)"
+
+
 def _pushplus_transfer_point(flight: dict) -> str:
     layovers = flight.get("layovers") or []
     if layovers:
@@ -4677,7 +4819,7 @@ def _pushplus_transfer_point(flight: dict) -> str:
     return ""
 
 
-def _pushplus_leg_summary(flight: dict | None, label: str) -> str:
+def _flight_local_time_summary(flight: dict | None, label: str, compact: bool = False) -> str:
     flight = flight or {}
     segments = flight.get("segments") or []
     try:
@@ -4686,29 +4828,37 @@ def _pushplus_leg_summary(flight: dict | None, label: str) -> str:
         stops = max(len(segments) - 1, 0)
     first = segments[0] if segments else {}
     last = segments[-1] if segments else {}
-    dep_time = _time_only(first.get("dep_time")) or "待确认"
-    arr_time = _time_only(last.get("arr_time")) or "待确认"
+    flight_numbers = _compact_flight_numbers(flight)
+    airline_name = _flight_airline_name(flight)
+    aircraft = _pushplus_aircraft_text(flight)
+    dep_airport = str(first.get("dep_airport") or "").strip().upper()
+    arr_airport = str(last.get("arr_airport") or "").strip().upper()
+    dep_label = f"{_airport_short_label(dep_airport)} {_local_time_label(dep_airport, first.get('dep_time'))}"
+    arr_label = f"{_airport_short_label(arr_airport)} {_local_time_label(arr_airport, last.get('arr_time'))}"
 
     if stops <= 0:
-        parts = [
-            _compact_flight_numbers(flight),
-            f"{dep_time}-{arr_time}",
-            "直飞",
+        lines = [
+            f"{label}:{flight_numbers}｜{airline_name}",
+            f"{dep_label} → {arr_label}",
+            "直飞" + (f"｜{aircraft}" if aircraft else ""),
         ]
-        aircraft = _pushplus_aircraft_text(flight)
-        if aircraft:
-            parts.append(aircraft)
-        return f"{label}:" + "｜".join(part for part in parts if part)
+    else:
+        transfer = _pushplus_transfer_point(flight)
+        transfer_label = _airport_short_label(transfer) if transfer else "中转地待确认"
+        duration = _pushplus_duration_text(flight)
+        lines = [
+            f"{label}:{airline_name}",
+            f"{dep_label} → 经{transfer_label}中转 → {arr_label}",
+            f"中转{stops}次 {transfer or ''}".strip()
+            + (f"｜总时长{duration}" if duration else ""),
+        ]
+    if compact:
+        return " | ".join(lines)
+    return "\n".join(lines)
 
-    dep_airport = first.get("dep_airport") or ""
-    arr_airport = last.get("arr_airport") or ""
-    transfer = _pushplus_transfer_point(flight)
-    transfer_text = f"中转{stops}次 {transfer}".strip()
-    duration = _pushplus_duration_text(flight)
-    return (
-        f"{label}:{dep_airport} {dep_time} → {arr_airport} {arr_time}｜"
-        f"{transfer_text}｜总时长{duration or '待确认'}"
-    )
+
+def _pushplus_leg_summary(flight: dict | None, label: str) -> str:
+    return _flight_local_time_summary(flight, label)
 
 
 def _pushplus_plan_lines(payload: dict) -> list[str]:
@@ -4724,16 +4874,17 @@ def _pushplus_plan_lines(payload: dict) -> list[str]:
     for index, plan in enumerate(primary[:2]):
         if plan.get("is_roundtrip"):
             current = [
-                html.escape(str(plan.get("outbound_push_line") or "")),
-                html.escape(str(plan.get("return_push_line") or "")),
+                str(plan.get("outbound_push_line") or ""),
+                str(plan.get("return_push_line") or ""),
             ]
         else:
-            current = [html.escape(str(plan.get("main_push_line") or ""))]
+            current = [str(plan.get("main_push_line") or "")]
         current = [line for line in current if line.strip()]
         if current:
             if detail_lines:
                 detail_lines.append("")
-            detail_lines.extend(current)
+            for item in current:
+                detail_lines.extend(html.escape(line) for line in item.splitlines() if line.strip())
     if not detail_lines:
         return []
     return ["", "推荐方案:"] + detail_lines
@@ -4788,8 +4939,8 @@ def _render_payload_plan_card(plan: dict, compact: bool = False) -> str:
     lines = [f'<div style="{CARD_STYLE}">', f'<div style="font-weight:bold;color:#2563eb;">{title}</div>']
     if plan.get("is_roundtrip"):
         lines.append(f"<div>往返总价：{_price_text(plan.get('price'))} | 预估实付：{_price_text(plan.get('estimated_price'))}</div>")
-        lines.append(f"<div>{html.escape(str(plan.get('outbound_line') or ''))}</div>")
-        lines.append(f"<div>{html.escape(str(plan.get('return_line') or ''))}</div>")
+        lines.append(f"<div>{_escape_multiline(plan.get('outbound_line') or '')}</div>")
+        lines.append(f"<div>{_escape_multiline(plan.get('return_line') or '')}</div>")
         links = plan.get("links") or {}
         if links.get("outbound"):
             lines.append(f"<div>去程购买：{links['outbound']}</div>")
@@ -4797,7 +4948,7 @@ def _render_payload_plan_card(plan: dict, compact: bool = False) -> str:
             lines.append(f"<div>返程购买：{links['return']}</div>")
     else:
         lines.append(f"<div>价格：{_price_text(plan.get('price'))} | 预估实付：{_price_text(plan.get('estimated_price'))}</div>")
-        lines.append(f"<div>{html.escape(str(plan.get('summary') or ''))}</div>")
+        lines.append(f"<div>{_escape_multiline(plan.get('summary') or '')}</div>")
         links = (plan.get("links") or {}).get("main")
         if links:
             lines.append(f"<div>购买：{links}</div>")
