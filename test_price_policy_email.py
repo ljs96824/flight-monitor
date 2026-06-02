@@ -72,6 +72,113 @@ def test_email_top_summary_separates_display_transaction_and_verify_prices():
     assert "当前价：</b>" not in html
 
 
+def test_email_roundtrip_excluded_single_leg_is_not_compared_to_roundtrip_total():
+    payload = {
+        "push_type": "值得验证",
+        "route": "上海 → 大阪",
+        "is_roundtrip": True,
+        "recommendation": "值得验证，不建议直接下单",
+        "display_price": 6522,
+        "transaction_price": 7182,
+        "verify_price": 6848,
+        "ideal_price": 7994,
+        "max_price": 9000,
+        "buy_condition": "支付页≤¥6,848且含托运行李",
+        "confidence": "中高",
+        "source_count": 2,
+        "recommended_plans": [
+            {
+                "label": "方案A",
+                "variant": "推荐",
+                "is_roundtrip": True,
+                "price": 6522,
+                "estimated_price": 7182,
+                "outbound_line": "去程:9C6575｜春秋航空\n浦东(PVG) 08:05(上海当地) → 关西(KIX) 11:20(大阪当地)\n直飞｜A320",
+                "return_line": "返程:9C6582｜春秋航空\n关西(KIX) 19:30(大阪当地) → 浦东(PVG) 21:00(上海当地)\n直飞｜A320",
+                "baggage_line": "行李:支付页需确认",
+                "purchase_mode": "两个单程拼接",
+                "links": {},
+            }
+        ],
+        "trigger_reason": [],
+        "price_history": [],
+        "excluded_plans": [
+            {
+                "scope": "outbound",
+                "price": 2887,
+                "flight_combo": "KE888+KE721",
+                "reason": "用户设置必须直飞",
+                "flight": {
+                    "price": 2887,
+                    "flight_combo": "KE888+KE721",
+                    "airline_summary": "大韩航空",
+                    "stops": 1,
+                    "total_duration_min": 460,
+                    "segments": [
+                        {"flight_no": "KE888", "airline": "大韩航空", "dep_airport": "PVG", "dep_time": "2026-10-01 08:00", "arr_airport": "ICN", "arr_time": "2026-10-01 11:00", "aircraft": "A330"},
+                        {"flight_no": "KE721", "airline": "大韩航空", "dep_airport": "ICN", "dep_time": "2026-10-01 13:00", "arr_airport": "KIX", "arr_time": "2026-10-01 15:40", "aircraft": "A321"},
+                    ],
+                    "layovers": [{"airport": "ICN", "city": "首尔仁川", "wait_minutes": 120}],
+                },
+            }
+        ],
+        "action_range": {"ranges": []},
+        "checklist": [],
+        "detail_url": "https://example.com/detail",
+        "form_url": "https://example.com/",
+        "feedback_url": "https://example.com/feedback",
+    }
+
+    _, html = render_email(payload)
+
+    assert "已排除的更低价去程方案" in html
+    assert "此为去程单段价，非往返总价" in html
+    assert "比推荐便宜¥3,635" not in html
+    assert "KE888+KE721" in html
+
+
+def test_email_detail_charts_dedupe_channels_and_skip_empty_plan_rows():
+    payload = {
+        "push_type": "值得验证",
+        "route": "上海 → 大阪",
+        "recommendation": "值得验证，不建议直接下单",
+        "display_price": 6522,
+        "transaction_price": 7182,
+        "verify_price": 6848,
+        "ideal_price": 7994,
+        "max_price": 9000,
+        "buy_condition": "支付页≤¥6,848且含托运行李",
+        "confidence": "中高",
+        "recommended_plans": [],
+        "trigger_reason": [],
+        "price_history": [],
+        "action_range": {"ranges": []},
+        "checklist": ["支付页最终价是否≤¥6,848"],
+        "channel_price_rows": [
+            {"label": "Google Flights(via SerpAPI)", "value": 3402},
+            {"label": "Google Flights(via HasData)", "value": 3402},
+            {"label": "携程", "value": 3450},
+        ],
+        "plan_price_rows": [
+            {"label": "方案A", "value": 6522, "note": "推荐"},
+            {"label": "方案B", "value": None, "note": "暂无符合条件的备选"},
+        ],
+        "detail_url": "https://example.com/detail",
+        "form_url": "https://example.com/",
+        "feedback_url": "https://example.com/feedback",
+    }
+
+    _, html = render_email(payload)
+
+    assert html.count("Google Flights") == 1
+    assert "SerpAPI、HasData 2个数据源一致" in html
+    assert "方案A: ¥6,522 推荐" in html
+    assert "方案B" not in html
+    assert "¥6,522 B" not in html
+
+
 if __name__ == "__main__":
     test_push_type_uses_transaction_price_when_display_price_only_looks_good()
     test_email_top_summary_separates_display_transaction_and_verify_prices()
+    test_email_roundtrip_excluded_single_leg_is_not_compared_to_roundtrip_total()
+    test_email_detail_charts_dedupe_channels_and_skip_empty_plan_rows()

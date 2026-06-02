@@ -3466,6 +3466,7 @@ def _excluded_flight_summary(flights: list[dict]) -> list[dict]:
                 "airline_summary": flight.get("airline_summary")
                 or " / ".join(flight.get("airlines") or []),
                 "reason": flight.get("exclude_reason") or "不符合当前筛选条件",
+                "scope": flight.get("scope") or flight.get("direction") or "single_leg",
                 "route_summary": flight.get("route_summary") or "",
                 "segments": flight.get("segments") or [],
                 "layovers": flight.get("layovers") or [],
