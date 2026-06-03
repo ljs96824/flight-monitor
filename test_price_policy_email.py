@@ -206,6 +206,40 @@ def test_email_uses_section_cards_and_plan_table_layout():
                 "estimated_price": 7182,
                 "outbound_line": "去程:9C6575｜春秋航空｜PVG 08:05 → KIX 11:20｜直飞｜A320",
                 "return_line": "返程:9C6582｜春秋航空｜KIX 19:30 → PVG 21:00｜直飞｜A320",
+                "outbound_flight": {
+                    "flight_combo": "9C6575",
+                    "airline_summary": "春秋航空",
+                    "stops": 0,
+                    "total_duration_min": 195,
+                    "segments": [
+                        {
+                            "flight_no": "9C6575",
+                            "airline": "春秋航空",
+                            "dep_airport": "PVG",
+                            "dep_time": "2026-10-01 08:05",
+                            "arr_airport": "KIX",
+                            "arr_time": "2026-10-01 11:20",
+                            "aircraft": "A320",
+                        }
+                    ],
+                },
+                "return_flight": {
+                    "flight_combo": "9C6582",
+                    "airline_summary": "春秋航空",
+                    "stops": 0,
+                    "total_duration_min": 210,
+                    "segments": [
+                        {
+                            "flight_no": "9C6582",
+                            "airline": "春秋航空",
+                            "dep_airport": "KIX",
+                            "dep_time": "2026-10-06 19:30",
+                            "arr_airport": "PVG",
+                            "arr_time": "2026-10-06 21:00",
+                            "aircraft": "A320",
+                        }
+                    ],
+                },
                 "purchase_mode": "两个单程拼接",
                 "baggage_line": "行李:支付页需确认",
                 "links": {"outbound": '<a href="https://example.com">Trip.com</a>'},
@@ -229,6 +263,13 @@ def test_email_uses_section_cards_and_plan_table_layout():
     assert "<table style='width:100%;font-size:14px;" in html
     assert "width:90px;" in html
     assert "推荐方案" in html
+    assert "✈ 去程" in html
+    assert "✈ 返程" in html
+    assert "起飞</td>" in html
+    assert "到达</td>" in html
+    assert "中转</td>" in html
+    assert "机型</td>" in html
+    assert "background:#f5f7fa;padding:4px 8px;border-radius:4px" in html
 
 
 def test_trend_png_source_sets_date_axis_labels():

@@ -4575,6 +4575,8 @@ def _payload_combo_plan(combo: dict, route_info: dict, index: int, variant: str)
         "estimated_price": transaction_total,
         "outbound_price": _to_float(outbound.get("price")),
         "return_price": _to_float(return_flight.get("price")),
+        "outbound_flight": outbound,
+        "return_flight": return_flight,
         "outbound_line": format_flight_detail(outbound, outbound_date, "去程"),
         "return_line": format_flight_detail(return_flight, return_date, "返程"),
         "outbound_push_line": _pushplus_leg_summary(outbound, "去程"),
@@ -4601,6 +4603,7 @@ def _payload_single_plan(flight: dict, route_info: dict, analysis_result: dict, 
         "is_roundtrip": False,
         "price": _to_float(flight.get("price")),
         "estimated_price": _to_float((flight.get("price_estimate") or {}).get("transaction_price") or flight.get("price")),
+        "main_flight": flight,
         "summary": format_flight_detail(flight, route_info.get("depart_date"), "去程"),
         "main_push_line": _pushplus_leg_summary(flight, "去程"),
         "baggage_line": _pushplus_baggage_line_for_flight(flight),
@@ -5330,16 +5333,21 @@ def _render_payload_plan_card(plan: dict, compact: bool = False) -> str:
     variant = str(plan.get("variant", ""))
     title_label = f"推荐{label}" if "推荐" in variant and not label.startswith("推荐") else label
     title = html.escape(f"{title_label} ｜ {variant}".strip())
+    body_parts: list[str] = []
     rows = []
     if plan.get("is_roundtrip"):
+        body_parts.append(
+            _email_plan_leg_group("去程", plan.get("outbound_flight"), str(plan.get("outbound_line") or ""))
+        )
+        body_parts.append(
+            _email_plan_leg_group("返程", plan.get("return_flight"), str(plan.get("return_line") or ""))
+        )
         rows.extend(
             [
-                ("去程", _escape_multiline(plan.get("outbound_line") or "")),
-                ("返程", _escape_multiline(plan.get("return_line") or "")),
-                ("往返总价", f"搜索参考价 {_price_text(plan.get('price'))}"),
+                ("搜索参考价", f"往返 {_price_text(plan.get('price'))}"),
                 ("预估实付", _price_text(plan.get("estimated_price"))),
                 ("购票方式", html.escape(str(plan.get("purchase_mode") or "待确认"))),
-                ("行李状态", html.escape(str(plan.get("baggage_line") or "支付页需确认"))),
+                ("行李状态", f'<span style="color:#d97706;">{html.escape(str(plan.get("baggage_line") or "支付页需确认"))}</span>'),
             ]
         )
         if plan.get("purchase_note"):
@@ -5353,12 +5361,14 @@ def _render_payload_plan_card(plan: dict, compact: bool = False) -> str:
         if link_lines:
             rows.append(("验证渠道", "验证整套往返：建议先在同一渠道选择往返搜索。<br>" + "<br>".join(link_lines)))
     else:
+        body_parts.append(
+            _email_plan_leg_group("去程", plan.get("main_flight"), str(plan.get("summary") or ""))
+        )
         rows.extend(
             [
-                ("航班", _escape_multiline(plan.get("summary") or "")),
                 ("搜索参考价", _price_text(plan.get("price"))),
                 ("预估实付", _price_text(plan.get("estimated_price"))),
-                ("行李状态", html.escape(str(plan.get("baggage_line") or "支付页需确认"))),
+                ("行李状态", f'<span style="color:#d97706;">{html.escape(str(plan.get("baggage_line") or "支付页需确认"))}</span>'),
             ]
         )
         links = (plan.get("links") or {}).get("main")
@@ -5368,7 +5378,8 @@ def _render_payload_plan_card(plan: dict, compact: bool = False) -> str:
         rows.append(("状态", html.escape(str(plan.get("tags") or ""))))
     if not compact:
         rows.append(("操作建议", f'<span style="color:#16a34a;">{html.escape(str(plan.get("buy_condition") or "以支付页为准"))}</span>'))
-    return _email_card(title, _email_table(rows))
+    body_parts.append(_email_plan_price_group(rows))
+    return _email_card(title, "".join(body_parts))
 
 
 def _payload_bar_html(title: str, rows: list[dict]) -> str:
@@ -5388,6 +5399,13 @@ EMAIL_CARD_TITLE_STYLE = (
 EMAIL_CARD_BODY_STYLE = "font-size:14px;color:#333;line-height:1.7;"
 EMAIL_LABEL_CELL_STYLE = "color:#888;width:90px;vertical-align:top;padding:4px 8px 4px 0;"
 EMAIL_VALUE_CELL_STYLE = "color:#333;vertical-align:top;padding:4px 0;"
+EMAIL_LEG_GROUP_STYLE = "margin-bottom:14px;"
+EMAIL_LEG_TITLE_STYLE = (
+    "font-weight:600;color:#111;margin-bottom:6px;"
+    "background:#f5f7fa;padding:4px 8px;border-radius:4px;"
+)
+EMAIL_LEG_LABEL_CELL_STYLE = "color:#999;width:80px;vertical-align:top;padding:4px 8px 4px 0;"
+EMAIL_LEG_VALUE_CELL_STYLE = "color:#333;vertical-align:top;padding:4px 0;"
 
 
 def _email_card(title: str, body: str) -> str:
@@ -5413,6 +5431,135 @@ def _email_table(rows: list[tuple[str, str]]) -> str:
     if not cells:
         return ""
     return "<table style='width:100%;font-size:14px;border-collapse:collapse;'>" + "".join(cells) + "</table>"
+
+
+def _email_leg_table(rows: list[tuple[str, str]]) -> str:
+    cells = []
+    for label, value in rows:
+        if value in (None, ""):
+            continue
+        cells.append(
+            "<tr>"
+            f"<td style='{EMAIL_LEG_LABEL_CELL_STYLE}'>{html.escape(str(label))}</td>"
+            f"<td style='{EMAIL_LEG_VALUE_CELL_STYLE}'>{value}</td>"
+            "</tr>"
+        )
+    if not cells:
+        return ""
+    return "<table style='width:100%;font-size:14px;line-height:1.8;border-collapse:collapse;'>" + "".join(cells) + "</table>"
+
+
+def _email_plan_local_time(airport_code: str, time_value) -> str:
+    airport = _airport_short_label(airport_code)
+    time_text = _time_only(time_value) or "时间待确认"
+    local_city = _airport_local_city(airport_code)
+    return f"{html.escape(airport)} {html.escape(time_text)}　{html.escape(local_city)}当地时间"
+
+
+def _email_plan_duration_text(flight: dict | None) -> str:
+    flight = flight or {}
+    minutes = _to_float(flight.get("total_duration_min"))
+    if minutes is None:
+        hours = _to_float(flight.get("total_hours"))
+        minutes = hours * 60 if hours is not None else None
+    if minutes is None:
+        return ""
+    minutes = int(round(minutes))
+    return f"{minutes // 60}h{minutes % 60:02d}m"
+
+
+def _email_plan_wait_text(minutes) -> str:
+    value = _to_float(minutes)
+    if value is None:
+        return ""
+    value = int(round(value))
+    return f"{value // 60}h{value % 60:02d}m"
+
+
+def _email_plan_aircraft_text(flight: dict | None) -> str:
+    flight = flight or {}
+    aircraft = []
+    for segment in flight.get("segments") or []:
+        item = str(segment.get("aircraft") or "").strip()
+        if item and item not in {"未知", "unknown", "Unknown", "请查询航司官网"} and item not in aircraft:
+            aircraft.append(item)
+    return " / ".join(aircraft) if aircraft else "机型待确认"
+
+
+def _email_plan_transfer_text(flight: dict | None) -> str:
+    flight = flight or {}
+    segments = flight.get("segments") or []
+    try:
+        stops = int(flight.get("stops") if flight.get("stops") is not None else max(len(segments) - 1, 0))
+    except (TypeError, ValueError):
+        stops = max(len(segments) - 1, 0)
+    if stops <= 0:
+        return "直飞"
+
+    layovers = flight.get("layovers") or []
+    parts = []
+    if layovers:
+        for layover in layovers[:2]:
+            airport = str(layover.get("airport") or "").strip().upper()
+            city = str(layover.get("city") or "").strip()
+            place = _airport_short_label(airport) if airport else city or "中转地待确认"
+            wait = _email_plan_wait_text(layover.get("wait_minutes"))
+            parts.append(f"{place} 等待{wait}" if wait else place)
+    elif len(segments) >= 2:
+        airport = str(segments[0].get("arr_airport") or "").strip().upper()
+        parts.append(_airport_short_label(airport) if airport else "中转地待确认")
+
+    duration = _email_plan_duration_text(flight)
+    summary = f"中转{stops}次"
+    if parts:
+        summary += " 经" + " / ".join(parts)
+    if duration:
+        summary += f"｜总时长{duration}"
+    return html.escape(summary)
+
+
+def _email_plan_flight_text(flight: dict | None) -> str:
+    flight = flight or {}
+    return html.escape(f"{_compact_flight_numbers(flight)} {_flight_airline_name(flight)}")
+
+
+def _email_plan_leg_group(title: str, flight: dict | None, fallback: str = "") -> str:
+    flight = flight or {}
+    segments = flight.get("segments") or []
+    heading = (
+        f'<div style="{EMAIL_LEG_TITLE_STYLE}">✈ {html.escape(str(title or "航程"))}</div>'
+    )
+    if not segments and not flight.get("flight_combo"):
+        rows = [("航班", _escape_multiline(fallback or "航班信息待确认"))]
+        return f'<div style="{EMAIL_LEG_GROUP_STYLE}">{heading}{_email_leg_table(rows)}</div>'
+
+    first = segments[0] if segments else {}
+    last = segments[-1] if segments else {}
+    dep_airport = str(first.get("dep_airport") or first.get("departure_airport") or "").strip().upper()
+    arr_airport = str(last.get("arr_airport") or last.get("arrival_airport") or "").strip().upper()
+
+    rows = [
+        ("航班", _email_plan_flight_text(flight)),
+        ("起飞", _email_plan_local_time(dep_airport, first.get("dep_time")) if segments else "时间待确认"),
+    ]
+    if segments and len(segments) > 1:
+        rows.append(("中转", _email_plan_transfer_text(flight)))
+    rows.append(("到达", _email_plan_local_time(arr_airport, last.get("arr_time")) if segments else "时间待确认"))
+    if not segments or len(segments) <= 1:
+        rows.append(("中转", _email_plan_transfer_text(flight)))
+    duration = _email_plan_duration_text(flight)
+    if segments and len(segments) > 1 and duration:
+        rows.append(("总时长", html.escape(duration)))
+    rows.append(("机型", html.escape(_email_plan_aircraft_text(flight))))
+    return f'<div style="{EMAIL_LEG_GROUP_STYLE}">{heading}{_email_leg_table(rows)}</div>'
+
+
+def _email_plan_price_group(rows: list[tuple[str, str]]) -> str:
+    return (
+        '<div style="border-top:1px solid #f0f0f0;padding-top:10px;">'
+        + _email_table(rows)
+        + "</div>"
+    )
 
 
 def _email_list(items, limit: int = 5) -> str:
