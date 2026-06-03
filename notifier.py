@@ -3707,6 +3707,122 @@ def _excluded_scope_note(item: dict, is_roundtrip: bool) -> str:
     return ""
 
 
+EXCLUDED_CARD_STYLE = "border:1px solid #f0d0d0;border-radius:8px;padding:12px;margin:10px 0;background:#fdf8f8;"
+EXCLUDED_TITLE_STYLE = "font-weight:600;color:#b91c1c;margin-bottom:8px;"
+EXCLUDED_LABEL_STYLE = "color:#999;width:80px;vertical-align:top;padding:4px 8px 4px 0;"
+EXCLUDED_VALUE_STYLE = "color:#111;vertical-align:top;padding:4px 0;"
+
+
+def _excluded_table_row(label: str, value: str, danger: bool = False) -> str:
+    color = "#b91c1c" if danger else "#111"
+    return (
+        "<tr>"
+        f"<td style='{EXCLUDED_LABEL_STYLE}'>{html.escape(str(label or ''))}</td>"
+        f"<td style='{EXCLUDED_VALUE_STYLE}color:{color};'>{value}</td>"
+        "</tr>"
+    )
+
+
+def _excluded_segment_value(segment: dict) -> str:
+    flight_no = str(segment.get("flight_no") or "").strip()
+    airline = str(segment.get("airline") or "").strip()
+    dep = str(segment.get("dep_airport") or "").strip().upper()
+    arr = str(segment.get("arr_airport") or "").strip().upper()
+    dep_time = _local_time_label(dep, segment.get("dep_time"))
+    arr_time = _local_time_label(arr, segment.get("arr_time"))
+    aircraft = str(segment.get("aircraft") or "").strip()
+    left = " ".join(part for part in [flight_no, airline] if part) or "航班信息待确认"
+    value = f"{html.escape(left)}｜{html.escape(dep)} {html.escape(dep_time)} → {html.escape(arr)} {html.escape(arr_time)}"
+    if aircraft and aircraft not in {"未知", "unknown", "Unknown", "请查询航司官网"}:
+        value += f"｜{html.escape(aircraft)}"
+    return value
+
+
+def _excluded_aircraft_text(flight: dict) -> str:
+    aircrafts = []
+    for segment in flight.get("segments") or []:
+        aircraft = str(segment.get("aircraft") or "").strip()
+        if aircraft and aircraft not in {"未知", "unknown", "Unknown", "请查询航司官网"} and aircraft not in aircrafts:
+            aircrafts.append(aircraft)
+    return " / ".join(aircrafts) if aircrafts else "机型待确认"
+
+
+def _excluded_transfer_text(flight: dict) -> str:
+    segments = flight.get("segments") or []
+    stops = int(flight.get("stops") if flight.get("stops") is not None else max(0, len(segments) - 1))
+    duration = _pushplus_duration_text(flight)
+    if stops <= 0:
+        return "直飞" + (f"｜总时长{duration}" if duration else "")
+    layovers = []
+    for layover in flight.get("layovers") or []:
+        airport = str(layover.get("airport") or "").strip().upper()
+        city = str(layover.get("city") or "").strip()
+        label = city or airport
+        if airport and airport not in label:
+            label = f"{label}{airport}" if label else airport
+        if label:
+            layovers.append(label)
+    transfer = f"{stops}次"
+    if layovers:
+        transfer += " " + " / ".join(layovers)
+    if duration:
+        transfer += f"｜总时长{duration}"
+    return transfer
+
+
+def _excluded_card_flights(item: dict, is_roundtrip: bool) -> list[tuple[str, dict]]:
+    if isinstance(item.get("outbound"), dict) or isinstance(item.get("return"), dict):
+        result = []
+        if isinstance(item.get("outbound"), dict):
+            result.append(("去程", item["outbound"]))
+        if isinstance(item.get("return"), dict):
+            result.append(("返程", item["return"]))
+        return result
+    scope = _excluded_scope(item, is_roundtrip)
+    label = "去程" if scope == "outbound" else "返程" if scope == "return" else "航班"
+    return [(label, _excluded_item_flight(item))]
+
+
+def _render_excluded_plan_card(item: dict, current_price, is_roundtrip: bool) -> str:
+    reason_lines = _excluded_reason_details(item)
+    reason = reason_lines[0] if reason_lines else (item.get("reason") or "不符合当前规则")
+    intro = _excluded_price_intro(item, current_price, is_roundtrip).replace("已排除的", "").replace("已排除", "").strip("： ")
+    semantic_intro = _excluded_price_intro(item, current_price, is_roundtrip)
+    title = f"已排除 · {intro}" if intro else "已排除"
+    rows = []
+    combo_text = str(item.get("flight_combo") or "").strip()
+    if combo_text:
+        rows.append(_excluded_table_row("航班组合", html.escape(combo_text)))
+    for prefix, flight in _excluded_card_flights(item, is_roundtrip):
+        segments = flight.get("segments") or []
+        if segments:
+            for index, segment in enumerate(segments):
+                rows.append(_excluded_table_row(prefix if index == 0 else "", _excluded_segment_value(segment)))
+        else:
+            rows.append(_excluded_table_row(prefix, html.escape(_excluded_flight_detail_text({"flight": flight, **item}))))
+        rows.append(_excluded_table_row(f"{prefix}中转", html.escape(_excluded_transfer_text(flight))))
+        rows.append(_excluded_table_row("机型", html.escape(_excluded_aircraft_text(flight))))
+    price = _to_float(item.get("total_price") or item.get("roundtrip_price") or item.get("price"))
+    if price is not None:
+        scope = _excluded_scope(item, is_roundtrip)
+        price_label = "价格" if scope == "roundtrip" or not is_roundtrip else f"{_excluded_scope_label(scope).replace('方案', '')}价格"
+        rows.append(_excluded_table_row(price_label, html.escape(_price_text(price))))
+    scope_note = _excluded_scope_note(item, is_roundtrip)
+    if scope_note:
+        rows.append(_excluded_table_row("说明", html.escape(scope_note)))
+    rows.append(_excluded_table_row("排除原因", html.escape(str(reason)), danger=True))
+    for extra in reason_lines[1:3]:
+        rows.append(_excluded_table_row("", html.escape(str(extra)), danger=True))
+    return (
+        f'<div style="{EXCLUDED_CARD_STYLE}">'
+        f'<div style="{EXCLUDED_TITLE_STYLE}">{html.escape(title)}</div>'
+        f'<div style="display:none;">{html.escape(semantic_intro)}</div>'
+        '<table style="width:100%;font-size:13px;line-height:1.6;border-collapse:collapse;">'
+        + "".join(rows)
+        + "</table></div>"
+    )
+
+
 def _excluded_relax_hints(items: list[dict]) -> list[str]:
     hints = []
     mapping = [
@@ -5449,19 +5565,14 @@ def render_email(payload: dict) -> tuple[str, str]:
                     cheaper.append(item)
                 elif current_price is None or price < current_price:
                     cheaper.append(item)
-        excluded_lines = []
+        excluded_lines = [
+            "<div style='color:#666;font-size:12px;margin-bottom:8px;'>"
+            "这些方案虽然更便宜，但触发了你的硬约束或默认安全规则。"
+            "如果你能接受这些条件，可在精准监控中放宽限制。"
+            "</div>"
+        ]
         for item in sorted(cheaper, key=lambda row: _to_float(row.get("price")) or 999999)[:3]:
-            reason_lines = _excluded_reason_details(item)
-            reason = reason_lines[0] if reason_lines else (item.get("reason") or "不符合当前规则")
-            excluded_lines.append(f"<div style='margin-bottom:10px;'><b>{html.escape(_excluded_price_intro(item, current_price, bool(payload.get('is_roundtrip'))))}</b>")
-            excluded_lines.append(f"<div>{html.escape(_excluded_flight_detail_text(item))}</div>")
-            scope_note = _excluded_scope_note(item, bool(payload.get("is_roundtrip")))
-            if scope_note:
-                excluded_lines.append(f"<div style='color:#666;font-size:12px;'>{html.escape(scope_note)}</div>")
-            excluded_lines.append(f"<div>排除原因：{html.escape(str(reason))}</div>")
-            for extra in reason_lines[1:3]:
-                excluded_lines.append(f"<div>- {html.escape(str(extra))}</div>")
-            excluded_lines.append("</div>")
+            excluded_lines.append(_render_excluded_plan_card(item, current_price, bool(payload.get("is_roundtrip"))))
         excluded_body = "".join(excluded_lines)
     cards.append(_email_card("为什么不推荐更便宜方案", excluded_body or "<div style='color:#888;font-size:12px;'>暂无被排除的更低价方案。</div>"))
 

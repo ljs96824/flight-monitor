@@ -137,6 +137,11 @@ def test_email_roundtrip_excluded_single_leg_is_not_compared_to_roundtrip_total(
     assert "此为去程单段价，非往返总价" in html
     assert "比推荐便宜¥3,635" not in html
     assert "KE888+KE721" in html
+    assert "border:1px solid #f0d0d0" in html
+    assert "background:#fdf8f8" in html
+    assert "font-size:13px;line-height:1.6" in html
+    assert "width:80px" in html
+    assert "#b91c1c" in html
 
 
 def test_email_detail_charts_dedupe_channels_and_skip_empty_plan_rows():
