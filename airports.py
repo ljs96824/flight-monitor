@@ -413,6 +413,15 @@ for city, airport_codes in CITY_AIRPORTS.items():
         AIRPORT_TO_CITY[code] = city
 
 
+CITY_ALIASES = {
+    "大版": "大阪",
+    "东京都": "东京",
+    "首尔市": "首尔",
+    "首儿": "首尔",
+    "新泻": "新潟",
+}
+
+
 def validate_airports():
     """Validate airport table completeness and derived mappings."""
     assert set(AIRPORTS) == EXPECTED_AIRPORT_CODES, (
@@ -481,12 +490,19 @@ def resolve_location(value):
     text = str(value or "").strip()
     if not text:
         return {"value": "", "type": "airport", "airports": []}
+    resolved_text = CITY_ALIASES.get(text, text)
+    if resolved_text != text:
+        print(f"[地点纠错] {text} → {resolved_text}")
     upper = text.upper()
-    if text in CITY_AIRPORTS:
-        return {"value": text, "type": "city", "airports": CITY_AIRPORTS[text]}
+    if resolved_text in CITY_AIRPORTS:
+        return {
+            "value": resolved_text,
+            "type": "city",
+            "airports": CITY_AIRPORTS[resolved_text],
+        }
     if 2 <= len(upper) <= 4 and upper.isascii() and upper.isalpha():
         return {"value": upper, "type": "airport", "airports": [upper]}
-    return {"value": text, "type": "unknown", "airports": []}
+    return {"value": resolved_text, "type": "unknown", "airports": []}
 
 
 def get_airport_timezone(iata_code):

@@ -148,12 +148,93 @@ def parse_flight_detail(flight_data: dict, data_source: str | None = None) -> di
     return result
 
 
+def _nested_value(value, *keys, default=""):
+    if isinstance(value, dict):
+        for key in keys:
+            item = value.get(key)
+            if item not in (None, "", []):
+                return item
+    elif isinstance(value, str) and value:
+        return value
+    return default
+
+
+def _normalize_raw_segment(segment: dict, fallback_airline: str = "") -> dict:
+    dep = segment.get("departure_airport") or segment.get("origin") or {}
+    arr = segment.get("arrival_airport") or segment.get("destination") or {}
+    return {
+        "flight_no": _nested_value(
+            segment, "flight_no", "flight_number", "number", "flight", default=""
+        ),
+        "airline": _nested_value(segment, "airline", "carrier", default=fallback_airline),
+        "aircraft": _nested_value(
+            segment, "aircraft", "airplane", "plane_type", "equipment", default=""
+        ),
+        "dep_airport": _nested_value(
+            segment, "dep_airport", "departure_airport_id", "origin", default=""
+        )
+        or _nested_value(dep, "id", "airport_id", "code", "iata", default=""),
+        "dep_city": _nested_value(dep, "name", "city", default=""),
+        "dep_time": _nested_value(
+            segment, "dep_time", "departure_time", "departure", "time", default=""
+        )
+        or _nested_value(dep, "time", "departure_time", default=""),
+        "arr_airport": _nested_value(
+            segment, "arr_airport", "arrival_airport_id", "destination", default=""
+        )
+        or _nested_value(arr, "id", "airport_id", "code", "iata", default=""),
+        "arr_city": _nested_value(arr, "name", "city", default=""),
+        "arr_time": _nested_value(
+            segment, "arr_time", "arrival_time", "arrival", default=""
+        )
+        or _nested_value(arr, "time", "arrival_time", default=""),
+        "duration_min": _nested_value(segment, "duration_min", "duration", default=0),
+        "cabin_class": _nested_value(segment, "cabin_class", "travel_class", default="Economy"),
+    }
+
+
+def _segments_from_raw_flight(detail: dict) -> list[dict]:
+    raw_segments = detail.get("flights") or detail.get("legs") or []
+    if not raw_segments:
+        return []
+    fallback_airline = detail.get("airline_summary") or detail.get("airline") or ""
+    return [
+        _normalize_raw_segment(segment, fallback_airline)
+        for segment in raw_segments
+        if isinstance(segment, dict)
+    ]
+
+
+def _segment_score(segments: list[dict] | None) -> int:
+    score = 0
+    for segment in segments or []:
+        score += 1
+        for key in ("flight_no", "airline", "aircraft", "dep_airport", "dep_time", "arr_airport", "arr_time"):
+            if segment.get(key):
+                score += 1
+    return score
+
+
+def _merge_detail_fields(target: dict, source: dict) -> dict:
+    merged = dict(target)
+    if _segment_score(source.get("segments")) > _segment_score(merged.get("segments")):
+        merged["segments"] = source.get("segments") or []
+    if len(source.get("layovers") or []) > len(merged.get("layovers") or []):
+        merged["layovers"] = source.get("layovers") or []
+    for key, value in source.items():
+        if key in {"price", "data_source", "source"}:
+            continue
+        if merged.get(key) in (None, "", [], {}) and value not in (None, "", [], {}):
+            merged[key] = value
+    return merged
+
+
 def _normalize_detail_flight(flight: dict, source_name: str | None = None) -> dict:
     detail = dict(flight)
     data_source = detail.get("data_source") or detail.get("source") or source_name
     detail["data_source"] = data_source
 
-    segments = detail.get("segments") or []
+    segments = detail.get("segments") or _segments_from_raw_flight(detail)
     layovers = detail.get("layovers") or []
     detail["segments"] = segments
     detail["layovers"] = layovers
@@ -257,6 +338,8 @@ def _merge_detail_flights(flights: list[dict]) -> list[dict]:
         if combo not in merged:
             merged[combo] = flight
             sources_by_combo[combo] = []
+        else:
+            merged[combo] = _merge_detail_fields(merged[combo], flight)
 
         data_source = flight.get("data_source")
         if data_source and data_source not in sources_by_combo[combo]:

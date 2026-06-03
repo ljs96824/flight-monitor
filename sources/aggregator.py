@@ -54,6 +54,65 @@ def _merge_booking_options(target: dict, source: dict) -> None:
         target["booking_options"] = options
 
 
+def _non_empty(value) -> bool:
+    return value not in (None, "", [], {})
+
+
+def _segment_score(segments) -> int:
+    score = 0
+    for segment in segments or []:
+        if not isinstance(segment, dict):
+            continue
+        score += 1
+        for key in (
+            "flight_no",
+            "flight_number",
+            "airline",
+            "aircraft",
+            "airplane",
+            "dep_airport",
+            "departure_airport",
+            "dep_time",
+            "departure_time",
+            "arr_airport",
+            "arrival_airport",
+            "arr_time",
+            "arrival_time",
+        ):
+            if segment.get(key):
+                score += 1
+    return score
+
+
+def _merge_flight_fields(target: dict, source: dict) -> dict:
+    """Merge duplicate flight records without letting sparse lower-price rows erase details."""
+    for key in ("segments", "layovers", "flights", "legs"):
+        source_value = source.get(key)
+        target_value = target.get(key)
+        if key in ("segments", "flights", "legs"):
+            if _segment_score(source_value) > _segment_score(target_value):
+                target[key] = source_value
+        elif len(source_value or []) > len(target_value or []):
+            target[key] = source_value
+
+    for key, value in source.items():
+        if key in {
+            "price",
+            "source",
+            "data_source",
+            "source_price_details",
+            "booking_options",
+        }:
+            continue
+        if not _non_empty(target.get(key)) and _non_empty(value):
+            target[key] = value
+
+    _merge_booking_options(target, source)
+    for entry in source.get("source_price_details") or []:
+        _append_source_price(target, entry.get("source"), entry.get("price"))
+    return target
+
+
 def _append_source_price(target: dict, source_name: str | None, price) -> None:
     try:
         value = float(price)
@@ -254,18 +313,14 @@ class FlightAggregator:
             current_price = seen.get(normalized_combo, {}).get("price", 99999)
             if normalized_combo in seen:
                 _append_sources(seen[normalized_combo], new_sources)
-                _merge_booking_options(seen[normalized_combo], flight)
+                _merge_flight_fields(seen[normalized_combo], flight)
                 _append_source_price(seen[normalized_combo], source_name, flight.get("price"))
             if normalized_combo not in seen or float(flight.get("price")) < float(current_price):
                 previous = seen.get(normalized_combo)
-                seen[normalized_combo] = flight
+                seen[normalized_combo] = dict(flight)
                 _append_source_price(seen[normalized_combo], source_name, flight.get("price"))
                 if previous:
-                    _merge_booking_options(seen[normalized_combo], previous)
-                    for entry in previous.get("source_price_details") or []:
-                        _append_source_price(
-                            seen[normalized_combo], entry.get("source"), entry.get("price")
-                        )
+                    _merge_flight_fields(seen[normalized_combo], previous)
                 _append_sources(seen[normalized_combo], sources_by_combo[normalized_combo])
 
         unique_flights = list(seen.values())
@@ -400,10 +455,14 @@ class FlightAggregator:
                             or float(new_price) < float(current_price)
                         )
                     ):
+                        previous = merged_by_combo[combo]
                         merged_by_combo[combo] = {
                             **flight,
                             "data_source": "+".join(_source_names(data_source)),
                         }
+                        _merge_flight_fields(merged_by_combo[combo], previous)
+                    else:
+                        _merge_flight_fields(merged_by_combo[combo], flight)
 
                 for source_name in _source_names(data_source):
                     if source_name not in source_order_by_combo[combo]:

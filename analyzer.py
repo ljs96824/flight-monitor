@@ -4363,6 +4363,24 @@ def _roundtrip_candidate_flights(analysis: dict, direction: str) -> list[dict]:
     return candidates
 
 
+def _roundtrip_debug_aircraft(flight: dict) -> str:
+    segments = flight.get("segments") or []
+    if segments:
+        value = segments[0].get("aircraft") or segments[0].get("plane_type") or segments[0].get("equipment")
+        if value:
+            return str(value)
+    return str(flight.get("aircraft") or flight.get("plane_type") or flight.get("equipment") or "待确认")
+
+
+def _roundtrip_debug_departure(flight: dict) -> str:
+    segments = flight.get("segments") or []
+    if segments:
+        value = segments[0].get("dep_time") or segments[0].get("departure_time")
+        if value:
+            return str(value)
+    return str(flight.get("departure_time") or flight.get("dep_time") or "待确认")
+
+
 def build_excluded_roundtrip_combos(
     outbound_analysis: dict,
     return_analysis: dict,
@@ -4411,12 +4429,24 @@ def build_excluded_roundtrip_combos(
                 continue
             reason_counts[reason_key] = reason_counts.get(reason_key, 0) + 1
 
+            outbound_flight = outbound["flight"]
+            return_flight = return_item["flight"]
+            print(
+                "[排除组合] "
+                f"去程={outbound_flight.get('flight_combo')} "
+                f"返程={return_flight.get('flight_combo')} "
+                f"去程机型={_roundtrip_debug_aircraft(outbound_flight)} "
+                f"返程机型={_roundtrip_debug_aircraft(return_flight)} "
+                f"去程时间={_roundtrip_debug_departure(outbound_flight)} "
+                f"返程时间={_roundtrip_debug_departure(return_flight)}"
+            )
+
             combos.append(
                 {
                     "scope": "roundtrip",
                     "is_roundtrip": True,
-                    "outbound": outbound["flight"],
-                    "return": return_item["flight"],
+                    "outbound": outbound_flight,
+                    "return": return_flight,
                     "outbound_price": outbound_price,
                     "return_price": return_price,
                     "total_price": total,

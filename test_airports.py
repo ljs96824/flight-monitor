@@ -14,6 +14,16 @@ class ResolveLocationTest(unittest.TestCase):
             },
         )
 
+    def test_resolve_location_city_alias_typo(self):
+        self.assertEqual(
+            resolve_location("大版"),
+            {
+                "value": "大阪",
+                "type": "city",
+                "airports": ["KIX", "ITM"],
+            },
+        )
+
     def test_resolve_location_iata_code(self):
         self.assertEqual(
             resolve_location("kix"),

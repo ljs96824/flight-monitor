@@ -245,6 +245,9 @@ def _normalize_subscription(item: dict) -> dict:
         ]
 
     normalized = {
+        "id": item.get("id"),
+        "subscription_id": item.get("subscription_id"),
+        "_index": item.get("_index", item.get("index")),
         "name": item.get("name") or "网页订阅",
         "origin": origin_info["value"],
         "origin_type": item.get("origin_type") or origin_info["type"],
@@ -469,12 +472,24 @@ def load_file_subscriptions() -> list[dict]:
         return []
 
     active = []
-    for item in subscriptions:
+    skipped = []
+    for index, item in enumerate(subscriptions):
         if not isinstance(item, dict):
             continue
         if item.get("status", "active") != "active":
             continue
-        active.append(_normalize_subscription(item))
+        try:
+            if not item.get("_index"):
+                item = {**item, "_index": index}
+            active.append(_normalize_subscription(item))
+        except Exception as exc:
+            sub_id = item.get("id") or item.get("index") or item.get("_index") or "未知"
+            skipped.append({"id": sub_id, "error": str(exc)})
+            print(f"[订阅跳过] 订阅{sub_id} 规范化失败: {exc}")
+            logging.warning(f"订阅{sub_id} 规范化失败，已跳过: {exc}")
+            continue
+    if skipped:
+        print(f"[订阅汇总] 跳过{len(skipped)}条无效订阅,正常处理{len(active)}条")
     return [
         sub
         for sub in active
@@ -1051,7 +1066,18 @@ def run(sync_remote: bool = True):
         return
 
     for sub in subscriptions:
-        process_subscription(sub, ensure_db=False)
+        try:
+            ok = process_subscription(sub, ensure_db=False)
+            if not ok:
+                print(f"[订阅处理失败] {sub.get('id') or sub.get('_index') or '未知'}: 返回失败")
+        except Exception as exc:
+            print(f"[订阅处理失败] {sub.get('id') or sub.get('_index') or '未知'}: {exc}")
+            print(traceback.format_exc())
+            logging.error(
+                f"订阅处理失败 {sub.get('id') or sub.get('_index') or '未知'}: {exc}",
+                exc_info=True,
+            )
+            continue
 
     logging.info("本轮执行完成")
 

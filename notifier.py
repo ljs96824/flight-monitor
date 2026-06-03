@@ -1267,7 +1267,7 @@ def _arrival_time_text(flight: dict) -> str:
 def _compact_flight_numbers(flight: dict) -> str:
     numbers = [
         segment.get("flight_no", "")
-        for segment in flight.get("segments") or []
+        for segment in _email_plan_segments(flight)
         if segment.get("flight_no")
     ]
     if numbers:
@@ -1279,7 +1279,7 @@ def _compact_flight_numbers(flight: dict) -> str:
 def _compact_aircrafts(flight: dict) -> str:
     aircrafts = [
         segment.get("aircraft", "")
-        for segment in flight.get("segments") or []
+        for segment in _email_plan_segments(flight)
         if segment.get("aircraft")
     ]
     return " → ".join(aircrafts) if aircrafts else "请查询航司官网"
@@ -3789,19 +3789,13 @@ def _render_excluded_plan_card(item: dict, current_price, is_roundtrip: bool) ->
     intro = _excluded_price_intro(item, current_price, is_roundtrip).replace("已排除的", "").replace("已排除", "").strip("： ")
     semantic_intro = _excluded_price_intro(item, current_price, is_roundtrip)
     title = f"已排除 · {intro}" if intro else "已排除"
+    body_parts = []
     rows = []
     combo_text = str(item.get("flight_combo") or "").strip()
     if combo_text:
         rows.append(_excluded_table_row("航班组合", html.escape(combo_text)))
     for prefix, flight in _excluded_card_flights(item, is_roundtrip):
-        segments = flight.get("segments") or []
-        if segments:
-            for index, segment in enumerate(segments):
-                rows.append(_excluded_table_row(prefix if index == 0 else "", _excluded_segment_value(segment)))
-        else:
-            rows.append(_excluded_table_row(prefix, html.escape(_excluded_flight_detail_text({"flight": flight, **item}))))
-        rows.append(_excluded_table_row(f"{prefix}中转", html.escape(_excluded_transfer_text(flight))))
-        rows.append(_excluded_table_row("机型", html.escape(_excluded_aircraft_text(flight))))
+        body_parts.append(_email_plan_leg_group(prefix, flight, _excluded_flight_detail_text({"flight": flight, **item})))
     price = _to_float(item.get("total_price") or item.get("roundtrip_price") or item.get("price"))
     if price is not None:
         scope = _excluded_scope(item, is_roundtrip)
@@ -3817,7 +3811,8 @@ def _render_excluded_plan_card(item: dict, current_price, is_roundtrip: bool) ->
         f'<div style="{EXCLUDED_CARD_STYLE}">'
         f'<div style="{EXCLUDED_TITLE_STYLE}">{html.escape(title)}</div>'
         f'<div style="display:none;">{html.escape(semantic_intro)}</div>'
-        '<table style="width:100%;font-size:13px;line-height:1.6;border-collapse:collapse;">'
+        + "".join(body_parts)
+        + '<table style="width:100%;font-size:13px;line-height:1.6;border-collapse:collapse;">'
         + "".join(rows)
         + "</table></div>"
     )
@@ -5143,7 +5138,7 @@ def _pushplus_duration_text(flight: dict) -> str:
 
 
 def _pushplus_aircraft_text(flight: dict) -> str:
-    segments = flight.get("segments") or []
+    segments = _email_plan_segments(flight)
     aircraft = ""
     if segments:
         aircraft = str(segments[0].get("aircraft") or "").strip()
@@ -5159,7 +5154,7 @@ def _airline_code_from_flight_no(value: str) -> str:
 
 def _flight_airline_name(flight: dict | None) -> str:
     flight = flight or {}
-    segments = flight.get("segments") or []
+    segments = _email_plan_segments(flight)
     codes = []
     names = []
     for segment in segments:
@@ -5215,7 +5210,7 @@ def _pushplus_transfer_point(flight: dict) -> str:
 
 def _flight_local_time_summary(flight: dict | None, label: str, compact: bool = False) -> str:
     flight = flight or {}
-    segments = flight.get("segments") or []
+    segments = _email_plan_segments(flight)
     try:
         stops = int(flight.get("stops") if flight.get("stops") is not None else max(len(segments) - 1, 0))
     except (TypeError, ValueError):
@@ -5365,8 +5360,9 @@ def _render_payload_plan_card(plan: dict, compact: bool = False) -> str:
         if link_lines:
             rows.append(("验证渠道", "验证整套往返：建议先在同一渠道选择往返搜索。<br>" + "<br>".join(link_lines)))
     else:
+        main_flight = plan.get("main_flight") or plan.get("outbound_flight") or plan.get("flight")
         body_parts.append(
-            _email_plan_leg_group("去程", plan.get("main_flight"), str(plan.get("summary") or ""))
+            _email_plan_leg_group("去程", main_flight, str(plan.get("summary") or ""))
         )
         rows.extend(
             [
@@ -5460,6 +5456,94 @@ def _email_plan_local_time(airport_code: str, time_value) -> str:
     return f"{html.escape(airport)} {html.escape(time_text)}　{html.escape(local_city)}当地时间"
 
 
+def _safe_flight_field(flight: dict | None, *keys: str, default=""):
+    flight = flight or {}
+    for key in keys:
+        value = flight.get(key)
+        if value not in (None, "", []):
+            return value
+    return default
+
+
+def _safe_nested_field(value, *keys: str, default=""):
+    if isinstance(value, dict):
+        for key in keys:
+            item = value.get(key)
+            if item not in (None, "", []):
+                return item
+    elif isinstance(value, str) and value:
+        return value
+    return default
+
+
+def _normalize_email_segment(segment: dict | None, fallback_airline: str = "") -> dict:
+    segment = segment or {}
+    dep = segment.get("departure_airport") or segment.get("origin") or {}
+    arr = segment.get("arrival_airport") or segment.get("destination") or {}
+    return {
+        "flight_no": _safe_nested_field(
+            segment, "flight_no", "flight_number", "number", "flight", default=""
+        ),
+        "airline": _safe_nested_field(segment, "airline", "carrier", default=fallback_airline),
+        "dep_airport": _safe_nested_field(
+            segment, "dep_airport", "departure_airport_id", "origin", default=""
+        )
+        or _safe_nested_field(dep, "id", "airport_id", "code", "iata", default=""),
+        "dep_time": _safe_nested_field(
+            segment, "dep_time", "departure_time", "departure", "time", default=""
+        )
+        or _safe_nested_field(dep, "time", "departure_time", default=""),
+        "arr_airport": _safe_nested_field(
+            segment, "arr_airport", "arrival_airport_id", "destination", default=""
+        )
+        or _safe_nested_field(arr, "id", "airport_id", "code", "iata", default=""),
+        "arr_time": _safe_nested_field(
+            segment, "arr_time", "arrival_time", "arrival", default=""
+        )
+        or _safe_nested_field(arr, "time", "arrival_time", default=""),
+        "aircraft": _safe_nested_field(
+            segment, "aircraft", "airplane", "plane_type", "equipment", default=""
+        ),
+        "duration_min": _safe_nested_field(segment, "duration_min", "duration", default=0),
+    }
+
+
+def _email_plan_segments(flight: dict | None) -> list[dict]:
+    flight = flight or {}
+    raw_segments = flight.get("segments") or flight.get("flights") or flight.get("legs") or []
+    fallback_airline = flight.get("airline_summary") or flight.get("airline") or ""
+    segments = [
+        _normalize_email_segment(segment, fallback_airline)
+        for segment in raw_segments
+        if isinstance(segment, dict)
+    ]
+    if segments:
+        return segments
+
+    dep_airport = _safe_flight_field(
+        flight, "departure_airport", "dep_airport", "origin_airport", "origin"
+    )
+    arr_airport = _safe_flight_field(
+        flight, "arrival_airport", "arr_airport", "destination_airport", "destination"
+    )
+    dep_time = _safe_flight_field(flight, "departure_time", "dep_time")
+    arr_time = _safe_flight_field(flight, "arrival_time", "arr_time")
+    aircraft = _safe_flight_field(flight, "aircraft", "airplane", "plane_type", "equipment")
+    if not any([dep_airport, arr_airport, dep_time, arr_time, aircraft, flight.get("flight_combo")]):
+        return []
+    return [
+        {
+            "flight_no": flight.get("flight_combo") or flight.get("flight_no") or "",
+            "airline": flight.get("airline_summary") or flight.get("airline") or "",
+            "dep_airport": dep_airport,
+            "dep_time": dep_time,
+            "arr_airport": arr_airport,
+            "arr_time": arr_time,
+            "aircraft": aircraft,
+        }
+    ]
+
+
 def _email_plan_duration_text(flight: dict | None) -> str:
     flight = flight or {}
     minutes = _to_float(flight.get("total_duration_min"))
@@ -5483,16 +5567,25 @@ def _email_plan_wait_text(minutes) -> str:
 def _email_plan_aircraft_text(flight: dict | None) -> str:
     flight = flight or {}
     aircraft = []
-    for segment in flight.get("segments") or []:
-        item = str(segment.get("aircraft") or "").strip()
+    for segment in _email_plan_segments(flight):
+        item = str(
+            segment.get("aircraft")
+            or segment.get("airplane")
+            or segment.get("plane_type")
+            or segment.get("equipment")
+            or ""
+        ).strip()
         if item and item not in {"未知", "unknown", "Unknown", "请查询航司官网"} and item not in aircraft:
             aircraft.append(item)
+    top_level = str(_safe_flight_field(flight, "aircraft", "airplane", "plane_type", "equipment") or "").strip()
+    if top_level and top_level not in {"未知", "unknown", "Unknown", "请查询航司官网"} and top_level not in aircraft:
+        aircraft.append(top_level)
     return " / ".join(aircraft) if aircraft else "机型待确认"
 
 
 def _email_plan_transfer_text(flight: dict | None) -> str:
     flight = flight or {}
-    segments = flight.get("segments") or []
+    segments = _email_plan_segments(flight)
     try:
         stops = int(flight.get("stops") if flight.get("stops") is not None else max(len(segments) - 1, 0))
     except (TypeError, ValueError):
@@ -5529,7 +5622,16 @@ def _email_plan_flight_text(flight: dict | None) -> str:
 
 def _email_plan_leg_group(title: str, flight: dict | None, fallback: str = "") -> str:
     flight = flight or {}
-    segments = flight.get("segments") or []
+    segments = _email_plan_segments(flight)
+    flight_debug_no = str(flight.get("flight_no") or flight.get("flight_number") or flight.get("flight_combo") or "")
+    needs_debug = bool(flight) and (
+        flight_debug_no.upper().startswith("CA")
+        or not segments
+        or _email_plan_aircraft_text(flight) == "机型待确认"
+    )
+    if needs_debug:
+        print(f"[航班调试] 航班号={flight.get('flight_no') or flight.get('flight_number') or flight.get('flight_combo')}")
+        print(f"[航班调试] 完整字段: {json.dumps(flight, ensure_ascii=False, default=str)}")
     heading = (
         f'<div style="{EMAIL_LEG_TITLE_STYLE}">✈ {html.escape(str(title or "航程"))}</div>'
     )

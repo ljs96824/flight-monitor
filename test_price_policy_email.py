@@ -243,11 +243,14 @@ def test_email_roundtrip_excluded_combo_shows_both_legs():
                 "return": {
                     "price": 3100,
                     "flight_combo": "9C6582",
+                    "airline_summary": "春秋航空",
                     "stops": 0,
                     "total_duration_min": 210,
-                    "segments": [
-                        {"flight_no": "9C6582", "airline": "春秋航空", "dep_airport": "KIX", "dep_time": "2026-10-06 19:30", "arr_airport": "PVG", "arr_time": "2026-10-06 21:00", "aircraft": "A320"}
-                    ],
+                    "departure_airport": "KIX",
+                    "departure_time": "2026-10-06 19:30",
+                    "arrival_airport": "PVG",
+                    "arrival_time": "2026-10-06 21:00",
+                    "aircraft": "A320",
                 },
             }
         ],
@@ -265,6 +268,12 @@ def test_email_roundtrip_excluded_combo_shows_both_legs():
     assert "KE888" in html
     assert "KE721" in html
     assert "9C6582" in html
+    assert "✈ 去程" in html
+    assert "✈ 返程" in html
+    assert html.index("KE888") < html.index("9C6582")
+    assert "关西(KIX)" in html
+    assert "19:30" in html
+    assert "A320" in html
     assert "返程" in html
     assert "单段价，非往返总价" not in html
 
@@ -397,6 +406,75 @@ def test_email_uses_section_cards_and_plan_table_layout():
     assert "background:#f5f7fa;padding:4px 8px;border-radius:4px" in html
 
 
+def test_email_plan_reads_google_nested_flights_fields_for_ca():
+    payload = {
+        "push_type": "值得验证",
+        "route": "上海 → 北京",
+        "recommendation": "值得验证",
+        "display_price": 1880,
+        "transaction_price": 1880,
+        "verify_price": 2000,
+        "ideal_price": 1900,
+        "max_price": 2500,
+        "buy_condition": "支付页≤¥2,000且含托运行李",
+        "confidence": "中高",
+        "recommended_plans": [
+            {
+                "label": "方案A",
+                "variant": "推荐",
+                "is_roundtrip": False,
+                "price": 1880,
+                "estimated_price": 1880,
+                "outbound_flight": {
+                    "price": 1880,
+                    "flight_combo": "CA1234",
+                    "stops": 0,
+                    "total_duration_min": 135,
+                    "flights": [
+                        {
+                            "flight_number": "CA1234",
+                            "airline": "中国国际航空",
+                            "airplane": "Airbus A321",
+                            "departure_airport": {
+                                "id": "PVG",
+                                "name": "Shanghai Pudong",
+                                "time": "2026-10-01 08:30",
+                            },
+                            "arrival_airport": {
+                                "id": "PEK",
+                                "name": "Beijing Capital",
+                                "time": "2026-10-01 10:45",
+                            },
+                            "duration": 135,
+                        }
+                    ],
+                },
+                "baggage_line": "行李:支付页需确认",
+                "purchase_mode": "单程",
+                "links": {},
+            }
+        ],
+        "trigger_reason": [],
+        "price_history": [],
+        "action_range": {"ranges": []},
+        "checklist": [],
+        "detail_url": "https://example.com/detail",
+        "form_url": "https://example.com/",
+        "feedback_url": "https://example.com/feedback",
+    }
+
+    _, html = render_email(payload)
+
+    assert "CA1234" in html
+    assert "中国国际航空" in html
+    assert "浦东(PVG)" in html
+    assert "08:30" in html
+    assert "首都(PEK)" in html
+    assert "10:45" in html
+    assert "Airbus A321" in html
+    assert "机型待确认" not in html
+
+
 def test_trend_png_source_sets_date_axis_labels():
     source = inspect.getsource(email_notifier.build_trend_png)
 
@@ -414,4 +492,5 @@ if __name__ == "__main__":
     test_email_roundtrip_excluded_combo_shows_both_legs()
     test_email_detail_charts_dedupe_channels_and_skip_empty_plan_rows()
     test_email_uses_section_cards_and_plan_table_layout()
+    test_email_plan_reads_google_nested_flights_fields_for_ca()
     test_trend_png_source_sets_date_axis_labels()
