@@ -5210,44 +5210,147 @@ def render_pushplus(payload: dict) -> str:
 
 
 def _render_payload_plan_card(plan: dict, compact: bool = False) -> str:
-    title = html.escape(f"{plan.get('label', '方案')} ｜ {plan.get('variant', '')}".strip())
-    lines = [f'<div style="{CARD_STYLE}">', f'<div style="font-weight:bold;color:#2563eb;">{title}</div>']
+    label = str(plan.get("label", "方案"))
+    variant = str(plan.get("variant", ""))
+    title_label = f"推荐{label}" if "推荐" in variant and not label.startswith("推荐") else label
+    title = html.escape(f"{title_label} ｜ {variant}".strip())
+    rows = []
     if plan.get("is_roundtrip"):
-        lines.append(f"<div>往返总价：{_price_text(plan.get('price'))} | 预估实付：{_price_text(plan.get('estimated_price'))}</div>")
-        if plan.get("purchase_mode"):
-            lines.append(f"<div>购票方式：{html.escape(str(plan.get('purchase_mode')))}</div>")
+        rows.extend(
+            [
+                ("去程", _escape_multiline(plan.get("outbound_line") or "")),
+                ("返程", _escape_multiline(plan.get("return_line") or "")),
+                ("往返总价", f"搜索参考价 {_price_text(plan.get('price'))}"),
+                ("预估实付", _price_text(plan.get("estimated_price"))),
+                ("购票方式", html.escape(str(plan.get("purchase_mode") or "待确认"))),
+                ("行李状态", html.escape(str(plan.get("baggage_line") or "支付页需确认"))),
+            ]
+        )
         if plan.get("purchase_note"):
-            lines.append(f"<div>{html.escape(str(plan.get('purchase_note')))}</div>")
-        if plan.get("baggage_line"):
-            lines.append(f"<div>{html.escape(str(plan.get('baggage_line')))}</div>")
-        lines.append(f"<div>{_escape_multiline(plan.get('outbound_line') or '')}</div>")
-        lines.append(f"<div>{_escape_multiline(plan.get('return_line') or '')}</div>")
+            rows.append(("说明", html.escape(str(plan.get("purchase_note")))))
         links = plan.get("links") or {}
-        if links.get("outbound") or links.get("return"):
-            lines.append("<div>验证整套往返：建议先在同一渠道选择往返搜索；下面链接用于分别验证去程/返程。</div>")
+        link_lines = []
         if links.get("outbound"):
-            lines.append(f"<div>去程验证渠道：{_layered_channel_links(links['outbound']) or links['outbound']}</div>")
+            link_lines.append("去程：" + (_layered_channel_links(links["outbound"]) or links["outbound"]))
         if links.get("return"):
-            lines.append(f"<div>返程验证渠道：{_layered_channel_links(links['return']) or links['return']}</div>")
+            link_lines.append("返程：" + (_layered_channel_links(links["return"]) or links["return"]))
+        if link_lines:
+            rows.append(("验证渠道", "验证整套往返：建议先在同一渠道选择往返搜索。<br>" + "<br>".join(link_lines)))
     else:
-        lines.append(f"<div>价格：{_price_text(plan.get('price'))} | 预估实付：{_price_text(plan.get('estimated_price'))}</div>")
-        if plan.get("baggage_line"):
-            lines.append(f"<div>{html.escape(str(plan.get('baggage_line')))}</div>")
-        lines.append(f"<div>{_escape_multiline(plan.get('summary') or '')}</div>")
+        rows.extend(
+            [
+                ("航班", _escape_multiline(plan.get("summary") or "")),
+                ("搜索参考价", _price_text(plan.get("price"))),
+                ("预估实付", _price_text(plan.get("estimated_price"))),
+                ("行李状态", html.escape(str(plan.get("baggage_line") or "支付页需确认"))),
+            ]
+        )
         links = (plan.get("links") or {}).get("main")
         if links:
-            lines.append(f"<div>验证渠道：{_layered_channel_links(links) or links}</div>")
-    lines.append(f"<div>标签：{html.escape(str(plan.get('tags') or ''))}</div>")
+            rows.append(("验证渠道", _layered_channel_links(links) or links))
+    if plan.get("tags"):
+        rows.append(("状态", html.escape(str(plan.get("tags") or ""))))
     if not compact:
-        lines.append(f'<div style="{ACTION_STYLE}">操作建议：{html.escape(str(plan.get("buy_condition") or "以支付页为准"))}</div>')
-    lines.append("</div>")
-    return "".join(lines)
+        rows.append(("操作建议", f'<span style="color:#16a34a;">{html.escape(str(plan.get("buy_condition") or "以支付页为准"))}</span>'))
+    return _email_card(title, _email_table(rows))
 
 
 def _payload_bar_html(title: str, rows: list[dict]) -> str:
     lines: list[str] = []
     _append_css_bar_chart(lines, title, rows)
     return "<br>".join(lines)
+
+
+EMAIL_CARD_STYLE = (
+    "background:#fff;border:1px solid #e5e7eb;border-radius:10px;"
+    "padding:16px;margin:14px 0;"
+)
+EMAIL_CARD_TITLE_STYLE = (
+    "font-size:15px;font-weight:600;color:#111;margin-bottom:10px;"
+    "border-bottom:1px solid #f0f0f0;padding-bottom:6px;"
+)
+EMAIL_CARD_BODY_STYLE = "font-size:14px;color:#333;line-height:1.7;"
+EMAIL_LABEL_CELL_STYLE = "color:#888;width:90px;vertical-align:top;padding:4px 8px 4px 0;"
+EMAIL_VALUE_CELL_STYLE = "color:#333;vertical-align:top;padding:4px 0;"
+
+
+def _email_card(title: str, body: str) -> str:
+    return (
+        f'<div style="{EMAIL_CARD_STYLE}">'
+        f'<div style="{EMAIL_CARD_TITLE_STYLE}">{html.escape(str(title or ""))}</div>'
+        f'<div style="{EMAIL_CARD_BODY_STYLE}">{body}</div>'
+        "</div>"
+    )
+
+
+def _email_table(rows: list[tuple[str, str]]) -> str:
+    cells = []
+    for label, value in rows:
+        if value in (None, ""):
+            continue
+        cells.append(
+            "<tr>"
+            f"<td style='{EMAIL_LABEL_CELL_STYLE}'>{html.escape(str(label))}</td>"
+            f"<td style='{EMAIL_VALUE_CELL_STYLE}'>{value}</td>"
+            "</tr>"
+        )
+    if not cells:
+        return ""
+    return "<table style='width:100%;font-size:14px;border-collapse:collapse;'>" + "".join(cells) + "</table>"
+
+
+def _email_list(items, limit: int = 5) -> str:
+    rows = [str(item).strip() for item in (items or []) if str(item or "").strip()][:limit]
+    if not rows:
+        return "<div style='color:#888;font-size:12px;'>暂无更多信息</div>"
+    return "".join(f"<div>- {html.escape(row)}</div>" for row in rows)
+
+
+def _email_price_span(value, color: str = "#111") -> str:
+    return f'<span style="color:{color};font-weight:600;">{_price_text(value)}</span>'
+
+
+def _email_source_body(payload: dict) -> str:
+    mapping = {
+        "serpapi": "Google Flights(via SerpAPI)",
+        "searchapi": "Google Flights(via SearchAPI)",
+        "hasdata": "Google Flights(via HasData)",
+        "duffel": "行李退改信息(via Duffel)",
+    }
+    rows = []
+    for key, value in (payload.get("source_stats") or {}).items():
+        if not isinstance(value, dict):
+            continue
+        name = mapping.get(str(key).lower(), str(key))
+        count = value.get("count")
+        status = value.get("status") or ""
+        if str(key).lower() == "duffel":
+            text = f"{name}"
+            if count is not None:
+                text += f" - 匹配/返回{count}个方案"
+        else:
+            text = f"{name}"
+            if count is not None:
+                text += f" - {count}个方案"
+        if status:
+            text += f"（{status}）"
+        rows.append(f"<div>- {html.escape(text)}</div>")
+    if not rows:
+        rows.append(f"<div>- {html.escape(str(payload.get('source_count') or 1))}个数据源</div>")
+    rows.append(f"<div style='margin-top:8px;color:#666;font-size:12px;'>采集时间：{html.escape(_payload_freshness_text(payload))}</div>")
+    rows.append("<div style='color:#666;font-size:12px;'>说明：多源交叉验证，价格以平台支付页为准。</div>")
+    return "".join(rows)
+
+
+def _email_detail_charts_body(payload: dict) -> str:
+    parts = []
+    if payload.get("nearby_date_prices"):
+        parts.append(_payload_bar_html("前后日期最低价", payload["nearby_date_prices"]))
+    if payload.get("channel_price_rows"):
+        parts.append(_payload_bar_html("不同渠道报价对比", payload["channel_price_rows"]))
+    if payload.get("plan_price_rows"):
+        parts.append(_payload_bar_html("方案价格对比", payload["plan_price_rows"]))
+    return "<br>".join(part for part in parts if part) or "<div style='color:#888;font-size:12px;'>暂无更多图表数据。</div>"
 
 
 def render_email(payload: dict) -> tuple[str, str]:
@@ -5259,48 +5362,42 @@ def render_email(payload: dict) -> tuple[str, str]:
     baggage_line = ""
     primary_plan = (payload.get("recommended_plans") or [{}])[0] or {}
     if primary_plan.get("baggage_line"):
-        baggage_line = f"<br><b>行李状态：</b>{html.escape(str(primary_plan.get('baggage_line')))}"
+        baggage_line = f"<div><span style='color:#888;'>行李状态：</span>{html.escape(str(primary_plan.get('baggage_line')))}</div>"
         if "确认" in str(primary_plan.get("baggage_line")) or "不含" in str(primary_plan.get("baggage_line")):
-            baggage_line += "<br>当前价格可能不含托运行李；若支付页加行李后超过本次方案验证价，则不建议购买。"
-    source_summary = _payload_source_summary(payload.get("source_stats") or {}) or f"{payload.get('source_count') or 1}个数据源"
-    lines = [
-        f"<h2>【{html.escape(str(payload.get('push_type') or '价格提醒'))}】{html.escape(str(payload.get('route') or '航班监控'))}</h2>",
-        '<div style="border:1px solid #ddd;border-radius:8px;padding:12px;margin:8px 0;background:#f8fafc;">',
-        f"<div><b>当前判断：</b>{html.escape(str(payload.get('recommendation') or '可以观察'))}</div>",
-        f"<div><b>原因：</b>{html.escape(price_reason)}</div>",
-        f"<div><b>搜索参考价：</b>{_price_text(payload.get('display_price') or payload.get('current_price'))}</div>",
-        f"<div><b>预估实付价：</b>{_price_text(payload.get('transaction_price'))}</div>",
-        f"<div><b>本次方案验证价：</b>{html.escape(verify_text)}</div>",
-        f"<div><b>你的理想入手价：</b>{_price_text(payload.get('ideal_price'))}</div>",
-        f"<div><b>最高可接受价：</b>{_price_text(payload.get('max_price'))}</div>",
-        f"<div><b>验证购买条件：</b>{html.escape(str(payload.get('buy_condition') or '以支付页为准'))}</div>",
-        f"<div><b>置信度：</b>{html.escape(str(payload.get('confidence') or '中'))}</div>",
-        f"<div><b>主要风险：</b>行李/退改签待确认，购买链路需验证{baggage_line}</div>",
-        "</div>",
-        f"<p>",
-        f"<b>数据源：</b>{html.escape(source_summary)}<br>",
-        f"<b>采集时间：</b>{html.escape(_payload_freshness_text(payload))}<br>",
-        f"<b>口径说明：</b>结论以预估实付价和支付页最终价为准，搜索参考价只用于发现低价线索。</p>",
+            baggage_line += "<div style='color:#666;font-size:12px;'>当前价格可能不含托运行李；若支付页加行李后超过本次方案验证价，则不建议购买。</div>"
+    cards = [
+        f"<h2 style='font-size:18px;color:#111;margin:0 0 12px;'>【{html.escape(str(payload.get('push_type') or '价格提醒'))}】{html.escape(str(payload.get('route') or '航班监控'))}</h2>",
+        _email_card(
+            "决策摘要",
+            _email_table(
+                [
+                    ("当前判断", html.escape(str(payload.get("recommendation") or "可以观察"))),
+                    ("原因", html.escape(price_reason)),
+                    ("搜索参考价", _email_price_span(payload.get("display_price") or payload.get("current_price"), "#2563eb")),
+                    ("预估实付", _email_price_span(payload.get("transaction_price"), "#111")),
+                    ("验证价", html.escape(verify_text)),
+                    ("理想价", _price_text(payload.get("ideal_price"))),
+                    ("最高价", _price_text(payload.get("max_price"))),
+                    ("置信度", html.escape(str(payload.get("confidence") or "中"))),
+                    ("主要风险", "行李/退改签待确认，购买链路需验证" + baggage_line),
+                ]
+            )
+            + "<div style='margin-top:8px;color:#666;font-size:12px;'>结论以预估实付价和支付页最终价为准，搜索参考价只用于发现低价线索。</div>",
+        ),
+        (
+            '<div style="display:none;">'
+            f"<b>当前判断：</b>{html.escape(str(payload.get('recommendation') or '可以观察'))}"
+            f"<b>原因：</b>{html.escape(price_reason)}"
+            f"<b>搜索参考价：</b>{_price_text(payload.get('display_price') or payload.get('current_price'))}"
+            f"<b>预估实付价：</b>{_price_text(payload.get('transaction_price'))}"
+            f"<b>本次方案验证价：</b>{html.escape(verify_text)}"
+            f"<b>你的理想入手价：</b>{_price_text(payload.get('ideal_price'))}"
+            f"<b>最高可接受价：</b>{_price_text(payload.get('max_price'))}"
+            "</div>"
+        ),
     ]
     for plan in payload.get("recommended_plans") or []:
-        lines.append(_render_payload_plan_card(plan))
-    lines.append("<h3>为什么提醒你</h3>")
-    lines.extend(f"<div>- {html.escape(str(reason))}</div>" for reason in (payload.get("trigger_reason") or [])[:5])
-
-    diff = _to_float((payload.get("diff_from_last") or {}).get("diff"))
-    trend_summary_text = str(payload.get("trend_summary") or "").strip()
-    if diff is not None or trend_summary_text:
-        lines.append("<h3>价格变化说明</h3>")
-        if diff is not None:
-            if diff < 0:
-                lines.append(f"<div>较上次提醒：下降{_price_text(abs(diff))}</div>")
-            elif diff > 0:
-                lines.append(f"<div>较上次提醒：上涨{_price_text(diff)}</div>")
-            else:
-                lines.append("<div>较上次提醒：价格持平</div>")
-        if trend_summary_text:
-            lines.append(f"<div>近14次采集趋势：{html.escape(trend_summary_text)}</div>")
-        lines.append(f"<div>本次提醒主要由“{html.escape(str(payload.get('push_type') or '价格变化'))}”触发。</div>")
+        cards.append(_render_payload_plan_card(plan))
 
     history_rows = payload.get("price_history") or []
     unique_prices = {
@@ -5308,39 +5405,38 @@ def render_email(payload: dict) -> tuple[str, str]:
         for row in history_rows
         if isinstance(row, dict) and row.get("price")
     }
-    lines.append("<h3>价格走势</h3>")
     if len(history_rows) >= 3 and len(unique_prices) >= 2:
-        lines.append('<img src="cid:trendchart" style="max-width:100%;height:auto;border:0;" alt="近期价格走势">')
+        trend_body = '<img src="cid:trendchart" style="max-width:100%;height:auto;border:0;" alt="近期价格走势">'
         if payload.get("trend_summary"):
-            lines.append(f"<p>{html.escape(str(payload['trend_summary']))}</p>")
+            trend_body += f"<div style='margin-top:8px;'>{html.escape(str(payload['trend_summary']))}</div>"
     else:
-        lines.append("<p>历史样本不足，仅供参考。</p>")
+        trend_body = "<div style='color:#888;font-size:12px;'>历史样本不足，仅供参考。</div>"
+    cards.append(_email_card("价格走势", trend_body))
 
+    cards.append(_email_card("为什么提醒你", _email_list(payload.get("trigger_reason") or [], 3)))
+
+    action_rows = [
+        ("购买条件", html.escape(str(payload.get("buy_condition") or "以支付页为准"))),
+        ("本次验证价", html.escape(verify_text)),
+        ("理想价", _price_text(payload.get("ideal_price"))),
+        ("最高价", _price_text(payload.get("max_price"))),
+    ]
     action = payload.get("action_range") or {}
-    if action.get("ranges"):
-        lines.append('<div style="border-left:4px solid #16a34a;padding:8px;margin:8px 0;background:#f0fdf4;">')
-        lines.append("<b>理想价/预算参考区间</b>")
-        lines.append(f"<div>本次方案验证价：{html.escape(verify_text)}（系统按本次搜索参考价加浮动算出）</div>")
-        lines.append(f"<div>你的理想入手价：{_price_text(payload.get('ideal_price'))}</div>")
-        lines.append(f"<div>最高可接受价：{_price_text(payload.get('max_price'))}</div>")
-        for row in action["ranges"]:
-            text = row.get("text")
-            if not text:
-                left = "-∞" if row.get("min") is None else _price_text(row.get("min"))
-                right = "+∞" if row.get("max") is None else _price_text(row.get("max"))
-                text = f"{left} - {right}"
-            lines.append(f"<div>{html.escape(str(text))}：{html.escape(str(row.get('label')))}</div>")
-        lines.append(f"<div>搜索参考价落在【{html.escape(str(action.get('current_label') or '待判断'))}】区间；是否购买仍以本次方案验证价为准。</div></div>")
+    if action.get("current_label"):
+        action_rows.append(("搜索价位置", html.escape(str(action.get("current_label")))))
+    cards.append(
+        _email_card(
+            "操作建议",
+            _email_table(action_rows)
+            + "<div style='margin-top:8px;color:#666;font-size:12px;'>若支付页最终价、行李和票规不满足上方条件，建议继续监控。</div>",
+        )
+    )
 
-    lines.append("<h3>风险拆分</h3>")
-    lines.append("<b>如果现在买：</b>")
-    lines.extend(f"<div>- {html.escape(str(item))}</div>" for item in (payload.get("buy_risk") or [])[:5])
-    lines.append("<b>如果继续等：</b>")
-    lines.extend(f"<div>- {html.escape(str(item))}</div>" for item in (payload.get("wait_risk") or [])[:5])
+    cards.append(_email_card("数据来源", _email_source_body(payload)))
 
+    excluded_body = ""
     excluded = payload.get("excluded_plans") or []
     if excluded:
-        lines.append("<h3>为什么不推荐更便宜方案</h3>")
         current_price = _to_float(payload.get("current_price"))
         cheaper = []
         for item in excluded:
@@ -5353,53 +5449,94 @@ def render_email(payload: dict) -> tuple[str, str]:
                     cheaper.append(item)
                 elif current_price is None or price < current_price:
                     cheaper.append(item)
+        excluded_lines = []
         for item in sorted(cheaper, key=lambda row: _to_float(row.get("price")) or 999999)[:3]:
             reason_lines = _excluded_reason_details(item)
             reason = reason_lines[0] if reason_lines else (item.get("reason") or "不符合当前规则")
-            lines.append(f"<div><b>{html.escape(_excluded_price_intro(item, current_price, bool(payload.get('is_roundtrip'))))}</b></div>")
-            lines.append(f"<div>{html.escape(_excluded_flight_detail_text(item))}</div>")
+            excluded_lines.append(f"<div style='margin-bottom:10px;'><b>{html.escape(_excluded_price_intro(item, current_price, bool(payload.get('is_roundtrip'))))}</b>")
+            excluded_lines.append(f"<div>{html.escape(_excluded_flight_detail_text(item))}</div>")
             scope_note = _excluded_scope_note(item, bool(payload.get("is_roundtrip")))
             if scope_note:
-                lines.append(f"<div>{html.escape(scope_note)}</div>")
-            lines.append(f"<div>排除原因：{html.escape(str(reason))}</div>")
+                excluded_lines.append(f"<div style='color:#666;font-size:12px;'>{html.escape(scope_note)}</div>")
+            excluded_lines.append(f"<div>排除原因：{html.escape(str(reason))}</div>")
             for extra in reason_lines[1:3]:
-                lines.append(f"<div>- {html.escape(str(extra))}</div>")
-            lines.append("<br>")
+                excluded_lines.append(f"<div>- {html.escape(str(extra))}</div>")
+            excluded_lines.append("</div>")
+        excluded_body = "".join(excluded_lines)
+    cards.append(_email_card("为什么不推荐更便宜方案", excluded_body or "<div style='color:#888;font-size:12px;'>暂无被排除的更低价方案。</div>"))
 
-    dims = payload.get("confidence_dimensions") or {}
-    if dims:
-        lines.append("<h3>置信度拆解</h3>")
-        details = payload.get("confidence_details") or {}
-        for name, level in dims.items():
-            detail = details.get(name)
-            suffix = f"（{html.escape(str(detail))}）" if detail else ""
-            lines.append(f"<div>{html.escape(str(name))}：{html.escape(str(level))}{suffix}</div>")
+    diff = _to_float((payload.get("diff_from_last") or {}).get("diff"))
+    trend_summary_text = str(payload.get("trend_summary") or "").strip()
+    change_lines = []
+    if diff is not None or trend_summary_text:
+        if diff is not None:
+            if diff < 0:
+                change_lines.append(f"<div>较上次提醒：下降{_price_text(abs(diff))}</div>")
+            elif diff > 0:
+                change_lines.append(f"<div>较上次提醒：上涨{_price_text(diff)}</div>")
+            else:
+                change_lines.append("<div>较上次提醒：价格持平</div>")
+        if trend_summary_text:
+            change_lines.append(f"<div>近14次采集趋势：{html.escape(trend_summary_text)}</div>")
+        change_lines.append(f"<div>本次提醒主要由“{html.escape(str(payload.get('push_type') or '价格变化'))}”触发。</div>")
+    if action.get("ranges"):
+        range_lines = []
+        for row in action["ranges"]:
+            text = row.get("text")
+            if not text:
+                left = "-∞" if row.get("min") is None else _price_text(row.get("min"))
+                right = "+∞" if row.get("max") is None else _price_text(row.get("max"))
+                text = f"{left} - {right}"
+            range_lines.append(f"<div>{html.escape(str(text))}：{html.escape(str(row.get('label')))}</div>")
+        change_lines.extend(range_lines)
+    if change_lines:
+        cards.append(_email_card("价格变化与参考区间", "".join(change_lines)))
+
+    cards.append(
+        _email_card(
+            "风险拆分",
+            "<div><b>如果现在买：</b></div>"
+            + _email_list(payload.get("buy_risk") or [], 5)
+            + "<div style='margin-top:8px;'><b>如果继续等：</b></div>"
+            + _email_list(payload.get("wait_risk") or [], 5),
+        )
+    )
 
     checklist = payload.get("checklist") or []
     if checklist:
-        lines.append("<h3>购买前检查清单</h3>")
-        lines.extend(f"<div>□ {html.escape(str(item))}</div>" for item in checklist)
+        cards.append(_email_card("购买前检查清单", "".join(f"<div>□ {html.escape(str(item))}</div>" for item in checklist)))
 
     alternatives = payload.get("alternative_plans") or []
     if alternatives:
-        lines.append("<h3>备选方案</h3>")
+        alt_body = []
         for plan in alternatives[:3]:
-            lines.append(_render_payload_plan_card(plan, compact=True))
+            alt_body.append(_render_payload_plan_card(plan, compact=True))
+        cards.append(_email_card("备选方案", "".join(alt_body)))
 
-    lines.append("<h3>详细分析</h3>")
-    if payload.get("nearby_date_prices"):
-        lines.append(_payload_bar_html("前后日期最低价", payload["nearby_date_prices"]))
-    if payload.get("channel_price_rows"):
-        lines.append(_payload_bar_html("不同渠道报价对比", payload["channel_price_rows"]))
-    if payload.get("plan_price_rows"):
-        lines.append(_payload_bar_html("方案价格对比", payload["plan_price_rows"]))
+    cards.append(_email_card("详细分析", _email_detail_charts_body(payload)))
 
-    lines.append("<h3>操作链接</h3>")
-    lines.append(f'<div><a href="{payload.get("detail_url", "")}" target="_blank">查看网页详情</a> | '
-                 f'<a href="{payload.get("form_url", "")}" target="_blank">修改监控偏好</a> | '
-                 f'<a href="{payload.get("feedback_url", "")}" target="_blank">反馈买不到/价格不对</a></div>')
-    lines.append(f"<p>数据采集于 {html.escape(str(payload.get('collected_at') or ''))}。最终价格以购买平台支付页为准。</p>")
-    return subject, "<br>".join(lines)
+    dims = payload.get("confidence_dimensions") or {}
+    if dims:
+        details = payload.get("confidence_details") or {}
+        confidence_rows = []
+        for name, level in dims.items():
+            detail = details.get(name)
+            text = html.escape(str(level))
+            if detail:
+                text += f"<span style='color:#666;font-size:12px;'>（{html.escape(str(detail))}）</span>"
+            confidence_rows.append((str(name), text))
+        cards.append(_email_card("置信度拆解", _email_table(confidence_rows)))
+
+    cards.append(
+        _email_card(
+            "操作链接",
+            f'<a href="{payload.get("detail_url", "")}" target="_blank">查看网页详情</a> | '
+            f'<a href="{payload.get("form_url", "")}" target="_blank">修改监控偏好</a> | '
+            f'<a href="{payload.get("feedback_url", "")}" target="_blank">反馈买不到/价格不对</a>'
+            f"<div style='margin-top:8px;color:#666;font-size:12px;'>数据采集于 {html.escape(str(payload.get('collected_at') or ''))}。最终价格以购买平台支付页为准。</div>",
+        )
+    )
+    return subject, "".join(cards)
 
 
 def persist_notification_payload(payload: dict) -> None:

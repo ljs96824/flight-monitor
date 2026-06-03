@@ -1,9 +1,11 @@
 import sys
 import types
+import inspect
 
 sys.modules.setdefault("httpx", types.SimpleNamespace(get=lambda *a, **k: None, post=lambda *a, **k: None))
 
 from analyzer import determine_push_type
+import email_notifier
 from notifier import render_email
 
 
@@ -177,8 +179,66 @@ def test_email_detail_charts_dedupe_channels_and_skip_empty_plan_rows():
     assert "¥6,522 B" not in html
 
 
+def test_email_uses_section_cards_and_plan_table_layout():
+    payload = {
+        "push_type": "值得验证",
+        "route": "上海 → 大阪",
+        "recommendation": "值得验证，不建议直接下单",
+        "display_price": 6522,
+        "transaction_price": 7182,
+        "verify_price": 6848,
+        "ideal_price": 7994,
+        "max_price": 9000,
+        "buy_condition": "支付页≤¥6,848且含托运行李",
+        "confidence": "中高",
+        "source_count": 2,
+        "recommended_plans": [
+            {
+                "label": "方案A",
+                "variant": "推荐",
+                "is_roundtrip": True,
+                "price": 6522,
+                "estimated_price": 7182,
+                "outbound_line": "去程:9C6575｜春秋航空｜PVG 08:05 → KIX 11:20｜直飞｜A320",
+                "return_line": "返程:9C6582｜春秋航空｜KIX 19:30 → PVG 21:00｜直飞｜A320",
+                "purchase_mode": "两个单程拼接",
+                "baggage_line": "行李:支付页需确认",
+                "links": {"outbound": '<a href="https://example.com">Trip.com</a>'},
+            }
+        ],
+        "trigger_reason": ["搜索参考价进入你的理想入手区间"],
+        "price_history": [],
+        "buy_risk": ["最终支付价需确认"],
+        "wait_risk": ["继续等待可能错过低价"],
+        "action_range": {"ranges": []},
+        "checklist": ["支付页最终价是否≤¥6,848"],
+        "detail_url": "https://example.com/detail",
+        "form_url": "https://example.com/",
+        "feedback_url": "https://example.com/feedback",
+    }
+
+    _, html = render_email(payload)
+
+    assert "background:#fff;border:1px solid #e5e7eb;border-radius:10px" in html
+    assert html.count("background:#fff;border:1px solid #e5e7eb;border-radius:10px") >= 6
+    assert "<table style='width:100%;font-size:14px;" in html
+    assert "width:90px;" in html
+    assert "推荐方案" in html
+
+
+def test_trend_png_source_sets_date_axis_labels():
+    source = inspect.getsource(email_notifier.build_trend_png)
+
+    assert "set_xticks" in source
+    assert "set_xticklabels" in source
+    assert "rotation=45" in source
+    assert 'bbox_inches="tight"' in source
+
+
 if __name__ == "__main__":
     test_push_type_uses_transaction_price_when_display_price_only_looks_good()
     test_email_top_summary_separates_display_transaction_and_verify_prices()
     test_email_roundtrip_excluded_single_leg_is_not_compared_to_roundtrip_total()
     test_email_detail_charts_dedupe_channels_and_skip_empty_plan_rows()
+    test_email_uses_section_cards_and_plan_table_layout()
+    test_trend_png_source_sets_date_axis_labels()
