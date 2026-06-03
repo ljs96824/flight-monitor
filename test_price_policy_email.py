@@ -4,7 +4,7 @@ import inspect
 
 sys.modules.setdefault("httpx", types.SimpleNamespace(get=lambda *a, **k: None, post=lambda *a, **k: None))
 
-from analyzer import determine_push_type
+from analyzer import analyze_round_trip, determine_push_type
 import email_notifier
 from notifier import render_email
 
@@ -142,6 +142,131 @@ def test_email_roundtrip_excluded_single_leg_is_not_compared_to_roundtrip_total(
     assert "font-size:13px;line-height:1.6" in html
     assert "width:80px" in html
     assert "#b91c1c" in html
+
+
+def test_roundtrip_analysis_builds_excluded_roundtrip_combos():
+    outbound_ok = {
+        "price": 3400,
+        "flight_combo": "9C6575",
+        "stops": 0,
+        "total_duration_min": 195,
+        "segments": [
+            {"flight_no": "9C6575", "airline": "春秋航空", "dep_airport": "PVG", "dep_time": "2026-10-01 08:05", "arr_airport": "KIX", "arr_time": "2026-10-01 11:20", "aircraft": "A320"}
+        ],
+    }
+    return_ok = {
+        "price": 3100,
+        "flight_combo": "9C6582",
+        "stops": 0,
+        "total_duration_min": 210,
+        "segments": [
+            {"flight_no": "9C6582", "airline": "春秋航空", "dep_airport": "KIX", "dep_time": "2026-10-06 19:30", "arr_airport": "PVG", "arr_time": "2026-10-06 21:00", "aircraft": "A320"}
+        ],
+    }
+    outbound_excluded = {
+        "price": 2500,
+        "flight_combo": "KE888+KE721",
+        "stops": 1,
+        "total_duration_min": 460,
+        "segments": [
+            {"flight_no": "KE888", "airline": "大韩航空", "dep_airport": "PVG", "dep_time": "2026-10-01 08:00", "arr_airport": "ICN", "arr_time": "2026-10-01 11:00", "aircraft": "A330"},
+            {"flight_no": "KE721", "airline": "大韩航空", "dep_airport": "ICN", "dep_time": "2026-10-01 13:00", "arr_airport": "KIX", "arr_time": "2026-10-01 15:40", "aircraft": "A321"},
+        ],
+        "layovers": [{"airport": "ICN", "city": "首尔仁川", "wait_minutes": 120}],
+    }
+    outbound_analysis = {
+        "economy_recommendations": [outbound_ok],
+        "all_flights": [outbound_ok],
+        "excluded_flights": [
+            {
+                "scope": "outbound",
+                "price": 2500,
+                "flight": outbound_excluded,
+                "reason": "用户设置必须直飞",
+            }
+        ],
+    }
+    return_analysis = {
+        "economy_recommendations": [return_ok],
+        "all_flights": [return_ok],
+        "excluded_flights": [],
+    }
+
+    result = analyze_round_trip(outbound_analysis, return_analysis)
+
+    excluded = result.get("excluded_roundtrip_combos") or []
+    assert excluded
+    assert excluded[0]["scope"] == "roundtrip"
+    assert excluded[0]["total_price"] == 5600
+    assert excluded[0]["diff"] == 900
+    assert excluded[0]["outbound"]["flight_combo"] == "KE888+KE721"
+    assert excluded[0]["return"]["flight_combo"] == "9C6582"
+    assert "去程" in excluded[0]["reason"]
+    assert "用户设置必须直飞" in excluded[0]["reason"]
+
+
+def test_email_roundtrip_excluded_combo_shows_both_legs():
+    payload = {
+        "push_type": "值得验证",
+        "route": "上海 → 大阪",
+        "is_roundtrip": True,
+        "recommendation": "值得验证",
+        "current_price": 6500,
+        "display_price": 6500,
+        "transaction_price": 6500,
+        "verify_price": 6900,
+        "ideal_price": 7800,
+        "max_price": 9000,
+        "buy_condition": "支付页≤¥6,900且含托运行李",
+        "confidence": "中高",
+        "recommended_plans": [],
+        "trigger_reason": [],
+        "price_history": [],
+        "excluded_plans": [
+            {
+                "scope": "roundtrip",
+                "is_roundtrip": True,
+                "total_price": 5600,
+                "diff": 900,
+                "reason": "去程：用户设置必须直飞",
+                "outbound": {
+                    "price": 2500,
+                    "flight_combo": "KE888+KE721",
+                    "stops": 1,
+                    "total_duration_min": 460,
+                    "segments": [
+                        {"flight_no": "KE888", "airline": "大韩航空", "dep_airport": "PVG", "dep_time": "2026-10-01 08:00", "arr_airport": "ICN", "arr_time": "2026-10-01 11:00", "aircraft": "A330"},
+                        {"flight_no": "KE721", "airline": "大韩航空", "dep_airport": "ICN", "dep_time": "2026-10-01 13:00", "arr_airport": "KIX", "arr_time": "2026-10-01 15:40", "aircraft": "A321"},
+                    ],
+                    "layovers": [{"airport": "ICN", "city": "首尔仁川", "wait_minutes": 120}],
+                },
+                "return": {
+                    "price": 3100,
+                    "flight_combo": "9C6582",
+                    "stops": 0,
+                    "total_duration_min": 210,
+                    "segments": [
+                        {"flight_no": "9C6582", "airline": "春秋航空", "dep_airport": "KIX", "dep_time": "2026-10-06 19:30", "arr_airport": "PVG", "arr_time": "2026-10-06 21:00", "aircraft": "A320"}
+                    ],
+                },
+            }
+        ],
+        "action_range": {"ranges": []},
+        "checklist": [],
+        "detail_url": "https://example.com/detail",
+        "form_url": "https://example.com/",
+        "feedback_url": "https://example.com/feedback",
+    }
+
+    _, html = render_email(payload)
+
+    assert "已排除的更低价往返组合" in html
+    assert "比推荐便宜¥900" in html
+    assert "KE888" in html
+    assert "KE721" in html
+    assert "9C6582" in html
+    assert "返程" in html
+    assert "单段价，非往返总价" not in html
 
 
 def test_email_detail_charts_dedupe_channels_and_skip_empty_plan_rows():
@@ -285,6 +410,8 @@ if __name__ == "__main__":
     test_push_type_uses_transaction_price_when_display_price_only_looks_good()
     test_email_top_summary_separates_display_transaction_and_verify_prices()
     test_email_roundtrip_excluded_single_leg_is_not_compared_to_roundtrip_total()
+    test_roundtrip_analysis_builds_excluded_roundtrip_combos()
+    test_email_roundtrip_excluded_combo_shows_both_legs()
     test_email_detail_charts_dedupe_channels_and_skip_empty_plan_rows()
     test_email_uses_section_cards_and_plan_table_layout()
     test_trend_png_source_sets_date_axis_labels()

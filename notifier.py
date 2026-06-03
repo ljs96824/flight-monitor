@@ -5047,7 +5047,11 @@ def build_notification_payload(
         "trigger_reason": (push_meta or {}).get("reasons") or (decision.get("reasons") or [])[:3],
         "recommended_plans": all_items[:2],
         "alternative_plans": all_items[2:5],
-        "excluded_plans": analysis_result.get("excluded_flights") or [],
+        "excluded_plans": (
+            ((analysis_result.get("round_trip_analysis") or {}).get("excluded_roundtrip_combos") or [])
+            if is_roundtrip
+            else (analysis_result.get("excluded_flights") or [])
+        ),
         "buy_risk": risk.get("buy_risks") or ["可能遇到支付页跳价", "票规需确认（行李/退改）", "不同渠道售后政策不同"],
         "wait_risk": risk.get("wait_risks") or ["可能错过当前低价", "临近出发价格通常上涨", "理想价再次出现不确定"],
         "risk_summary": risk.get("summary") or "",
@@ -5718,7 +5722,10 @@ def render_email(payload: dict) -> tuple[str, str]:
             "如果你能接受这些条件，可在精准监控中放宽限制。"
             "</div>"
         ]
-        for item in sorted(cheaper, key=lambda row: _to_float(row.get("price")) or 999999)[:3]:
+        for item in sorted(
+            cheaper,
+            key=lambda row: _to_float(row.get("total_price") or row.get("roundtrip_price") or row.get("price")) or 999999,
+        )[:3]:
             excluded_lines.append(_render_excluded_plan_card(item, current_price, bool(payload.get("is_roundtrip"))))
         excluded_body = "".join(excluded_lines)
     cards.append(_email_card("为什么不推荐更便宜方案", excluded_body or "<div style='color:#888;font-size:12px;'>暂无被排除的更低价方案。</div>"))

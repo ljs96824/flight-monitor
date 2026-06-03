@@ -4290,6 +4290,147 @@ def _roundtrip_budget_advice(roundtrip_lowest, target_price=None, max_budget=Non
     return ""
 
 
+def _roundtrip_excluded_flight_from_item(item: dict) -> dict:
+    flight = item.get("flight") if isinstance(item, dict) else None
+    if isinstance(flight, dict) and flight:
+        merged = dict(flight)
+        for key in (
+            "price",
+            "flight_combo",
+            "airline_summary",
+            "segments",
+            "layovers",
+            "airlines",
+            "stops",
+            "total_duration_min",
+            "price_estimate",
+            "fare_verification",
+            "availability",
+            "transfer_risk",
+        ):
+            if item.get(key) not in (None, "", []):
+                merged.setdefault(key, item.get(key))
+        return merged
+    return dict(item or {})
+
+
+def _roundtrip_flight_identity(flight: dict) -> tuple:
+    segments = flight.get("segments") or []
+    first = segments[0] if segments else {}
+    last = segments[-1] if segments else {}
+    return (
+        str(flight.get("flight_combo") or ""),
+        _to_float(flight.get("price")),
+        str(first.get("dep_airport") or ""),
+        str(last.get("arr_airport") or ""),
+        str(first.get("dep_time") or ""),
+    )
+
+
+def _roundtrip_candidate_flights(analysis: dict, direction: str) -> list[dict]:
+    candidates = []
+    seen = set()
+
+    def add_candidate(flight: dict, reason: str = "") -> None:
+        if not isinstance(flight, dict) or not flight:
+            return
+        price = _to_float(flight.get("price"))
+        if price is None or price <= 0:
+            return
+        item = {
+            "flight": dict(flight),
+            "price": price,
+            "reason": str(reason or "").strip(),
+            "excluded": bool(reason),
+            "direction": direction,
+        }
+        key = (_roundtrip_flight_identity(item["flight"]), item["excluded"], item["reason"])
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append(item)
+
+    for flight in (analysis.get("economy_recommendations") or []) + (analysis.get("all_flights") or []):
+        add_candidate(flight)
+
+    for excluded in analysis.get("excluded_flights") or []:
+        if not isinstance(excluded, dict):
+            continue
+        flight = _roundtrip_excluded_flight_from_item(excluded)
+        reason = excluded.get("reason") or flight.get("exclude_reason") or "不符合当前筛选规则"
+        add_candidate(flight, reason)
+
+    return candidates
+
+
+def build_excluded_roundtrip_combos(
+    outbound_analysis: dict,
+    return_analysis: dict,
+    recommended_total,
+    max_show: int = 3,
+) -> list[dict]:
+    """Build same-unit excluded round-trip combos for notification explanations."""
+    recommended_total = _to_float(recommended_total)
+    if recommended_total is None:
+        return []
+
+    outbound_candidates = _roundtrip_candidate_flights(outbound_analysis or {}, "outbound")
+    return_candidates = _roundtrip_candidate_flights(return_analysis or {}, "return")
+    combos = []
+    reason_counts: dict[tuple[str, ...], int] = {}
+    seen_pairs = set()
+
+    for outbound in outbound_candidates:
+        for return_item in return_candidates:
+            reasons = []
+            if outbound.get("excluded") and outbound.get("reason"):
+                reasons.append(f"去程：{outbound['reason']}")
+            if return_item.get("excluded") and return_item.get("reason"):
+                reasons.append(f"返程：{return_item['reason']}")
+            if not reasons:
+                continue
+
+            outbound_price = _to_float(outbound.get("price"))
+            return_price = _to_float(return_item.get("price"))
+            if outbound_price is None or return_price is None:
+                continue
+            total = outbound_price + return_price
+            if total >= recommended_total:
+                continue
+
+            pair_key = (
+                _roundtrip_flight_identity(outbound["flight"]),
+                _roundtrip_flight_identity(return_item["flight"]),
+            )
+            if pair_key in seen_pairs:
+                continue
+            seen_pairs.add(pair_key)
+
+            reason_key = tuple(reasons)
+            if reason_counts.get(reason_key, 0) >= 2:
+                continue
+            reason_counts[reason_key] = reason_counts.get(reason_key, 0) + 1
+
+            combos.append(
+                {
+                    "scope": "roundtrip",
+                    "is_roundtrip": True,
+                    "outbound": outbound["flight"],
+                    "return": return_item["flight"],
+                    "outbound_price": outbound_price,
+                    "return_price": return_price,
+                    "total_price": total,
+                    "roundtrip_price": total,
+                    "diff": recommended_total - total,
+                    "reasons": reasons,
+                    "reason": "；".join(reasons),
+                }
+            )
+
+    combos.sort(key=lambda item: item["total_price"])
+    return combos[:max_show]
+
+
 def analyze_round_trip(
     outbound_analysis: dict,
     return_analysis: dict,
@@ -4384,6 +4525,12 @@ def analyze_round_trip(
         target_float * 2 if target_float else None,
         execution_grade,
     )
+    excluded_roundtrip_combos = build_excluded_roundtrip_combos(
+        outbound_analysis,
+        return_analysis,
+        combinations[0].get("total_price") if combinations else total_min,
+        3,
+    )
 
     return {
         "outbound_min": outbound_min,
@@ -4401,6 +4548,7 @@ def analyze_round_trip(
         "decision_summary": decision_summary,
         "confidence_breakdown": confidence_breakdown,
         "buy_vs_wait_risk": buy_vs_wait_risk,
+        "excluded_roundtrip_combos": excluded_roundtrip_combos,
         "previous": previous,
         "advice": _roundtrip_budget_advice(total_min, target_price, max_budget),
     }
