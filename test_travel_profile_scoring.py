@@ -1,6 +1,6 @@
 import unittest
 
-from analyzer import build_travel_profile, calc_final_score
+from analyzer import build_recommendation_basis, build_travel_profile, calc_final_score
 
 
 class TravelProfileScoringTest(unittest.TestCase):
@@ -16,6 +16,40 @@ class TravelProfileScoringTest(unittest.TestCase):
         self.assertEqual(profile["comfort"], "high")
         self.assertEqual(profile["risk_averse"], "high")
         self.assertEqual(profile["baggage"], "high")
+
+    def test_multiple_scenarios_merge_highest_dimension_requirements(self):
+        profile = build_travel_profile(
+            {
+                "travel_scenarios": ["tourism", "family"],
+                "travelers": "solo",
+            }
+        )
+
+        self.assertEqual(profile["scenarios"], ["tourism", "family"])
+        self.assertEqual(profile["scenario"], "tourism")
+        self.assertEqual(profile["price"], "high")
+        self.assertEqual(profile["comfort"], "high")
+        self.assertEqual(profile["risk_averse"], "high")
+        self.assertEqual(profile["baggage"], "high")
+        self.assertIn("tourism+family", profile["scenario_combo"])
+
+    def test_legacy_single_scenario_string_is_normalized_to_list(self):
+        profile = build_travel_profile({"travel_scenarios": "business"})
+
+        self.assertEqual(profile["scenarios"], ["business"])
+        self.assertEqual(profile["scenario"], "business")
+        self.assertEqual(profile["time"], "high")
+        self.assertEqual(profile["risk_averse"], "high")
+
+    def test_recommendation_basis_uses_same_combined_profile(self):
+        profile = build_travel_profile({"travel_scenarios": ["tourism", "family"]})
+        basis = build_recommendation_basis(profile)
+
+        self.assertEqual(basis["scenarios"], ["tourism", "family"])
+        self.assertEqual(basis["scenario_labels"], ["旅游", "家庭/亲子"])
+        self.assertIn("价格敏感", " ".join(basis["applied_rules"]))
+        self.assertIn("白天直飞", " ".join(basis["applied_rules"]))
+        self.assertIn("孩子安全舒适", basis["conflict_note"])
 
     def test_family_profile_prefers_reliable_comfort_over_cheapest(self):
         stable = {

@@ -204,10 +204,62 @@ TRAVEL_PROFILE_LEVEL_LABELS = {
 }
 
 
+TRAVEL_PROFILE_LABELS = {
+    "price": "价格敏感度",
+    "time": "时间刚性",
+    "comfort": "舒适度需求",
+    "risk_averse": "执行风险厌恶",
+    "baggage": "行李票规重要性",
+}
+
+
+TRAVEL_PROFILE_LEVEL_LABELS = {
+    "low": "低",
+    "medium": "中",
+    "high": "高",
+}
+
+
+TRAVEL_SCENARIO_LABELS = {
+    "personal": "个人出行",
+    "business": "商务/会议",
+    "tourism": "旅游",
+    "family_visit": "探亲/回家",
+    "visit_family": "探亲/回家",
+    "family": "家庭/亲子",
+    "elderly": "有老人同行",
+    "with_elderly": "有老人同行",
+    "important": "重要事项",
+    "price_first": "价格优先",
+}
+
+
+def _normalize_travel_scenarios(value) -> list[str]:
+    """Normalize legacy single scenario and new multi-select values."""
+    if value in (None, "", []):
+        return ["personal"]
+    if isinstance(value, str):
+        items = [item.strip() for item in value.split(",") if item.strip()]
+    elif isinstance(value, (list, tuple, set)):
+        items = [str(item).strip() for item in value if str(item).strip()]
+    else:
+        items = [str(value).strip()]
+    return items or ["personal"]
+
+
+def _travel_scenario_labels(scenarios: list[str]) -> list[str]:
+    return [TRAVEL_SCENARIO_LABELS.get(item, item) for item in scenarios]
+
+
 def build_travel_profile(soft_prefs: dict | None) -> dict:
     """Convert scenario and companions into scoring weights."""
     soft_prefs = soft_prefs or {}
-    scenario = soft_prefs.get("travel_scenario", "personal")
+    scenarios = _normalize_travel_scenarios(
+        soft_prefs.get("travel_scenarios")
+        or soft_prefs.get("travel_scenario")
+        or soft_prefs.get("scenario")
+    )
+    scenario = scenarios[0]
     travelers = soft_prefs.get("travelers") or soft_prefs.get("companions") or "solo"
     profiles = {
         "personal": {
@@ -281,7 +333,14 @@ def build_travel_profile(soft_prefs: dict | None) -> dict:
             "baggage": "low",
         },
     }
-    profile = dict(profiles.get(scenario, profiles["personal"]))
+    level = {"low": 1, "medium": 2, "high": 3}
+    level_rev = {1: "low", 2: "medium", 3: "high"}
+    merged = {"price": 1, "time": 1, "comfort": 1, "risk_averse": 1, "baggage": 1}
+    for item in scenarios:
+        scenario_profile = profiles.get(item, profiles["personal"])
+        for dim in merged:
+            merged[dim] = max(merged[dim], level.get(scenario_profile.get(dim), 2))
+    profile = {dim: level_rev[value] for dim, value in merged.items()}
     if travelers in ("with_child", "with_elderly_child"):
         profile["comfort"] = "high"
         profile["risk_averse"] = "high"
@@ -293,6 +352,8 @@ def build_travel_profile(soft_prefs: dict | None) -> dict:
         profile["baggage"] = "high"
         profile["stock_check"] = "high"
     profile["scenario"] = scenario
+    profile["scenarios"] = scenarios
+    profile["scenario_combo"] = "+".join(scenarios)
     profile["travelers"] = travelers
     return profile
 
@@ -355,6 +416,151 @@ def travel_profile_explanation(profile: dict | None) -> dict:
         "basis": basis.get(scenario, "按价格、时间、舒适度和执行风险做均衡排序。"),
         "dimensions": dimensions,
         "stock_check": profile.get("stock_check"),
+    }
+
+
+def travel_profile_explanation(profile: dict | None) -> dict:
+    """User-facing explanation for why a scenario combo changes recommendation order."""
+    profile = profile or build_travel_profile({})
+    scenarios = _normalize_travel_scenarios(profile.get("scenarios") or profile.get("scenario"))
+    scenario = scenarios[0]
+    basis = {
+        "business": "商务/会议提高到达时间稳定、直飞/低风险和可改签权重。",
+        "family": "家庭/亲子提高白天直飞、行李明确和低中转风险权重。",
+        "elderly": "老人同行提高白天到达、全服务航司和低转机风险权重。",
+        "with_elderly": "老人同行提高白天到达、全服务航司和低转机风险权重。",
+        "important": "重要事项提高稳定到达、可退改和低执行风险权重。",
+        "price_first": "价格优先保留低价敏感度，但仍会提示执行风险。",
+        "tourism": "旅游保留价格敏感和日期弹性。",
+        "family_visit": "探亲/回家提高行李明确和合理价格权重。",
+        "visit_family": "探亲/回家提高行李明确和合理价格权重。",
+        "personal": "个人出行按价格和便利性均衡处理。",
+    }
+    basis_items = [basis.get(item) for item in scenarios if basis.get(item)]
+    if len(scenarios) > 1:
+        basis_text = "系统合并了多个场景的需求：" + "；".join(basis_items)
+    else:
+        basis_text = basis_items[0] if basis_items else "按价格、时间、舒适度和执行风险做均衡排序。"
+    scenario_set = set(scenarios)
+    tradeoff = ""
+    if "price_first" in scenario_set and "important" in scenario_set:
+        tradeoff = "你同时选择了价格优先和重要事项，系统会先保证可靠性，再在可靠方案中选择价格更低的。"
+    elif "price_first" in scenario_set and ("elderly" in scenario_set or "with_elderly" in scenario_set):
+        tradeoff = "老人出行的直飞、白天到达和稳定性会适当优先于极致低价。"
+    elif "business" in scenario_set and "price_first" in scenario_set:
+        tradeoff = "商务场景会先保证准点和低风险，再在同类稳妥方案中选择更低价格。"
+    elif "tourism" in scenario_set and "family" in scenario_set:
+        tradeoff = "旅游保留价格敏感，但家庭/亲子的安全舒适要求会优先于纯低价。"
+    elif ("elderly" in scenario_set or "with_elderly" in scenario_set) and (
+        "family_visit" in scenario_set or "visit_family" in scenario_set
+    ):
+        tradeoff = "探亲/回家提高行李权重，老人同行进一步提高直飞、白天到达和低风险权重。"
+    dimensions = {
+        TRAVEL_PROFILE_LABELS.get(key, key): TRAVEL_PROFILE_LEVEL_LABELS.get(value, value)
+        for key, value in profile.items()
+        if key in TRAVEL_PROFILE_LABELS
+    }
+    return {
+        "scenario": scenario,
+        "scenarios": scenarios,
+        "scenario_label": " + ".join(_travel_scenario_labels(scenarios)),
+        "basis": basis_text,
+        "tradeoff": tradeoff,
+        "dimensions": dimensions,
+        "stock_check": profile.get("stock_check"),
+    }
+
+
+def build_recommendation_basis(profile: dict | None, defaults_applied: list[str] | None = None) -> dict:
+    """Build one user-facing source of truth for scenario-based ranking."""
+    profile = profile or build_travel_profile({})
+    scenarios = _normalize_travel_scenarios(profile.get("scenarios") or profile.get("scenario"))
+    scenario_set = set(scenarios)
+    scenario_labels = _travel_scenario_labels(scenarios)
+    applied_rules: list[str] = []
+
+    if "tourism" in scenario_set:
+        applied_rules.append("价格敏感，关注低价和日期弹性（旅游）")
+    if "family" in scenario_set:
+        applied_rules.extend(
+            [
+                "优先白天直飞（家庭/亲子）",
+                "行李明确优先（家庭/亲子）",
+                "降低红眼和长中转风险（家庭/亲子）",
+            ]
+        )
+    if "elderly" in scenario_set or "with_elderly" in scenario_set:
+        applied_rules.extend(
+            [
+                "优先直飞、白天到达和低转机风险（老人同行）",
+                "全服务航司和可退改更优先（老人同行）",
+            ]
+        )
+    if "family_visit" in scenario_set or "visit_family" in scenario_set:
+        applied_rules.append("行李权重高，避免极端折腾（探亲/回家）")
+    if "business" in scenario_set:
+        applied_rules.append("准点、直飞和可改签优先（商务/会议）")
+    if "important" in scenario_set:
+        applied_rules.append("稳定到达和低执行风险优先（重要事项）")
+    if "price_first" in scenario_set:
+        applied_rules.append("保留低价敏感度，但高风险方案会被提示或降权（价格优先）")
+
+    if not applied_rules:
+        applied_rules.append("按价格、时间、舒适度和执行风险均衡排序")
+
+    conflict_note = ""
+    if "tourism" in scenario_set and "family" in scenario_set:
+        conflict_note = "孩子安全舒适优先于纯低价"
+    elif ("elderly" in scenario_set or "with_elderly" in scenario_set) and (
+        "family_visit" in scenario_set or "visit_family" in scenario_set
+    ):
+        conflict_note = "老人同行的直飞、白天到达和稳定性优先于极致低价"
+    elif "price_first" in scenario_set and "important" in scenario_set:
+        conflict_note = "重要事项先保证可靠性，再比较价格"
+    elif "business" in scenario_set and "price_first" in scenario_set:
+        conflict_note = "先保证准点和低风险，再在稳妥方案中比较价格"
+
+    sort_factors = [
+        ("价格", TRAVEL_PROFILE_LEVEL_LABELS.get(profile.get("price", "medium"), "中")),
+        ("时间", TRAVEL_PROFILE_LEVEL_LABELS.get(profile.get("time", "medium"), "中")),
+        ("舒适度", TRAVEL_PROFILE_LEVEL_LABELS.get(profile.get("comfort", "medium"), "中")),
+        ("执行风险厌恶", TRAVEL_PROFILE_LEVEL_LABELS.get(profile.get("risk_averse", "medium"), "中")),
+        ("行李重要性", TRAVEL_PROFILE_LEVEL_LABELS.get(profile.get("baggage", "medium"), "中")),
+    ]
+
+    if "tourism" in scenario_set and "family" in scenario_set:
+        plain_language = "先保证适合带孩子（白天/直飞/行李），再在其中挑便宜的。"
+        recommendation_text = "该方案白天直飞、行李明确，价格也在合理区间，适合带孩子的旅行，兼顾省心和性价比。"
+    elif ("elderly" in scenario_set or "with_elderly" in scenario_set) and (
+        "family_visit" in scenario_set or "visit_family" in scenario_set
+    ):
+        plain_language = "先保证适合老人探亲（直飞/白天到达/行李），再比较价格。"
+        recommendation_text = "该方案直飞、白天到达、行李充足，转机风险低，适合带老人回家探亲。"
+    elif "business" in scenario_set and "price_first" in scenario_set:
+        plain_language = "先保证商务出行的准点和低风险，再在同类稳妥方案中选价格更低的。"
+        recommendation_text = "该方案优先保证准点、直飞和低风险，并在同类稳妥方案里兼顾较低价格。"
+    elif "price_first" in scenario_set and "important" in scenario_set:
+        plain_language = "先保证重要行程可靠，不把纯低价但容易出错的方案排在前面。"
+        recommendation_text = "该方案先按重要事项保证可靠性，再在可执行方案中兼顾低价。"
+    elif "family" in scenario_set:
+        plain_language = "优先白天直飞、行李明确和低中转风险，价格作为第二层比较。"
+        recommendation_text = "该方案优先考虑白天直飞、行李明确和低中转风险，适合带孩子出行，减少折腾。"
+    elif "tourism" in scenario_set:
+        plain_language = "优先价格和日期弹性，同时保留基本的执行风险提醒。"
+        recommendation_text = "该方案兼顾低价日期和合理中转，适合旅游行程继续比较。"
+    else:
+        plain_language = "按价格、时间、舒适度和执行风险综合排序。"
+        recommendation_text = "本次按价格、时间、舒适度、执行风险和行李票规综合排序。"
+
+    return {
+        "scenarios": scenarios,
+        "scenario_labels": scenario_labels,
+        "applied_rules": applied_rules,
+        "sort_factors": sort_factors,
+        "conflict_note": conflict_note,
+        "plain_language": plain_language,
+        "recommendation_text": recommendation_text,
+        "defaults_applied": defaults_applied or [],
     }
 
 
@@ -496,11 +702,16 @@ def migrate_old_subscription(subscription: dict) -> dict:
         }
 
     if not preferences:
+        travel_scenarios = _normalize_travel_scenarios(
+            soft.get("travel_scenarios")
+            or soft.get("travel_scenario")
+            or sub.get("travel_scenarios")
+            or sub.get("travel_scenario")
+        )
         preferences = {
             "travelers": soft.get("companions") or sub.get("companions", "solo"),
-            "travel_scenario": soft.get("travel_scenario")
-            or sub.get("travel_scenario")
-            or "personal",
+            "travel_scenario": travel_scenarios[0],
+            "travel_scenarios": travel_scenarios,
             "companion_constraints": soft.get("companion_constraints")
             or sub.get("companion_constraints")
             or [],
@@ -591,6 +802,7 @@ def migrate_old_subscription(subscription: dict) -> dict:
     _set_if_missing(soft, "companions", preferences.get("travelers"))
     _set_if_missing(soft, "travelers", preferences.get("travelers"))
     _set_if_missing(soft, "travel_scenario", preferences.get("travel_scenario"))
+    _set_if_missing(soft, "travel_scenarios", preferences.get("travel_scenarios"))
     _set_if_missing(soft, "companion_constraints", preferences.get("companion_constraints"))
     _set_if_missing(soft, "solo_travel", preferences.get("solo_travel"))
     _set_if_missing(soft, "no_late_arrival", preferences.get("no_late_arrival"))
@@ -635,13 +847,17 @@ def apply_default_rules(subscription: dict) -> dict:
     quick_mode = monitor_mode != "precise"
     defaults_applied = []
 
-    travel_scenario = soft.get("travel_scenario") or "personal"
-    soft["travel_scenario"] = travel_scenario
+    travel_scenarios = _normalize_travel_scenarios(
+        soft.get("travel_scenarios") or soft.get("travel_scenario")
+    )
+    soft["travel_scenarios"] = travel_scenarios
+    soft["travel_scenario"] = travel_scenarios[0]
     scenario_rules = []
-    scenario = SCENARIO_RULES.get(travel_scenario)
-    if scenario:
-        _apply_rule_defaults(soft, hard, scenario, defaults_applied, override=False)
-        scenario_rules.append(travel_scenario)
+    for travel_scenario in travel_scenarios:
+        scenario = SCENARIO_RULES.get(travel_scenario)
+        if scenario:
+            _apply_rule_defaults(soft, hard, scenario, defaults_applied, override=False)
+            scenario_rules.append(travel_scenario)
 
     companions = soft.get("companions") or soft.get("travelers") or "solo"
     soft["companions"] = companions
@@ -3592,7 +3808,10 @@ def _apply_user_preferences(
     need_baggage = preferences.get("need_baggage", "unknown")
     refund_flexibility = preferences.get("refund_flexibility", "unknown")
     companions = preferences.get("companions") or preferences.get("travelers") or "solo"
-    travel_scenario = preferences.get("travel_scenario") or "personal"
+    travel_scenarios = _normalize_travel_scenarios(
+        preferences.get("travel_scenarios") or preferences.get("travel_scenario")
+    )
+    travel_scenario_set = set(travel_scenarios)
     travel_profile = build_travel_profile(preferences)
     companion_constraints = preferences.get("companion_constraints") or []
     if isinstance(companion_constraints, str):
@@ -3827,21 +4046,21 @@ def _apply_user_preferences(
                 penalty += 2
                 penalties.append("廉航不适合家庭出行")
 
-        if travel_scenario == "business":
+        if "business" in travel_scenario_set:
             if stops > 0:
                 penalty += 2
                 penalties.append("商务/会议更适合直飞或低风险中转")
             if not _is_daytime_flight(flight):
                 penalty += 1
                 penalties.append("商务/会议时段稳定性一般")
-        elif travel_scenario == "important":
+        if "important" in travel_scenario_set:
             if stops > 0:
                 penalty += 3
                 penalties.append("重要事项不适合复杂中转")
             if _is_red_eye(flight):
                 penalty += 3
                 penalties.append("重要事项不适合红眼/凌晨航班")
-        elif travel_scenario == "price_first":
+        if "price_first" in travel_scenario_set:
             penalty = max(0, penalty - 2)
             notes.append("价格优先场景：保留低价不便方案")
 
@@ -4547,6 +4766,7 @@ def analyze_all_flights(
         "confidence_breakdown": confidence_breakdown,
         "travel_profile": travel_profile,
         "travel_profile_explanation": travel_profile_explanation(travel_profile),
+        "recommendation_basis": build_recommendation_basis(travel_profile),
         "alert_policy": alert_policy,
         "mode": mode,
         "priorities": priority_config,
@@ -5182,6 +5402,7 @@ def analyze_round_trip(
         "confidence_breakdown": confidence_breakdown,
         "travel_profile": travel_profile,
         "travel_profile_explanation": travel_profile_explanation(travel_profile),
+        "recommendation_basis": build_recommendation_basis(travel_profile),
         "alert_policy": build_alert_policy(travel_profile),
         "buy_vs_wait_risk": buy_vs_wait_risk,
         "excluded_roundtrip_combos": excluded_roundtrip_combos,

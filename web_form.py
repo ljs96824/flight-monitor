@@ -754,16 +754,16 @@ FORM_TEMPLATE = """
         <label><input type="radio" name="primary_goal" value="best_overall" required> 帮我找最合适航班 <small style="color:gray">（不只看价格，综合时间/行李/中转）</small></label>
       </div>
 
-      <label>本次出行场景</label>
+      <label>本次出行场景（可多选）</label>
       <div class="choice">
-        <label><input type="radio" name="travel_scenario" value="personal" checked> 个人出行</label>
-        <label><input type="radio" name="travel_scenario" value="business"> 商务/会议</label>
-        <label><input type="radio" name="travel_scenario" value="tourism"> 旅游</label>
-        <label><input type="radio" name="travel_scenario" value="family_visit"> 探亲/回家</label>
-        <label><input type="radio" name="travel_scenario" value="family"> 家庭/亲子</label>
-        <label><input type="radio" name="travel_scenario" value="elderly"> 有老人同行</label>
-        <label><input type="radio" name="travel_scenario" value="important"> 重要事项（考试/婚礼/医疗/邮轮等）</label>
-        <label><input type="radio" name="travel_scenario" value="price_first"> 价格优先</label>
+        <label><input type="checkbox" name="travel_scenario" value="personal" checked> 个人出行</label>
+        <label><input type="checkbox" name="travel_scenario" value="business"> 商务/会议</label>
+        <label><input type="checkbox" name="travel_scenario" value="tourism"> 旅游</label>
+        <label><input type="checkbox" name="travel_scenario" value="family_visit"> 探亲/回家</label>
+        <label><input type="checkbox" name="travel_scenario" value="family"> 家庭/亲子</label>
+        <label><input type="checkbox" name="travel_scenario" value="elderly"> 有老人同行</label>
+        <label><input type="checkbox" name="travel_scenario" value="important"> 重要事项（考试/婚礼/医疗/邮轮等）</label>
+        <label><input type="checkbox" name="travel_scenario" value="price_first"> 价格优先</label>
       </div>
       <div id="travel-scenario-notice" class="auto-notice"></div>
 
@@ -1517,6 +1517,17 @@ FORM_TEMPLATE = """
         .map(input => input.value);
     }
 
+    function selectedTravelScenarios() {
+      const values = checkedValues('travel_scenario');
+      return values.length ? values : ['personal'];
+    }
+
+    function selectedLabels(name) {
+      return Array.from(document.querySelectorAll(`input[name="${name}"]:checked`))
+        .map(input => input.parentElement.textContent.trim())
+        .filter(Boolean);
+    }
+
     function selectedOrigin() {
       const manual = form.origin_manual.value.trim();
       const selected = form.origin_select.value;
@@ -2015,21 +2026,44 @@ FORM_TEMPLATE = """
     }
 
     function applyTravelScenarioDefaults() {
-      const scenario = checkedValue('travel_scenario') || 'personal';
-      const config = scenarioDefaults[scenario] || scenarioDefaults.personal;
+      let scenarios = selectedTravelScenarios();
+      if (scenarios.length > 1 && scenarios.includes('personal')) {
+        const personal = document.querySelector('input[name="travel_scenario"][value="personal"]');
+        if (personal) personal.checked = false;
+        scenarios = scenarios.filter(value => value !== 'personal');
+      }
+      if (!scenarios.length) {
+        setCheckbox('travel_scenario', 'personal', true);
+        scenarios = ['personal'];
+      }
+      const configs = scenarios.map(value => scenarioDefaults[value] || scenarioDefaults.personal);
       clearAutoSuggestions();
       document.querySelectorAll('input[name="companion_constraints"]').forEach(input => {
         input.checked = false;
         input.closest('label')?.classList.remove('auto-suggested');
       });
-      Object.entries(config.radios || {}).forEach(([name, value]) => setRadio(name, value, true));
-      (config.constraints || []).forEach(value => setCheckbox('companion_constraints', value, true, true));
+      configs.forEach(config => {
+        Object.entries(config.radios || {}).forEach(([name, value]) => setRadio(name, value, true));
+        (config.constraints || []).forEach(value => setCheckbox('companion_constraints', value, true, true));
+      });
       toggleTimePreference();
       toggleShortTransferOptions();
       updateConditionalFields();
       syncPrefCards();
       if (travelScenarioNotice) {
-        travelScenarioNotice.innerHTML = `${config.notice} <button id="scenario-open-precise" class="link-button" type="button">想调整？进入精准设置</button>`;
+        const scenarioText = selectedLabels('travel_scenario').join(' + ');
+        const notices = configs.map(config => config.notice).filter(Boolean);
+        const tradeoffs = [];
+        if (scenarios.includes('tourism') && scenarios.includes('family')) {
+          tradeoffs.push('说明：孩子出行的安全舒适要求会优先于纯价格考虑。');
+        }
+        if (scenarios.includes('elderly') && scenarios.includes('family_visit')) {
+          tradeoffs.push('说明：老人同行的直飞、白天到达和稳定性会优先于极致低价。');
+        }
+        if (scenarios.includes('price_first') && scenarios.includes('important')) {
+          tradeoffs.push('说明：重要事项会先保证可靠性，再在可靠方案中选择更低价格。');
+        }
+        travelScenarioNotice.innerHTML = `已按【${scenarioText}】组合启用规则：<br>${notices.map(item => `✓ ${item}`).join('<br>')}${tradeoffs.length ? '<br>' + tradeoffs.join('<br>') : ''} <button id="scenario-open-precise" class="link-button" type="button">想调整？进入精准设置</button>`;
         travelScenarioNotice.style.display = 'block';
         document.getElementById('scenario-open-precise')?.addEventListener('click', showPreciseCompanionSettings);
       }
@@ -2063,7 +2097,13 @@ FORM_TEMPLATE = """
       if (hard.target_price || soft.target_price) targetPriceInput.value = hard.target_price || soft.target_price;
       if (hard.transfer_policy) setRadio('transfer_policy', hard.transfer_policy);
       if (hard.baggage) setRadio('baggage', hard.baggage);
-      if (soft.travel_scenario) setRadio('travel_scenario', soft.travel_scenario);
+      const savedScenarios = Array.isArray(soft.travel_scenarios)
+        ? soft.travel_scenarios
+        : String(soft.travel_scenarios || soft.travel_scenario || '').split(',').map(item => item.trim()).filter(Boolean);
+      if (savedScenarios.length) {
+        document.querySelectorAll('input[name="travel_scenario"]').forEach(input => { input.checked = false; });
+        savedScenarios.forEach(value => setCheckbox('travel_scenario', value, true));
+      }
       if (soft.companions) setRadio('companions', soft.companions);
       const savedCompanionConstraints = Array.isArray(soft.companion_constraints)
         ? soft.companion_constraints
@@ -2171,17 +2211,36 @@ FORM_TEMPLATE = """
     function systemDefaultRulesForSummary() {
       const precise = checkedValue('monitor_mode') === 'precise';
       const rules = [];
-      const scenario = checkedValue('travel_scenario');
-      if (scenario === 'family') {
+      const scenarios = selectedTravelScenarios();
+      if (scenarios.includes('family')) {
         rules.push('✓ 家庭/亲子：优先白天航班、直飞/短中转、行李明确');
-      } else if (scenario === 'elderly') {
+      }
+      if (scenarios.includes('elderly')) {
         rules.push('✓ 老人同行：优先白天到达、短中转、全服务航司和可退改');
-      } else if (scenario === 'business') {
+      }
+      if (scenarios.includes('business')) {
         rules.push('✓ 商务/会议：准点、直飞和可改签优先');
-      } else if (scenario === 'important') {
+      }
+      if (scenarios.includes('tourism')) {
+        rules.push('✓ 旅游：保留价格敏感和日期弹性');
+      }
+      if (scenarios.includes('family_visit')) {
+        rules.push('✓ 探亲/回家：行李权重高，避免极端折腾');
+      }
+      if (scenarios.includes('important')) {
         rules.push('✓ 重要事项：降低复杂中转、非联程和红眼风险');
-      } else if (scenario === 'price_first') {
+      }
+      if (scenarios.includes('price_first')) {
         rules.push('✓ 价格优先：低价权重最高，同时提示执行风险');
+      }
+      if (scenarios.includes('tourism') && scenarios.includes('family')) {
+        rules.push('✓ 冲突权衡：孩子安全舒适优先于纯低价');
+      }
+      if (scenarios.includes('elderly') && scenarios.includes('family_visit')) {
+        rules.push('✓ 冲突权衡：老人同行优先直飞、白天到达和稳定性');
+      }
+      if (scenarios.includes('price_first') && scenarios.includes('important')) {
+        rules.push('✓ 冲突权衡：重要事项先保证可靠性，再比较价格');
       }
       if (!precise || !moduleIsDirty('time')) {
         rules.push('✓ 不推荐红眼/凌晨到达');
@@ -2310,7 +2369,7 @@ FORM_TEMPLATE = """
       }
       summaryLine('中转', selectedLabel('transfer_policy'));
       summaryLine('行李', selectedLabel('baggage'));
-      summaryLine('出行场景', selectedLabel('travel_scenario'));
+      summaryLine('出行场景', selectedLabels('travel_scenario').join(' + '));
       if (checkedValue('companions') !== 'solo') {
         summaryLine('同行', selectedLabel('companions'));
       }
@@ -2375,7 +2434,8 @@ FORM_TEMPLATE = """
         refund_flexibility: checkedValue('refund_flexibility'),
         price_sensitivity: checkedValue('price_sensitivity'),
         trip_type: form.trip_type ? form.trip_type.value : '',
-        travel_scenario: checkedValue('travel_scenario'),
+        travel_scenario: selectedTravelScenarios()[0],
+        travel_scenarios: selectedTravelScenarios(),
         companions: checkedValue('companions'),
         companion_constraints: checkedValues('companion_constraints'),
         solo_travel: Boolean(document.querySelector('input[name="solo_travel"]')?.checked),
@@ -3296,7 +3356,17 @@ def build_subscription(form) -> dict:
     for item in form.getlist("blocked_airlines_common"):
         if item and item not in blocked_airlines:
             blocked_airlines.append(item)
-    travel_scenario = form.get("travel_scenario", "personal")
+    travel_scenarios = form.getlist("travel_scenario")
+    if not travel_scenarios:
+        legacy_scenario = form.get("travel_scenario", "personal")
+        if isinstance(legacy_scenario, list):
+            travel_scenarios = legacy_scenario
+        else:
+            travel_scenarios = [legacy_scenario]
+    travel_scenarios = [str(item).strip() for item in travel_scenarios if str(item).strip()]
+    if not travel_scenarios:
+        travel_scenarios = ["personal"]
+    travel_scenario = travel_scenarios[0]
     companions = form.get("companions", "solo")
     companion_constraints = form.getlist("companion_constraints")
     solo_travel = parse_bool(form.get("solo_travel", "false"))
@@ -3327,6 +3397,7 @@ def build_subscription(form) -> dict:
         "preferences": {
             "travelers": companions,
             "travel_scenario": travel_scenario,
+            "travel_scenarios": travel_scenarios,
             "companion_constraints": companion_constraints,
             "solo_travel": solo_travel,
             "no_late_arrival": no_late_arrival,
@@ -3418,6 +3489,7 @@ def build_subscription(form) -> dict:
             "red_eye_allowed": red_eye_allowed_from_windows(time_mode, all_time_windows),
             "early_morning_allowed": early_morning_allowed_from_windows(time_mode, all_time_windows),
             "travel_scenario": travel_scenario,
+            "travel_scenarios": travel_scenarios,
             "travelers": companions,
             "companions": companions,
             "companion_constraints": companion_constraints,

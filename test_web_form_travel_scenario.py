@@ -63,7 +63,7 @@ class WebFormTravelScenarioTest(unittest.TestCase):
                     "transfer_policy": "reasonable",
                     "baggage": "required",
                     "primary_goal": "buy_timing",
-                    "travel_scenario": "family",
+                    "travel_scenario": ["tourism", "family"],
                     "companions": "with_child",
                     "companion_constraints": [
                         "direct_preferred",
@@ -81,7 +81,8 @@ class WebFormTravelScenarioTest(unittest.TestCase):
         soft = sub["soft_preferences"]
         prefs = sub["preferences"]
 
-        self.assertEqual(soft["travel_scenario"], "family")
+        self.assertEqual(soft["travel_scenario"], "tourism")
+        self.assertEqual(soft["travel_scenarios"], ["tourism", "family"])
         self.assertEqual(soft["companions"], "with_child")
         self.assertEqual(soft["travelers"], "with_child")
         self.assertEqual(
@@ -90,7 +91,8 @@ class WebFormTravelScenarioTest(unittest.TestCase):
         )
         self.assertTrue(soft["solo_travel"])
         self.assertTrue(soft["no_late_arrival"])
-        self.assertEqual(prefs["travel_scenario"], "family")
+        self.assertEqual(prefs["travel_scenario"], "tourism")
+        self.assertEqual(prefs["travel_scenarios"], ["tourism", "family"])
         self.assertEqual(prefs["travelers"], "with_child")
 
 

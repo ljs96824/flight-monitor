@@ -3,7 +3,7 @@ import sys
 import types
 
 sys.modules.setdefault("httpx", types.SimpleNamespace(post=lambda *a, **k: None))
-from notifier import render_email, render_pushplus
+from notifier import build_notification_payload, render_email, render_pushplus
 
 
 class NotifierTravelProfileTest(unittest.TestCase):
@@ -49,6 +49,86 @@ class NotifierTravelProfileTest(unittest.TestCase):
         self.assertIn("舒适度需求", email_html)
         self.assertIn("适合带孩子出行", email_html)
         self.assertIn("值得验证", subject)
+
+    def test_email_explains_combined_scenarios_and_tradeoff(self):
+        payload = {
+            "push_type": "值得验证",
+            "route": "上海 → 大阪",
+            "display_price": 6522,
+            "transaction_price": 7182,
+            "verify_price": 6848,
+            "recommendation": "值得验证",
+            "buy_condition": "支付页≤¥6,848且含托运行李",
+            "trigger_reason": ["搜索参考价达标"],
+            "travel_profile": {
+                "scenario": "tourism",
+                "scenarios": ["tourism", "family"],
+                "price": "high",
+                "time": "medium",
+                "comfort": "high",
+                "risk_averse": "high",
+                "baggage": "high",
+            },
+            "travel_profile_explanation": {
+                "scenario": "tourism",
+                "scenarios": ["tourism", "family"],
+                "scenario_label": "旅游 + 家庭/亲子",
+                "basis": "系统合并了多个场景的需求：旅游保留价格敏感；家庭/亲子提高白天直飞、行李明确和低中转风险权重。",
+                "tradeoff": "旅游保留价格敏感，但家庭/亲子的安全舒适要求会优先于纯低价。",
+                "dimensions": {
+                    "价格敏感度": "高",
+                    "舒适度需求": "高",
+                },
+            },
+            "scenario_recommendation": "该方案白天直飞、行李明确，价格也在合理区间，适合带孩子的旅行，兼顾省心和性价比。",
+            "recommended_plans": [],
+            "price_history": [],
+        }
+
+        push = render_pushplus(payload)
+        subject, email_html = render_email(payload)
+
+        self.assertIn("旅游 + 家庭/亲子", push)
+        self.assertIn("旅游 + 家庭/亲子", email_html)
+        self.assertIn("孩子", email_html)
+        self.assertIn("纯低价", email_html)
+        self.assertIn("值得验证", subject)
+
+    def test_payload_prefers_subscription_scenarios_over_stale_analysis_profile(self):
+        payload = build_notification_payload(
+            analysis_result={
+                "travel_profile": {
+                    "scenario": "personal",
+                    "scenarios": ["personal"],
+                    "price": "high",
+                    "time": "medium",
+                    "comfort": "medium",
+                    "risk_averse": "medium",
+                    "baggage": "medium",
+                },
+                "travel_profile_explanation": {
+                    "scenario": "personal",
+                    "scenarios": ["personal"],
+                    "scenario_label": "个人出行",
+                    "basis": "按个人出行排序",
+                    "dimensions": {},
+                },
+                "recommendations": [],
+            },
+            route_info={"origin": "上海", "destination": "大阪", "depart_date": "2026-10-01"},
+            subscription={
+                "soft_preferences": {
+                    "travel_scenarios": ["tourism", "family"],
+                    "travel_scenario": "tourism",
+                }
+            },
+            price_history=[],
+        )
+
+        self.assertEqual(payload["travel_scenarios"], ["tourism", "family"])
+        self.assertEqual(payload["travel_profile"]["scenarios"], ["tourism", "family"])
+        self.assertEqual(payload["travel_profile_explanation"]["scenario_label"], "旅游 + 家庭/亲子")
+        self.assertIn("孩子安全舒适", payload["recommendation_basis"]["conflict_note"])
 
 
 if __name__ == "__main__":

@@ -51,5 +51,20 @@ class SubscriptionLoadingTest(unittest.TestCase):
         self.assertEqual(loaded[0]["destination_airports"], ["KIX", "ITM"])
 
 
+    def test_subscription_preferences_include_travel_scenarios(self):
+        prefs = main.subscription_preferences(
+            {
+                "soft_preferences": {
+                    "travel_scenarios": ["tourism", "family"],
+                    "travel_scenario": "tourism",
+                },
+                "companions": "solo",
+            }
+        )
+
+        self.assertEqual(prefs["travel_scenarios"], ["tourism", "family"])
+        self.assertEqual(prefs["travel_scenario"], "tourism")
+
+
 if __name__ == "__main__":
     unittest.main()

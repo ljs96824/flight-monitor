@@ -23,6 +23,7 @@ from airports import (
 )
 from channels import CHANNEL_INFO
 from analyzer import (
+    build_recommendation_basis,
     build_travel_profile,
     calculate_price_references,
     calc_confidence,
@@ -4912,21 +4913,46 @@ def _sorting_logic_items(route_info: dict, is_round_trip: bool) -> list[str]:
 
 def _payload_travel_profile(analysis_result: dict, subscription: dict) -> tuple[dict, dict]:
     round_trip = (analysis_result or {}).get("round_trip_analysis") or {}
+    soft = (subscription or {}).get("soft_preferences") or {}
+    subscription_scenarios = soft.get("travel_scenarios") or soft.get("travel_scenario")
+    subscription_profile = build_travel_profile(soft) if subscription_scenarios else None
     profile = (
         round_trip.get("travel_profile")
         or (analysis_result or {}).get("travel_profile")
-        or build_travel_profile((subscription or {}).get("soft_preferences") or {})
+        or subscription_profile
+        or build_travel_profile(soft)
     )
+    if subscription_profile and profile.get("scenarios") != subscription_profile.get("scenarios"):
+        profile = subscription_profile
     explanation = (
         round_trip.get("travel_profile_explanation")
         or (analysis_result or {}).get("travel_profile_explanation")
         or travel_profile_explanation(profile)
     )
+    if explanation.get("scenarios") != profile.get("scenarios"):
+        explanation = travel_profile_explanation(profile)
     return profile, explanation
 
 
-def _scenario_recommendation_text(explanation: dict, profile: dict | None = None) -> str:
+def _scenario_recommendation_text(
+    explanation: dict,
+    profile: dict | None = None,
+    recommendation_basis: dict | None = None,
+) -> str:
+    if recommendation_basis and recommendation_basis.get("recommendation_text"):
+        return str(recommendation_basis["recommendation_text"])
     scenario = (explanation or {}).get("scenario") or (profile or {}).get("scenario")
+    scenarios = set((explanation or {}).get("scenarios") or (profile or {}).get("scenarios") or [scenario])
+    if "tourism" in scenarios and "family" in scenarios:
+        return "该方案白天直飞、行李明确，价格也在合理区间，适合带孩子的旅行，兼顾省心和性价比。"
+    if ("elderly" in scenarios or "with_elderly" in scenarios) and (
+        "family_visit" in scenarios or "visit_family" in scenarios
+    ):
+        return "该方案直飞、白天到达、行李充足，转机风险低，适合带老人回家探亲。"
+    if "business" in scenarios and "price_first" in scenarios:
+        return "该方案优先保证准点、直飞和低风险，并在同类稳妥方案里兼顾较低价格。"
+    if "price_first" in scenarios and "important" in scenarios:
+        return "该方案先按重要事项保证可靠性，再在可执行方案中兼顾低价。"
     mapping = {
         "business": "该方案价格不一定最低，但更重视到达时间稳定、直飞/低风险和可改签，适合商务出行。",
         "family": "该方案优先考虑白天直飞、行李明确和低中转风险，适合带孩子出行，减少折腾。",
@@ -4982,6 +5008,18 @@ def build_notification_payload(
         else analysis_result.get("buy_vs_wait_risk")
     ) or {}
     travel_profile, profile_explanation = _payload_travel_profile(analysis_result, subscription)
+    print(
+        "[场景调试] 订阅里的 travel_scenarios = "
+        f"{((subscription or {}).get('soft_preferences') or {}).get('travel_scenarios')}"
+    )
+    print(f"[场景调试] 画像里的 scenarios = {travel_profile.get('scenarios')}")
+    recommendation_basis = (
+        ((analysis_result.get("round_trip_analysis") or {}).get("recommendation_basis"))
+        or analysis_result.get("recommendation_basis")
+        or build_recommendation_basis(travel_profile)
+    )
+    if recommendation_basis.get("scenarios") != travel_profile.get("scenarios"):
+        recommendation_basis = build_recommendation_basis(travel_profile)
 
     if is_roundtrip:
         all_items = [
@@ -5073,7 +5111,13 @@ def build_notification_payload(
         "confidence_details": confidence.get("details") or {},
         "travel_profile": travel_profile,
         "travel_profile_explanation": profile_explanation,
-        "scenario_recommendation": _scenario_recommendation_text(profile_explanation, travel_profile),
+        "travel_scenarios": travel_profile.get("scenarios") or [],
+        "recommendation_basis": recommendation_basis,
+        "scenario_recommendation": _scenario_recommendation_text(
+            profile_explanation,
+            travel_profile,
+            recommendation_basis,
+        ),
         "alert_policy": (
             ((analysis_result.get("round_trip_analysis") or {}).get("alert_policy"))
             or analysis_result.get("alert_policy")
@@ -5122,6 +5166,7 @@ def build_notification_payload(
             "fare_status": _snapshot_fare_status(primary_flight),
         },
     }
+    print(f"[场景调试] 推送将显示 = {payload.get('travel_scenarios')}")
     return payload
 
 
@@ -5355,12 +5400,18 @@ def render_pushplus(payload: dict) -> str:
         f"购买条件:{buy_condition}",
     ]
     lines.extend(_pushplus_plan_lines(payload))
+    recommendation_basis = payload.get("recommendation_basis") or {}
+    scenario_label = " + ".join(recommendation_basis.get("scenario_labels") or [])
     profile_explanation = payload.get("travel_profile_explanation") or {}
-    if profile_explanation.get("scenario_label"):
+    if not scenario_label:
+        scenario_label = str(profile_explanation.get("scenario_label") or "")
+    basis_line = recommendation_basis.get("plain_language") or profile_explanation.get("basis") or ""
+    if scenario_label:
         lines.extend(
             [
                 "",
-                f"推荐依据:按“{html.escape(str(profile_explanation.get('scenario_label')))}”场景综合排序",
+                f"推荐依据:按“{html.escape(scenario_label)}”综合排序",
+                html.escape(str(basis_line)),
             ]
         )
     lines.extend(
@@ -5819,14 +5870,44 @@ def render_email(payload: dict) -> tuple[str, str]:
         cards.append(_render_payload_plan_card(plan))
 
     profile_explanation = payload.get("travel_profile_explanation") or {}
+    recommendation_basis = payload.get("recommendation_basis") or {}
     profile_dimensions = profile_explanation.get("dimensions") or {}
+    scenario_label = " + ".join(recommendation_basis.get("scenario_labels") or [])
     profile_rows = [
-        ("出行场景", html.escape(str(profile_explanation.get("scenario_label") or "个人出行"))),
-        ("排序依据", html.escape(str(profile_explanation.get("basis") or "按价格、时间、舒适度和执行风险综合排序。"))),
+        ("出行场景", html.escape(str(scenario_label or profile_explanation.get("scenario_label") or "个人出行"))),
+        (
+            "排序依据",
+            html.escape(
+                str(
+                    recommendation_basis.get("plain_language")
+                    or profile_explanation.get("basis")
+                    or "按价格、时间、舒适度和执行风险综合排序。"
+                )
+            ),
+        ),
         ("场景话术", html.escape(str(payload.get("scenario_recommendation") or ""))),
     ]
-    for key, value in profile_dimensions.items():
-        profile_rows.append((str(key), html.escape(str(value))))
+    if recommendation_basis.get("conflict_note") or profile_explanation.get("tradeoff"):
+        profile_rows.append(
+            (
+                "权衡说明",
+                html.escape(str(recommendation_basis.get("conflict_note") or profile_explanation.get("tradeoff"))),
+            )
+        )
+    applied_rules = recommendation_basis.get("applied_rules") or []
+    if applied_rules:
+        profile_rows.append(("实际生效规则", "<br>".join(html.escape(str(item)) for item in applied_rules[:4])))
+    sort_factors = recommendation_basis.get("sort_factors") or []
+    if sort_factors:
+        profile_rows.append(
+            (
+                "排序因子",
+                " | ".join(f"{html.escape(str(name))}:{html.escape(str(level))}" for name, level in sort_factors),
+            )
+        )
+    if not sort_factors:
+        for key, value in profile_dimensions.items():
+            profile_rows.append((str(key), html.escape(str(value))))
     if (payload.get("travel_profile") or {}).get("stock_check") == "high":
         profile_rows.append(
             (

@@ -498,6 +498,13 @@ def load_file_subscriptions() -> list[dict]:
 
 
 def subscription_preferences(sub: dict) -> dict:
+    soft = sub.get("soft_preferences") or {}
+    travel_scenarios = soft.get("travel_scenarios") or sub.get("travel_scenarios")
+    if isinstance(travel_scenarios, str):
+        travel_scenarios = [item.strip() for item in travel_scenarios.split(",") if item.strip()]
+    if not travel_scenarios:
+        travel_scenario = soft.get("travel_scenario") or sub.get("travel_scenario")
+        travel_scenarios = [travel_scenario] if travel_scenario else []
     return {
         "direct_only": sub.get("direct_only", "flexible"),
         "transfer_policy": sub.get("transfer_policy", "reasonable"),
@@ -517,6 +524,8 @@ def subscription_preferences(sub: dict) -> dict:
         "refund_flexibility": sub.get("refund_flexibility", "unknown"),
         "trip_type": sub.get("trip_type", "tourism"),
         "companions": sub.get("companions", "solo"),
+        "travel_scenario": (travel_scenarios[0] if travel_scenarios else "personal"),
+        "travel_scenarios": travel_scenarios or ["personal"],
         "price_sensitivity": sub.get("price_sensitivity", "low"),
         "trip_rigidity": sub.get("trip_rigidity", "confirmed"),
         "goals": sub.get("goals", []),
