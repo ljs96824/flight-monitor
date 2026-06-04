@@ -63,6 +63,36 @@ def _to_float(value) -> float | None:
         return None
 
 
+def has_enough_detail(flight: dict) -> bool:
+    """Whether a flight has enough segment detail to be actionable as a recommendation."""
+    segments = flight.get("segments") or []
+    if not segments:
+        return False
+    first = segments[0] if isinstance(segments[0], dict) else {}
+    last = segments[-1] if isinstance(segments[-1], dict) else {}
+    dep_time = (
+        flight.get("departure_time")
+        or flight.get("dep_time")
+        or first.get("dep_time")
+        or first.get("departure_time")
+    )
+    arr_time = (
+        flight.get("arrival_time")
+        or flight.get("arr_time")
+        or last.get("arr_time")
+        or last.get("arrival_time")
+    )
+    return bool(dep_time and arr_time)
+
+
+def _reference_only_reason(flight: dict) -> str:
+    return (
+        flight.get("reference_reason")
+        or flight.get("exclude_reason")
+        or "航段时间/机型信息不完整，仅作价格参考"
+    )
+
+
 def _set_if_missing(target: dict, key: str, value) -> None:
     if key not in target and value not in (None, ""):
         target[key] = value
@@ -4414,6 +4444,33 @@ def analyze_all_flights(
             "price_insights": price_insights,
         }
 
+    detail_reference_flights = []
+    actionable_flights = []
+    for flight in usable_flights:
+        if flight.get("reference_only") or not has_enough_detail(flight):
+            reference = {
+                **flight,
+                "reference_only": True,
+                "reference_reason": _reference_only_reason(flight),
+                "preference_reference": True,
+            }
+            detail_reference_flights.append(reference)
+        else:
+            actionable_flights.append(flight)
+    usable_flights = actionable_flights
+    if not usable_flights:
+        return {
+            "error": "no_actionable_flights",
+            "total_options": 0,
+            "total_reference_options": len(detail_reference_flights),
+            "all_flights": [],
+            "reference_flights": detail_reference_flights,
+            "price_range": [],
+            "current_min_price": None,
+            "market_context": {},
+            "price_insights": price_insights,
+        }
+
     mode = _trip_mode(mode, user_preferences)
     mode = mode if mode in SCORE_WEIGHTS else "balanced"
     original_options = len(usable_flights)
@@ -4463,6 +4520,7 @@ def analyze_all_flights(
         return {
             "error": "no_flights",
             "excluded_flights": _excluded_flight_summary(excluded_flights),
+            "reference_flights": detail_reference_flights,
         }
 
     # 1. 鎸変环鏍兼帓鍚?
@@ -4556,7 +4614,7 @@ def analyze_all_flights(
 
     priority_config = _normalize_priorities(priorities)
     qualified_flights = []
-    reference_flights = []
+    reference_flights = list(detail_reference_flights)
     if priority_config:
         for flight in by_price:
             violations = _priority_violations(flight, priority_config)
@@ -5413,6 +5471,17 @@ def analyze_round_trip(
 
 def select_recommendations(economy_flights, business_flights, mode: str = "balanced"):
     """Select push options: up to four economy options and one business option."""
+    economy_flights = [
+        flight
+        for flight in economy_flights
+        if not flight.get("reference_only") and has_enough_detail(flight)
+    ]
+    business_flights = [
+        flight
+        for flight in business_flights
+        if not flight.get("reference_only") and has_enough_detail(flight)
+    ]
+
     def max_layover_minutes(flight: dict) -> int:
         return max(
             (int(layover.get("wait_minutes") or 0) for layover in flight.get("layovers", [])),

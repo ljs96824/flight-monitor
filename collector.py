@@ -77,6 +77,28 @@ def calc_layover_minutes(arr_time_str, dep_time_str) -> int:
         return 0
 
 
+def make_layover_summary(flight: dict) -> str:
+    """Generate a layover summary from stops first, never defaulting stop flights to direct."""
+    try:
+        stops = int(flight.get("stops", 0) or 0)
+    except (TypeError, ValueError):
+        stops = 0
+    if stops == 0:
+        return "直飞"
+
+    layovers = flight.get("layovers") or []
+    cities = []
+    for layover in layovers:
+        if not isinstance(layover, dict):
+            continue
+        city = layover.get("airport") or layover.get("city")
+        if city:
+            cities.append(str(city))
+    if cities:
+        return f"中转{stops}次 经{'/'.join(cities)}"
+    return f"中转{stops}次"
+
+
 def parse_flight_detail(flight_data: dict, data_source: str | None = None) -> dict:
     """解析单个航班方案的完整信息"""
     segments = flight_data.get("flights", [])
@@ -136,14 +158,7 @@ def parse_flight_detail(flight_data: dict, data_source: str | None = None) -> di
         segment["flight_no"] for segment in result["segments"] if segment["flight_no"]
     )
     result["total_hours"] = round(result["total_duration_min"] / 60, 1)
-    result["layover_summary"] = (
-        "、".join(
-            f"{layover['city']}等{layover['wait_minutes'] // 60}h{layover['wait_minutes'] % 60}m"
-            for layover in result["layovers"]
-        )
-        if result["layovers"]
-        else "直飞"
-    )
+    result["layover_summary"] = make_layover_summary(result)
 
     return result
 
@@ -308,17 +323,7 @@ def _normalize_detail_flight(flight: dict, source_name: str | None = None) -> di
             [segments[0].get("dep_airport", "")]
             + [segment.get("arr_airport", "") for segment in segments]
         )
-    if not detail.get("layover_summary"):
-        detail["layover_summary"] = (
-            "、".join(
-                f"{layover.get('city', layover.get('airport', '中转地'))}等"
-                f"{(layover.get('wait_minutes') or 0) // 60}h"
-                f"{(layover.get('wait_minutes') or 0) % 60}m"
-                for layover in layovers
-            )
-            if layovers
-            else "直飞"
-        )
+    detail["layover_summary"] = make_layover_summary(detail)
 
     detail["fare_rules"] = standardize_fare_rules(
         detail.get("extra") or {}, detail.get("flight_combo", "")

@@ -102,6 +102,10 @@ def _merge_flight_fields(target: dict, source: dict) -> dict:
             "data_source",
             "source_price_details",
             "booking_options",
+            "reference_only",
+            "reference_reason",
+            "source_role",
+            "data_quality",
         }:
             continue
         if not _non_empty(target.get(key)) and _non_empty(value):
@@ -217,6 +221,7 @@ class FlightAggregator:
 
         for source in self.search_sources:
             source_name = getattr(source, "name", type(source).__name__)
+            source_role = "reference" if str(source_name).lower() == "travelpayouts" else "search"
             source_optional = len(all_flights) >= OPTIONAL_SOURCE_THRESHOLD
             source_count = 0
             source_succeeded = False
@@ -245,6 +250,13 @@ class FlightAggregator:
                         if not flight.get("data_source"):
                             flight["data_source"] = source_name
                         flight["cabin_class"] = flight.get("cabin_class") or cabin_class
+                        flight["source_role"] = flight.get("source_role") or source_role
+                        if source_role == "reference":
+                            flight["reference_only"] = True
+                            flight["reference_reason"] = (
+                                flight.get("reference_reason")
+                                or "Travelpayouts仅提供缓存价格，缺少航段时间和机型"
+                            )
 
                     source_count += len(flights)
                     cabin_counts[cabin_class] = len(flights)
@@ -290,6 +302,7 @@ class FlightAggregator:
                 "cabin_counts": cabin_counts,
                 "status": status,
                 "optional": source_optional,
+                "role": source_role,
             }
 
         total_raw = len(all_flights)

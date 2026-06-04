@@ -109,6 +109,9 @@ class TravelpayoutsSource(FlightSource):
             "layovers": [],
             "source": "travelpayouts",
             "data_source": "travelpayouts",
+            "reference_only": True,
+            "reference_reason": "Travelpayouts仅提供缓存价格，缺少航段时间和机型",
+            "data_quality": "price_reference_only",
             "cabin_class": cabin_class,
             "extra": {},
         }
