@@ -224,6 +224,14 @@ SECONDARY_GOAL_LABELS = {
     "better_same_day": "同日更优方案提醒",
 }
 
+GOAL_TO_ALERTS = {
+    "price_alert": ["low_price_alert", "price_risk_alert"],
+    "price_drop_alert": ["low_price_alert", "price_risk_alert"],
+    "buy_timing": ["price_risk_alert", "better_same_day"],
+    "cheaper_date": ["cheaper_date"],
+    "best_overall": ["better_same_day"],
+}
+
 
 FORM_TEMPLATE = """
 <!doctype html>
@@ -703,29 +711,22 @@ FORM_TEMPLATE = """
 
       <label>价格策略</label>
       <div class="choice">
-        <label><input type="radio" name="budget_strategy" value="explicit" checked> 我有明确预算</label>
-        <label><input type="radio" name="budget_strategy" value="auto_judge"> 不知道合理价，帮我判断</label>
-        <label><input type="radio" name="budget_strategy" value="low_price_alert"> 只要进入低价区间就提醒</label>
+        <label><input type="radio" name="price_strategy" value="explicit" checked> 1. 我有明确价格</label>
+        <label><input type="radio" name="price_strategy" value="auto_judge"> 2. 我不知道合理价，帮我判断</label>
+        <label><input type="radio" name="price_strategy" value="low_price_alert"> 3. 只要进入低价区间就提醒我</label>
       </div>
 
-      <div id="budget-amount-fields" data-show-if="budget_strategy=explicit">
+      <div id="budget-amount-fields" data-show-if="price_strategy=explicit">
       <label>最高可接受价格（超过这个价通常不考虑）</label>
       <input id="max_budget" name="max_budget" type="number" min="1" step="1" placeholder="例如 8000">
       <p class="hint">超过这个价通常不考虑</p>
-      <div class="choice">
-        <label><input type="radio" name="max_budget_mode" value="fixed" checked> 输入具体金额</label>
-        <label><input type="radio" name="max_budget_mode" value="none"> 不确定，帮我判断</label>
-      </div>
+      <input type="hidden" name="max_budget_mode" value="fixed">
 
       <label>理想入手价格（可选，到这个价格就值得买）</label>
       <input id="target_price" name="target_price" type="number" min="1" step="1" placeholder="例如 6000（选填）">
       <p class="hint">到这个价格就值得买（可选）</p>
       <p id="price-validation-error" class="field-error">理想入手价应低于最高可接受价，请确认是否填反了</p>
-      <div class="choice">
-        <label><input type="radio" name="target_price_mode" value="fixed" checked> 输入具体金额</label>
-        <label><input type="radio" name="target_price_mode" value="auto"> 不确定，帮我判断合理价格</label>
-        <label><input type="radio" name="target_price_mode" value="low_zone"> 没有明确预算，进入低价区间时提醒我</label>
-      </div>
+      <input type="hidden" name="target_price_mode" value="fixed">
       </div>
 
       <input type="hidden" name="price_tolerance_mode" value="100">
@@ -747,13 +748,35 @@ FORM_TEMPLATE = """
     </fieldset>
 
     <fieldset class="form-step" data-step="3">
-      <legend>监控目标</legend>
+      <legend>监控目标与提醒</legend>
       <label>主目标</label>
       <div class="choice">
         <label><input type="radio" name="primary_goal" value="price_drop_alert" required> 找到合适价格时提醒我 <small style="color:gray">（适合还没急着买，等低价）</small></label>
         <label><input type="radio" name="primary_goal" value="buy_timing" checked required> 判断现在该不该买 <small style="color:gray">（适合已看到价格，想知道能不能下手）</small></label>
         <label><input type="radio" name="primary_goal" value="cheaper_date" required> 帮我找更便宜的日期 <small style="color:gray">（适合日期可以调整）</small></label>
         <label><input type="radio" name="primary_goal" value="best_overall" required> 帮我找最合适航班 <small style="color:gray">（不只看价格，综合时间/行李/中转）</small></label>
+      </div>
+
+      <label>提醒方式</label>
+      <div class="choice">
+        <label><input type="radio" name="notification_method" value="email"> 邮箱</label>
+        <label><input type="radio" name="notification_method" value="pushplus" checked> PushPlus微信推送</label>
+        <label><input type="radio" name="notification_method" value="both"> 邮箱 + 微信(PushPlus)都接收</label>
+        <label><input type="radio" name="notification_method" value="page_only"> 暂时只在页面查看</label>
+      </div>
+      <div id="email-reminder-wrap" data-show-if="notification_method=email|both">
+        <label for="notification_email">邮箱地址</label>
+        <input id="notification_email" name="notification_email" type="email" placeholder="you@example.com">
+        <p class="hint">支持任意邮箱。注意：Gmail在国内需翻墙才能查看，推荐用QQ/163/Outlook</p>
+        <p id="email-error" class="inline-warning"></p>
+      </div>
+      <p id="page-only-hint" class="hint" data-show-if="notification_method=page_only">你可以稍后在订阅列表查看监控结果</p>
+
+      <label>提醒频率</label>
+      <div class="choice">
+        <label><input type="radio" name="notification_frequency" value="important_only" checked> 仅重要变化提醒</label>
+        <label><input type="radio" name="notification_frequency" value="daily_digest"> 每天汇总一次</label>
+        <label><input type="radio" name="notification_frequency" value="price_change"> 价格变化就提醒</label>
       </div>
 
       <label>本次出行场景（可多选）</label>
@@ -1112,30 +1135,6 @@ FORM_TEMPLATE = """
     <div id="summary-card">
       <h2>即将创建的监控：</h2>
       <ul id="summary-list"></ul>
-      <fieldset>
-        <legend>提醒设置</legend>
-        <label>提醒方式</label>
-        <div class="choice">
-          <label><input type="radio" name="notification_method" value="email"> 邮箱</label>
-          <label><input type="radio" name="notification_method" value="pushplus" checked> PushPlus微信推送</label>
-          <label><input type="radio" name="notification_method" value="both"> 邮箱 + 微信(PushPlus)都接收</label>
-          <label><input type="radio" name="notification_method" value="page_only"> 暂时只在页面查看</label>
-        </div>
-        <div id="email-reminder-wrap" data-show-if="notification_method=email|both">
-          <label for="notification_email">邮箱地址</label>
-          <input id="notification_email" name="notification_email" type="email" placeholder="you@example.com">
-          <p class="hint">支持任意邮箱。注意：Gmail在国内需翻墙才能查看，推荐用QQ/163/Outlook</p>
-          <p id="email-error" class="inline-warning"></p>
-        </div>
-        <p id="page-only-hint" class="hint" data-show-if="notification_method=page_only">你可以稍后在订阅列表查看监控结果</p>
-
-        <label>提醒频率</label>
-        <div class="choice">
-          <label><input type="radio" name="notification_frequency" value="important_only" checked> 仅重要变化提醒</label>
-          <label><input type="radio" name="notification_frequency" value="daily_digest"> 每天汇总一次</label>
-          <label><input type="radio" name="notification_frequency" value="price_change"> 价格变化就提醒</label>
-        </div>
-      </fieldset>
       <p class="hint">开始后，系统会立即生成当前购买判断，并在价格进入低价区间、涨价风险升高或出现异常低价时提醒你。</p>
       <div class="submit-preview">
         提交后将生成：当前是否值得买的判断、推荐方案与备选方案、价格置信度拆解、购买前检查清单，以及为什么排除更便宜方案的解释。
@@ -1179,8 +1178,9 @@ FORM_TEMPLATE = """
       frequency: {"important_only": "仅重要变化时提醒", "daily_digest": "每天汇总推送一次", "price_change": "每次价格变化都提醒"}
     };
     const goalDefaults = {
+      price_alert: ["low_price_alert", "price_risk_alert"],
       price_drop_alert: ["low_price_alert", "price_risk_alert"],
-      buy_timing: ["price_risk_alert", "low_price_alert"],
+      buy_timing: ["price_risk_alert", "better_same_day"],
       cheaper_date: ["cheaper_date"],
       best_overall: ["better_same_day"]
     };
@@ -1190,7 +1190,7 @@ FORM_TEMPLATE = """
 
     const form = document.getElementById('subscription-form');
     const modeRadios = document.querySelectorAll('input[name="monitor_mode"]');
-    const budgetStrategyRadios = document.querySelectorAll('input[name="budget_strategy"]');
+    const budgetStrategyRadios = document.querySelectorAll('input[name="price_strategy"]');
     const budgetAmountFields = document.getElementById('budget-amount-fields');
     const requiredProgress = document.getElementById('required-progress');
     const savedTemplateBanner = document.getElementById('saved-template-banner');
@@ -1468,7 +1468,7 @@ FORM_TEMPLATE = """
       const origin = selectedOrigin();
       const destination = destinationInput.value.trim();
       const isRoundTrip = checkedValue('round_trip') === 'true';
-      const strategy = checkedValue('budget_strategy');
+      const strategy = checkedValue('price_strategy');
       const baseItems = [
         {done: Boolean(origin && origin !== '其他'), label: '出发地'},
         {done: Boolean(destination), label: '目的地'},
@@ -1842,17 +1842,18 @@ FORM_TEMPLATE = """
     }
 
     function toggleBudgetRequired() {
-      const explicit = checkedValue('budget_strategy') === 'explicit';
+      const strategy = checkedValue('price_strategy');
+      const explicit = strategy === 'explicit';
       if (budgetAmountFields) {
         budgetAmountFields.style.display = explicit ? 'block' : 'none';
       }
       maxBudgetInput.required = false;
       targetPriceInput.required = false;
       if (!explicit) {
-        if (checkedValue('budget_strategy') === 'auto_judge') {
+        if (strategy === 'auto_judge') {
           setRadio('max_budget_mode', 'none');
           setRadio('target_price_mode', 'auto');
-        } else if (checkedValue('budget_strategy') === 'low_price_alert') {
+        } else if (strategy === 'low_price_alert') {
           setRadio('max_budget_mode', 'none');
           setRadio('target_price_mode', 'low_zone');
         }
@@ -1931,7 +1932,8 @@ FORM_TEMPLATE = """
       const targetPriceMode = checkedValue('target_price_mode');
       const maxBudget = Number(maxBudgetInput.value || 0);
       const targetPrice = Number(targetPriceInput.value || 0);
-      const invalid = maxBudgetMode === 'fixed'
+      const invalid = checkedValue('price_strategy') === 'explicit'
+        && maxBudgetMode === 'fixed'
         && targetPriceMode === 'fixed'
         && maxBudget > 0
         && targetPrice > 0
@@ -2094,7 +2096,7 @@ FORM_TEMPLATE = """
       const soft = data.soft_preferences || {};
       const goals = data.notification_goals || {};
       if (data.monitor_mode) setRadio('monitor_mode', data.monitor_mode);
-      if (hard.budget_strategy) setRadio('budget_strategy', hard.budget_strategy);
+      if (hard.budget_strategy) setRadio('price_strategy', hard.budget_strategy);
       if (hard.max_budget) maxBudgetInput.value = hard.max_budget;
       if (hard.target_price || soft.target_price) targetPriceInput.value = hard.target_price || soft.target_price;
       if (hard.transfer_policy) setRadio('transfer_policy', hard.transfer_policy);
@@ -2358,8 +2360,8 @@ FORM_TEMPLATE = """
       summaryLine('返程', returnDate.value);
       }
       summaryLine('日期弹性', selectedLabel('date_flexibility'));
-      summaryLine('价格策略', selectedLabel('budget_strategy'));
-      if (checkedValue('budget_strategy') === 'explicit') {
+      summaryLine('价格策略', selectedLabel('price_strategy'));
+      if (checkedValue('price_strategy') === 'explicit') {
         summaryLine(
           '最高可接受价',
           maxBudgetMode === 'fixed' ? money(maxBudgetInput.value) : selectedLabel('max_budget_mode')
@@ -2429,7 +2431,7 @@ FORM_TEMPLATE = """
     function collectPreferenceTemplate() {
       return {
         monitor_mode: checkedValue('monitor_mode'),
-        budget_strategy: checkedValue('budget_strategy'),
+        budget_strategy: checkedValue('price_strategy'),
         transfer_policy: checkedValue('transfer_policy'),
         baggage: checkedValue('baggage'),
         time_preference: checkedValue('time_preference'),
@@ -2479,7 +2481,7 @@ FORM_TEMPLATE = """
       applyLocationFromTemplate(data);
       [
         'monitor_mode',
-        'budget_strategy',
+        'price_strategy',
         'transfer_policy',
         'baggage',
         'time_preference',
@@ -2496,6 +2498,9 @@ FORM_TEMPLATE = """
       ].forEach(name => {
         if (data[name]) setRadio(name, name === 'time_preference' && data[name] === 'any' ? 'unlimited' : data[name]);
       });
+      if (data.budget_strategy) {
+        setRadio('price_strategy', data.budget_strategy);
+      }
       if (data.notification_frequency) {
         setRadio('notification_frequency_rule', data.notification_frequency);
       }
@@ -3273,9 +3278,9 @@ def build_subscription(form) -> dict:
         )
         - (set(origin_airports_active) | set(destination_airports_active))
     )
-    budget_strategy = form.get("budget_strategy", "explicit")
-    max_budget_mode = form.get("max_budget_mode", "fixed")
-    target_price_mode = form.get("target_price_mode", "fixed")
+    budget_strategy = form.get("price_strategy") or form.get("budget_strategy", "explicit")
+    max_budget_mode = "fixed"
+    target_price_mode = "fixed"
     if budget_strategy == "auto_judge":
         max_budget_mode = "none"
         target_price_mode = "auto"
@@ -3374,6 +3379,10 @@ def build_subscription(form) -> dict:
         form.get("notification_frequency", "important_only"),
         form.get("notification_frequency", "important_only"),
     )
+    primary_goal = form.get("primary_goal", "buy_timing")
+    secondary_goals = form.getlist("secondary_goals") or list(
+        GOAL_TO_ALERTS.get(primary_goal, [])
+    )
     blocked_airlines = [
         item.strip()
         for item in form.get("exclude_airlines", "").replace("，", ",").split(",")
@@ -3460,7 +3469,7 @@ def build_subscription(form) -> dict:
             },
             "alerts": {
                 "frequency": notification_frequency,
-                "types": form.getlist("secondary_goals"),
+                "types": secondary_goals,
                 "price_change_threshold": form.get("price_change_threshold", "down_100"),
                 "digest_time": form.get("digest_time", "09:00"),
             },
@@ -3533,8 +3542,8 @@ def build_subscription(form) -> dict:
             "max_budget": max_budget,
         },
         "notification_goals": {
-            "primary": form.get("primary_goal", "buy_timing"),
-            "secondary": form.getlist("secondary_goals"),
+            "primary": primary_goal,
+            "secondary": secondary_goals,
             "method": form.get("notification_method", "pushplus"),
             "email": form.get("notification_email", "").strip(),
             "frequency": notification_frequency,

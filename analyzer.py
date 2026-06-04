@@ -263,6 +263,14 @@ TRAVEL_SCENARIO_LABELS = {
     "price_first": "价格优先",
 }
 
+GOAL_TO_ALERTS = {
+    "price_alert": ["low_price_alert", "price_risk_alert"],
+    "price_drop_alert": ["low_price_alert", "price_risk_alert"],
+    "buy_timing": ["price_risk_alert", "better_same_day"],
+    "cheaper_date": ["cheaper_date"],
+    "best_overall": ["better_same_day"],
+}
+
 
 def _normalize_travel_scenarios(value) -> list[str]:
     """Normalize legacy single scenario and new multi-select values."""
@@ -964,8 +972,17 @@ def apply_default_rules(subscription: dict) -> dict:
         defaults_applied.append("不推荐过夜中转")
 
     if not goals.get("secondary"):
-        goals["secondary"] = ["low_price_alert", "price_rise_alert"]
-        defaults_applied.append("提醒异常低价和涨价风险")
+        primary_goal = goals.get("primary", "buy_timing")
+        default_alerts = list(GOAL_TO_ALERTS.get(primary_goal, GOAL_TO_ALERTS["buy_timing"]))
+        goals["secondary"] = default_alerts
+        if "cheaper_date" in default_alerts:
+            defaults_applied.append("提醒前后日期更便宜方案")
+        elif "better_same_day" in default_alerts and len(default_alerts) == 1:
+            defaults_applied.append("提醒同日更优方案")
+        elif "better_same_day" in default_alerts:
+            defaults_applied.append("提醒涨价风险和同日更优方案")
+        else:
+            defaults_applied.append("提醒异常低价和涨价风险")
 
     if not goals.get("frequency"):
         goals["frequency"] = "important_only"
