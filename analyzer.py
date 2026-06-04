@@ -68,6 +68,211 @@ def _set_if_missing(target: dict, key: str, value) -> None:
         target[key] = value
 
 
+SCENARIO_RULES = {
+    "personal": {
+        "label": "个人出行",
+        "defaults": {"price_sensitivity": "medium"},
+        "notes": ["个人出行：价格和便利性均衡"],
+    },
+    "business": {
+        "label": "商务/会议",
+        "defaults": {
+            "trip_type": "business_meeting",
+            "direct_preferred": True,
+            "time_preference_mode": "daytime",
+            "refund_flexibility": "preferred",
+            "airline_policy": "prefer_full_service",
+        },
+        "notes": ["商务/会议：准点、直飞和可改签优先"],
+    },
+    "tourism": {
+        "label": "旅游",
+        "defaults": {"trip_type": "tourism", "price_sensitivity": "high"},
+        "notes": ["旅游：突出低价日期和合理中转"],
+    },
+    "family_visit": {
+        "label": "探亲/回家",
+        "defaults": {
+            "trip_type": "family_visit",
+            "baggage_default": "prefer_included",
+            "price_sensitivity": "medium",
+        },
+        "notes": ["探亲/回家：行李和合理价格优先"],
+    },
+    "family": {
+        "label": "家庭/亲子",
+        "defaults": {
+            "companions": "with_child",
+            "time_preference_mode": "no_redeye",
+            "direct_preferred": True,
+            "baggage_default": "prefer_included",
+            "max_extra_duration_hours": 3,
+        },
+        "notes": ["家庭/亲子：优先白天、直飞/短中转和行李明确"],
+    },
+    "elderly": {
+        "label": "有老人同行",
+        "defaults": {
+            "companions": "with_elderly",
+            "time_preference_mode": "no_redeye",
+            "direct_preferred": True,
+            "baggage_default": "prefer_included",
+            "max_extra_duration_hours": 3,
+            "refund_flexibility": "preferred",
+            "airline_policy": "prefer_full_service",
+        },
+        "notes": ["有老人同行：白天到达、短中转、全服务航司和可退改优先"],
+    },
+    "important": {
+        "label": "重要事项",
+        "defaults": {
+            "time_preference_mode": "no_redeye",
+            "direct_preferred": True,
+            "allow_self_transfer": False,
+            "allow_overnight_transfer": False,
+            "refund_flexibility": "required",
+            "max_extra_duration_hours": 3,
+        },
+        "notes": ["重要事项：按保守规则处理，降低复杂中转和票规风险"],
+    },
+    "price_first": {
+        "label": "价格优先",
+        "defaults": {
+            "price_sensitivity": "max",
+            "transfer_policy": "price_first",
+        },
+        "notes": ["价格优先：低价权重最高，可接受合理不便"],
+    },
+}
+
+
+COMPANION_RULES = {
+    "with_child": {
+        "label": "有儿童",
+        "defaults": {
+            "time_preference_mode": "no_redeye",
+            "baggage_default": "prefer_included",
+            "direct_preferred": True,
+        },
+        "notes": ["儿童同行：降低红眼、长中转和行李不明确方案"],
+    },
+    "with_elderly": {
+        "label": "有老人",
+        "defaults": {
+            "time_preference_mode": "no_redeye",
+            "baggage_default": "prefer_included",
+            "direct_preferred": True,
+            "refund_flexibility": "preferred",
+            "airline_policy": "prefer_full_service",
+            "max_extra_duration_hours": 3,
+        },
+        "notes": ["老人同行：提高白天、短中转、全服务航司和可退改权重"],
+    },
+    "with_elderly_child": {
+        "label": "老人和儿童都有",
+        "defaults": {
+            "time_preference_mode": "no_redeye",
+            "baggage_default": "prefer_included",
+            "direct_preferred": True,
+            "refund_flexibility": "preferred",
+            "airline_policy": "prefer_full_service",
+            "max_extra_duration_hours": 3,
+        },
+        "notes": ["老人和儿童同行：优先直飞/短中转、白天和行李明确"],
+    },
+    "group": {
+        "label": "多人同行",
+        "defaults": {"availability_priority": "high"},
+        "notes": ["多人同行：提高库存可购买性和最终支付价校验权重"],
+    },
+}
+
+
+def _set_default_if_missing(target: dict, key: str, value) -> bool:
+    if value in (None, ""):
+        return False
+    if key in {"companions", "travelers"} and target.get(key) == "solo" and value != "solo":
+        target[key] = value
+        return True
+    if key not in target or target.get(key) in (None, "", "unknown", "any", "unlimited"):
+        target[key] = value
+        return True
+    return False
+
+
+def _apply_preference_default(
+    soft: dict, hard: dict, key: str, value, *, override: bool = False
+) -> None:
+    if key in {
+        "transfer_policy",
+        "baggage",
+        "baggage_default",
+        "max_extra_duration_hours",
+        "arrival_time_policy",
+        "accept_self_transfer",
+        "accept_overnight_transfer",
+    }:
+        if override:
+            hard[key] = value
+        else:
+            _set_default_if_missing(hard, key, value)
+    else:
+        if override:
+            soft[key] = value
+        else:
+            _set_default_if_missing(soft, key, value)
+        if key == "time_preference_mode":
+            if override:
+                soft["time_preference"] = value
+                hard["time_preference_mode"] = value
+                hard["time_preference"] = value
+            else:
+                _set_default_if_missing(soft, "time_preference", value)
+                _set_default_if_missing(hard, "time_preference_mode", value)
+                _set_default_if_missing(hard, "time_preference", value)
+
+
+def _apply_rule_defaults(
+    soft: dict, hard: dict, rules: dict, defaults_applied: list[str], *, override: bool = False
+) -> None:
+    for key, value in (rules.get("defaults") or {}).items():
+        _apply_preference_default(soft, hard, key, value, override=override)
+    defaults_applied.extend(rules.get("notes") or [])
+
+
+def _apply_companion_constraints(
+    soft: dict, hard: dict, constraints: list[str], defaults_applied: list[str]
+) -> None:
+    constraint_set = set(constraints or [])
+    if "direct_preferred" in constraint_set:
+        soft["direct_preferred"] = True
+        defaults_applied.append("同行约束：需要尽量直飞")
+    if "no_redeye" in constraint_set:
+        _apply_preference_default(soft, hard, "time_preference_mode", "no_redeye", override=True)
+        defaults_applied.append("同行约束：不接受红眼/凌晨到达")
+    if "avoid_long_layover" in constraint_set:
+        _apply_preference_default(soft, hard, "max_extra_duration_hours", 3, override=False)
+        soft["avoid_long_layover"] = True
+        defaults_applied.append("同行约束：不适合长时间中转")
+    if "need_baggage" in constraint_set:
+        hard["baggage"] = "required"
+        defaults_applied.append("同行约束：需要托运行李")
+    if "need_refund_change" in constraint_set:
+        soft["refund_flexibility"] = "required"
+        hard["refund_flexibility"] = "required"
+        defaults_applied.append("同行约束：需要可退改")
+    if "daytime_arrival" in constraint_set:
+        hard["arrival_time_policy"] = "daytime_only"
+        soft["prefer_daytime_arrival"] = True
+        defaults_applied.append("同行约束：希望白天到达")
+    if "limited_mobility" in constraint_set:
+        soft["direct_preferred"] = True
+        soft["allow_self_transfer"] = False
+        hard["accept_self_transfer"] = False
+        _apply_preference_default(soft, hard, "max_extra_duration_hours", 3, override=False)
+        defaults_applied.append("同行约束：行动不便，降低步行/换乘风险")
+
+
 def migrate_old_subscription(subscription: dict) -> dict:
     """Normalize legacy flat subscriptions into the four-section V3 shape."""
     sub = dict(subscription or {})
@@ -123,6 +328,20 @@ def migrate_old_subscription(subscription: dict) -> dict:
     if not preferences:
         preferences = {
             "travelers": soft.get("companions") or sub.get("companions", "solo"),
+            "travel_scenario": soft.get("travel_scenario")
+            or sub.get("travel_scenario")
+            or "personal",
+            "companion_constraints": soft.get("companion_constraints")
+            or sub.get("companion_constraints")
+            or [],
+            "solo_travel": bool(soft.get("solo_travel") or sub.get("solo_travel")),
+            "no_late_arrival": bool(
+                soft.get("no_late_arrival") or sub.get("no_late_arrival")
+            ),
+            "prefer_daytime_arrival": bool(
+                soft.get("prefer_daytime_arrival")
+                or sub.get("prefer_daytime_arrival")
+            ),
             "time_pref": soft.get("time_preference_mode")
             or soft.get("time_preference")
             or hard.get("time_preference_mode")
@@ -200,6 +419,12 @@ def migrate_old_subscription(subscription: dict) -> dict:
     _set_if_missing(hard, "accept_self_transfer", transfer_rules.get("self_transfer"))
 
     _set_if_missing(soft, "companions", preferences.get("travelers"))
+    _set_if_missing(soft, "travelers", preferences.get("travelers"))
+    _set_if_missing(soft, "travel_scenario", preferences.get("travel_scenario"))
+    _set_if_missing(soft, "companion_constraints", preferences.get("companion_constraints"))
+    _set_if_missing(soft, "solo_travel", preferences.get("solo_travel"))
+    _set_if_missing(soft, "no_late_arrival", preferences.get("no_late_arrival"))
+    _set_if_missing(soft, "prefer_daytime_arrival", preferences.get("prefer_daytime_arrival"))
     _set_if_missing(soft, "time_preference", preferences.get("time_pref"))
     _set_if_missing(soft, "time_preference_mode", preferences.get("time_pref"))
     _set_if_missing(soft, "refund_flexibility", preferences.get("refund_policy"))
@@ -239,6 +464,40 @@ def apply_default_rules(subscription: dict) -> dict:
     monitor_mode = subscription.get("monitor_mode", "quick")
     quick_mode = monitor_mode != "precise"
     defaults_applied = []
+
+    travel_scenario = soft.get("travel_scenario") or "personal"
+    soft["travel_scenario"] = travel_scenario
+    scenario_rules = []
+    scenario = SCENARIO_RULES.get(travel_scenario)
+    if scenario:
+        _apply_rule_defaults(soft, hard, scenario, defaults_applied, override=False)
+        scenario_rules.append(travel_scenario)
+
+    companions = soft.get("companions") or soft.get("travelers") or "solo"
+    soft["companions"] = companions
+    soft["travelers"] = companions
+    companion_rule = COMPANION_RULES.get(companions)
+    if companion_rule:
+        _apply_rule_defaults(soft, hard, companion_rule, defaults_applied, override=False)
+
+    companion_constraints = soft.get("companion_constraints") or []
+    if isinstance(companion_constraints, str):
+        companion_constraints = [
+            item.strip() for item in companion_constraints.split(",") if item.strip()
+        ]
+    soft["companion_constraints"] = companion_constraints
+    if companion_constraints:
+        _apply_companion_constraints(soft, hard, companion_constraints, defaults_applied)
+
+    if soft.get("solo_travel"):
+        soft["no_late_arrival"] = True
+        defaults_applied.append("独自出行：降低深夜到达方案权重")
+    if soft.get("no_late_arrival"):
+        hard["arrival_time_policy"] = "no_midnight"
+        defaults_applied.append("不接受深夜到达")
+    if soft.get("prefer_daytime_arrival"):
+        hard["arrival_time_policy"] = "daytime_only"
+        defaults_applied.append("希望优先白天到达")
 
     time_pref = (
         soft.get("time_preference_mode")
@@ -296,6 +555,7 @@ def apply_default_rules(subscription: dict) -> dict:
         goals["frequency"] = "important_only"
         defaults_applied.append("只在重要变化时提醒")
 
+    soft["scenario_rules"] = sorted(set(scenario_rules))
     subscription["soft_preferences"] = soft
     subscription["hard_constraints"] = hard
     subscription["notification_goals"] = goals
@@ -3152,7 +3412,19 @@ def _apply_user_preferences(
     )
     need_baggage = preferences.get("need_baggage", "unknown")
     refund_flexibility = preferences.get("refund_flexibility", "unknown")
-    companions = preferences.get("companions", "solo")
+    companions = preferences.get("companions") or preferences.get("travelers") or "solo"
+    travel_scenario = preferences.get("travel_scenario") or "personal"
+    companion_constraints = preferences.get("companion_constraints") or []
+    if isinstance(companion_constraints, str):
+        companion_constraints = [
+            item.strip() for item in companion_constraints.split(",") if item.strip()
+        ]
+    companion_constraints = set(companion_constraints)
+    direct_preferred = bool(preferences.get("direct_preferred")) or "direct_preferred" in companion_constraints
+    avoid_long_layover = bool(preferences.get("avoid_long_layover")) or "avoid_long_layover" in companion_constraints
+    no_late_arrival = bool(preferences.get("no_late_arrival")) or "daytime_arrival" in companion_constraints
+    prefer_daytime_arrival = bool(preferences.get("prefer_daytime_arrival")) or "daytime_arrival" in companion_constraints
+    solo_travel = bool(preferences.get("solo_travel"))
     price_sensitivity = preferences.get("price_sensitivity", "low")
     trip_rigidity = preferences.get("trip_rigidity", "confirmed")
     airline_policy = preferences.get("airline_policy", "any")
@@ -3366,6 +3638,52 @@ def _apply_user_preferences(
             if any(marker.lower() in airline_text.lower() for marker in low_cost_markers):
                 penalty += 2
                 penalties.append("廉航不适合家庭出行")
+
+        if travel_scenario == "business":
+            if stops > 0:
+                penalty += 2
+                penalties.append("商务/会议更适合直飞或低风险中转")
+            if not _is_daytime_flight(flight):
+                penalty += 1
+                penalties.append("商务/会议时段稳定性一般")
+        elif travel_scenario == "important":
+            if stops > 0:
+                penalty += 3
+                penalties.append("重要事项不适合复杂中转")
+            if _is_red_eye(flight):
+                penalty += 3
+                penalties.append("重要事项不适合红眼/凌晨航班")
+        elif travel_scenario == "price_first":
+            penalty = max(0, penalty - 2)
+            notes.append("价格优先场景：保留低价不便方案")
+
+        if direct_preferred and stops > 0:
+            penalty += 2
+            penalties.append("同行约束：更偏好直飞")
+        if avoid_long_layover and _max_layover_minutes(flight) > 240:
+            penalty += 3
+            penalties.append("同行约束：中转等待偏长")
+        if "need_baggage" in companion_constraints and not _has_free_checked_baggage(flight):
+            penalty += 3
+            penalties.append("同行约束：托运行李需确认")
+        if "need_refund_change" in companion_constraints and not _has_refund_change_flexibility(flight):
+            penalty += 3
+            penalties.append("同行约束：退改签需确认")
+        if no_late_arrival:
+            arrival_hour = _last_arrival_hour(flight)
+            if arrival_hour is not None and (arrival_hour >= 23 or arrival_hour < 6):
+                penalty += 3
+                penalties.append("不接受深夜/凌晨到达")
+        if prefer_daytime_arrival:
+            arrival_hour = _last_arrival_hour(flight)
+            if arrival_hour is not None and not (6 <= arrival_hour < 22):
+                penalty += 2
+                penalties.append("希望白天到达")
+        if solo_travel and _is_red_eye(flight):
+            penalty += 2
+            penalties.append("独自出行降低红眼方案权重")
+        if companions == "group":
+            notes.append("多人同行：请重点确认低价库存是否充足")
 
         if price_sensitivity == "low":
             if stops > 0:

@@ -160,9 +160,32 @@ TRIP_TYPE_LABELS = {
 
 COMPANION_LABELS = {
     "solo": "仅本人",
-    "with_elderly": "有老人同行",
-    "with_child": "有小孩同行（12岁以下）",
-    "with_elderly_child": "老人和小孩都有",
+    "couple_friends": "情侣/朋友",
+    "with_child": "有儿童",
+    "with_elderly": "有老人",
+    "with_elderly_child": "老人和儿童都有",
+    "group": "多人同行",
+}
+
+TRAVEL_SCENARIO_LABELS = {
+    "personal": "个人出行",
+    "business": "商务/会议",
+    "tourism": "旅游",
+    "family_visit": "探亲/回家",
+    "family": "家庭/亲子",
+    "elderly": "有老人同行",
+    "important": "重要事项",
+    "price_first": "价格优先",
+}
+
+COMPANION_CONSTRAINT_LABELS = {
+    "direct_preferred": "需要尽量直飞",
+    "no_redeye": "不接受红眼/凌晨到达",
+    "avoid_long_layover": "不适合长时间中转",
+    "need_baggage": "需要托运行李",
+    "need_refund_change": "需要可退改",
+    "daytime_arrival": "希望白天到达",
+    "limited_mobility": "有行动不便，不适合长时间步行/换乘",
 }
 
 PRICE_SENSITIVITY_LABELS = {
@@ -352,6 +375,15 @@ FORM_TEMPLATE = """
       color: #1a73e8;
       padding: 0;
       font-size: 13px;
+      text-decoration: underline;
+      cursor: pointer;
+    }
+    .link-button {
+      border: 0;
+      background: transparent;
+      color: #1a73e8;
+      padding: 0;
+      font-size: inherit;
       text-decoration: underline;
       cursor: pointer;
     }
@@ -722,6 +754,19 @@ FORM_TEMPLATE = """
         <label><input type="radio" name="primary_goal" value="best_overall" required> 帮我找最合适航班 <small style="color:gray">（不只看价格，综合时间/行李/中转）</small></label>
       </div>
 
+      <label>本次出行场景</label>
+      <div class="choice">
+        <label><input type="radio" name="travel_scenario" value="personal" checked> 个人出行</label>
+        <label><input type="radio" name="travel_scenario" value="business"> 商务/会议</label>
+        <label><input type="radio" name="travel_scenario" value="tourism"> 旅游</label>
+        <label><input type="radio" name="travel_scenario" value="family_visit"> 探亲/回家</label>
+        <label><input type="radio" name="travel_scenario" value="family"> 家庭/亲子</label>
+        <label><input type="radio" name="travel_scenario" value="elderly"> 有老人同行</label>
+        <label><input type="radio" name="travel_scenario" value="important"> 重要事项（考试/婚礼/医疗/邮轮等）</label>
+        <label><input type="radio" name="travel_scenario" value="price_first"> 价格优先</label>
+      </div>
+      <div id="travel-scenario-notice" class="auto-notice"></div>
+
       <button id="advanced-toggle" class="secondary-button precise-only" type="button">＋ 补充偏好，让推荐更准确</button>
       <div id="advanced-preferences" class="smart-panel precise-only">
       <fieldset>
@@ -760,9 +805,30 @@ FORM_TEMPLATE = """
         <label>同行人员</label>
         <div class="choice">
           <label><input type="radio" name="companions" value="solo" checked> 仅本人</label>
-          <label><input type="radio" name="companions" value="with_elderly"> 有老人同行</label>
-          <label><input type="radio" name="companions" value="with_child"> 有小孩同行（12岁以下）</label>
-          <label><input type="radio" name="companions" value="with_elderly_child"> 老人和小孩都有</label>
+          <label><input type="radio" name="companions" value="couple_friends"> 情侣/朋友</label>
+          <label><input type="radio" name="companions" value="with_child"> 有儿童</label>
+          <label><input type="radio" name="companions" value="with_elderly"> 有老人</label>
+          <label><input type="radio" name="companions" value="with_elderly_child"> 老人和儿童都有</label>
+          <label><input type="radio" name="companions" value="group"> 多人同行</label>
+        </div>
+        <div data-show-if="companions=with_child|with_elderly|with_elderly_child">
+          <p class="hint">（可选）具体约束，不需要填写年龄或性别，按实际出行限制选择即可。</p>
+          <div class="choice">
+            <label><input type="checkbox" name="companion_constraints" value="direct_preferred"> 需要尽量直飞</label>
+            <label><input type="checkbox" name="companion_constraints" value="no_redeye"> 不接受红眼/凌晨到达</label>
+            <label><input type="checkbox" name="companion_constraints" value="avoid_long_layover"> 不适合长时间中转</label>
+            <label><input type="checkbox" name="companion_constraints" value="need_baggage"> 需要托运行李</label>
+            <label><input type="checkbox" name="companion_constraints" value="need_refund_change"> 需要可退改</label>
+            <label><input type="checkbox" name="companion_constraints" value="daytime_arrival"> 希望白天到达</label>
+            <label><input type="checkbox" name="companion_constraints" value="limited_mobility"> 有行动不便，不适合长时间步行/换乘</label>
+          </div>
+        </div>
+        <p class="hint" data-show-if="companions=group">多人同行：低价库存可能不足，系统会提高最终支付价校验和库存可购买性权重。</p>
+        <label>其他实际需求（可选）</label>
+        <div class="choice">
+          <label><input type="checkbox" name="solo_travel" value="true"> 独自出行</label>
+          <label><input type="checkbox" name="no_late_arrival" value="true"> 不接受深夜到达</label>
+          <label><input type="checkbox" name="prefer_daytime_arrival" value="true"> 希望优先白天到达</label>
         </div>
         <div id="auto-preference-notice" class="auto-notice"></div>
         </div>
@@ -1196,6 +1262,8 @@ FORM_TEMPLATE = """
     const dateFlexWarning = document.getElementById('date-flex-warning');
     const cheaperDateCheck = document.querySelector('input[name="secondary_goals"][value="cheaper_date"]');
     const cheaperDateLabel = cheaperDateCheck ? cheaperDateCheck.closest('label') : null;
+    const travelScenarioRadios = document.querySelectorAll('input[name="travel_scenario"]');
+    const travelScenarioNotice = document.getElementById('travel-scenario-notice');
     const companionRadios = document.querySelectorAll('input[name="companions"]');
     const autoPreferenceNotice = document.getElementById('auto-preference-notice');
     const departurePolicyInput = document.querySelector('input[name="departure_time_policy"]');
@@ -1643,10 +1711,22 @@ FORM_TEMPLATE = """
     const prefCardLabelMaps = {
       companions: {
         solo: '未设置',
-        with_elderly: '有老人同行',
-        with_child: '有小孩同行',
-        with_elderly_child: '老人和小孩都有',
-        with_both: '老人和小孩都有'
+        couple_friends: '情侣/朋友',
+        with_child: '有儿童',
+        with_elderly: '有老人',
+        with_elderly_child: '老人和儿童都有',
+        with_both: '老人和儿童都有',
+        group: '多人同行'
+      },
+      travel_scenario: {
+        personal: '个人出行',
+        business: '商务/会议',
+        tourism: '旅游',
+        family_visit: '探亲/回家',
+        family: '家庭/亲子',
+        elderly: '有老人同行',
+        important: '重要事项',
+        price_first: '价格优先'
       },
       time_preference: {
         any: '使用默认：避免红眼',
@@ -1888,6 +1968,74 @@ FORM_TEMPLATE = """
       }
     }
 
+    const scenarioDefaults = {
+      personal: {
+        notice: '个人出行：默认按价格和便利性均衡处理，可接受合理中转和早晚班。',
+        radios: {price_sensitivity: 'medium', transfer_policy: 'reasonable'}
+      },
+      business: {
+        notice: '商务/会议：已默认提高准点、直飞、可改签和到达时间稳定性的权重。',
+        radios: {time_preference: 'daytime', transfer_policy: 'direct_only', refund_flexibility: 'preferred', airline_policy: 'prefer_full_service'}
+      },
+      tourism: {
+        notice: '旅游：已默认提高低价日期和合理中转权重，适合继续比较前后日期。',
+        radios: {price_sensitivity: 'high', transfer_policy: 'reasonable', date_flexibility: '3'}
+      },
+      family_visit: {
+        notice: '探亲/回家：已默认提高行李明确和合理价格权重，不推荐极端折腾方案。',
+        radios: {baggage: 'required', price_sensitivity: 'medium', transfer_policy: 'reasonable'}
+      },
+      family: {
+        notice: '家庭/亲子：已默认优先白天航班、直飞/短中转、行李明确，降低红眼和高风险中转推荐。',
+        radios: {companions: 'with_child', time_preference: 'no_redeye', transfer_policy: 'reasonable', short_transfer_limit: 'extra_3', baggage: 'required'},
+        constraints: ['direct_preferred', 'no_redeye', 'avoid_long_layover', 'need_baggage', 'daytime_arrival']
+      },
+      elderly: {
+        notice: '有老人同行：已默认优先直飞/短中转、白天到达、全服务航司和可退改方案。',
+        radios: {companions: 'with_elderly', time_preference: 'no_redeye', transfer_policy: 'reasonable', short_transfer_limit: 'extra_3', baggage: 'required', refund_flexibility: 'preferred', airline_policy: 'prefer_full_service'},
+        constraints: ['direct_preferred', 'no_redeye', 'avoid_long_layover', 'need_baggage', 'need_refund_change', 'daytime_arrival']
+      },
+      important: {
+        notice: '重要事项：已启用保守默认规则，优先提前/稳定到达、可退改，降低复杂中转、非联程和红眼风险。',
+        radios: {time_preference: 'no_redeye', transfer_policy: 'direct_only', refund_flexibility: 'required', accept_self_transfer: 'false', accept_overnight_transfer: 'false'},
+        constraints: ['direct_preferred', 'no_redeye', 'need_refund_change', 'daytime_arrival']
+      },
+      price_first: {
+        notice: '价格优先：已默认提高低价权重，允许中转和一定不便，系统仍会提示执行风险。',
+        radios: {price_sensitivity: 'max', transfer_policy: 'price_first'}
+      }
+    };
+
+    function showPreciseCompanionSettings() {
+      setRadio('monitor_mode', 'precise');
+      applyMonitorMode();
+      setSmartPanel(advanced, true);
+      togglePrefDetail('companions');
+      document.getElementById('pref-detail-companions')?.scrollIntoView({behavior: 'smooth', block: 'center'});
+    }
+
+    function applyTravelScenarioDefaults() {
+      const scenario = checkedValue('travel_scenario') || 'personal';
+      const config = scenarioDefaults[scenario] || scenarioDefaults.personal;
+      clearAutoSuggestions();
+      document.querySelectorAll('input[name="companion_constraints"]').forEach(input => {
+        input.checked = false;
+        input.closest('label')?.classList.remove('auto-suggested');
+      });
+      Object.entries(config.radios || {}).forEach(([name, value]) => setRadio(name, value, true));
+      (config.constraints || []).forEach(value => setCheckbox('companion_constraints', value, true, true));
+      toggleTimePreference();
+      toggleShortTransferOptions();
+      updateConditionalFields();
+      syncPrefCards();
+      if (travelScenarioNotice) {
+        travelScenarioNotice.innerHTML = `${config.notice} <button id="scenario-open-precise" class="link-button" type="button">想调整？进入精准设置</button>`;
+        travelScenarioNotice.style.display = 'block';
+        document.getElementById('scenario-open-precise')?.addEventListener('click', showPreciseCompanionSettings);
+      }
+      refreshSummaryIfFinalStep();
+    }
+
     function applyEditSubscription(data) {
       if (!data || !Object.keys(data).length) return;
       document.getElementById('subscription_index').value = data._index ?? document.getElementById('subscription_index').value;
@@ -1915,7 +2063,18 @@ FORM_TEMPLATE = """
       if (hard.target_price || soft.target_price) targetPriceInput.value = hard.target_price || soft.target_price;
       if (hard.transfer_policy) setRadio('transfer_policy', hard.transfer_policy);
       if (hard.baggage) setRadio('baggage', hard.baggage);
+      if (soft.travel_scenario) setRadio('travel_scenario', soft.travel_scenario);
       if (soft.companions) setRadio('companions', soft.companions);
+      const savedCompanionConstraints = Array.isArray(soft.companion_constraints)
+        ? soft.companion_constraints
+        : String(soft.companion_constraints || '').split(',').map(item => item.trim()).filter(Boolean);
+      savedCompanionConstraints.forEach(value => setCheckbox('companion_constraints', value, true));
+      const soloTravelInput = document.querySelector('input[name="solo_travel"]');
+      const noLateArrivalInput = document.querySelector('input[name="no_late_arrival"]');
+      const preferDaytimeArrivalInput = document.querySelector('input[name="prefer_daytime_arrival"]');
+      if (soloTravelInput) soloTravelInput.checked = Boolean(soft.solo_travel);
+      if (noLateArrivalInput) noLateArrivalInput.checked = Boolean(soft.no_late_arrival);
+      if (preferDaytimeArrivalInput) preferDaytimeArrivalInput.checked = Boolean(soft.prefer_daytime_arrival);
       const savedTimeMode = soft.time_preference_mode || soft.time_preference || hard.time_preference;
       if (savedTimeMode) setRadio('time_preference', savedTimeMode === 'any' ? 'unlimited' : savedTimeMode);
       if (soft.refund_flexibility) setRadio('refund_flexibility', soft.refund_flexibility);
@@ -1954,7 +2113,12 @@ FORM_TEMPLATE = """
     function applyCompanionDefaults() {
       const companions = checkedValue('companions');
       clearAutoSuggestions();
-      if (companions === 'solo') {
+      if (companions === 'solo' || companions === 'couple_friends') {
+        return;
+      }
+      if (companions === 'group') {
+        autoPreferenceNotice.textContent = '多人同行：低价库存可能不足，系统会提高最终支付价校验和库存可购买性权重';
+        autoPreferenceNotice.style.display = 'block';
         return;
       }
 
@@ -2007,6 +2171,18 @@ FORM_TEMPLATE = """
     function systemDefaultRulesForSummary() {
       const precise = checkedValue('monitor_mode') === 'precise';
       const rules = [];
+      const scenario = checkedValue('travel_scenario');
+      if (scenario === 'family') {
+        rules.push('✓ 家庭/亲子：优先白天航班、直飞/短中转、行李明确');
+      } else if (scenario === 'elderly') {
+        rules.push('✓ 老人同行：优先白天到达、短中转、全服务航司和可退改');
+      } else if (scenario === 'business') {
+        rules.push('✓ 商务/会议：准点、直飞和可改签优先');
+      } else if (scenario === 'important') {
+        rules.push('✓ 重要事项：降低复杂中转、非联程和红眼风险');
+      } else if (scenario === 'price_first') {
+        rules.push('✓ 价格优先：低价权重最高，同时提示执行风险');
+      }
       if (!precise || !moduleIsDirty('time')) {
         rules.push('✓ 不推荐红眼/凌晨到达');
       }
@@ -2134,10 +2310,22 @@ FORM_TEMPLATE = """
       }
       summaryLine('中转', selectedLabel('transfer_policy'));
       summaryLine('行李', selectedLabel('baggage'));
+      summaryLine('出行场景', selectedLabel('travel_scenario'));
       if (checkedValue('companions') !== 'solo') {
         summaryLine('同行', selectedLabel('companions'));
       }
       if (checkedValue('monitor_mode') === 'precise') {
+        const companionDetails = selectedCheckboxLabels('companion_constraints');
+        if (companionDetails.length) {
+          summaryLine('同行具体约束', companionDetails.join('、'));
+        }
+        const realNeeds = [];
+        if (document.querySelector('input[name="solo_travel"]')?.checked) realNeeds.push('独自出行');
+        if (document.querySelector('input[name="no_late_arrival"]')?.checked) realNeeds.push('不接受深夜到达');
+        if (document.querySelector('input[name="prefer_daytime_arrival"]')?.checked) realNeeds.push('希望优先白天到达');
+        if (realNeeds.length) {
+          summaryLine('实际需求', realNeeds.join('、'));
+        }
         summaryLine('时间偏好', timePreferenceText());
         if (checkedValue('time_preference') === 'custom') {
           if (isRoundTrip) {
@@ -2187,7 +2375,12 @@ FORM_TEMPLATE = """
         refund_flexibility: checkedValue('refund_flexibility'),
         price_sensitivity: checkedValue('price_sensitivity'),
         trip_type: form.trip_type ? form.trip_type.value : '',
+        travel_scenario: checkedValue('travel_scenario'),
         companions: checkedValue('companions'),
+        companion_constraints: checkedValues('companion_constraints'),
+        solo_travel: Boolean(document.querySelector('input[name="solo_travel"]')?.checked),
+        no_late_arrival: Boolean(document.querySelector('input[name="no_late_arrival"]')?.checked),
+        prefer_daytime_arrival: Boolean(document.querySelector('input[name="prefer_daytime_arrival"]')?.checked),
         airline_policy: checkedValue('airline_policy'),
         notification_method: checkedValue('notification_method'),
         notification_frequency: checkedValue('notification_frequency'),
@@ -2230,6 +2423,7 @@ FORM_TEMPLATE = """
         'time_preference',
         'refund_flexibility',
         'price_sensitivity',
+        'travel_scenario',
         'companions',
         'airline_policy',
         'notification_method',
@@ -2246,6 +2440,15 @@ FORM_TEMPLATE = """
       if (form.trip_type && data.trip_type) {
         form.trip_type.value = data.trip_type;
       }
+      document.querySelectorAll('input[name="companion_constraints"]').forEach(input => {
+        input.checked = (data.companion_constraints || []).includes(input.value);
+      });
+      const soloTravelInput = document.querySelector('input[name="solo_travel"]');
+      const noLateArrivalInput = document.querySelector('input[name="no_late_arrival"]');
+      const preferDaytimeArrivalInput = document.querySelector('input[name="prefer_daytime_arrival"]');
+      if (soloTravelInput) soloTravelInput.checked = Boolean(data.solo_travel);
+      if (noLateArrivalInput) noLateArrivalInput.checked = Boolean(data.no_late_arrival);
+      if (preferDaytimeArrivalInput) preferDaytimeArrivalInput.checked = Boolean(data.prefer_daytime_arrival);
       secondaryGoalChecks.forEach(check => {
         check.checked = (data.secondary_goals || []).includes(check.value);
       });
@@ -2355,6 +2558,7 @@ FORM_TEMPLATE = """
     destinationInput.addEventListener('input', () => { updateDestinationAirportHint(); updateRequiredProgress(); });
     destinationInput.addEventListener('change', () => { updateDestinationAirportHint(); updateRequiredProgress(); });
     modeRadios.forEach(radio => radio.addEventListener('change', applyMonitorMode));
+    travelScenarioRadios.forEach(radio => radio.addEventListener('change', applyTravelScenarioDefaults));
     timePreferenceRadios.forEach(radio => radio.addEventListener('change', toggleTimePreference));
     preciseTimeToggle?.addEventListener('click', () => {
       if (!preciseTimeOptions) return;
@@ -2382,7 +2586,7 @@ FORM_TEMPLATE = """
     resetModuleButtons.forEach(button => {
       button.addEventListener('click', () => resetModule(button.dataset.resetModule));
     });
-    ['companions', 'time_preference', 'refund_flexibility', 'airline_policy', 'accept_self_transfer'].forEach(name => {
+    ['companions', 'time_preference', 'refund_flexibility', 'airline_policy', 'accept_self_transfer', 'companion_constraints', 'solo_travel', 'no_late_arrival', 'prefer_daytime_arrival'].forEach(name => {
       document.querySelectorAll(`input[name="${name}"]`).forEach(input => {
         input.addEventListener('change', syncPrefCards);
       });
@@ -3092,6 +3296,12 @@ def build_subscription(form) -> dict:
     for item in form.getlist("blocked_airlines_common"):
         if item and item not in blocked_airlines:
             blocked_airlines.append(item)
+    travel_scenario = form.get("travel_scenario", "personal")
+    companions = form.get("companions", "solo")
+    companion_constraints = form.getlist("companion_constraints")
+    solo_travel = parse_bool(form.get("solo_travel", "false"))
+    no_late_arrival = parse_bool(form.get("no_late_arrival", "false"))
+    prefer_daytime_arrival = parse_bool(form.get("prefer_daytime_arrival", "false"))
 
     return {
         "basic": {
@@ -3115,7 +3325,12 @@ def build_subscription(form) -> dict:
             "checked_baggage_required": form.get("baggage", "required") == "required",
         },
         "preferences": {
-            "travelers": form.get("companions", "solo"),
+            "travelers": companions,
+            "travel_scenario": travel_scenario,
+            "companion_constraints": companion_constraints,
+            "solo_travel": solo_travel,
+            "no_late_arrival": no_late_arrival,
+            "prefer_daytime_arrival": prefer_daytime_arrival,
             "time_pref": time_mode,
             "refund_policy": form.get("refund_flexibility", "preferred"),
             "price_sensitivity": form.get("price_sensitivity", "low"),
@@ -3202,7 +3417,13 @@ def build_subscription(form) -> dict:
             "return_arrival_time_windows": return_arrival_time_windows,
             "red_eye_allowed": red_eye_allowed_from_windows(time_mode, all_time_windows),
             "early_morning_allowed": early_morning_allowed_from_windows(time_mode, all_time_windows),
-            "companions": form.get("companions", "solo"),
+            "travel_scenario": travel_scenario,
+            "travelers": companions,
+            "companions": companions,
+            "companion_constraints": companion_constraints,
+            "solo_travel": solo_travel,
+            "no_late_arrival": no_late_arrival,
+            "prefer_daytime_arrival": prefer_daytime_arrival,
             "price_sensitivity": form.get("price_sensitivity", "low"),
             "trip_rigidity": form.get("trip_rigidity", "confirmed"),
             "refund_flexibility": form.get("refund_flexibility", "preferred"),
