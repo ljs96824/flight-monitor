@@ -58,6 +58,7 @@ logging.basicConfig(
 
 ANALYSIS_LOG = DATA_DIR / "analysis_log.jsonl"
 SUBSCRIPTIONS_PATH = DATA_DIR / "subscriptions.json"
+PAGE_PAYLOADS_DIR = DATA_DIR / "payloads"
 
 
 def _as_bool(value) -> bool:
@@ -346,19 +347,24 @@ def _email_subject(html_content: str, route_info: dict) -> str:
 
 
 def _save_result_for_page(subscription_id: str, html_content: str, payload: dict | None = None) -> None:
+    PAGE_PAYLOADS_DIR.mkdir(exist_ok=True)
+    safe_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(subscription_id or "unknown")).strip("_") or "unknown"
+    payload_path = PAGE_PAYLOADS_DIR / f"{safe_id}.json"
+    record = {
+        "subscription_id": str(subscription_id),
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "html": html_content,
+        "payload": payload or {},
+    }
+    payload_path.write_text(json.dumps(record, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    print(f"[详情存储] 保存订阅 {subscription_id} 的payload到 {payload_path}")
+
     path = DATA_DIR / "page_results.json"
     try:
         records = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
     except json.JSONDecodeError:
         records = []
-    records.append(
-        {
-            "subscription_id": subscription_id,
-            "created_at": datetime.now().isoformat(timespec="seconds"),
-            "html": html_content,
-            "payload": payload or {},
-        }
-    )
+    records.append(record)
     path.write_text(json.dumps(records[-100:], ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -404,10 +410,10 @@ def _deliver_notification(sub: dict, route: str, message_kwargs: dict) -> bool:
             subject, full_html = email_rendered
             inline_images = {}
         print("[推送] 邮件/详情HTML渲染完成")
+        _save_result_for_page(subscription_id, full_html, payload)
 
         if method == "page_only":
             print("[推送] 开始保存页面结果")
-            _save_result_for_page(subscription_id, full_html, payload)
             print("[推送] 用户选择仅页面查看，已保存页面结果")
             return True
 
@@ -446,7 +452,6 @@ def _deliver_notification(sub: dict, route: str, message_kwargs: dict) -> bool:
 
         if sent:
             print("[推送] 开始保存推送payload/页面详情")
-            _save_result_for_page(subscription_id, full_html, payload)
             persist_notification_payload(payload)
             print("[推送] 发送完成")
         else:

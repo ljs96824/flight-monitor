@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 import traceback
 from datetime import datetime, timedelta
@@ -19,6 +20,7 @@ BASE_DIR = Path(__file__).parent
 SUBSCRIPTIONS_PATH = BASE_DIR / "data" / "subscriptions.json"
 FEEDBACK_PATH = BASE_DIR / "data" / "feedback.json"
 PAGE_RESULTS_PATH = BASE_DIR / "data" / "page_results.json"
+PAGE_PAYLOADS_DIR = BASE_DIR / "data" / "payloads"
 load_dotenv(BASE_DIR / ".env", encoding="utf-8")
 
 app = Flask(__name__)
@@ -2957,6 +2959,30 @@ def load_page_results() -> list[dict]:
     return data if isinstance(data, list) else []
 
 
+def _safe_payload_id(subscription_id: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", str(subscription_id or "unknown")).strip("_") or "unknown"
+
+
+def _load_payload_result(subscription_id: str) -> dict | None:
+    if not subscription_id:
+        return None
+    path = PAGE_PAYLOADS_DIR / f"{_safe_payload_id(subscription_id)}.json"
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _detail_storage_keys(results: list[dict]) -> list[str]:
+    keys = {str(item.get("subscription_id", "")) for item in results if item.get("subscription_id")}
+    if PAGE_PAYLOADS_DIR.exists():
+        keys.update(path.stem for path in PAGE_PAYLOADS_DIR.glob("*.json"))
+    return sorted(keys)
+
+
 DETAIL_TEMPLATE = """
 <!doctype html>
 <html lang="zh-CN">
@@ -3701,12 +3727,15 @@ def feedback():
 def detail():
     subscription_id = request.args.get("sub", "")
     results = load_page_results()
-    matched = None
+    keys = _detail_storage_keys(results)
+    print(f"[详情读取] 查找订阅 {subscription_id},存储里现有的key: {keys}")
+    matched = _load_payload_result(subscription_id)
     if subscription_id:
-        for item in reversed(results):
-            if str(item.get("subscription_id", "")) == str(subscription_id):
-                matched = item
-                break
+        if not matched:
+            for item in reversed(results):
+                if str(item.get("subscription_id", "")) == str(subscription_id):
+                    matched = item
+                    break
     elif results:
         matched = results[-1]
     return render_template_string(DETAIL_TEMPLATE, result=matched)
