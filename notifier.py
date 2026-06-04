@@ -23,6 +23,7 @@ from airports import (
 )
 from channels import CHANNEL_INFO
 from analyzer import (
+    build_travel_profile,
     calculate_price_references,
     calc_confidence,
     determine_push_type,
@@ -30,6 +31,7 @@ from analyzer import (
     generate_trend_summary,
     multi_window_analysis,
     price_position_description,
+    travel_profile_explanation,
     waiting_risk_description,
 )
 from storage import (
@@ -4908,6 +4910,37 @@ def _sorting_logic_items(route_info: dict, is_round_trip: bool) -> list[str]:
     ]
 
 
+def _payload_travel_profile(analysis_result: dict, subscription: dict) -> tuple[dict, dict]:
+    round_trip = (analysis_result or {}).get("round_trip_analysis") or {}
+    profile = (
+        round_trip.get("travel_profile")
+        or (analysis_result or {}).get("travel_profile")
+        or build_travel_profile((subscription or {}).get("soft_preferences") or {})
+    )
+    explanation = (
+        round_trip.get("travel_profile_explanation")
+        or (analysis_result or {}).get("travel_profile_explanation")
+        or travel_profile_explanation(profile)
+    )
+    return profile, explanation
+
+
+def _scenario_recommendation_text(explanation: dict, profile: dict | None = None) -> str:
+    scenario = (explanation or {}).get("scenario") or (profile or {}).get("scenario")
+    mapping = {
+        "business": "该方案价格不一定最低，但更重视到达时间稳定、直飞/低风险和可改签，适合商务出行。",
+        "family": "该方案优先考虑白天直飞、行李明确和低中转风险，适合带孩子出行，减少折腾。",
+        "elderly": "该方案优先考虑直飞/短中转、白天到达和全服务航司，转机风险更低，适合老人出行。",
+        "with_elderly": "该方案优先考虑直飞/短中转、白天到达和全服务航司，转机风险更低，适合老人出行。",
+        "important": "该方案更重视稳定到达和可退改，适合考试、婚礼、医疗、邮轮等重要行程。",
+        "price_first": "该方案更看重当前低价区间；如果能接受时间和中转不便，性价比更高。",
+        "tourism": "该方案兼顾低价日期和合理中转，适合旅游行程继续比较。",
+        "family_visit": "该方案更重视行李明确和合理价格，不推荐极端折腾方案。",
+        "visit_family": "该方案更重视行李明确和合理价格，不推荐极端折腾方案。",
+    }
+    return mapping.get(scenario, "本次按价格、时间、舒适度、执行风险和行李票规综合排序。")
+
+
 def build_notification_payload(
     analysis_result,
     outbound_analysis=None,
@@ -4948,6 +4981,7 @@ def build_notification_payload(
         if is_roundtrip
         else analysis_result.get("buy_vs_wait_risk")
     ) or {}
+    travel_profile, profile_explanation = _payload_travel_profile(analysis_result, subscription)
 
     if is_roundtrip:
         all_items = [
@@ -5037,6 +5071,14 @@ def build_notification_payload(
         "confidence": confidence.get("overall") or decision.get("confidence") or "中",
         "confidence_dimensions": confidence.get("dimensions") or {},
         "confidence_details": confidence.get("details") or {},
+        "travel_profile": travel_profile,
+        "travel_profile_explanation": profile_explanation,
+        "scenario_recommendation": _scenario_recommendation_text(profile_explanation, travel_profile),
+        "alert_policy": (
+            ((analysis_result.get("round_trip_analysis") or {}).get("alert_policy"))
+            or analysis_result.get("alert_policy")
+            or {}
+        ),
         "buy_condition": f"支付页≤{_price_text(verify_limit)}且含托运行李" if verify_limit else "以支付页最终价和票规为准",
         "action_range": _payload_action_range(display_price, target, max_budget),
         "trigger_reason": (push_meta or {}).get("reasons") or (decision.get("reasons") or [])[:3],
@@ -5313,6 +5355,14 @@ def render_pushplus(payload: dict) -> str:
         f"购买条件:{buy_condition}",
     ]
     lines.extend(_pushplus_plan_lines(payload))
+    profile_explanation = payload.get("travel_profile_explanation") or {}
+    if profile_explanation.get("scenario_label"):
+        lines.extend(
+            [
+                "",
+                f"推荐依据:按“{html.escape(str(profile_explanation.get('scenario_label')))}”场景综合排序",
+            ]
+        )
     lines.extend(
         [
             "",
@@ -5767,6 +5817,24 @@ def render_email(payload: dict) -> tuple[str, str]:
     ]
     for plan in payload.get("recommended_plans") or []:
         cards.append(_render_payload_plan_card(plan))
+
+    profile_explanation = payload.get("travel_profile_explanation") or {}
+    profile_dimensions = profile_explanation.get("dimensions") or {}
+    profile_rows = [
+        ("出行场景", html.escape(str(profile_explanation.get("scenario_label") or "个人出行"))),
+        ("排序依据", html.escape(str(profile_explanation.get("basis") or "按价格、时间、舒适度和执行风险综合排序。"))),
+        ("场景话术", html.escape(str(payload.get("scenario_recommendation") or ""))),
+    ]
+    for key, value in profile_dimensions.items():
+        profile_rows.append((str(key), html.escape(str(value))))
+    if (payload.get("travel_profile") or {}).get("stock_check") == "high":
+        profile_rows.append(
+            (
+                "多人同行提示",
+                "低价舱位库存可能不足，建议尽快验证支付页能否同时预订多张。",
+            )
+        )
+    cards.append(_email_card("推荐依据", _email_table(profile_rows)))
 
     history_rows = payload.get("price_history") or []
     unique_prices = {

@@ -188,6 +188,176 @@ COMPANION_RULES = {
 }
 
 
+TRAVEL_PROFILE_LABELS = {
+    "price": "价格敏感度",
+    "time": "时间刚性",
+    "comfort": "舒适度需求",
+    "risk_averse": "执行风险厌恶",
+    "baggage": "行李票规重要性",
+}
+
+
+TRAVEL_PROFILE_LEVEL_LABELS = {
+    "low": "低",
+    "medium": "中",
+    "high": "高",
+}
+
+
+def build_travel_profile(soft_prefs: dict | None) -> dict:
+    """Convert scenario and companions into scoring weights."""
+    soft_prefs = soft_prefs or {}
+    scenario = soft_prefs.get("travel_scenario", "personal")
+    travelers = soft_prefs.get("travelers") or soft_prefs.get("companions") or "solo"
+    profiles = {
+        "personal": {
+            "price": "high",
+            "time": "medium",
+            "comfort": "medium",
+            "risk_averse": "medium",
+            "baggage": "medium",
+        },
+        "business": {
+            "price": "low",
+            "time": "high",
+            "comfort": "high",
+            "risk_averse": "high",
+            "baggage": "medium",
+        },
+        "tourism": {
+            "price": "high",
+            "time": "medium",
+            "comfort": "medium",
+            "risk_averse": "medium",
+            "baggage": "medium",
+        },
+        "visit_family": {
+            "price": "medium",
+            "time": "medium",
+            "comfort": "medium",
+            "risk_averse": "medium",
+            "baggage": "high",
+        },
+        "family_visit": {
+            "price": "medium",
+            "time": "medium",
+            "comfort": "medium",
+            "risk_averse": "medium",
+            "baggage": "high",
+        },
+        "family": {
+            "price": "medium",
+            "time": "medium",
+            "comfort": "high",
+            "risk_averse": "high",
+            "baggage": "high",
+        },
+        "with_elderly": {
+            "price": "medium",
+            "time": "high",
+            "comfort": "high",
+            "risk_averse": "high",
+            "baggage": "high",
+        },
+        "elderly": {
+            "price": "medium",
+            "time": "high",
+            "comfort": "high",
+            "risk_averse": "high",
+            "baggage": "high",
+        },
+        "important": {
+            "price": "low",
+            "time": "high",
+            "comfort": "high",
+            "risk_averse": "high",
+            "baggage": "medium",
+        },
+        "price_first": {
+            "price": "high",
+            "time": "low",
+            "comfort": "low",
+            "risk_averse": "low",
+            "baggage": "low",
+        },
+    }
+    profile = dict(profiles.get(scenario, profiles["personal"]))
+    if travelers in ("with_child", "with_elderly_child"):
+        profile["comfort"] = "high"
+        profile["risk_averse"] = "high"
+        profile["baggage"] = "high"
+    if travelers == "with_elderly":
+        profile["comfort"] = "high"
+        profile["risk_averse"] = "high"
+    if travelers in ("multiple", "group"):
+        profile["baggage"] = "high"
+        profile["stock_check"] = "high"
+    profile["scenario"] = scenario
+    profile["travelers"] = travelers
+    return profile
+
+
+def build_alert_policy(profile: dict | None) -> dict:
+    """Describe how the travel profile changes notification sensitivity."""
+    profile = profile or build_travel_profile({})
+    price_level = profile.get("price", "medium")
+    risk_level = profile.get("risk_averse", "medium")
+    if price_level == "high":
+        price_drop_threshold = 100
+        trigger_focus = "价格小幅下降也提醒"
+    elif price_level == "low":
+        price_drop_threshold = 300
+        trigger_focus = "优先提醒稳定可执行方案"
+    else:
+        price_drop_threshold = 200
+        trigger_focus = "价格和方案质量均衡提醒"
+    return {
+        "price_drop_threshold": price_drop_threshold,
+        "risk_quality_gate": "high_confidence_only" if risk_level == "high" else "normal",
+        "trigger_focus": trigger_focus,
+    }
+
+
+def travel_profile_explanation(profile: dict | None) -> dict:
+    """User-facing explanation for why a scenario changes recommendation order."""
+    profile = profile or build_travel_profile({})
+    scenario = profile.get("scenario", "personal")
+    scenario_labels = {
+        "personal": "个人出行",
+        "business": "商务/会议",
+        "tourism": "旅游",
+        "family_visit": "探亲/回家",
+        "visit_family": "探亲/回家",
+        "family": "家庭/亲子",
+        "elderly": "有老人同行",
+        "with_elderly": "有老人同行",
+        "important": "重要事项",
+        "price_first": "价格优先",
+    }
+    basis = {
+        "business": "优先了到达时间稳定、直飞/低中转风险和可改签，价格不是唯一排序因素。",
+        "family": "优先了白天直飞、行李明确和低中转风险，减少带孩子出行的折腾。",
+        "elderly": "优先了白天到达、全服务航司和低转机风险，更适合老人出行。",
+        "important": "优先了稳定到达、可退改和低执行风险，降低考试/婚礼/医疗等重要行程的不确定性。",
+        "price_first": "优先了当前低价区间，如果能接受时间和中转不便，性价比更高。",
+        "tourism": "优先了低价日期和合理中转，同时保留基础执行风险提示。",
+        "family_visit": "优先了行李明确和合理价格，不推荐极端折腾方案。",
+        "visit_family": "优先了行李明确和合理价格，不推荐极端折腾方案。",
+    }
+    dimensions = {
+        TRAVEL_PROFILE_LABELS.get(key, key): TRAVEL_PROFILE_LEVEL_LABELS.get(value, value)
+        for key, value in profile.items()
+        if key in TRAVEL_PROFILE_LABELS
+    }
+    return {
+        "scenario": scenario,
+        "scenario_label": scenario_labels.get(scenario, "个人出行"),
+        "basis": basis.get(scenario, "按价格、时间、舒适度和执行风险做均衡排序。"),
+        "dimensions": dimensions,
+        "stock_check": profile.get("stock_check"),
+    }
+
+
 def _set_default_if_missing(target: dict, key: str, value) -> bool:
     if value in (None, ""):
         return False
@@ -2217,6 +2387,15 @@ def _max_layover_minutes(flight: dict) -> int:
     )
 
 
+def _min_layover_minutes(flight: dict) -> int | None:
+    waits = [
+        int(layover.get("wait_minutes") or 0)
+        for layover in flight.get("layovers", [])
+        if int(layover.get("wait_minutes") or 0) > 0
+    ]
+    return min(waits) if waits else None
+
+
 def _is_likely_self_transfer(flight: dict) -> bool:
     if flight.get("self_transfer") or flight.get("separate_tickets"):
         return True
@@ -3414,6 +3593,7 @@ def _apply_user_preferences(
     refund_flexibility = preferences.get("refund_flexibility", "unknown")
     companions = preferences.get("companions") or preferences.get("travelers") or "solo"
     travel_scenario = preferences.get("travel_scenario") or "personal"
+    travel_profile = build_travel_profile(preferences)
     companion_constraints = preferences.get("companion_constraints") or []
     if isinstance(companion_constraints, str):
         companion_constraints = [
@@ -3567,6 +3747,14 @@ def _apply_user_preferences(
             continue
         if stops > 0 and not allow_self_transfer and _is_likely_self_transfer(flight):
             excluded.append({**flight, "exclude_reason": "系统默认不推荐疑似非联程中转"})
+            continue
+        if (
+            travel_profile.get("risk_averse") == "high"
+            and transfer_policy != "price_first"
+            and stops > 0
+            and (_min_layover_minutes(flight) or 9999) < 90
+        ):
+            excluded.append({**flight, "exclude_reason": "出行风险画像：中转时间低于90分钟"})
             continue
 
         if red_eye == "reject" and _is_red_eye(flight):
@@ -3869,14 +4057,72 @@ def price_tolerance_advice(
     }
 
 
-def calc_final_score(flight: dict, target_price=None) -> float:
+def _bounded_score(value) -> float:
+    try:
+        return max(0, min(100, float(value)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _profile_weight(level: str) -> float:
+    return {"high": 0.35, "medium": 0.2, "low": 0.1}.get(level, 0.2)
+
+
+def _flight_price_score(flight: dict, target_price=None) -> float:
     price = _to_float(flight.get("price")) or 0
     target = _to_float(target_price)
     if target and target > 0 and price > 0:
-        price_score = max(0, 100 - abs(price - target) / target * 100)
+        return _bounded_score(100 - abs(price - target) / target * 100)
+    raw_price_score = (flight.get("scores") or {}).get("price_score", 5)
+    return _bounded_score(float(raw_price_score) * 10)
+
+
+def _flight_time_score(flight: dict) -> float:
+    score = 50
+    if _stops_count(flight) == 0:
+        score += 20
+    if _is_daytime_flight(flight):
+        score += 20
+    total_minutes = int(flight.get("total_duration_min") or 0)
+    if total_minutes and total_minutes <= 8 * 60:
+        score += 10
+    elif total_minutes > 24 * 60:
+        score -= 20
+    return _bounded_score(score)
+
+
+def _flight_comfort_score(flight: dict) -> float:
+    score = 45
+    stops = _stops_count(flight)
+    if stops == 0:
+        score += 30
+    elif stops == 1:
+        score += 10
     else:
-        raw_price_score = (flight.get("scores") or {}).get("price_score", 5)
-        price_score = max(0, min(100, float(raw_price_score) * 10))
+        score -= 10
+    if _max_layover_minutes(flight) <= 180:
+        score += 10
+    elif _max_layover_minutes(flight) > 480:
+        score -= 15
+    if _contains_any_airline(flight, FULL_SERVICE_AIRLINES):
+        score += 10
+    if _is_red_eye(flight):
+        score -= 20
+    return _bounded_score(score)
+
+
+def _flight_baggage_score(flight: dict) -> float:
+    if _has_free_checked_baggage(flight):
+        return 100
+    fare_rules = flight.get("fare_rules") or flight.get("fare_verification") or {}
+    if fare_rules:
+        return 60
+    return 40
+
+
+def calc_final_score(flight: dict, target_price=None, profile: dict | None = None) -> float:
+    profile = profile or build_travel_profile({})
+    price_score = _flight_price_score(flight, target_price)
 
     risk_score = (flight.get("execution_risk") or {}).get("score", 50)
     reliability_score = max(0, 100 - float(risk_score))
@@ -3886,7 +4132,36 @@ def calc_final_score(flight: dict, target_price=None) -> float:
         preference_score = (flight.get("scores") or {}).get("total", 5)
     preference_score = max(0, min(100, float(preference_score) * 10))
 
-    final_score = price_score * 0.4 + reliability_score * 0.3 + preference_score * 0.3
+    time_score = _flight_time_score(flight)
+    comfort_score = _flight_comfort_score(flight)
+    baggage_score = _flight_baggage_score(flight)
+    weights = {
+        "price": _profile_weight(profile.get("price", "medium")),
+        "time": _profile_weight(profile.get("time", "medium")),
+        "comfort": _profile_weight(profile.get("comfort", "medium")),
+        "risk": _profile_weight(profile.get("risk_averse", "medium")),
+        "baggage": _profile_weight(profile.get("baggage", "medium")),
+    }
+    total_w = sum(weights.values()) or 1
+
+    final_score = (
+        price_score * weights["price"]
+        + time_score * weights["time"]
+        + comfort_score * weights["comfort"]
+        + reliability_score * weights["risk"]
+        + baggage_score * weights["baggage"]
+    ) / total_w
+    final_score = final_score * 0.85 + _bounded_score(preference_score) * 0.15
+    flight["score_components"] = {
+        "price": round(price_score, 1),
+        "time": round(time_score, 1),
+        "comfort": round(comfort_score, 1),
+        "risk": round(reliability_score, 1),
+        "baggage": round(baggage_score, 1),
+        "preference": round(_bounded_score(preference_score), 1),
+        "weights": weights,
+    }
+    flight["travel_profile"] = dict(profile)
     flight["final_score"] = round(final_score, 1)
     return flight["final_score"]
 
@@ -3929,6 +4204,8 @@ def analyze_all_flights(
             merged_preferences["need_baggage"] = hard_constraints.get("baggage")
     else:
         merged_preferences = user_preferences or {}
+    travel_profile = build_travel_profile(merged_preferences)
+    alert_policy = build_alert_policy(travel_profile)
     print(f"[过滤前] {len(usable_flights)}个航班, 约束: {merged_preferences}")
     for flight in usable_flights:
         print(
@@ -4056,7 +4333,7 @@ def analyze_all_flights(
             - float(flight.get("preference_penalty") or 0),
             1,
         )
-        calc_final_score(flight, target_price_effective)
+        calc_final_score(flight, target_price_effective, travel_profile)
 
     priority_config = _normalize_priorities(priorities)
     qualified_flights = []
@@ -4268,6 +4545,9 @@ def analyze_all_flights(
         "decision_summary": decision_summary,
         "buy_vs_wait_risk": buy_vs_wait_risk,
         "confidence_breakdown": confidence_breakdown,
+        "travel_profile": travel_profile,
+        "travel_profile_explanation": travel_profile_explanation(travel_profile),
+        "alert_policy": alert_policy,
         "mode": mode,
         "priorities": priority_config,
         "qualified_flights": qualified_flights,
@@ -4857,6 +5137,11 @@ def analyze_round_trip(
         {},
         history,
     )
+    travel_profile = (
+        outbound_analysis.get("travel_profile")
+        or return_analysis.get("travel_profile")
+        or build_travel_profile((outbound_analysis.get("user_preferences") or {}))
+    )
     target_float = _to_float(target_price)
     max_budget_float = _to_float(max_budget)
     decision_summary = generate_decision_summary(
@@ -4895,6 +5180,9 @@ def analyze_round_trip(
         "price_analysis": price_analysis,
         "decision_summary": decision_summary,
         "confidence_breakdown": confidence_breakdown,
+        "travel_profile": travel_profile,
+        "travel_profile_explanation": travel_profile_explanation(travel_profile),
+        "alert_policy": build_alert_policy(travel_profile),
         "buy_vs_wait_risk": buy_vs_wait_risk,
         "excluded_roundtrip_combos": excluded_roundtrip_combos,
         "previous": previous,
