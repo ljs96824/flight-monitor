@@ -336,6 +336,17 @@ FORM_TEMPLATE = """
       background: #fff6f5;
       color: #a50e0e;
     }
+    .required-progress-title {
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+    .required-progress ul {
+      margin: 6px 0 0;
+      padding-left: 20px;
+    }
+    .required-progress li {
+      margin: 2px 0;
+    }
     .submit-preview {
       border-left: 4px solid #1a73e8;
       padding: 8px 12px;
@@ -651,7 +662,10 @@ FORM_TEMPLATE = """
       </div>
       <p class="hint">快速监控只填写基础信息；精准监控会展开补充偏好和筛选规则。</p>
     </div>
-    <div id="required-progress" class="required-progress">已完成 0/10 个基础项</div>
+    <div id="required-progress" class="required-progress incomplete">
+      <div class="required-progress-title">还需填写：</div>
+      <ul id="required-missing-list"></ul>
+    </div>
 
     <fieldset class="form-step active" data-step="1">
       <legend>行程信息</legend>
@@ -1120,9 +1134,9 @@ FORM_TEMPLATE = """
     </div>
 
     <div id="quick-defaults-note" class="default-rules-note">
-      系统将使用默认安全偏好：避免红眼、优先含行李、避免高风险中转、仅重要变化提醒。
+      快速模式会默认启用安全规则：不优先推荐红眼、不优先推荐非联程、优先含行李方案、仅重要变化提醒。
       <br>
-      <button id="open-precise-mode" class="secondary-button" type="button">查看/修改默认偏好</button>
+      <button id="open-precise-mode" class="secondary-button" type="button">修改默认规则</button>
     </div>
 
     <div class="submit-preview">
@@ -1453,6 +1467,11 @@ FORM_TEMPLATE = """
 
     function validateCurrentStep() {
       updateRequiredProgress();
+      const missing = missingRequiredLabels(currentStep);
+      if (missing.length) {
+        alert(`请先填写${humanJoin(missing)}`);
+        return false;
+      }
       toggleBudgetRequired();
       toggleReturnDate();
       if (!validatePriceInputs()) {
@@ -1460,45 +1479,72 @@ FORM_TEMPLATE = """
         targetPriceInput.focus();
         return false;
       }
-      return form.reportValidity();
+      const currentFieldset = document.querySelector(`.form-step[data-step="${currentStep}"]`);
+      if (!currentFieldset) {
+        return true;
+      }
+      const invalidControl = Array.from(
+        currentFieldset.querySelectorAll('input, select, textarea')
+      ).find(control => !control.disabled && !control.checkValidity());
+      if (invalidControl) {
+        invalidControl.reportValidity();
+        return false;
+      }
+      return true;
     }
 
-    function updateRequiredProgress() {
-      const missing = [];
+    function humanJoin(items) {
+      if (!items.length) return '';
+      if (items.length === 1) return items[0];
+      return `${items.slice(0, -1).join('、')}和${items[items.length - 1]}`;
+    }
+
+    function missingRequiredLabels(maxStep = null) {
       const origin = selectedOrigin();
       const destination = destinationInput.value.trim();
       const isRoundTrip = checkedValue('round_trip') === 'true';
-      const strategy = checkedValue('price_strategy');
-      const baseItems = [
-        {done: Boolean(origin && origin !== '其他'), label: '出发地'},
-        {done: Boolean(destination), label: '目的地'},
-        {done: Boolean(checkedValue('round_trip')), label: '单程/往返'},
-        {done: Boolean(form.depart_date.value), label: '出发日期'},
-        {done: !isRoundTrip || Boolean(returnDate.value), label: '返程日期'},
-        {done: Boolean(checkedValue('date_flexibility')), label: '日期弹性'},
-        {done: Boolean(strategy), label: '价格策略'},
-        {done: Boolean(checkedValue('transfer_policy')), label: '中转接受程度'},
-        {done: Boolean(checkedValue('baggage')), label: '托运行李'},
-        {done: Boolean(checkedValue('primary_goal')), label: '主目标'}
+      const items = [
+        {done: Boolean(origin && origin !== '\u5176\u4ed6'), label: '\u51fa\u53d1\u5730', step: 1},
+        {done: Boolean(destination), label: '\u76ee\u7684\u5730', step: 1},
+        {done: Boolean(checkedValue('round_trip')), label: '\u5355\u7a0b/\u5f80\u8fd4', step: 1},
+        {done: Boolean(form.depart_date.value), label: '\u51fa\u53d1\u65e5\u671f', step: 1},
+        {done: !isRoundTrip || Boolean(returnDate.value), label: '\u8fd4\u7a0b\u65e5\u671f', step: 1},
+        {done: Boolean(checkedValue('date_flexibility')), label: '\u65e5\u671f\u5f39\u6027', step: 2},
+        {done: Boolean(checkedValue('price_strategy')), label: '\u4ef7\u683c\u7b56\u7565', step: 2},
+        {done: Boolean(checkedValue('transfer_policy')), label: '\u4e2d\u8f6c\u63a5\u53d7\u7a0b\u5ea6', step: 2},
+        {done: Boolean(checkedValue('baggage')), label: '\u6258\u8fd0\u884c\u674e', step: 2},
+        {done: Boolean(checkedValue('primary_goal')), label: '\u4e3b\u76ee\u6807', step: 3},
+        {done: Boolean(checkedValue('notification_method')), label: '\u63d0\u9192\u65b9\u5f0f', step: 3}
       ];
-      baseItems.forEach(item => {
-        if (!item.done) missing.push(item.label);
-      });
-      const done = baseItems.length - missing.length;
+      return items
+        .filter(item => !item.done && (maxStep === null || item.step <= maxStep))
+        .map(item => item.label);
+    }
+
+    function updateRequiredProgress() {
+      const missing = missingRequiredLabels();
       if (requiredProgress) {
-        requiredProgress.textContent = missing.length
-          ? `已完成 ${done}/10 个基础项；还需填写：${missing.join('、')}`
-          : '已完成 10/10 个基础项';
+        if (missing.length) {
+          requiredProgress.innerHTML = '<div class="required-progress-title">还需填写：</div><ul id="required-missing-list"></ul>';
+          const list = requiredProgress.querySelector('#required-missing-list');
+          missing.forEach(label => {
+            const item = document.createElement('li');
+            item.textContent = label;
+            list.appendChild(item);
+          });
+        } else {
+          requiredProgress.innerHTML = '<div class="required-progress-title">基础项已完成 ✓</div>';
+        }
         requiredProgress.classList.toggle('incomplete', missing.length > 0);
       }
       if (previewButton) {
-        previewButton.textContent = missing.length ? `请先填写${missing[0]}` : '开始监控';
-        previewButton.disabled = missing.length > 0;
+        previewButton.textContent = '开始监控';
+        previewButton.disabled = false;
       }
       if (missingRequiredWarning) {
         missingRequiredWarning.style.display = missing.length ? 'block' : 'none';
         missingRequiredWarning.textContent = missing.length
-          ? `请先填写：${missing.join('、')}`
+          ? `请先填写${humanJoin(missing)}`
           : '';
       }
       return missing;
@@ -1561,7 +1607,7 @@ FORM_TEMPLATE = """
       if (/^[A-Z]{2,4}$/.test(upper)) {
         return [upper];
       }
-      return [upper];
+      return [];
     }
 
     function renderAirportTags(kind) {
@@ -1576,7 +1622,9 @@ FORM_TEMPLATE = """
       tagsEl.innerHTML = '';
       hiddenEl.value = state.active.join(',');
       if (hintEl) {
-        hintEl.textContent = state.active.length ? '将搜索这些机场：' : '';
+        hintEl.textContent = state.active.length
+          ? '系统将搜索这些机场：是否只搜索某个机场？点击标签上的 × 可取消。'
+          : '';
       }
       state.active.forEach(code => {
         const tag = document.createElement('span');
@@ -1677,6 +1725,7 @@ FORM_TEMPLATE = """
       setSmartPanel(advancedRules, precise);
       toggleTimePreference();
       toggleShortTransferOptions();
+      updateConditionalFields();
       refreshSummaryIfFinalStep();
     }
 
@@ -1834,6 +1883,10 @@ FORM_TEMPLATE = """
       addSummaryLine(`${label}: ${value}`);
     }
 
+    function displayDate(value) {
+      return value ? value.replaceAll('-', '/') : '';
+    }
+
     function toggleReturnDate() {
       const isRoundTrip = checkedValue('round_trip') === 'true';
       returnWrap.style.display = isRoundTrip ? 'block' : 'none';
@@ -1915,16 +1968,15 @@ FORM_TEMPLATE = """
       const precise = checkedValue('monitor_mode') === 'precise';
       const visible = precise && (policy === 'reasonable' || policy === 'price_first');
       const priceFirst = precise && policy === 'price_first';
-      shortTransferOptions.style.display = visible ? 'block' : 'none';
       shortTransferInputs.forEach(input => {
         input.disabled = !visible;
       });
-      if (overnightTransferOptions) {
-        overnightTransferOptions.style.display = priceFirst ? 'block' : 'none';
-      }
-      if (selfTransferOptions) {
-        selfTransferOptions.style.display = priceFirst ? 'block' : 'none';
-      }
+      overnightTransferOptions?.querySelectorAll('input, select').forEach(input => {
+        input.disabled = !priceFirst;
+      });
+      selfTransferOptions?.querySelectorAll('input, select').forEach(input => {
+        input.disabled = !priceFirst;
+      });
     }
 
     function validatePriceInputs() {
@@ -2352,12 +2404,16 @@ FORM_TEMPLATE = """
       const targetPriceMode = checkedValue('target_price_mode');
 
       addSummaryHeader('【你填写的条件】');
-      summaryLine('路线', origin && destination ? `${origin} → ${destination}` : '');
-      summaryLine('覆盖机场', `去${activeAirportText('origin') || '-'} | 到${activeAirportText('destination') || '-'}`);
+      summaryLine(
+        '路线',
+        origin && destination
+          ? `${origin} ${activeAirportText('origin') || ''} → ${destination} ${activeAirportText('destination') || ''}`
+          : ''
+      );
       summaryLine('行程', isRoundTrip ? '往返' : '单程');
-      summaryLine('出发', form.depart_date.value);
+      summaryLine('出发日期', displayDate(form.depart_date.value));
       if (isRoundTrip) {
-      summaryLine('返程', returnDate.value);
+        summaryLine('返程日期', displayDate(returnDate.value));
       }
       summaryLine('日期弹性', selectedLabel('date_flexibility'));
       summaryLine('价格策略', selectedLabel('price_strategy'));
@@ -2587,6 +2643,11 @@ FORM_TEMPLATE = """
     previewButton.addEventListener('click', () => {
       toggleBudgetRequired();
       toggleReturnDate();
+      const missing = updateRequiredProgress();
+      if (missing.length) {
+        alert(`请先填写${humanJoin(missing)}`);
+        return;
+      }
       if (!validatePriceInputs()) {
         alert('理想入手价应低于最高可接受价，请确认是否填反了');
         targetPriceInput.focus();
@@ -2719,6 +2780,12 @@ FORM_TEMPLATE = """
       refreshSummaryIfFinalStep();
     });
     form.addEventListener('submit', event => {
+      const missing = updateRequiredProgress();
+      if (missing.length) {
+        event.preventDefault();
+        alert(`请先填写${humanJoin(missing)}`);
+        return;
+      }
       if (!validatePriceInputs()) {
         event.preventDefault();
         alert('理想入手价应低于最高可接受价，请确认是否填反了');
