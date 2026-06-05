@@ -793,6 +793,10 @@ FORM_TEMPLATE = """
         <label><input type="radio" name="notification_frequency" value="price_change"> 价格变化就提醒</label>
       </div>
 
+      <div class="quick-only">
+      <label>购票人数</label>
+      <input type="number" name="passenger_count" min="1" value="1">
+
       <label>本次出行场景（可多选）</label>
       <div class="choice">
         <label><input type="checkbox" name="travel_scenario" value="personal" checked> 个人出行</label>
@@ -805,6 +809,7 @@ FORM_TEMPLATE = """
         <label><input type="checkbox" name="travel_scenario" value="price_first"> 价格优先</label>
       </div>
       <div id="travel-scenario-notice" class="auto-notice"></div>
+      </div>
 
       <button id="advanced-toggle" class="secondary-button precise-only" type="button">＋ 补充偏好，让推荐更准确</button>
       <div id="advanced-preferences" class="smart-panel precise-only">
@@ -841,16 +846,24 @@ FORM_TEMPLATE = """
         </div>
 
         <div id="pref-detail-companions" class="pref-card-detail">
-        <label>同行人员</label>
+        <label>出行目的/类型（可多选）</label>
         <div class="choice">
-          <label><input type="radio" name="companions" value="solo" checked> 仅本人</label>
-          <label><input type="radio" name="companions" value="couple_friends"> 情侣/朋友</label>
-          <label><input type="radio" name="companions" value="with_child"> 有儿童</label>
-          <label><input type="radio" name="companions" value="with_elderly"> 有老人</label>
-          <label><input type="radio" name="companions" value="with_elderly_child"> 老人和儿童都有</label>
-          <label><input type="radio" name="companions" value="group"> 多人同行</label>
+          <label><input type="checkbox" name="travel_purpose" value="business"> 商务/会议</label>
+          <label><input type="checkbox" name="travel_purpose" value="tourism"> 旅游</label>
+          <label><input type="checkbox" name="travel_purpose" value="family_visit"> 探亲/回家</label>
+          <label><input type="checkbox" name="travel_purpose" value="family"> 家庭/亲子</label>
+          <label><input type="checkbox" name="travel_purpose" value="important"> 重要事项</label>
+          <label><input type="checkbox" name="travel_purpose" value="price_first"> 价格优先</label>
         </div>
-        <div data-show-if="companions=with_child|with_elderly|with_elderly_child">
+        <label>购票人数</label>
+        <div class="inline-grid">
+          <label>成人 <input type="number" name="passenger_adult" min="0" value="1"></label>
+          <label>儿童 <input type="number" name="passenger_child" min="0" value="0"></label>
+          <label>老人 <input type="number" name="passenger_elderly" min="0" value="0"></label>
+          <label>婴儿 <input type="number" name="passenger_infant" min="0" value="0"></label>
+        </div>
+        <input type="hidden" name="companions" value="solo">
+        <div>
           <p class="hint">（可选）具体约束，不需要填写年龄或性别，按实际出行限制选择即可。</p>
           <div class="choice">
             <label><input type="checkbox" name="companion_constraints" value="direct_preferred"> 需要尽量直飞</label>
@@ -1566,6 +1579,10 @@ FORM_TEMPLATE = """
     }
 
     function selectedTravelScenarios() {
+      if (checkedValue('monitor_mode') === 'precise') {
+        const purposes = checkedValues('travel_purpose');
+        if (purposes.length) return purposes;
+      }
       const values = checkedValues('travel_scenario');
       return values.length ? values : ['personal'];
     }
@@ -1574,6 +1591,14 @@ FORM_TEMPLATE = """
       return Array.from(document.querySelectorAll(`input[name="${name}"]:checked`))
         .map(input => input.parentElement.textContent.trim())
         .filter(Boolean);
+    }
+
+    function selectedScenarioLabels() {
+      if (checkedValue('monitor_mode') === 'precise') {
+        const purposeLabels = selectedLabels('travel_purpose');
+        if (purposeLabels.length) return purposeLabels;
+      }
+      return selectedLabels('travel_scenario');
     }
 
     function selectedOrigin() {
@@ -1707,6 +1732,12 @@ FORM_TEMPLATE = """
       document.querySelectorAll('.precise-only').forEach(el => {
         el.style.display = precise ? 'block' : 'none';
       });
+      document.querySelectorAll('.quick-only').forEach(el => {
+        el.style.display = precise ? 'none' : 'block';
+      });
+      if (precise) {
+        syncTravelPurposesFromQuickScenarios();
+      }
       if (quickDefaultsNote) {
         quickDefaultsNote.style.display = precise ? 'none' : 'block';
       }
@@ -1727,6 +1758,18 @@ FORM_TEMPLATE = """
       toggleShortTransferOptions();
       updateConditionalFields();
       refreshSummaryIfFinalStep();
+    }
+
+    function syncTravelPurposesFromQuickScenarios() {
+      const purposeInputs = Array.from(document.querySelectorAll('input[name="travel_purpose"]'));
+      if (!purposeInputs.length || checkedValues('travel_purpose').length) {
+        return;
+      }
+      selectedTravelScenarios().forEach(value => {
+        const mapped = value === 'elderly' ? 'family' : value;
+        const input = document.querySelector(`input[name="travel_purpose"][value="${mapped}"]`);
+        if (input) input.checked = true;
+      });
     }
 
     function toggleTimePreference() {
@@ -1839,8 +1882,25 @@ FORM_TEMPLATE = """
       return map[value] || selectedLabel(name) || value;
     }
 
+    function precisePassengerSummary() {
+      const items = [
+        ['成人', Number(document.querySelector('input[name="passenger_adult"]')?.value || 0)],
+        ['儿童', Number(document.querySelector('input[name="passenger_child"]')?.value || 0)],
+        ['老人', Number(document.querySelector('input[name="passenger_elderly"]')?.value || 0)],
+        ['婴儿', Number(document.querySelector('input[name="passenger_infant"]')?.value || 0)]
+      ].filter(([, count]) => count > 0);
+      const total = items.reduce((sum, [, count]) => sum + count, 0);
+      if (!total) return '';
+      return `${items.map(([label, count]) => `${label}${count}`).join(' + ')}，共${total}人`;
+    }
+
+    function quickPassengerSummary() {
+      const count = Number(document.querySelector('input[name="passenger_count"]')?.value || 1);
+      return `购票人数：${Math.max(1, count)}人`;
+    }
+
     function syncPrefCards() {
-      setPrefValue('companions', mappedPrefLabel('companions', '未设置'));
+      setPrefValue('companions', precisePassengerSummary() || mappedPrefLabel('companions', '未设置'));
       setPrefValue('time', mappedPrefLabel('time_preference', '使用默认：避免红眼'));
       setPrefValue('refund', mappedPrefLabel('refund_flexibility', '使用默认：便宜优先，提醒风险'));
       setPrefValue('airline', mappedPrefLabel('airline_policy', '使用默认：不限'));
@@ -2416,6 +2476,12 @@ FORM_TEMPLATE = """
         summaryLine('返程日期', displayDate(returnDate.value));
       }
       summaryLine('日期弹性', selectedLabel('date_flexibility'));
+      summaryLine(
+        '购票人数',
+        checkedValue('monitor_mode') === 'precise'
+          ? precisePassengerSummary()
+          : quickPassengerSummary().replace('购票人数：', '')
+      );
       summaryLine('价格策略', selectedLabel('price_strategy'));
       if (checkedValue('price_strategy') === 'explicit') {
         summaryLine(
@@ -2429,7 +2495,7 @@ FORM_TEMPLATE = """
       }
       summaryLine('中转', selectedLabel('transfer_policy'));
       summaryLine('行李', selectedLabel('baggage'));
-      summaryLine('出行场景', selectedLabels('travel_scenario').join(' + '));
+      summaryLine('出行场景', selectedScenarioLabels().join(' + '));
       if (checkedValue('companions') !== 'solo') {
         summaryLine('同行', selectedLabel('companions'));
       }
@@ -2496,6 +2562,14 @@ FORM_TEMPLATE = """
         trip_type: form.trip_type ? form.trip_type.value : '',
         travel_scenario: selectedTravelScenarios()[0],
         travel_scenarios: selectedTravelScenarios(),
+        travel_purposes: checkedValues('travel_purpose'),
+        passenger_count: Number(document.querySelector('input[name="passenger_count"]')?.value || 1),
+        passengers: {
+          adult: Number(document.querySelector('input[name="passenger_adult"]')?.value || 0),
+          child: Number(document.querySelector('input[name="passenger_child"]')?.value || 0),
+          elderly: Number(document.querySelector('input[name="passenger_elderly"]')?.value || 0),
+          infant: Number(document.querySelector('input[name="passenger_infant"]')?.value || 0)
+        },
         companions: checkedValue('companions'),
         companion_constraints: checkedValues('companion_constraints'),
         solo_travel: Boolean(document.querySelector('input[name="solo_travel"]')?.checked),
@@ -2714,9 +2788,16 @@ FORM_TEMPLATE = """
     resetModuleButtons.forEach(button => {
       button.addEventListener('click', () => resetModule(button.dataset.resetModule));
     });
-    ['companions', 'time_preference', 'refund_flexibility', 'airline_policy', 'accept_self_transfer', 'companion_constraints', 'solo_travel', 'no_late_arrival', 'prefer_daytime_arrival'].forEach(name => {
+    ['companions', 'travel_purpose', 'passenger_adult', 'passenger_child', 'passenger_elderly', 'passenger_infant', 'passenger_count', 'time_preference', 'refund_flexibility', 'airline_policy', 'accept_self_transfer', 'companion_constraints', 'solo_travel', 'no_late_arrival', 'prefer_daytime_arrival'].forEach(name => {
       document.querySelectorAll(`input[name="${name}"]`).forEach(input => {
-        input.addEventListener('change', syncPrefCards);
+        input.addEventListener('change', () => {
+          syncPrefCards();
+          refreshSummaryIfFinalStep();
+        });
+        input.addEventListener('input', () => {
+          syncPrefCards();
+          refreshSummaryIfFinalStep();
+        });
       });
     });
     document.querySelectorAll('.pref-card-detail input, .pref-card-detail select').forEach(input => {
@@ -3319,6 +3400,7 @@ def first_push_text() -> str:
 
 def build_subscription(form) -> dict:
     round_trip = parse_bool(form.get("round_trip", "false"))
+    monitor_mode = form.get("monitor_mode", "quick")
     origin_manual = form.get("origin_manual", "").strip()
     origin_select = form.get("origin_select", "").strip()
     origin_input = origin_manual or ("" if origin_select == "OTHER" else origin_select)
@@ -3458,7 +3540,22 @@ def build_subscription(form) -> dict:
     for item in form.getlist("blocked_airlines_common"):
         if item and item not in blocked_airlines:
             blocked_airlines.append(item)
-    travel_scenarios = form.getlist("travel_scenario")
+    precise_passengers = {
+        "adult": parse_int(form.get("passenger_adult"), 0),
+        "child": parse_int(form.get("passenger_child"), 0),
+        "elderly": parse_int(form.get("passenger_elderly"), 0),
+        "infant": parse_int(form.get("passenger_infant"), 0),
+    }
+    quick_passenger_count = max(1, parse_int(form.get("passenger_count"), 1))
+    if monitor_mode == "precise":
+        if not any(precise_passengers.values()):
+            precise_passengers["adult"] = quick_passenger_count
+        passenger_count = sum(precise_passengers.values())
+        travel_scenarios = form.getlist("travel_purpose") or form.getlist("travel_scenario")
+    else:
+        passenger_count = quick_passenger_count
+        precise_passengers = {"adult": passenger_count, "child": 0, "elderly": 0, "infant": 0}
+        travel_scenarios = form.getlist("travel_scenario")
     if not travel_scenarios:
         legacy_scenario = form.get("travel_scenario", "personal")
         if isinstance(legacy_scenario, list):
@@ -3469,7 +3566,16 @@ def build_subscription(form) -> dict:
     if not travel_scenarios:
         travel_scenarios = ["personal"]
     travel_scenario = travel_scenarios[0]
-    companions = form.get("companions", "solo")
+    if precise_passengers.get("child") and precise_passengers.get("elderly"):
+        companions = "with_elderly_child"
+    elif precise_passengers.get("child"):
+        companions = "with_child"
+    elif precise_passengers.get("elderly"):
+        companions = "with_elderly"
+    elif passenger_count > 1:
+        companions = "multiple"
+    else:
+        companions = form.get("companions", "solo")
     companion_constraints = form.getlist("companion_constraints")
     solo_travel = parse_bool(form.get("solo_travel", "false"))
     no_late_arrival = parse_bool(form.get("no_late_arrival", "false"))
@@ -3487,6 +3593,7 @@ def build_subscription(form) -> dict:
             "trip_type": "round_trip" if round_trip else "one_way",
             "departure_date": form.get("depart_date", "").strip(),
             "return_date": form.get("return_date", "").strip() if round_trip else None,
+            "passenger_count": passenger_count,
         },
         "constraints": {
             "budget_strategy": budget_strategy,
@@ -3498,6 +3605,9 @@ def build_subscription(form) -> dict:
         },
         "preferences": {
             "travelers": companions,
+            "passengers": precise_passengers,
+            "passenger_count": passenger_count,
+            "travel_purposes": travel_scenarios if monitor_mode == "precise" else [],
             "travel_scenario": travel_scenario,
             "travel_scenarios": travel_scenarios,
             "companion_constraints": companion_constraints,
@@ -3550,10 +3660,11 @@ def build_subscription(form) -> dict:
         "destination_airports": destination_info["airports"],
         "destination_airports_active": destination_airports_active,
         "excluded_airports": excluded_airports,
-        "monitor_mode": form.get("monitor_mode", "quick"),
+        "monitor_mode": monitor_mode,
         "depart_date": form.get("depart_date", "").strip(),
         "return_date": form.get("return_date", "").strip() if round_trip else None,
         "round_trip": round_trip,
+        "passenger_count": passenger_count,
         "date_flexibility": parse_int(form.get("date_flexibility"), 0),
         "return_date_flexibility": (
             parse_int(form.get("return_date_flexibility"), 0) if round_trip else 0
@@ -3592,6 +3703,9 @@ def build_subscription(form) -> dict:
             "early_morning_allowed": early_morning_allowed_from_windows(time_mode, all_time_windows),
             "travel_scenario": travel_scenario,
             "travel_scenarios": travel_scenarios,
+            "travel_purposes": travel_scenarios if monitor_mode == "precise" else [],
+            "passengers": precise_passengers,
+            "passenger_count": passenger_count,
             "travelers": companions,
             "companions": companions,
             "companion_constraints": companion_constraints,

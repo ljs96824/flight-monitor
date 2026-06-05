@@ -6038,7 +6038,13 @@ def _email_price_span(value, color: str = "#111") -> str:
     return f'<span style="color:{color};font-weight:600;">{_price_text(value)}</span>'
 
 
-def _email_action_panel_body(payload: dict, primary_plan: dict, verify_text: str, price_reason: str) -> str:
+def _email_action_panel_body(
+    payload: dict,
+    primary_plan: dict,
+    verify_text: str,
+    price_reason: str,
+    interactive_channels: bool = False,
+) -> str:
     conclusion = str(payload.get("recommendation") or "可以观察")
     primary_line = _email_primary_plan_line(payload, primary_plan)
     buy_condition = str(payload.get("buy_condition") or "以支付页为准")
@@ -6057,7 +6063,7 @@ def _email_action_panel_body(payload: dict, primary_plan: dict, verify_text: str
             f"若支付页高于{html.escape(verify_text.replace('支付页≤', ''))},说明搜索低价没真正落地,建议继续监控。"
             "</div>"
         ),
-        _email_action_links(payload, primary_plan),
+        _email_action_links(payload, primary_plan, interactive_channels=interactive_channels),
     ]
     return "".join(blocks)
 
@@ -6088,27 +6094,118 @@ def _email_trigger_reason_text(payload: dict) -> str:
     return ",".join(reasons[:2])
 
 
-def _email_action_links(payload: dict, primary_plan: dict | None = None) -> str:
-    verify_url = _email_primary_booking_url(primary_plan or {})
+def _email_action_links(
+    payload: dict,
+    primary_plan: dict | None = None,
+    interactive_channels: bool = False,
+) -> str:
+    channel_picker = _email_channel_picker(primary_plan or {}, interactive=interactive_channels)
     detail_url = str(payload.get("detail_url") or "")
     form_url = str(payload.get("form_url") or "")
     feedback_url = str(payload.get("feedback_url") or "")
     links = []
-    if verify_url:
-        links.append(("去验证价格", verify_url))
     if detail_url:
         links.append(("查看网页详情", detail_url))
     if form_url:
         links.append(("继续监控", form_url))
     if feedback_url:
         links.append(("反馈买不到", feedback_url))
-    if not links:
+    if not links and not channel_picker:
         return ""
+    action_links = ""
+    if links:
+        action_links = (
+            "<div style='margin-top:8px;'>"
+            + " | ".join(_email_button_link(label, url) for label, url in links)
+            + "</div>"
+        )
     return (
         "<div style='margin-top:10px;'>"
-        + " | ".join(_email_button_link(label, url) for label, url in links)
+        + channel_picker
+        + action_links
         + "</div>"
     )
+
+
+def _email_channel_picker(plan: dict, interactive: bool = False) -> str:
+    sections = _email_channel_sections(plan)
+    if not sections:
+        verify_url = _email_primary_booking_url(plan or {})
+        if not verify_url:
+            return ""
+        sections = [("", [("去验证价格", verify_url)])]
+    if interactive:
+        body = "".join(_email_channel_section_html(title, links) for title, links in sections)
+        return (
+            "<details style='margin:8px 0;'>"
+            "<summary style='cursor:pointer;color:#2563eb;font-weight:600;'>去验证价格 ▾</summary>"
+            f"<div style='margin-top:6px;'>{body}</div>"
+            "</details>"
+        )
+    body = "<div style='font-weight:600;margin-bottom:4px;'>去验证价格(选择渠道):</div>"
+    body += "".join(_email_channel_section_html(title, links) for title, links in sections)
+    return body
+
+
+def _email_channel_sections(plan: dict) -> list[tuple[str, list[tuple[str, str]]]]:
+    links = (plan or {}).get("links") or {}
+    purchase_mode = str((plan or {}).get("purchase_mode") or "")
+    is_roundtrip = bool((plan or {}).get("is_roundtrip"))
+    sections: list[tuple[str, list[tuple[str, str]]]] = []
+    if is_roundtrip and "单程" in purchase_mode:
+        for key, title in (("outbound", "去程"), ("return", "返程")):
+            channel_links = _extract_primary_channel_links(links.get(key))
+            if channel_links:
+                sections.append((title, channel_links))
+        return sections
+    candidates = [
+        ("往返组合" if is_roundtrip else "", links.get("main")),
+        ("去程" if is_roundtrip else "", links.get("outbound")),
+        ("返程", links.get("return")),
+    ]
+    seen: set[str] = set()
+    for title, link_html in candidates:
+        channel_links = [
+            (label, href)
+            for label, href in _extract_primary_channel_links(link_html)
+            if not (href in seen or seen.add(href))
+        ]
+        if channel_links:
+            sections.append((title, channel_links))
+            if is_roundtrip:
+                break
+    return sections
+
+
+def _extract_primary_channel_links(link_html: str) -> list[tuple[str, str]]:
+    wanted = ("携程", "飞猪", "去哪儿")
+    found: list[tuple[str, str]] = []
+    for href, label_html in re.findall(
+        r'<a\s+[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
+        str(link_html or ""),
+        flags=re.I | re.S,
+    ):
+        label = re.sub(r"<[^>]+>", "", label_html)
+        label = html.unescape(label).strip()
+        href = html.unescape(href)
+        for name in wanted:
+            if name in label and name not in [item[0] for item in found]:
+                found.append((name, href))
+                break
+    return found
+
+
+def _email_channel_section_html(title: str, links: list[tuple[str, str]]) -> str:
+    if not links:
+        return ""
+    prefix = f"<div style='color:#666;font-size:12px;margin-top:4px;'>{html.escape(title)}</div>" if title else ""
+    rows = "".join(
+        "<div style='font-size:13px;line-height:1.7;'>"
+        f"- {html.escape(label)} → <a href=\"{html.escape(str(url))}\" target=\"_blank\">{html.escape(label)}</a>"
+        "</div>"
+        for label, url in links
+    )
+    return prefix + rows
 
 
 def _email_button_link(label: str, url: str) -> str:
@@ -6497,7 +6594,16 @@ def render_detail_html(payload: dict) -> str:
     primary_plan = _plan_for_render((payload.get("recommended_plans") or [{}])[0] or {}, payload)
     cards = [
         f"<h2 style='font-size:18px;color:#111;margin:0 0 12px;'>{html.escape(subject)}</h2>",
-        _email_card("行动面板", _email_action_panel_body(payload, primary_plan, verify_text, price_reason)),
+        _email_card(
+            "行动面板",
+            _email_action_panel_body(
+                payload,
+                primary_plan,
+                verify_text,
+                price_reason,
+                interactive_channels=True,
+            ),
+        ),
         _render_payload_plan_cards(payload, payload.get("recommended_plans") or [], primary_plan),
         _email_card("为什么提醒你", _email_list(payload.get("trigger_reason") or [], 3)),
         _email_card("价格走势", _email_trend_card_body(payload)),
@@ -6554,7 +6660,7 @@ def render_detail_html(payload: dict) -> str:
     cards.append(
         _email_card(
             "下一步",
-            _email_action_links(payload, primary_plan)
+            _email_action_links(payload, primary_plan, interactive_channels=True)
             + f"<div style='margin-top:8px;color:#666;font-size:12px;'>数据采集于 {html.escape(str(payload.get('collected_at') or ''))}。最终价格以购买平台支付页为准。</div>",
         )
     )

@@ -289,16 +289,62 @@ def _travel_scenario_labels(scenarios: list[str]) -> list[str]:
     return [TRAVEL_SCENARIO_LABELS.get(item, item) for item in scenarios]
 
 
+def _to_non_negative_int(value, default: int = 0) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _normalize_passengers(value) -> dict:
+    if not isinstance(value, dict):
+        return {}
+    passengers = {
+        "adult": _to_non_negative_int(value.get("adult")),
+        "child": _to_non_negative_int(value.get("child")),
+        "elderly": _to_non_negative_int(value.get("elderly")),
+        "infant": _to_non_negative_int(value.get("infant")),
+    }
+    return passengers if any(passengers.values()) else {}
+
+
+def _infer_travelers_from_passengers(passengers: dict, fallback: str = "solo") -> str:
+    if not passengers:
+        return fallback or "solo"
+    has_child = passengers.get("child", 0) > 0
+    has_elderly = passengers.get("elderly", 0) > 0
+    total = sum(passengers.values())
+    if has_child and has_elderly:
+        return "with_elderly_child"
+    if has_child:
+        return "with_child"
+    if has_elderly:
+        return "with_elderly"
+    if total > 1:
+        return "multiple"
+    return fallback or "solo"
+
+
 def build_travel_profile(soft_prefs: dict | None) -> dict:
     """Convert scenario and companions into scoring weights."""
     soft_prefs = soft_prefs or {}
     scenarios = _normalize_travel_scenarios(
-        soft_prefs.get("travel_scenarios")
+        soft_prefs.get("travel_purposes")
+        or soft_prefs.get("travel_scenarios")
         or soft_prefs.get("travel_scenario")
         or soft_prefs.get("scenario")
     )
     scenario = scenarios[0]
-    travelers = soft_prefs.get("travelers") or soft_prefs.get("companions") or "solo"
+    passengers = _normalize_passengers(soft_prefs.get("passengers"))
+    if not passengers and _to_non_negative_int(soft_prefs.get("passenger_count")) > 0:
+        passengers = {
+            "adult": _to_non_negative_int(soft_prefs.get("passenger_count")),
+            "child": 0,
+            "elderly": 0,
+            "infant": 0,
+        }
+    fallback_travelers = soft_prefs.get("travelers") or soft_prefs.get("companions") or "solo"
+    travelers = _infer_travelers_from_passengers(passengers, fallback_travelers)
     profiles = {
         "personal": {
             "price": "high",
@@ -389,10 +435,18 @@ def build_travel_profile(soft_prefs: dict | None) -> dict:
     if travelers in ("multiple", "group"):
         profile["baggage"] = "high"
         profile["stock_check"] = "high"
+    passenger_count = sum(passengers.values()) if passengers else _to_non_negative_int(soft_prefs.get("passenger_count"), 1)
+    if passenger_count > 1:
+        profile["stock_check"] = "high"
+    if passengers.get("infant", 0) > 0:
+        profile["infant"] = True
+        profile["infant_note"] = "婴儿票、摇篮和行李额需在支付页单独确认"
     profile["scenario"] = scenario
     profile["scenarios"] = scenarios
     profile["scenario_combo"] = "+".join(scenarios)
     profile["travelers"] = travelers
+    profile["passengers"] = passengers or {"adult": passenger_count, "child": 0, "elderly": 0, "infant": 0}
+    profile["passenger_count"] = passenger_count
     return profile
 
 
@@ -839,6 +893,9 @@ def migrate_old_subscription(subscription: dict) -> dict:
 
     _set_if_missing(soft, "companions", preferences.get("travelers"))
     _set_if_missing(soft, "travelers", preferences.get("travelers"))
+    _set_if_missing(soft, "passengers", preferences.get("passengers"))
+    _set_if_missing(soft, "passenger_count", basic.get("passenger_count"))
+    _set_if_missing(soft, "travel_purposes", preferences.get("travel_purposes"))
     _set_if_missing(soft, "travel_scenario", preferences.get("travel_scenario"))
     _set_if_missing(soft, "travel_scenarios", preferences.get("travel_scenarios"))
     _set_if_missing(soft, "companion_constraints", preferences.get("companion_constraints"))
@@ -886,9 +943,11 @@ def apply_default_rules(subscription: dict) -> dict:
     defaults_applied = []
 
     travel_scenarios = _normalize_travel_scenarios(
-        soft.get("travel_scenarios") or soft.get("travel_scenario")
+        soft.get("travel_purposes") or soft.get("travel_scenarios") or soft.get("travel_scenario")
     )
     soft["travel_scenarios"] = travel_scenarios
+    if soft.get("travel_purposes"):
+        soft["travel_purposes"] = travel_scenarios
     soft["travel_scenario"] = travel_scenarios[0]
     scenario_rules = []
     for travel_scenario in travel_scenarios:
@@ -897,7 +956,21 @@ def apply_default_rules(subscription: dict) -> dict:
             _apply_rule_defaults(soft, hard, scenario, defaults_applied, override=False)
             scenario_rules.append(travel_scenario)
 
-    companions = soft.get("companions") or soft.get("travelers") or "solo"
+    passengers = _normalize_passengers(soft.get("passengers"))
+    if not passengers and _to_non_negative_int(soft.get("passenger_count")) > 0:
+        passengers = {
+            "adult": _to_non_negative_int(soft.get("passenger_count")),
+            "child": 0,
+            "elderly": 0,
+            "infant": 0,
+        }
+    companions = _infer_travelers_from_passengers(
+        passengers,
+        soft.get("companions") or soft.get("travelers") or "solo",
+    )
+    if passengers:
+        soft["passengers"] = passengers
+        soft["passenger_count"] = sum(passengers.values())
     soft["companions"] = companions
     soft["travelers"] = companions
     companion_rule = COMPANION_RULES.get(companions)

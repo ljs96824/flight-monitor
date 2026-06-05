@@ -41,6 +41,23 @@ class TravelProfileScoringTest(unittest.TestCase):
         self.assertEqual(profile["time"], "high")
         self.assertEqual(profile["risk_averse"], "high")
 
+    def test_precise_passenger_counts_drive_companion_profile(self):
+        profile = build_travel_profile(
+            {
+                "travel_purposes": ["tourism"],
+                "passengers": {"adult": 2, "child": 1, "elderly": 1, "infant": 1},
+            }
+        )
+
+        self.assertEqual(profile["scenarios"], ["tourism"])
+        self.assertEqual(profile["travelers"], "with_elderly_child")
+        self.assertEqual(profile["passenger_count"], 5)
+        self.assertEqual(profile["comfort"], "high")
+        self.assertEqual(profile["risk_averse"], "high")
+        self.assertEqual(profile["baggage"], "high")
+        self.assertEqual(profile["stock_check"], "high")
+        self.assertTrue(profile["infant"])
+
     def test_recommendation_basis_uses_same_combined_profile(self):
         profile = build_travel_profile({"travel_scenarios": ["tourism", "family"]})
         basis = build_recommendation_basis(profile)

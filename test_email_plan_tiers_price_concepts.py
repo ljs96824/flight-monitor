@@ -357,6 +357,51 @@ class EmailPlanTiersPriceConceptsTest(unittest.TestCase):
         self.assertIn("\u9002\u5408\u4f60\u613f\u610f\u63a5\u53d7\u4e2d\u8f6c\u548c\u552e\u540e\u5206\u79bb", html)
         self.assertIn("\u9a8c\u8bc1\u4ef7\u8bf4\u660e:\u8fd9\u6b21\u65b9\u6848\u503c\u5f97\u4e70\u7684\u4e0a\u9650", html)
 
+    def test_email_and_detail_show_channel_picker_for_price_verification(self):
+        channel_links = (
+            '<a href="https://ctrip.example" target="_blank">\u643a\u7a0b</a> | '
+            '<a href="https://fliggy.example" target="_blank">\u98de\u732a</a> | '
+            '<a href="https://qunar.example" target="_blank">\u53bb\u54ea\u513f</a> | '
+            '<a href="https://trip.example" target="_blank">Trip.com</a>'
+        )
+        payload = {
+            "push_type": "\u503c\u5f97\u9a8c\u8bc1",
+            "route": "\u4e0a\u6d77 \u2192 \u5927\u962a",
+            "recommendation": "\u503c\u5f97\u9a8c\u8bc1",
+            "display_price": 6521,
+            "verify_price": 6847,
+            "recommended_plans": [
+                {
+                    "label": "\u65b9\u6848A",
+                    "tier": "\u9996\u9009\u63a8\u8350",
+                    "is_roundtrip": True,
+                    "price": 6521,
+                    "estimated_price": 7181,
+                    "purchase_mode": "\u5f80\u8fd4\u7ec4\u5408",
+                    "links": {"outbound": channel_links, "return": channel_links},
+                }
+            ],
+            "trigger_reason": [],
+            "price_history": [],
+            "action_range": {"ranges": []},
+            "detail_url": "https://example.com/detail",
+            "form_url": "https://example.com/",
+            "feedback_url": "https://example.com/feedback",
+        }
+
+        _, email_html = render_email(payload)
+        detail_html = render_detail_html(payload)
+
+        self.assertIn("\u53bb\u9a8c\u8bc1\u4ef7\u683c(\u9009\u62e9\u6e20\u9053)", email_html)
+        self.assertIn("\u643a\u7a0b", email_html)
+        self.assertIn("https://ctrip.example", email_html)
+        self.assertIn("\u98de\u732a", email_html)
+        self.assertIn("https://fliggy.example", email_html)
+        self.assertIn("\u53bb\u54ea\u513f", email_html)
+        self.assertIn("https://qunar.example", email_html)
+        self.assertIn("<details", detail_html)
+        self.assertIn("\u53bb\u9a8c\u8bc1\u4ef7\u683c", detail_html)
+
 
 if __name__ == "__main__":
     unittest.main()
