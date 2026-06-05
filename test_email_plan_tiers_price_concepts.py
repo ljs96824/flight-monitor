@@ -218,6 +218,78 @@ class EmailPlanTiersPriceConceptsTest(unittest.TestCase):
         self.assertNotIn("\u00a56,521 B", html)
         self.assertNotIn("\u00a56,186 B", html)
 
+    def test_email_starts_with_action_panel_and_plan_tradeoffs(self):
+        payload = {
+            "push_type": "\u503c\u5f97\u9a8c\u8bc1",
+            "route": "\u4e0a\u6d77 \u2192 \u5927\u962a",
+            "recommendation": "\u503c\u5f97\u9a8c\u8bc1,\u4e0d\u5efa\u8bae\u76f4\u63a5\u4e0b\u5355",
+            "price_policy_reason": "\u641c\u7d22\u53c2\u8003\u4ef7\u8fdb\u5165\u7406\u60f3\u5165\u624b\u533a\u95f4,\u4f46\u9884\u4f30\u5b9e\u4ed8\u4ecd\u9700\u9a8c\u8bc1",
+            "display_price": 6521,
+            "transaction_price": 7181,
+            "verify_price": 6847,
+            "ideal_price": 7800,
+            "max_price": 8394,
+            "buy_condition": "\u652f\u4ed8\u9875\u6700\u7ec8\u4ef7\u2264\u00a56,847,\u4e14\u542b\u6258\u8fd0\u884c\u674e",
+            "buy_condition_explanation": (
+                "\u672c\u6b21\u9a8c\u8bc1\u4ef7\u00a56,847 = \u5f53\u524d\u641c\u7d22\u53c2\u8003\u4ef7\u00a56,521 "
+                "+ \u53ef\u63a5\u53d7\u6d6e\u52a8\u548c\u8d39\u7528\u5bb9\u5fcd\u533a\u95f4"
+            ),
+            "confidence": "\u4e2d\u9ad8",
+            "trigger_reason": ["\u641c\u7d22\u53c2\u8003\u4ef7\u8fdb\u5165\u7406\u60f3\u5165\u624b\u533a\u95f4"],
+            "recommended_plans": [
+                {
+                    "label": "\u65b9\u6848A",
+                    "tier": "\u9996\u9009\u63a8\u8350",
+                    "tier_reason": "\u76f4\u98de\u7701\u5fc3,\u9002\u5408\u5bb6\u5ead/\u8001\u4eba\u540c\u884c",
+                    "is_roundtrip": True,
+                    "price": 6521,
+                    "estimated_price": 7181,
+                    "purchase_mode": "\u5f80\u8fd4\u7ec4\u5408",
+                    "baggage_line": "\u884c\u674e:\u652f\u4ed8\u9875\u9700\u786e\u8ba4",
+                    "links": {
+                        "outbound": '<a href="https://buy.example/out">Trip.com</a>',
+                        "return": '<a href="https://buy.example/ret">Trip.com</a>',
+                    },
+                    "outbound_flight": {"stops": 0, "flight_combo": "9C6575"},
+                    "return_flight": {"stops": 0, "flight_combo": "9C6582"},
+                },
+                {
+                    "label": "\u65b9\u6848B",
+                    "tier": "\u4f4e\u4ef7\u5907\u9009",
+                    "tier_reason": "\u4ef7\u683c\u66f4\u4f4e,\u4f46\u53bb\u7a0b\u4e2d\u8f6c\u4e14\u4e3a\u4e24\u4e2a\u5355\u7a0b\u62fc\u63a5",
+                    "suitable_condition": "\u9002\u5408\u4f60\u613f\u610f\u63a5\u53d7\u4e2d\u8f6c\u548c\u552e\u540e\u5206\u79bb,\u4ee5\u6362\u53d6\u66f4\u4f4e\u4ef7\u683c\u3002",
+                    "is_roundtrip": True,
+                    "price": 6186,
+                    "estimated_price": 7300,
+                    "purchase_mode": "\u4e24\u4e2a\u5355\u7a0b\u62fc\u63a5",
+                    "links": {},
+                    "outbound_flight": {"stops": 1, "flight_combo": "KE888+KE721"},
+                    "return_flight": {"stops": 0, "flight_combo": "9C6582"},
+                },
+            ],
+            "price_history": [],
+            "action_range": {"ranges": []},
+            "detail_url": "https://example.com/detail",
+            "form_url": "https://example.com/",
+            "feedback_url": "https://example.com/feedback",
+        }
+
+        _, html = render_email(payload)
+
+        self.assertIn("\u5f53\u524d\u5224\u65ad:\u503c\u5f97\u9a8c\u8bc1,\u4e0d\u5efa\u8bae\u76f4\u63a5\u4e0b\u5355", html)
+        self.assertIn("\u9996\u9009\u65b9\u6848:\u65b9\u6848A,\u76f4\u98de\u5f80\u8fd4,\u641c\u7d22\u53c2\u8003\u4ef7\u00a56,521", html)
+        self.assertIn("\u8d2d\u4e70\u6761\u4ef6:\u652f\u4ed8\u9875\u6700\u7ec8\u4ef7\u2264\u00a56,847,\u4e14\u542b\u6258\u8fd0\u884c\u674e", html)
+        self.assertIn("\u4e0b\u4e00\u6b65:\u53bb\u9a8c\u8bc1\u4ef7\u683c | \u67e5\u770b\u8be6\u60c5 | \u7ee7\u7eed\u76d1\u63a7", html)
+        self.assertIn("\u89e6\u53d1\u7c7b\u578b:\u4f4e\u4ef7\u7ebf\u7d22 | \u9700\u9a8c\u8bc1 | \u975e\u76f4\u63a5\u8d2d\u4e70", html)
+        self.assertIn("\u89e6\u53d1\u539f\u56e0:\u641c\u7d22\u53c2\u8003\u4ef7\u8fdb\u5165\u7406\u60f3\u5165\u624b\u533a\u95f4,\u4f46\u9884\u4f30\u5b9e\u4ed8\u4ecd\u9700\u9a8c\u8bc1", html)
+        self.assertLess(html.index("\u53bb\u9a8c\u8bc1\u4ef7\u683c"), html.index("\u4ef7\u683c\u53e3\u5f84\u4e0e\u4fe1\u53f7"))
+        self.assertIn("\u65b9\u6848A \uff5c \u9996\u9009\u63a8\u8350 \uff5c \u66f4\u7701\u5fc3", html)
+        self.assertIn("\u65b9\u6848A:\u76f4\u98de,\u7701\u5fc3", html)
+        self.assertIn("\u65b9\u6848B \uff5c \u4f4e\u4ef7\u5907\u9009 \uff5c \u66f4\u4fbf\u5b9c\u4f46\u98ce\u9669\u66f4\u9ad8", html)
+        self.assertIn("\u65b9\u6848B:\u4fbf\u5b9c\u7ea6\u00a5335,\u4f46\u4ef7\u683c\u66f4\u4f4e,\u4f46\u53bb\u7a0b\u4e2d\u8f6c\u4e14\u4e3a\u4e24\u4e2a\u5355\u7a0b\u62fc\u63a5", html)
+        self.assertIn("\u9002\u5408\u4f60\u613f\u610f\u63a5\u53d7\u4e2d\u8f6c\u548c\u552e\u540e\u5206\u79bb", html)
+        self.assertIn("\u9a8c\u8bc1\u4ef7\u8bf4\u660e:\u8fd9\u6b21\u65b9\u6848\u503c\u5f97\u4e70\u7684\u4e0a\u9650", html)
+
 
 if __name__ == "__main__":
     unittest.main()
