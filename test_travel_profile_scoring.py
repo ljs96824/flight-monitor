@@ -58,6 +58,23 @@ class TravelProfileScoringTest(unittest.TestCase):
         self.assertEqual(profile["stock_check"], "high")
         self.assertTrue(profile["infant"])
 
+    def test_legacy_companion_field_is_converted_to_passenger_shape(self):
+        profile = build_travel_profile({"travel_scenarios": "tourism", "companions": "with_child"})
+
+        self.assertEqual(profile["travelers"], "with_child")
+        self.assertEqual(profile["passengers"], {"adult": 1, "child": 1, "elderly": 0, "infant": 0})
+        self.assertEqual(profile["passenger_count"], 2)
+        self.assertEqual(profile["comfort"], "high")
+        self.assertEqual(profile["stock_check"], "high")
+
+    def test_infant_count_triggers_child_profile(self):
+        profile = build_travel_profile({"passengers": {"adult": 2, "child": 0, "elderly": 0, "infant": 1}})
+
+        self.assertEqual(profile["travelers"], "with_child")
+        self.assertEqual(profile["passenger_count"], 3)
+        self.assertTrue(profile["infant"])
+        self.assertEqual(profile["risk_averse"], "high")
+
     def test_recommendation_basis_uses_same_combined_profile(self):
         profile = build_travel_profile({"travel_scenarios": ["tourism", "family"]})
         basis = build_recommendation_basis(profile)

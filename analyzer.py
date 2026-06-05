@@ -308,10 +308,23 @@ def _normalize_passengers(value) -> dict:
     return passengers if any(passengers.values()) else {}
 
 
+def _passengers_from_legacy_companions(companions: str) -> dict:
+    companions = str(companions or "solo")
+    mapping = {
+        "with_child": {"adult": 1, "child": 1, "elderly": 0, "infant": 0},
+        "with_elderly": {"adult": 1, "child": 0, "elderly": 1, "infant": 0},
+        "with_elderly_child": {"adult": 1, "child": 1, "elderly": 1, "infant": 0},
+        "with_both": {"adult": 1, "child": 1, "elderly": 1, "infant": 0},
+        "multiple": {"adult": 2, "child": 0, "elderly": 0, "infant": 0},
+        "group": {"adult": 2, "child": 0, "elderly": 0, "infant": 0},
+    }
+    return dict(mapping.get(companions, {}))
+
+
 def _infer_travelers_from_passengers(passengers: dict, fallback: str = "solo") -> str:
     if not passengers:
         return fallback or "solo"
-    has_child = passengers.get("child", 0) > 0
+    has_child = passengers.get("child", 0) > 0 or passengers.get("infant", 0) > 0
     has_elderly = passengers.get("elderly", 0) > 0
     total = sum(passengers.values())
     if has_child and has_elderly:
@@ -335,6 +348,7 @@ def build_travel_profile(soft_prefs: dict | None) -> dict:
         or soft_prefs.get("scenario")
     )
     scenario = scenarios[0]
+    fallback_travelers = soft_prefs.get("travelers") or soft_prefs.get("companions") or "solo"
     passengers = _normalize_passengers(soft_prefs.get("passengers"))
     if not passengers and _to_non_negative_int(soft_prefs.get("passenger_count")) > 0:
         passengers = {
@@ -343,7 +357,8 @@ def build_travel_profile(soft_prefs: dict | None) -> dict:
             "elderly": 0,
             "infant": 0,
         }
-    fallback_travelers = soft_prefs.get("travelers") or soft_prefs.get("companions") or "solo"
+    if not passengers:
+        passengers = _passengers_from_legacy_companions(fallback_travelers)
     travelers = _infer_travelers_from_passengers(passengers, fallback_travelers)
     profiles = {
         "personal": {
@@ -956,6 +971,7 @@ def apply_default_rules(subscription: dict) -> dict:
             _apply_rule_defaults(soft, hard, scenario, defaults_applied, override=False)
             scenario_rules.append(travel_scenario)
 
+    fallback_companions = soft.get("companions") or soft.get("travelers") or "solo"
     passengers = _normalize_passengers(soft.get("passengers"))
     if not passengers and _to_non_negative_int(soft.get("passenger_count")) > 0:
         passengers = {
@@ -964,9 +980,11 @@ def apply_default_rules(subscription: dict) -> dict:
             "elderly": 0,
             "infant": 0,
         }
+    if not passengers:
+        passengers = _passengers_from_legacy_companions(fallback_companions)
     companions = _infer_travelers_from_passengers(
         passengers,
-        soft.get("companions") or soft.get("travelers") or "solo",
+        fallback_companions,
     )
     if passengers:
         soft["passengers"] = passengers

@@ -370,6 +370,7 @@ class EmailPlanTiersPriceConceptsTest(unittest.TestCase):
             "recommendation": "\u503c\u5f97\u9a8c\u8bc1",
             "display_price": 6521,
             "verify_price": 6847,
+            "travel_profile": {"stock_check": "high", "passenger_count": 3},
             "recommended_plans": [
                 {
                     "label": "\u65b9\u6848A",
@@ -393,6 +394,8 @@ class EmailPlanTiersPriceConceptsTest(unittest.TestCase):
         detail_html = render_detail_html(payload)
 
         self.assertIn("\u53bb\u9a8c\u8bc1\u4ef7\u683c(\u9009\u62e9\u6e20\u9053)", email_html)
+        self.assertIn("\u5f80\u8fd4\u7ec4\u5408", email_html)
+        self.assertIn("\u643a\u7a0b \u00a56,521", email_html)
         self.assertIn("\u643a\u7a0b", email_html)
         self.assertIn("https://ctrip.example", email_html)
         self.assertIn("\u98de\u732a", email_html)
@@ -401,6 +404,7 @@ class EmailPlanTiersPriceConceptsTest(unittest.TestCase):
         self.assertIn("https://qunar.example", email_html)
         self.assertIn("<details", detail_html)
         self.assertIn("\u53bb\u9a8c\u8bc1\u4ef7\u683c", detail_html)
+        self.assertIn("3\u4eba\u51fa\u884c", email_html)
 
 
 if __name__ == "__main__":

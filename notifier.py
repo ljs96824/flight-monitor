@@ -6128,6 +6128,7 @@ def _email_action_links(
 
 
 def _email_channel_picker(plan: dict, interactive: bool = False) -> str:
+    price = plan.get("price") or plan.get("display_price") or plan.get("estimated_price")
     sections = _email_channel_sections(plan)
     if not sections:
         verify_url = _email_primary_booking_url(plan or {})
@@ -6135,7 +6136,7 @@ def _email_channel_picker(plan: dict, interactive: bool = False) -> str:
             return ""
         sections = [("", [("去验证价格", verify_url)])]
     if interactive:
-        body = "".join(_email_channel_section_html(title, links) for title, links in sections)
+        body = "".join(_email_channel_section_html(title, links, price) for title, links in sections)
         return (
             "<details style='margin:8px 0;'>"
             "<summary style='cursor:pointer;color:#2563eb;font-weight:600;'>去验证价格 ▾</summary>"
@@ -6143,7 +6144,7 @@ def _email_channel_picker(plan: dict, interactive: bool = False) -> str:
             "</details>"
         )
     body = "<div style='font-weight:600;margin-bottom:4px;'>去验证价格(选择渠道):</div>"
-    body += "".join(_email_channel_section_html(title, links) for title, links in sections)
+    body += "".join(_email_channel_section_html(title, links, price) for title, links in sections)
     return body
 
 
@@ -6158,10 +6159,13 @@ def _email_channel_sections(plan: dict) -> list[tuple[str, list[tuple[str, str]]
             if channel_links:
                 sections.append((title, channel_links))
         return sections
+    if is_roundtrip:
+        combo_links = _extract_primary_channel_links(links.get("main") or links.get("outbound") or links.get("return"))
+        return [("往返组合", combo_links)] if combo_links else []
     candidates = [
-        ("往返组合" if is_roundtrip else "", links.get("main")),
-        ("去程" if is_roundtrip else "", links.get("outbound")),
-        ("返程", links.get("return")),
+        ("", links.get("main")),
+        ("", links.get("outbound")),
+        ("", links.get("return")),
     ]
     seen: set[str] = set()
     for title, link_html in candidates:
@@ -6195,13 +6199,14 @@ def _extract_primary_channel_links(link_html: str) -> list[tuple[str, str]]:
     return found
 
 
-def _email_channel_section_html(title: str, links: list[tuple[str, str]]) -> str:
+def _email_channel_section_html(title: str, links: list[tuple[str, str]], price=None) -> str:
     if not links:
         return ""
     prefix = f"<div style='color:#666;font-size:12px;margin-top:4px;'>{html.escape(title)}</div>" if title else ""
+    price_suffix = f" {_price_text(price)}" if price else ""
     rows = "".join(
         "<div style='font-size:13px;line-height:1.7;'>"
-        f"- {html.escape(label)} → <a href=\"{html.escape(str(url))}\" target=\"_blank\">{html.escape(label)}</a>"
+        f"- {html.escape(label + price_suffix)} → <a href=\"{html.escape(str(url))}\" target=\"_blank\">{html.escape(label)}</a>"
         "</div>"
         for label, url in links
     )
@@ -6508,10 +6513,14 @@ def render_email(payload: dict) -> tuple[str, str]:
         for key, value in profile_dimensions.items():
             profile_rows.append((str(key), html.escape(str(value))))
     if (payload.get("travel_profile") or {}).get("stock_check") == "high":
+        passenger_count = (payload.get("travel_profile") or {}).get("passenger_count")
+        passenger_text = f"{int(passenger_count)}人出行，" if isinstance(passenger_count, (int, float)) and passenger_count > 1 else ""
         profile_rows.append(
             (
                 "多人同行提示",
-                "低价舱位库存可能不足，建议尽快验证支付页能否同时预订多张。",
+                f"{passenger_text}低价舱位库存可能不足，建议尽快验证支付页能否同时预订{int(passenger_count)}张。"
+                if isinstance(passenger_count, (int, float)) and passenger_count > 1
+                else "低价舱位库存可能不足，建议尽快验证支付页能否同时预订多张。",
             )
         )
     cards.append(_email_card("推荐依据", _email_table(profile_rows)))

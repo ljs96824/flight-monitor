@@ -1765,11 +1765,19 @@ FORM_TEMPLATE = """
       if (!purposeInputs.length || checkedValues('travel_purpose').length) {
         return;
       }
-      selectedTravelScenarios().forEach(value => {
+      const scenarios = selectedTravelScenarios();
+      scenarios.forEach(value => {
         const mapped = value === 'elderly' ? 'family' : value;
         const input = document.querySelector(`input[name="travel_purpose"][value="${mapped}"]`);
         if (input) input.checked = true;
       });
+      const adultInput = document.querySelector('input[name="passenger_adult"]');
+      const childInput = document.querySelector('input[name="passenger_child"]');
+      const elderlyInput = document.querySelector('input[name="passenger_elderly"]');
+      if (adultInput && Number(adultInput.value || 0) < 1) adultInput.value = '1';
+      if (scenarios.includes('family') && childInput && Number(childInput.value || 0) < 1) childInput.value = '1';
+      if ((scenarios.includes('elderly') || scenarios.includes('with_elderly')) && elderlyInput && Number(elderlyInput.value || 0) < 1) elderlyInput.value = '1';
+      syncPrefCards();
     }
 
     function toggleTimePreference() {
@@ -1882,7 +1890,7 @@ FORM_TEMPLATE = """
       return map[value] || selectedLabel(name) || value;
     }
 
-    function precisePassengerSummary() {
+    function precisePassengerSummary(includeWeightNote = false) {
       const items = [
         ['成人', Number(document.querySelector('input[name="passenger_adult"]')?.value || 0)],
         ['儿童', Number(document.querySelector('input[name="passenger_child"]')?.value || 0)],
@@ -1891,7 +1899,14 @@ FORM_TEMPLATE = """
       ].filter(([, count]) => count > 0);
       const total = items.reduce((sum, [, count]) => sum + count, 0);
       if (!total) return '';
-      return `${items.map(([label, count]) => `${label}${count}`).join(' + ')}，共${total}人`;
+      const summary = `${items.map(([label, count]) => `${label}${count}`).join(' + ')}，共${total}人`;
+      const hasCareNeed = Number(document.querySelector('input[name="passenger_child"]')?.value || 0) > 0
+        || Number(document.querySelector('input[name="passenger_elderly"]')?.value || 0) > 0
+        || Number(document.querySelector('input[name="passenger_infant"]')?.value || 0) > 0;
+      if (includeWeightNote && hasCareNeed) {
+        return `${summary}（系统据此提高了直飞/白天/行李权重）`;
+      }
+      return summary;
     }
 
     function quickPassengerSummary() {
@@ -2479,7 +2494,7 @@ FORM_TEMPLATE = """
       summaryLine(
         '购票人数',
         checkedValue('monitor_mode') === 'precise'
-          ? precisePassengerSummary()
+          ? precisePassengerSummary(true)
           : quickPassengerSummary().replace('购票人数：', '')
       );
       summaryLine('价格策略', selectedLabel('price_strategy'));
