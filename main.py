@@ -31,6 +31,7 @@ from health_check import system_health_check
 from notifier import (
     build_notification_payload,
     persist_notification_payload,
+    render_detail_html,
     render_pushplus,
     send,
 )
@@ -410,7 +411,8 @@ def _deliver_notification(sub: dict, route: str, message_kwargs: dict) -> bool:
             subject, full_html = email_rendered
             inline_images = {}
         print("[推送] 邮件/详情HTML渲染完成")
-        _save_result_for_page(subscription_id, full_html, payload)
+        detail_html = render_detail_html(payload)
+        _save_result_for_page(subscription_id, detail_html, payload)
 
         if method == "page_only":
             print("[推送] 开始保存页面结果")

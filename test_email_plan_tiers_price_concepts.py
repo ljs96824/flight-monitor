@@ -6,7 +6,7 @@ import unittest
 sys.modules.setdefault("httpx", types.SimpleNamespace(get=lambda *a, **k: None, post=lambda *a, **k: None))
 
 from analyzer import build_execution_advice, build_price_signal
-from notifier import render_email
+from notifier import render_detail_html, render_email
 
 
 class EmailPlanTiersPriceConceptsTest(unittest.TestCase):
@@ -158,16 +158,83 @@ class EmailPlanTiersPriceConceptsTest(unittest.TestCase):
 
         _, html = render_email(payload)
 
-        self.assertIn("\u4ef7\u683c:Google Flights \u591a\u6e90\u4ea4\u53c9\u9a8c\u8bc1,21\u4e2a\u5019\u9009\u65b9\u6848", html)
-        self.assertIn("\u884c\u674e/\u9000\u6539:Duffel \u8fd4\u56de78\u6761\u89c4\u5219\u53c2\u8003", html)
-        self.assertIn("\u5f53\u524d\u6709\u6548\u65b9\u6848:\u5df2\u53bb\u91cd\u7b5b\u9009", html)
+        self.assertIn("\u4ef7\u683c:Google Flights \u591a\u6e90\u4ea4\u53c9\u9a8c\u8bc1", html)
+        self.assertIn("\u7968\u89c4:Duffel \u884c\u674e/\u9000\u6539\u89c4\u5219\u53c2\u8003", html)
+        self.assertIn("\u5019\u9009\u65b9\u6848:\u5df2\u53bb\u91cd\u5e76\u7b5b\u9009", html)
         self.assertIn("\u91c7\u96c6\u65f6\u95f4:\u521a\u521a\u91c7\u96c6", html)
+        self.assertNotIn("21\u4e2a\u5019\u9009\u65b9\u6848", html)
         self.assertNotIn("after_dedup_by_cabin", html)
         self.assertNotIn("travelpayouts", html)
         self.assertNotIn("skyscanner", html)
         self.assertNotIn("429", html)
+        self.assertIn("\u66f4\u4fbf\u5b9c\u65b9\u6848", html)
+        self.assertIn("\u6392\u9664\u539f\u56e0", html)
+        self.assertIn("\u00a54,564(\u5355\u7a0b)", html)
+        self.assertIn("\u00a55,714(\u5f80\u8fd4)", html)
         self.assertIn("\u5b8c\u6574\u6392\u9664\u65b9\u6848\u8be6\u60c5\u89c1\u7f51\u9875\u8be6\u60c5\u9875", html)
         self.assertNotIn("\u822a\u73ed\u7ec4\u5408", html)
+
+    def test_detail_html_uses_collapsed_sections_for_complex_analysis(self):
+        payload = {
+            "push_type": "\u503c\u5f97\u9a8c\u8bc1",
+            "route": "\u4e0a\u6d77 \u2192 \u5927\u962a",
+            "recommendation": "\u503c\u5f97\u9a8c\u8bc1",
+            "display_price": 6521,
+            "transaction_price": 7181,
+            "verify_price": 6847,
+            "confidence": "\u4e2d\u9ad8",
+            "is_roundtrip": True,
+            "source_stats": {
+                "serpapi": {"count": 10, "status": "\u6210\u529f"},
+                "hasdata": {"count": 11, "status": "\u6210\u529f"},
+                "after_dedup_by_cabin": {"count": 20, "status": "\u6210\u529f"},
+                "duffel": {"count": 78, "status": "\u6210\u529f"},
+            },
+            "recommended_plans": [
+                {
+                    "label": "\u65b9\u6848A",
+                    "tier": "\u9996\u9009\u63a8\u8350",
+                    "is_roundtrip": True,
+                    "price": 6521,
+                    "estimated_price": 7181,
+                    "purchase_mode": "\u5f80\u8fd4\u7ec4\u5408",
+                    "links": {},
+                }
+            ],
+            "excluded_plans": [
+                {
+                    "scope": "roundtrip",
+                    "flight_combo": "7C123+MM456",
+                    "total_price": 5714,
+                    "reason": "\u53bb\u7a0b04:05+\u8fd4\u7a0b22:20\uff0c\u89e6\u53d1\u7ea2\u773c/\u51cc\u6668\u5230\u8fbe\u98ce\u9669",
+                    "outbound": {"flight_combo": "7C123", "stops": 1, "price": 2500},
+                    "return": {"flight_combo": "MM456", "stops": 0, "price": 3214},
+                }
+            ],
+            "trigger_reason": ["\u641c\u7d22\u53c2\u8003\u4ef7\u8fdb\u5165\u7406\u60f3\u5165\u624b\u533a\u95f4"],
+            "price_history": [
+                {"date": "5/22", "price": 6971},
+                {"date": "5/23", "price": 6700},
+                {"date": "5/24", "price": 6521},
+            ],
+            "checklist": ["\u652f\u4ed8\u9875\u6700\u7ec8\u4ef7\u662f\u5426\u2264\u00a56,847"],
+            "confidence_dimensions": {"\u4ef7\u683c\u65b0\u9c9c\u5ea6": "\u9ad8"},
+            "action_range": {"ranges": []},
+            "detail_url": "https://example.com/detail",
+            "form_url": "https://example.com/",
+            "feedback_url": "https://example.com/feedback",
+        }
+
+        html = render_detail_html(payload)
+
+        self.assertIn("<details", html)
+        self.assertIn("\u5c55\u5f00:\u6392\u9664\u65b9\u6848", html)
+        self.assertIn("\u5c55\u5f00:\u4ef7\u683c\u8d70\u52bf\u8be6\u60c5", html)
+        self.assertIn("\u5c55\u5f00:\u7f6e\u4fe1\u5ea6\u62c6\u89e3", html)
+        self.assertIn("\u5c55\u5f00:\u8d2d\u4e70\u524d\u68c0\u67e5\u6e05\u5355", html)
+        self.assertIn("\u5c55\u5f00:\u8be6\u7ec6\u6570\u636e\u6765\u6e90", html)
+        self.assertIn("\u822a\u73ed\u7ec4\u5408", html)
+        self.assertIn("after_dedup_by_cabin", html)
 
     def test_email_labels_chart_price_scope_and_avoids_plan_template_residue(self):
         payload = {
@@ -208,7 +275,7 @@ class EmailPlanTiersPriceConceptsTest(unittest.TestCase):
             "feedback_url": "https://example.com/feedback",
         }
 
-        _, html = render_email(payload)
+        html = render_detail_html(payload)
 
         self.assertIn("\u524d\u540e\u65e5\u671f\u6700\u4f4e\u4ef7(\u5355\u7a0b\u53c2\u8003\u4ef7)", html)
         self.assertIn("\u00a51,402(\u5355\u7a0b)", html)
