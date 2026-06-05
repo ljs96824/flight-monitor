@@ -104,6 +104,120 @@ class EmailPlanTiersPriceConceptsTest(unittest.TestCase):
         self.assertIn("\u5f53\u524d\u641c\u7d22\u53c2\u8003\u4ef7", html)
         self.assertNotIn("\u641c\u7d22\u4ef7\u4f4d\u7f6e", html)
 
+    def test_email_simplifies_source_stats_and_excluded_plans(self):
+        payload = {
+            "push_type": "\u503c\u5f97\u9a8c\u8bc1",
+            "route": "\u4e0a\u6d77 \u2192 \u5927\u962a",
+            "recommendation": "\u503c\u5f97\u9a8c\u8bc1",
+            "display_price": 6521,
+            "transaction_price": 7181,
+            "verify_price": 6847,
+            "confidence": "\u4e2d\u9ad8",
+            "is_roundtrip": True,
+            "freshness_minutes": 0,
+            "source_stats": {
+                "serpapi": {"count": 10, "status": "\u6210\u529f"},
+                "hasdata": {"count": 11, "status": "\u6210\u529f"},
+                "searchapi": {"count": 0, "status": "\u5931\u8d25 429"},
+                "travelpayouts": {"count": 0, "status": "\u5931\u8d25"},
+                "skyscanner": {"count": 0, "status": "\u5931\u8d25 429"},
+                "after_dedup_by_cabin": {"count": 20, "status": "\u6210\u529f"},
+                "duffel": {"count": 78, "status": "\u6210\u529f"},
+            },
+            "recommended_plans": [
+                {
+                    "label": "\u65b9\u6848A",
+                    "tier": "\u9996\u9009\u63a8\u8350",
+                    "is_roundtrip": True,
+                    "price": 6521,
+                    "estimated_price": 7181,
+                    "purchase_mode": "\u5f80\u8fd4\u7ec4\u5408",
+                    "links": {},
+                }
+            ],
+            "excluded_plans": [
+                {
+                    "price": 4564,
+                    "scope": "outbound",
+                    "flight_combo": "KE888+KE721",
+                    "reason": "\u53bb\u7a0b04:05\u8d77\u98de\uff0c\u4e2d\u8f6c\u7b49\u5f859h50m\uff0c\u89e6\u53d1\u7ea2\u773c/\u957f\u4e2d\u8f6c\u98ce\u9669",
+                },
+                {
+                    "total_price": 5714,
+                    "scope": "roundtrip",
+                    "reason": "\u53bb\u7a0b04:05+\u8fd4\u7a0b22:20\uff0c\u89e6\u53d1\u7ea2\u773c/\u51cc\u6668\u5230\u8fbe\u98ce\u9669",
+                },
+            ],
+            "trigger_reason": [],
+            "price_history": [],
+            "action_range": {"ranges": []},
+            "detail_url": "https://example.com/detail",
+            "form_url": "https://example.com/",
+            "feedback_url": "https://example.com/feedback",
+        }
+
+        _, html = render_email(payload)
+
+        self.assertIn("\u4ef7\u683c:Google Flights \u591a\u6e90\u4ea4\u53c9\u9a8c\u8bc1,21\u4e2a\u5019\u9009\u65b9\u6848", html)
+        self.assertIn("\u884c\u674e/\u9000\u6539:Duffel \u8fd4\u56de78\u6761\u89c4\u5219\u53c2\u8003", html)
+        self.assertIn("\u5f53\u524d\u6709\u6548\u65b9\u6848:\u5df2\u53bb\u91cd\u7b5b\u9009", html)
+        self.assertIn("\u91c7\u96c6\u65f6\u95f4:\u521a\u521a\u91c7\u96c6", html)
+        self.assertNotIn("after_dedup_by_cabin", html)
+        self.assertNotIn("travelpayouts", html)
+        self.assertNotIn("skyscanner", html)
+        self.assertNotIn("429", html)
+        self.assertIn("\u5b8c\u6574\u6392\u9664\u65b9\u6848\u8be6\u60c5\u89c1\u7f51\u9875\u8be6\u60c5\u9875", html)
+        self.assertNotIn("\u822a\u73ed\u7ec4\u5408", html)
+
+    def test_email_labels_chart_price_scope_and_avoids_plan_template_residue(self):
+        payload = {
+            "push_type": "\u503c\u5f97\u9a8c\u8bc1",
+            "route": "\u4e0a\u6d77 \u2192 \u5927\u962a",
+            "recommendation": "\u503c\u5f97\u9a8c\u8bc1",
+            "display_price": 6521,
+            "transaction_price": 7181,
+            "verify_price": 6847,
+            "confidence": "\u4e2d\u9ad8",
+            "is_roundtrip": True,
+            "nearby_date_prices": [
+                {"label": "2026-10-01", "value": 2887, "scope": "oneway"},
+                {"label": "2026-10-04", "value": 1402, "scope": "oneway", "highlight": "low"},
+            ],
+            "plan_price_rows": [
+                {
+                    "label": "\u65b9\u6848A",
+                    "value": 6521,
+                    "scope": "roundtrip",
+                    "note": "B",
+                    "description": "\u76f4\u98de\u5f80\u8fd4,\u9996\u9009\u63a8\u8350",
+                },
+                {
+                    "label": "\u65b9\u6848B",
+                    "value": 6186,
+                    "scope": "roundtrip",
+                    "note": "B",
+                    "description": "\u53bb\u7a0b\u4e2d\u8f6c+\u4e24\u4e2a\u5355\u7a0b\u62fc\u63a5,\u4f4e\u4ef7\u5907\u9009",
+                },
+            ],
+            "recommended_plans": [],
+            "trigger_reason": [],
+            "price_history": [],
+            "action_range": {"ranges": []},
+            "detail_url": "https://example.com/detail",
+            "form_url": "https://example.com/",
+            "feedback_url": "https://example.com/feedback",
+        }
+
+        _, html = render_email(payload)
+
+        self.assertIn("\u524d\u540e\u65e5\u671f\u6700\u4f4e\u4ef7(\u5355\u7a0b\u53c2\u8003\u4ef7)", html)
+        self.assertIn("\u00a51,402(\u5355\u7a0b)", html)
+        self.assertIn("\u6ce8:\u4e3a\u5355\u7a0b\u4ef7,\u975e\u5f80\u8fd4\u603b\u4ef7", html)
+        self.assertIn("\u65b9\u6848A:\u00a56,521(\u5f80\u8fd4),\u76f4\u98de\u5f80\u8fd4,\u9996\u9009\u63a8\u8350", html)
+        self.assertIn("\u65b9\u6848B:\u00a56,186(\u5f80\u8fd4),\u53bb\u7a0b\u4e2d\u8f6c+\u4e24\u4e2a\u5355\u7a0b\u62fc\u63a5,\u4f4e\u4ef7\u5907\u9009", html)
+        self.assertNotIn("\u00a56,521 B", html)
+        self.assertNotIn("\u00a56,186 B", html)
+
 
 if __name__ == "__main__":
     unittest.main()
