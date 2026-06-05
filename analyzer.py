@@ -3731,6 +3731,130 @@ def determine_push_type(
     }
 
 
+def build_price_signal(display_price, target_price=None, price_history=None) -> dict:
+    """Describe whether the search/display price is attractive, without making purchase claims."""
+    display = _to_float(display_price)
+    target = _to_float(target_price)
+    prices = sorted(_flatten_price_history(price_history))
+
+    percentile = None
+    if display is not None and prices:
+        below = sum(1 for price in prices if price < display)
+        percentile = round(below / len(prices) * 100)
+
+    if display is None:
+        return {
+            "label": "未知",
+            "summary": "搜索参考价暂未确认",
+            "percentile": percentile,
+        }
+
+    if percentile is not None and percentile <= 30:
+        label = "强"
+        summary = "搜索参考价处于近期低位"
+    elif target is not None and display <= target:
+        label = "强"
+        summary = "搜索参考价已进入理想入手区间"
+    elif target is not None and display <= target * 1.05:
+        label = "中高"
+        summary = "搜索参考价接近理想入手价"
+    elif target is not None:
+        label = "中"
+        summary = "搜索参考价仍高于理想入手价"
+    else:
+        label = "中"
+        summary = "搜索参考价可作为低价线索，需结合历史数据判断"
+
+    return {
+        "label": label,
+        "summary": summary,
+        "percentile": percentile,
+    }
+
+
+def build_execution_advice(display_price, transaction_price=None, verify_price=None, target_price=None) -> dict:
+    """Describe whether the current plan is executable, using estimated/checkout price concepts."""
+    display = _to_float(display_price)
+    transaction = _to_float(transaction_price)
+    verify = _to_float(verify_price)
+    target = _to_float(target_price)
+
+    if transaction is not None and verify is not None and transaction <= verify:
+        return {
+            "label": "可验证购买",
+            "conclusion": "可以购买前验证",
+            "summary": "预估实付价不高于本次验证价，进入渠道确认最终价和票规后可购买",
+            "condition": f"支付页最终价≤¥{verify:,.0f}，且含托运行李",
+        }
+
+    if display is not None and verify is not None and display <= verify and transaction is not None and transaction > verify:
+        return {
+            "label": "验证后再买",
+            "conclusion": "值得验证，不建议直接下单",
+            "summary": "预估实付价高于本次验证价，需确认最终价和行李",
+            "condition": f"支付页最终价≤¥{verify:,.0f}，且含托运行李",
+        }
+
+    if target is not None and display is not None and display > target:
+        return {
+            "label": "继续观察",
+            "conclusion": "继续观察",
+            "summary": "搜索参考价仍高于理想入手价",
+            "condition": f"理想入手价≤¥{target:,.0f}",
+        }
+
+    return {
+        "label": "待确认",
+        "conclusion": "可以观察",
+        "summary": "执行条件需要以支付页最终价、行李和票规为准",
+        "condition": "以支付页最终价和票规为准",
+    }
+
+
+def classify_plan_tier(
+    is_direct=True,
+    execution_grade=None,
+    cheaper_than_primary=False,
+    has_transfer=False,
+    split_ticket=False,
+) -> dict:
+    """Classify a plan for user-facing A/B presentation."""
+    grade = str(execution_grade or "").upper()
+    high_risk = grade in {"C", "D"} or bool(has_transfer) or bool(split_ticket)
+
+    if cheaper_than_primary and high_risk:
+        reasons = []
+        if has_transfer:
+            reasons.append("有中转")
+        if split_ticket:
+            reasons.append("两个单程拼接")
+        if grade in {"C", "D"}:
+            reasons.append("执行风险较高")
+        reason = "价格更低，但" + "、".join(reasons or ["执行风险更高"])
+        condition = "如果你能接受" + "、".join(reasons or ["额外执行风险"]) + "，可验证该方案"
+        return {"tier": "低价备选", "reason": reason, "suitable_condition": condition}
+
+    if is_direct and grade not in {"C", "D"}:
+        return {
+            "tier": "首选推荐",
+            "reason": "直飞省心，适合家庭/老人同行",
+            "suitable_condition": "适合更重视直飞、省心和执行稳定性的行程",
+        }
+
+    if has_transfer:
+        return {
+            "tier": "稳妥备选",
+            "reason": "综合得分较高，但含中转，需确认联程和行李",
+            "suitable_condition": "适合能接受中转并愿意核对票规的行程",
+        }
+
+    return {
+        "tier": "首选推荐",
+        "reason": "综合得分最高，建议优先验证",
+        "suitable_condition": "适合优先验证该方案的价格和票规",
+    }
+
+
 def _dedupe_text(items: list[str]) -> list[str]:
     result = []
     for item in items:

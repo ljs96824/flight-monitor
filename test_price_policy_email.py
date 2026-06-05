@@ -63,7 +63,7 @@ def test_email_top_summary_separates_display_transaction_and_verify_prices():
 
     subject, html = render_email(payload)
 
-    assert "【值得验证】上海 → 大阪 搜索价¥6,522，需确认实付价" == subject
+    assert "【值得验证】上海 → 大阪 搜索参考价¥6,522，需确认实付价" == subject
     assert "当前判断：</b>值得验证，不建议直接下单" in html
     assert "原因：</b>搜索参考价达标，但预估实付价高于验证购买价" in html
     assert "搜索参考价：</b>¥6,522" in html
@@ -396,7 +396,7 @@ def test_email_uses_section_cards_and_plan_table_layout():
     assert html.count("background:#fff;border:1px solid #e5e7eb;border-radius:10px") >= 6
     assert "<table style='width:100%;font-size:14px;" in html
     assert "width:90px;" in html
-    assert "推荐方案" in html
+    assert "方案A ｜ 首选推荐" in html
     assert "✈ 去程" in html
     assert "✈ 返程" in html
     assert "起飞</td>" in html
