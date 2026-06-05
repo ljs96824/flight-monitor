@@ -130,6 +130,32 @@ class NotifierTravelProfileTest(unittest.TestCase):
         self.assertEqual(payload["travel_profile_explanation"]["scenario_label"], "旅游 + 家庭/亲子")
         self.assertIn("孩子安全舒适", payload["recommendation_basis"]["conflict_note"])
 
+    def test_payload_uses_precise_passenger_breakdown_over_stale_count(self):
+        payload = build_notification_payload(
+            analysis_result={"recommendations": [], "display_price": 6521},
+            route_info={"origin": "\u4e0a\u6d77", "destination": "\u5927\u962a", "depart_date": "2026-10-01"},
+            subscription={
+                "basic": {"passenger_count": 3},
+                "preferences": {
+                    "passengers": {"adult": 2, "child": 1, "elderly": 2, "infant": 0},
+                    "travel_purposes": ["tourism", "family"],
+                },
+                "soft_preferences": {
+                    "passenger_count": 3,
+                    "travel_scenarios": ["tourism", "family"],
+                },
+            },
+            price_history=[],
+        )
+
+        self.assertEqual(payload["travel_profile"]["passenger_count"], 5)
+        self.assertEqual(payload["travel_profile"]["passengers"]["elderly"], 2)
+
+        _, email_html = render_email(payload)
+
+        self.assertIn("5\u4eba\u51fa\u884c", email_html)
+        self.assertIn("\u6210\u4eba2+\u513f\u7ae51+\u8001\u4eba2", email_html)
+
 
 if __name__ == "__main__":
     unittest.main()

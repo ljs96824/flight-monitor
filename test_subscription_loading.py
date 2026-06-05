@@ -65,6 +65,35 @@ class SubscriptionLoadingTest(unittest.TestCase):
         self.assertEqual(prefs["travel_scenarios"], ["tourism", "family"])
         self.assertEqual(prefs["travel_scenario"], "tourism")
 
+    def test_normalized_subscription_preserves_canonical_passenger_fields(self):
+        normalized = main._normalize_subscription(
+            {
+                "id": "family-trip",
+                "origin": "上海",
+                "destination": "大阪",
+                "depart_date": "2026-10-01",
+                "status": "active",
+                "basic": {
+                    "passenger_count": 5,
+                },
+                "preferences": {
+                    "passengers": {"adult": 2, "child": 1, "elderly": 2, "infant": 0},
+                    "passenger_count": 5,
+                    "travel_purposes": ["tourism", "family"],
+                },
+                "soft_preferences": {
+                    "travel_scenarios": ["tourism", "family"],
+                },
+            }
+        )
+
+        self.assertEqual(normalized["basic"]["passenger_count"], 5)
+        self.assertEqual(
+            normalized["preferences"]["passengers"],
+            {"adult": 2, "child": 1, "elderly": 2, "infant": 0},
+        )
+        self.assertEqual(normalized["soft_preferences"]["passengers"]["elderly"], 2)
+
 
 if __name__ == "__main__":
     unittest.main()

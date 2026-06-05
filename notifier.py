@@ -33,6 +33,7 @@ from analyzer import (
     determine_push_type,
     generate_decision_summary,
     generate_trend_summary,
+    get_total_passengers,
     multi_window_analysis,
     price_position_description,
     travel_profile_explanation,
@@ -5052,8 +5053,17 @@ def _sorting_logic_items(route_info: dict, is_round_trip: bool) -> list[str]:
 
 def _payload_travel_profile(analysis_result: dict, subscription: dict) -> tuple[dict, dict]:
     round_trip = (analysis_result or {}).get("round_trip_analysis") or {}
-    soft = (subscription or {}).get("soft_preferences") or {}
-    subscription_scenarios = soft.get("travel_scenarios") or soft.get("travel_scenario")
+    subscription = subscription or {}
+    soft = dict(subscription.get("soft_preferences") or {})
+    preferences = subscription.get("preferences") or {}
+    for key in ("travel_purposes", "travel_scenarios", "travel_scenario"):
+        if not soft.get(key) and preferences.get(key):
+            soft[key] = preferences.get(key)
+    total_passengers, passenger_breakdown = get_total_passengers(subscription)
+    if passenger_breakdown:
+        soft["passengers"] = passenger_breakdown
+    soft["passenger_count"] = total_passengers
+    subscription_scenarios = soft.get("travel_purposes") or soft.get("travel_scenarios") or soft.get("travel_scenario")
     subscription_profile = build_travel_profile(soft) if subscription_scenarios else None
     profile = (
         round_trip.get("travel_profile")
@@ -5061,8 +5071,15 @@ def _payload_travel_profile(analysis_result: dict, subscription: dict) -> tuple[
         or subscription_profile
         or build_travel_profile(soft)
     )
-    if subscription_profile and profile.get("scenarios") != subscription_profile.get("scenarios"):
+    if subscription_profile and (
+        profile.get("scenarios") != subscription_profile.get("scenarios")
+        or profile.get("passenger_count") != total_passengers
+    ):
         profile = subscription_profile
+    profile = dict(profile)
+    profile["passenger_count"] = total_passengers
+    if passenger_breakdown:
+        profile["passengers"] = passenger_breakdown
     explanation = (
         round_trip.get("travel_profile_explanation")
         or (analysis_result or {}).get("travel_profile_explanation")
@@ -5147,6 +5164,20 @@ def build_notification_payload(
         else analysis_result.get("buy_vs_wait_risk")
     ) or {}
     travel_profile, profile_explanation = _payload_travel_profile(analysis_result, subscription)
+    total_passengers, passenger_breakdown = get_total_passengers(subscription)
+    print(
+        "[人数调试] basic.passenger_count = "
+        f"{((subscription or {}).get('basic') or {}).get('passenger_count')}"
+    )
+    print(
+        "[人数调试] preferences.passengers = "
+        f"{((subscription or {}).get('preferences') or {}).get('passengers')}"
+    )
+    print(
+        "[人数定位] 完整订阅: "
+        f"{json.dumps(subscription or {}, ensure_ascii=False, default=str)}"
+    )
+    print(f"[人数调试] 推送将显示总数 = {travel_profile.get('passenger_count') or total_passengers}")
     print(
         "[场景调试] 订阅里的 travel_scenarios = "
         f"{((subscription or {}).get('soft_preferences') or {}).get('travel_scenarios')}"
@@ -6038,6 +6069,19 @@ def _email_price_span(value, color: str = "#111") -> str:
     return f'<span style="color:{color};font-weight:600;">{_price_text(value)}</span>'
 
 
+def _passenger_breakdown_text(passengers: dict | None) -> str:
+    passengers = passengers or {}
+    parts = []
+    for key, label in (("adult", "成人"), ("child", "儿童"), ("elderly", "老人"), ("infant", "婴儿")):
+        try:
+            count = int(passengers.get(key) or 0)
+        except (TypeError, ValueError):
+            count = 0
+        if count > 0:
+            parts.append(f"{label}{count}")
+    return "+".join(parts)
+
+
 def _email_action_panel_body(
     payload: dict,
     primary_plan: dict,
@@ -6513,12 +6557,14 @@ def render_email(payload: dict) -> tuple[str, str]:
         for key, value in profile_dimensions.items():
             profile_rows.append((str(key), html.escape(str(value))))
     if (payload.get("travel_profile") or {}).get("stock_check") == "high":
-        passenger_count = (payload.get("travel_profile") or {}).get("passenger_count")
-        passenger_text = f"{int(passenger_count)}人出行，" if isinstance(passenger_count, (int, float)) and passenger_count > 1 else ""
+        travel_profile = payload.get("travel_profile") or {}
+        passenger_count = travel_profile.get("passenger_count")
+        breakdown = _passenger_breakdown_text(travel_profile.get("passengers"))
+        breakdown_text = f"({breakdown})" if breakdown else ""
         profile_rows.append(
             (
                 "多人同行提示",
-                f"{passenger_text}低价舱位库存可能不足，建议尽快验证支付页能否同时预订{int(passenger_count)}张。"
+                f"{int(passenger_count)}人出行{breakdown_text}，低价舱位库存可能不足，建议尽快验证能否同时预订{int(passenger_count)}张。"
                 if isinstance(passenger_count, (int, float)) and passenger_count > 1
                 else "低价舱位库存可能不足，建议尽快验证支付页能否同时预订多张。",
             )

@@ -112,7 +112,7 @@ class WebFormTravelScenarioTest(unittest.TestCase):
                     "travel_purpose": ["tourism", "family"],
                     "passenger_adult": "2",
                     "passenger_child": "1",
-                    "passenger_elderly": "1",
+                    "passenger_elderly": "2",
                     "passenger_infant": "0",
                     "notification_method": "pushplus",
                     "notification_frequency": "important_only",
@@ -120,11 +120,41 @@ class WebFormTravelScenarioTest(unittest.TestCase):
             )
         )
 
-        self.assertEqual(sub["basic"]["passenger_count"], 4)
-        self.assertEqual(sub["preferences"]["passengers"], {"adult": 2, "child": 1, "elderly": 1, "infant": 0})
+        self.assertEqual(sub["basic"]["passenger_count"], 5)
+        self.assertEqual(sub["preferences"]["passengers"], {"adult": 2, "child": 1, "elderly": 2, "infant": 0})
         self.assertEqual(sub["preferences"]["travel_scenarios"], ["tourism", "family"])
         self.assertEqual(sub["soft_preferences"]["travel_scenarios"], ["tourism", "family"])
         self.assertEqual(sub["soft_preferences"]["travelers"], "with_elderly_child")
+
+    def test_precise_passenger_counts_accept_canonical_count_field_names(self):
+        sub = build_subscription(
+            _Form(
+                {
+                    "origin_select": "\u4e0a\u6d77",
+                    "destination": "\u5927\u962a",
+                    "round_trip": "false",
+                    "depart_date": "2026-10-01",
+                    "budget_strategy": "auto_judge",
+                    "transfer_policy": "reasonable",
+                    "baggage": "required",
+                    "primary_goal": "buy_timing",
+                    "monitor_mode": "precise",
+                    "travel_purpose": ["tourism", "family"],
+                    "adult_count": "2",
+                    "child_count": "1",
+                    "elderly_count": "2",
+                    "infant_count": "0",
+                    "notification_method": "pushplus",
+                    "notification_frequency": "important_only",
+                }
+            )
+        )
+
+        self.assertEqual(sub["basic"]["passenger_count"], 5)
+        self.assertEqual(
+            sub["preferences"]["passengers"],
+            {"adult": 2, "child": 1, "elderly": 2, "infant": 0},
+        )
 
 
 if __name__ == "__main__":

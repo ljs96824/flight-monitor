@@ -21,6 +21,7 @@ from analyzer import (
     apply_default_rules,
     analyze_all_flights,
     analyze_round_trip,
+    get_total_passengers,
     migrate_old_subscription,
     price_position_description,
     waiting_risk_description,
@@ -146,6 +147,17 @@ def _normalize_subscription(item: dict) -> dict:
     item = migrate_old_subscription(item)
     hard_constraints = item.get("hard_constraints") or {}
     soft_preferences = item.get("soft_preferences") or {}
+    basic = dict(item.get("basic") or {})
+    constraints = dict(item.get("constraints") or {})
+    preferences = dict(item.get("preferences") or {})
+    advanced_rules = dict(item.get("advanced_rules") or {})
+    passenger_count, passengers = get_total_passengers(item)
+    basic["passenger_count"] = passenger_count
+    preferences["passenger_count"] = passenger_count
+    if passengers:
+        preferences["passengers"] = passengers
+        soft_preferences["passengers"] = passengers
+    soft_preferences["passenger_count"] = passenger_count
     notification_goals = item.get("notification_goals") or {}
     return_date = item.get("return_date") or hard_constraints.get("return_date")
     round_trip = _as_bool(item.get("round_trip", hard_constraints.get("round_trip", False)))
@@ -309,6 +321,10 @@ def _normalize_subscription(item: dict) -> dict:
         ),
         "goals": _normalize_goals(notification_goals, item.get("goals", [])),
         "notification_goals": notification_goals,
+        "basic": basic,
+        "constraints": constraints,
+        "preferences": preferences,
+        "advanced_rules": advanced_rules,
         "hard_constraints": hard_constraints,
         "soft_preferences": soft_preferences,
         "mode": item.get("mode", "balanced"),
@@ -506,6 +522,8 @@ def load_file_subscriptions() -> list[dict]:
 
 def subscription_preferences(sub: dict) -> dict:
     soft = sub.get("soft_preferences") or {}
+    preferences = sub.get("preferences") or {}
+    basic = sub.get("basic") or {}
     travel_scenarios = soft.get("travel_scenarios") or sub.get("travel_scenarios")
     if isinstance(travel_scenarios, str):
         travel_scenarios = [item.strip() for item in travel_scenarios.split(",") if item.strip()]
@@ -531,6 +549,8 @@ def subscription_preferences(sub: dict) -> dict:
         "refund_flexibility": sub.get("refund_flexibility", "unknown"),
         "trip_type": sub.get("trip_type", "tourism"),
         "companions": sub.get("companions", "solo"),
+        "passengers": preferences.get("passengers"),
+        "passenger_count": basic.get("passenger_count") or preferences.get("passenger_count"),
         "travel_scenario": (travel_scenarios[0] if travel_scenarios else "personal"),
         "travel_scenarios": travel_scenarios or ["personal"],
         "price_sensitivity": sub.get("price_sensitivity", "low"),

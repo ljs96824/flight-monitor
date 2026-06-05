@@ -857,10 +857,10 @@ FORM_TEMPLATE = """
         </div>
         <label>购票人数</label>
         <div class="inline-grid">
-          <label>成人 <input type="number" name="passenger_adult" min="0" value="1"></label>
-          <label>儿童 <input type="number" name="passenger_child" min="0" value="0"></label>
-          <label>老人 <input type="number" name="passenger_elderly" min="0" value="0"></label>
-          <label>婴儿 <input type="number" name="passenger_infant" min="0" value="0"></label>
+          <label>成人 <input type="number" name="adult_count" min="0" value="1"></label>
+          <label>儿童 <input type="number" name="child_count" min="0" value="0"></label>
+          <label>老人 <input type="number" name="elderly_count" min="0" value="0"></label>
+          <label>婴儿 <input type="number" name="infant_count" min="0" value="0"></label>
         </div>
         <input type="hidden" name="companions" value="solo">
         <div>
@@ -1771,9 +1771,9 @@ FORM_TEMPLATE = """
         const input = document.querySelector(`input[name="travel_purpose"][value="${mapped}"]`);
         if (input) input.checked = true;
       });
-      const adultInput = document.querySelector('input[name="passenger_adult"]');
-      const childInput = document.querySelector('input[name="passenger_child"]');
-      const elderlyInput = document.querySelector('input[name="passenger_elderly"]');
+      const adultInput = document.querySelector('input[name="adult_count"]');
+      const childInput = document.querySelector('input[name="child_count"]');
+      const elderlyInput = document.querySelector('input[name="elderly_count"]');
       if (adultInput && Number(adultInput.value || 0) < 1) adultInput.value = '1';
       if (scenarios.includes('family') && childInput && Number(childInput.value || 0) < 1) childInput.value = '1';
       if ((scenarios.includes('elderly') || scenarios.includes('with_elderly')) && elderlyInput && Number(elderlyInput.value || 0) < 1) elderlyInput.value = '1';
@@ -1892,17 +1892,17 @@ FORM_TEMPLATE = """
 
     function precisePassengerSummary(includeWeightNote = false) {
       const items = [
-        ['成人', Number(document.querySelector('input[name="passenger_adult"]')?.value || 0)],
-        ['儿童', Number(document.querySelector('input[name="passenger_child"]')?.value || 0)],
-        ['老人', Number(document.querySelector('input[name="passenger_elderly"]')?.value || 0)],
-        ['婴儿', Number(document.querySelector('input[name="passenger_infant"]')?.value || 0)]
+        ['成人', Number(document.querySelector('input[name="adult_count"]')?.value || 0)],
+        ['儿童', Number(document.querySelector('input[name="child_count"]')?.value || 0)],
+        ['老人', Number(document.querySelector('input[name="elderly_count"]')?.value || 0)],
+        ['婴儿', Number(document.querySelector('input[name="infant_count"]')?.value || 0)]
       ].filter(([, count]) => count > 0);
       const total = items.reduce((sum, [, count]) => sum + count, 0);
       if (!total) return '';
       const summary = `${items.map(([label, count]) => `${label}${count}`).join(' + ')}，共${total}人`;
-      const hasCareNeed = Number(document.querySelector('input[name="passenger_child"]')?.value || 0) > 0
-        || Number(document.querySelector('input[name="passenger_elderly"]')?.value || 0) > 0
-        || Number(document.querySelector('input[name="passenger_infant"]')?.value || 0) > 0;
+      const hasCareNeed = Number(document.querySelector('input[name="child_count"]')?.value || 0) > 0
+        || Number(document.querySelector('input[name="elderly_count"]')?.value || 0) > 0
+        || Number(document.querySelector('input[name="infant_count"]')?.value || 0) > 0;
       if (includeWeightNote && hasCareNeed) {
         return `${summary}（系统据此提高了直飞/白天/行李权重）`;
       }
@@ -2580,10 +2580,10 @@ FORM_TEMPLATE = """
         travel_purposes: checkedValues('travel_purpose'),
         passenger_count: Number(document.querySelector('input[name="passenger_count"]')?.value || 1),
         passengers: {
-          adult: Number(document.querySelector('input[name="passenger_adult"]')?.value || 0),
-          child: Number(document.querySelector('input[name="passenger_child"]')?.value || 0),
-          elderly: Number(document.querySelector('input[name="passenger_elderly"]')?.value || 0),
-          infant: Number(document.querySelector('input[name="passenger_infant"]')?.value || 0)
+          adult: Number(document.querySelector('input[name="adult_count"]')?.value || 0),
+          child: Number(document.querySelector('input[name="child_count"]')?.value || 0),
+          elderly: Number(document.querySelector('input[name="elderly_count"]')?.value || 0),
+          infant: Number(document.querySelector('input[name="infant_count"]')?.value || 0)
         },
         companions: checkedValue('companions'),
         companion_constraints: checkedValues('companion_constraints'),
@@ -2803,7 +2803,7 @@ FORM_TEMPLATE = """
     resetModuleButtons.forEach(button => {
       button.addEventListener('click', () => resetModule(button.dataset.resetModule));
     });
-    ['companions', 'travel_purpose', 'passenger_adult', 'passenger_child', 'passenger_elderly', 'passenger_infant', 'passenger_count', 'time_preference', 'refund_flexibility', 'airline_policy', 'accept_self_transfer', 'companion_constraints', 'solo_travel', 'no_late_arrival', 'prefer_daytime_arrival'].forEach(name => {
+    ['companions', 'travel_purpose', 'adult_count', 'child_count', 'elderly_count', 'infant_count', 'passenger_count', 'time_preference', 'refund_flexibility', 'airline_policy', 'accept_self_transfer', 'companion_constraints', 'solo_travel', 'no_late_arrival', 'prefer_daytime_arrival'].forEach(name => {
       document.querySelectorAll(`input[name="${name}"]`).forEach(input => {
         input.addEventListener('change', () => {
           syncPrefCards();
@@ -3298,6 +3298,14 @@ def parse_int(value: str | None, default: int = 0) -> int:
         return default
 
 
+def parse_count_alias(form, *names: str) -> int:
+    for name in names:
+        value = form.get(name)
+        if value not in (None, ""):
+            return parse_int(value, 0)
+    return 0
+
+
 def parse_optional_budget(value: str | None, budget_mode: str) -> int | None:
     if budget_mode != "fixed":
         return parse_int(value, 0) or None
@@ -3556,10 +3564,10 @@ def build_subscription(form) -> dict:
         if item and item not in blocked_airlines:
             blocked_airlines.append(item)
     precise_passengers = {
-        "adult": parse_int(form.get("passenger_adult"), 0),
-        "child": parse_int(form.get("passenger_child"), 0),
-        "elderly": parse_int(form.get("passenger_elderly"), 0),
-        "infant": parse_int(form.get("passenger_infant"), 0),
+        "adult": parse_count_alias(form, "adult_count", "passenger_adult"),
+        "child": parse_count_alias(form, "child_count", "passenger_child"),
+        "elderly": parse_count_alias(form, "elderly_count", "passenger_elderly"),
+        "infant": parse_count_alias(form, "infant_count", "passenger_infant"),
     }
     quick_passenger_count = max(1, parse_int(form.get("passenger_count"), 1))
     if monitor_mode == "precise":
@@ -3846,6 +3854,14 @@ def index():
 @app.post("/subscribe")
 def subscribe():
     try:
+        print(
+            "[form debug] "
+            f"adult={request.form.get('adult_count') or request.form.get('passenger_adult')}, "
+            f"child={request.form.get('child_count') or request.form.get('passenger_child')}, "
+            f"elderly={request.form.get('elderly_count') or request.form.get('passenger_elderly')}, "
+            f"infant={request.form.get('infant_count') or request.form.get('passenger_infant')}, "
+            f"passenger_count={request.form.get('passenger_count')}"
+        )
         print("[表单] 开始构建订阅")
         subscription = build_subscription(request.form)
         print("[表单] 订阅构建完成")

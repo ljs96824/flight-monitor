@@ -1,10 +1,12 @@
 import sys
 import types
 import inspect
+import contextlib
+import io
 
 sys.modules.setdefault("httpx", types.SimpleNamespace(get=lambda *a, **k: None, post=lambda *a, **k: None))
 
-from analyzer import analyze_round_trip, determine_push_type
+from analyzer import analyze_round_trip, build_excluded_roundtrip_combos, determine_push_type
 import email_notifier
 from notifier import render_email
 
@@ -203,6 +205,57 @@ def test_roundtrip_analysis_builds_excluded_roundtrip_combos():
     assert excluded[0]["return"]["flight_combo"] == "9C6582"
     assert "去程" in excluded[0]["reason"]
     assert "用户设置必须直飞" in excluded[0]["reason"]
+
+
+def test_excluded_roundtrip_combos_dedupes_reason_and_limits_debug_output():
+    return_ok = {
+        "price": 3200,
+        "flight_combo": "9C6582",
+        "segments": [
+            {
+                "flight_no": "9C6582",
+                "dep_airport": "KIX",
+                "dep_time": "2026-10-06 19:30",
+                "arr_airport": "PVG",
+            }
+        ],
+    }
+    outbound_items = []
+    for idx, price in enumerate((2400, 2450, 2500, 2550), start=1):
+        outbound_items.append(
+            {
+                "scope": "outbound",
+                "price": price,
+                "flight": {
+                    "price": price,
+                    "flight_combo": f"KE{idx}+KE{idx + 10}",
+                    "stops": 1,
+                    "segments": [
+                        {
+                            "flight_no": f"KE{idx}",
+                            "dep_airport": "PVG",
+                            "dep_time": f"2026-10-01 0{idx}:00",
+                            "arr_airport": "ICN",
+                            "aircraft": "A330",
+                        }
+                    ],
+                },
+                "reason": "中转时间过长",
+            }
+        )
+
+    stdout = io.StringIO()
+    with contextlib.redirect_stdout(stdout):
+        combos = build_excluded_roundtrip_combos(
+            {"excluded_flights": outbound_items},
+            {"economy_recommendations": [return_ok], "all_flights": [return_ok]},
+            recommended_total=7000,
+            max_show=3,
+        )
+
+    assert len(combos) == 1
+    assert combos[0]["outbound"]["flight_combo"] == "KE1+KE11"
+    assert stdout.getvalue().count("[排除组合]") == len(combos)
 
 
 def test_email_roundtrip_excluded_combo_shows_both_legs():
@@ -489,6 +542,7 @@ if __name__ == "__main__":
     test_email_top_summary_separates_display_transaction_and_verify_prices()
     test_email_roundtrip_excluded_single_leg_is_not_compared_to_roundtrip_total()
     test_roundtrip_analysis_builds_excluded_roundtrip_combos()
+    test_excluded_roundtrip_combos_dedupes_reason_and_limits_debug_output()
     test_email_roundtrip_excluded_combo_shows_both_legs()
     test_email_detail_charts_dedupe_channels_and_skip_empty_plan_rows()
     test_email_uses_section_cards_and_plan_table_layout()

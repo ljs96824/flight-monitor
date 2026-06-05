@@ -321,6 +321,33 @@ def _passengers_from_legacy_companions(companions: str) -> dict:
     return dict(mapping.get(companions, {}))
 
 
+def get_total_passengers(subscription: dict | None) -> tuple[int, dict | None]:
+    """Return the canonical passenger total and optional category breakdown."""
+    subscription = subscription or {}
+    preferences = subscription.get("preferences") or {}
+    basic = subscription.get("basic") or {}
+    passengers = _normalize_passengers(preferences.get("passengers"))
+    if passengers:
+        return sum(passengers.values()), passengers
+
+    count = _to_non_negative_int(
+        basic.get("passenger_count") or preferences.get("passenger_count"),
+        1,
+    )
+    if count > 1:
+        return count, None
+
+    legacy = (
+        preferences.get("travelers")
+        or preferences.get("companions")
+        or subscription.get("companions")
+    )
+    legacy_passengers = _passengers_from_legacy_companions(legacy)
+    if legacy_passengers:
+        return sum(legacy_passengers.values()), legacy_passengers
+    return max(1, count), None
+
+
 def _infer_travelers_from_passengers(passengers: dict, fallback: str = "solo") -> str:
     if not passengers:
         return fallback or "solo"
@@ -842,6 +869,25 @@ def migrate_old_subscription(subscription: dict) -> dict:
             or sub.get("price_sensitivity", "low"),
             "travel_type": soft.get("trip_type") or sub.get("trip_type", "tourism"),
         }
+
+    passengers = (
+        _normalize_passengers(preferences.get("passengers"))
+        or _normalize_passengers(soft.get("passengers"))
+        or _normalize_passengers(sub.get("passengers"))
+    )
+    passenger_count = _to_non_negative_int(
+        basic.get("passenger_count")
+        or preferences.get("passenger_count")
+        or soft.get("passenger_count")
+        or sub.get("passenger_count"),
+        0,
+    )
+    if passengers:
+        passenger_count = sum(passengers.values())
+        preferences["passengers"] = passengers
+    if passenger_count > 0:
+        basic["passenger_count"] = passenger_count
+        preferences["passenger_count"] = passenger_count
 
     if not advanced:
         advanced = {
@@ -5489,6 +5535,34 @@ def _roundtrip_debug_departure(flight: dict) -> str:
     return str(flight.get("departure_time") or flight.get("dep_time") or "待确认")
 
 
+def _roundtrip_combo_dedupe_key(combo: dict) -> tuple:
+    outbound = combo.get("outbound") or {}
+    return_flight = combo.get("return") or {}
+    return (
+        outbound.get("flight_combo") or _roundtrip_flight_identity(outbound),
+        return_flight.get("flight_combo") or _roundtrip_flight_identity(return_flight),
+    )
+
+
+def _dedupe_and_limit_excluded_roundtrip_combos(combos: list[dict], max_show: int = 3) -> list[dict]:
+    seen_pairs = set()
+    seen_reasons = set()
+    result = []
+    for combo in sorted(combos or [], key=lambda item: item.get("total_price") or 999999999):
+        pair_key = _roundtrip_combo_dedupe_key(combo)
+        if pair_key in seen_pairs:
+            continue
+        reason_key = tuple(sorted(str(reason) for reason in (combo.get("reasons") or []) if reason))
+        if reason_key in seen_reasons:
+            continue
+        seen_pairs.add(pair_key)
+        seen_reasons.add(reason_key)
+        result.append(combo)
+        if len(result) >= max_show:
+            break
+    return result
+
+
 def build_excluded_roundtrip_combos(
     outbound_analysis: dict,
     return_analysis: dict,
@@ -5503,8 +5577,6 @@ def build_excluded_roundtrip_combos(
     outbound_candidates = _roundtrip_candidate_flights(outbound_analysis or {}, "outbound")
     return_candidates = _roundtrip_candidate_flights(return_analysis or {}, "return")
     combos = []
-    reason_counts: dict[tuple[str, ...], int] = {}
-    seen_pairs = set()
 
     for outbound in outbound_candidates:
         for return_item in return_candidates:
@@ -5524,37 +5596,12 @@ def build_excluded_roundtrip_combos(
             if total >= recommended_total:
                 continue
 
-            pair_key = (
-                _roundtrip_flight_identity(outbound["flight"]),
-                _roundtrip_flight_identity(return_item["flight"]),
-            )
-            if pair_key in seen_pairs:
-                continue
-            seen_pairs.add(pair_key)
-
-            reason_key = tuple(reasons)
-            if reason_counts.get(reason_key, 0) >= 2:
-                continue
-            reason_counts[reason_key] = reason_counts.get(reason_key, 0) + 1
-
-            outbound_flight = outbound["flight"]
-            return_flight = return_item["flight"]
-            print(
-                "[排除组合] "
-                f"去程={outbound_flight.get('flight_combo')} "
-                f"返程={return_flight.get('flight_combo')} "
-                f"去程机型={_roundtrip_debug_aircraft(outbound_flight)} "
-                f"返程机型={_roundtrip_debug_aircraft(return_flight)} "
-                f"去程时间={_roundtrip_debug_departure(outbound_flight)} "
-                f"返程时间={_roundtrip_debug_departure(return_flight)}"
-            )
-
             combos.append(
                 {
                     "scope": "roundtrip",
                     "is_roundtrip": True,
-                    "outbound": outbound_flight,
-                    "return": return_flight,
+                    "outbound": outbound["flight"],
+                    "return": return_item["flight"],
                     "outbound_price": outbound_price,
                     "return_price": return_price,
                     "total_price": total,
@@ -5565,8 +5612,20 @@ def build_excluded_roundtrip_combos(
                 }
             )
 
-    combos.sort(key=lambda item: item["total_price"])
-    return combos[:max_show]
+    limited = _dedupe_and_limit_excluded_roundtrip_combos(combos, max_show)
+    for combo in limited:
+        outbound_flight = combo.get("outbound") or {}
+        return_flight = combo.get("return") or {}
+        print(
+            "[排除组合] "
+            f"去程={outbound_flight.get('flight_combo')} "
+            f"返程={return_flight.get('flight_combo')} "
+            f"去程机型={_roundtrip_debug_aircraft(outbound_flight)} "
+            f"返程机型={_roundtrip_debug_aircraft(return_flight)} "
+            f"去程时间={_roundtrip_debug_departure(outbound_flight)} "
+            f"返程时间={_roundtrip_debug_departure(return_flight)}"
+        )
+    return limited
 
 
 def analyze_round_trip(
