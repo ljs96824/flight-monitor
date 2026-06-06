@@ -274,6 +274,9 @@ def _time_only(value) -> str:
 
 def _flight_status_tags(flight: dict | None, route_info: dict | None = None, analysis_result: dict | None = None) -> str:
     flight = flight or {}
+    domestic_tags = [str(tag) for tag in flight.get("domestic_tags") or [] if tag]
+    if domestic_tags:
+        return " | ".join(domestic_tags[:4])
     price = _to_float(flight.get("price"))
     target = _to_float(_preference_value(route_info, analysis_result, "target_price")) if route_info or analysis_result else None
     if target and price:
@@ -2910,6 +2913,15 @@ def _combo_transaction_total(combo: dict) -> float | None:
 
 
 def _round_trip_combo_tags(combo: dict, route_info: dict, confidence: dict | None) -> str:
+    legs = [combo.get("outbound") or {}, combo.get("return") or {}]
+    domestic_tags = []
+    for flight in legs:
+        for tag in flight.get("domestic_tags") or []:
+            if tag and tag not in domestic_tags:
+                domestic_tags.append(str(tag))
+    if domestic_tags:
+        return " | ".join(domestic_tags[:4])
+
     total = _to_float(combo.get("total_price"))
     target = _to_float(route_info.get("target_price"))
     target_total = target * 2 if target else None
@@ -2924,7 +2936,6 @@ def _round_trip_combo_tags(combo: dict, route_info: dict, confidence: dict | Non
     else:
         price_label = "价格偏高"
 
-    legs = [combo.get("outbound") or {}, combo.get("return") or {}]
     availability_labels = [_status_availability_label(flight) for flight in legs if flight]
     availability_labels = [label for label in availability_labels if label]
     if "需刷新" in availability_labels:
@@ -4466,6 +4477,17 @@ def _pushplus_baggage_line_for_flight(flight: dict | None) -> str:
 
     fare_rules = flight.get("fare_rules") or {}
     baggage = fare_rules.get("baggage") or {}
+    if baggage.get("included") is False:
+        note = baggage.get("note") or "托运需另购"
+        return f"行李:仅含手提,{note}"
+    if baggage.get("included") is True:
+        kg = baggage.get("checked_kg")
+        pieces = baggage.get("checked_pieces")
+        if kg:
+            return f"行李:已含托运{kg}kg"
+        if pieces:
+            return f"行李:已含{pieces}件托运"
+        return "行李:已含托运"
     pieces = baggage.get("checked_pieces") or 0
     kg = baggage.get("checked_kg") or 0
     if pieces:
@@ -5698,6 +5720,9 @@ def _render_payload_plan_card(plan: dict, compact: bool = False, primary_plan: d
             rows.append(("验证渠道", _layered_channel_links(links) or links))
     if plan.get("tags"):
         rows.append(("状态", html.escape(str(plan.get("tags") or ""))))
+    refund_line = _plan_refund_line(plan)
+    if refund_line:
+        rows.append(("退改", refund_line))
     source_label = _plan_source_label(plan)
     if source_label:
         rows.append(("数据来源", html.escape(source_label)))
@@ -6340,6 +6365,23 @@ def _plan_source_label(plan: dict) -> str:
         if label and label not in labels:
             labels.append(label)
     return " / ".join(labels)
+
+
+def _plan_refund_line(plan: dict) -> str:
+    lines = []
+    for flight in _plan_flights(plan):
+        fare_rules = flight.get("fare_rules") or {}
+        refund = fare_rules.get("refund") or {}
+        if refund.get("label") or refund.get("note"):
+            text = refund.get("note") or refund.get("label")
+            if refund.get("label") and refund.get("note"):
+                text = f"{refund.get('label')}，{refund.get('note')}"
+            if text and text not in lines:
+                lines.append(str(text))
+        source_note = fare_rules.get("source_note")
+        if source_note and source_note not in lines:
+            lines.append(str(source_note))
+    return "<br>".join(html.escape(item) for item in lines[:3])
 
 
 def _detail_section(title: str, body: str, open_by_default: bool = False) -> str:

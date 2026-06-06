@@ -3296,6 +3296,180 @@ def verify_fare_rules(flight, hard_constraints):
     }
 
 
+def _flight_airline_code(flight: dict | None) -> str:
+    from domestic_fare_rules import airline_code_from_flight
+
+    return airline_code_from_flight(flight)
+
+
+def _is_domestic_flight(flight: dict | None) -> bool:
+    flight = flight or {}
+    if str(flight.get("route_type") or "").lower() == "domestic":
+        return True
+    data_source = str(flight.get("data_source") or flight.get("source") or "").lower()
+    if "juhe" in data_source:
+        return True
+    try:
+        from sources.aggregator import is_domestic_route
+
+        dep = (
+            flight.get("departure_airport")
+            or flight.get("dep_airport")
+            or flight.get("origin")
+            or ((flight.get("segments") or [{}])[0] or {}).get("dep_airport")
+            or ((flight.get("segments") or [{}])[0] or {}).get("departure_airport")
+        )
+        arr = (
+            flight.get("arrival_airport")
+            or flight.get("arr_airport")
+            or flight.get("destination")
+            or ((flight.get("segments") or [{}])[-1] or {}).get("arr_airport")
+            or ((flight.get("segments") or [{}])[-1] or {}).get("arrival_airport")
+        )
+        return is_domestic_route(dep, arr)
+    except Exception:
+        return False
+
+
+def _ensure_domestic_fare_rules(flight: dict) -> dict:
+    if not _is_domestic_flight(flight):
+        return flight.get("fare_rules", {}) or {}
+    from sources.fare_rules import standardize_domestic_fare_rules
+
+    fare_rules = standardize_domestic_fare_rules(flight)
+    flight["fare_rules"] = fare_rules
+    return fare_rules
+
+
+def verify_fare_rules(flight, hard_constraints):
+    issues = []
+    matches = []
+    hard_constraints = hard_constraints or {}
+    flight = flight or {}
+
+    fare_rules = _ensure_domestic_fare_rules(flight)
+    if not fare_rules:
+        fare_rules = flight.get("fare_rules", {}) or {}
+
+    baggage_req = hard_constraints.get("baggage", "unknown")
+    baggage_info = fare_rules.get("baggage", {}) or {}
+    checked_kg = baggage_info.get("checked_kg", 0) or 0
+    checked_pieces = baggage_info.get("checked_pieces", 0) or 0
+    baggage_included = baggage_info.get("included")
+
+    if baggage_req == "required":
+        if checked_pieces > 0 or checked_kg > 0 or baggage_included is True:
+            matches.append(f"含托运行李 {checked_kg or '标准'}kg/{checked_pieces or 1}件")
+        elif baggage_included is False:
+            issues.append("不含免费托运行李，需额外购买")
+        elif fare_rules:
+            issues.append("托运行李规则待确认，购买前请核实")
+        else:
+            issues.append("托运行李信息未确认，购买前请核实")
+
+    refund_pref = hard_constraints.get("refund_flexibility", "unknown")
+    refund_info = fare_rules.get("refund", {}) or {}
+    change_info = fare_rules.get("change", {}) or {}
+    refund_level = refund_info.get("level")
+
+    if refund_pref in ("must_refundable", "required"):
+        if refund_level == "高" or refund_info.get("allowed"):
+            matches.append(refund_info.get("label") or "可退改")
+        elif refund_info:
+            issues.append(refund_info.get("note") or "该票退改规则不满足要求")
+        else:
+            issues.append("退票规则未确认，购买前请核实")
+
+    if refund_pref in ("preferred", "must_refundable", "required"):
+        if refund_level in {"高", "中"} or change_info.get("allowed"):
+            matches.append(refund_info.get("label") or "可改签")
+        elif refund_info:
+            issues.append(refund_info.get("note") or "该票退改签较严格")
+        else:
+            issues.append("改签规则未确认")
+
+    cabin = flight.get("cabin_class", "economy")
+    if cabin in ("basic_economy", "light"):
+        issues.append("基础经济舱/轻选舱，可能不含行李、不可选座、不可退改")
+
+    airlines = flight.get("airlines", []) or []
+    if flight.get("stops", 0) > 0:
+        if len(set(airlines)) > 1:
+            issues.append("跨航司中转，可能为非联程票，需确认")
+        else:
+            matches.append("同航司中转，大概率联程票")
+
+    if fare_rules.get("source") == "国内标准规则推断":
+        matches.append("国内标准规则推断，具体条款以支付页为准")
+
+    if not issues:
+        match_level = "full"
+        match_label = "票规完全匹配"
+    elif len(issues) <= len(matches):
+        match_level = "partial"
+        match_label = "票规部分匹配"
+    else:
+        match_level = "mismatch"
+        match_label = "票规需确认"
+
+    return {
+        "level": match_level,
+        "label": match_label,
+        "matches": matches,
+        "issues": issues,
+    }
+
+
+def make_domestic_tags(flight, profile, lowest_price=None):
+    if not _is_domestic_flight(flight):
+        return []
+
+    from domestic_fare_rules import FULL_SERVICE, LCC_AIRLINES
+
+    flight = flight or {}
+    profile = profile or {}
+    tags = []
+    airline = _flight_airline_code(flight)
+    stops = _stops_count(flight, 0)
+    dep_hour = _first_departure_hour(flight)
+    fare_rules = flight.get("fare_rules") or _ensure_domestic_fare_rules(flight)
+    refund_level = (fare_rules.get("refund") or {}).get("level")
+    baggage_included = (fare_rules.get("baggage") or {}).get("included")
+    price = _to_float(flight.get("price"))
+
+    if price is not None and (lowest_price is None or price <= float(lowest_price) * 1.03):
+        tags.append("价格最优")
+    if stops == 0 and (dep_hour is None or 6 <= dep_hour <= 20):
+        tags.append("时间最优")
+    if stops == 0:
+        tags.append("少折腾")
+    if airline in FULL_SERVICE and refund_level in ("高", "中") and stops == 0:
+        tags.append("商务友好")
+    if stops == 0 and (dep_hour is None or 8 <= dep_hour <= 18) and baggage_included:
+        tags.append("家庭友好")
+    if stops == 0 and airline in FULL_SERVICE:
+        tags.append("低风险")
+    if airline in LCC_AIRLINES:
+        tags.append("廉航低价")
+
+    scenario_priority = []
+    if profile.get("price") == "high":
+        scenario_priority.extend(["价格最优", "廉航低价"])
+    if profile.get("time") == "high":
+        scenario_priority.extend(["商务友好", "低风险", "时间最优"])
+    if profile.get("comfort") == "high" or profile.get("risk_averse") == "high":
+        scenario_priority.extend(["家庭友好", "少折腾", "低风险"])
+
+    ordered = []
+    for tag in scenario_priority + tags:
+        if tag and tag in tags and tag not in ordered:
+            ordered.append(tag)
+    for tag in tags:
+        if tag not in ordered:
+            ordered.append(tag)
+    return ordered[:4]
+
+
 def estimate_availability(flight, collected_at=None):
     status = "unknown"
     label = "未验证"
@@ -4989,6 +5163,7 @@ def analyze_all_flights(
         flight["scores"] = overall_score(flight, prices, durations, mode)
         flight["transfer_risk"] = transfer_risk(flight)
         flight["fare_verification"] = verify_fare_rules(flight, merged_preferences)
+        flight["domestic_tags"] = make_domestic_tags(flight, travel_profile, lowest_price)
         flight["price_estimate"] = calc_transaction_price(flight, merged_preferences)
         flight["availability"] = estimate_availability(
             flight,

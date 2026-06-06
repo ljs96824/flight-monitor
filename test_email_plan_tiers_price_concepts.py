@@ -158,8 +158,8 @@ class EmailPlanTiersPriceConceptsTest(unittest.TestCase):
 
         _, html = render_email(payload)
 
-        self.assertIn("\u4ef7\u683c:Google Flights \u591a\u6e90\u4ea4\u53c9\u9a8c\u8bc1", html)
-        self.assertIn("\u7968\u89c4:Duffel \u884c\u674e/\u9000\u6539\u89c4\u5219\u53c2\u8003", html)
+        self.assertIn("主源:Google Flights 多源", html)
+        self.assertIn("行李/退改:Duffel 规则参考", html)
         self.assertIn("\u5019\u9009\u65b9\u6848:\u5df2\u53bb\u91cd\u5e76\u7b5b\u9009", html)
         self.assertIn("\u91c7\u96c6\u65f6\u95f4:\u521a\u521a\u91c7\u96c6", html)
         self.assertNotIn("21\u4e2a\u5019\u9009\u65b9\u6848", html)

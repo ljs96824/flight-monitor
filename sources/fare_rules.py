@@ -108,3 +108,10 @@ def standardize_fare_rules(duffel_data, flight_combo) -> dict:
         "refund": refund,
         "cabin_class": _normalize_cabin_class(cabin_class),
     }
+
+
+def standardize_domestic_fare_rules(flight: dict | None) -> dict:
+    """Map domestic China inferred baggage/refund rules to the standard schema."""
+    from domestic_fare_rules import standardize_domestic_fare_rules as _standardize
+
+    return _standardize(flight)
