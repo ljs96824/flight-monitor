@@ -188,6 +188,75 @@ def is_domestic_route(origin: str, dest: str) -> bool:
     return str(origin or "").upper() in CN_AIRPORTS and str(dest or "").upper() in CN_AIRPORTS
 
 
+def route_type_for(origin: str, dest: str) -> str:
+    return "domestic" if is_domestic_route(origin, dest) else "international"
+
+
+def _source_name(source) -> str:
+    return str(getattr(source, "name", type(source).__name__)).lower()
+
+
+def _role_weight_for_source(source_name: str, domestic: bool) -> tuple[str, float]:
+    source_name = str(source_name or "").lower()
+    google_sources = {"serpapi", "searchapi", "hasdata"}
+    if domestic:
+        if source_name == "juhe":
+            return "primary", 1.0
+        if source_name in google_sources:
+            return "cross_check", 0.6
+        return "reference", 0.3
+    if source_name in google_sources:
+        return "primary", 1.0
+    return "reference", 0.3
+
+
+def _apply_route_source_roles(sources: list[FlightSource], domestic: bool) -> list[FlightSource]:
+    for source in sources:
+        role, weight = _role_weight_for_source(_source_name(source), domestic)
+        source.role = role
+        source.weight = weight
+    return sources
+
+
+def _flight_primary_priority(flight: dict, is_domestic: bool) -> tuple[int, float]:
+    sources = set(_source_names(flight.get("data_source") or flight.get("source")))
+    role = str(flight.get("source_role") or "").lower()
+    weight = float(flight.get("source_weight") or 0)
+    if is_domestic:
+        if "juhe" in sources:
+            return (0, -weight)
+        if role == "cross_check":
+            return (1, -weight)
+        return (2, -weight)
+    google_sources = {"serpapi", "searchapi", "hasdata"}
+    if sources & google_sources:
+        return (0, -weight)
+    if role == "primary":
+        return (1, -weight)
+    return (2, -weight)
+
+
+def _should_replace_flight(current: dict, incoming: dict, is_domestic: bool) -> bool:
+    current_priority = _flight_primary_priority(current, is_domestic)
+    incoming_priority = _flight_primary_priority(incoming, is_domestic)
+    if incoming_priority != current_priority:
+        return incoming_priority < current_priority
+    try:
+        return float(incoming.get("price")) < float(current.get("price"))
+    except (TypeError, ValueError):
+        return False
+
+
+def _primary_source_for_sources(sources: list[str], is_domestic: bool) -> str:
+    normalized = [str(source or "").lower() for source in sources if source]
+    if is_domestic and "juhe" in normalized:
+        return "juhe"
+    for source in ("serpapi", "hasdata", "searchapi"):
+        if source in normalized:
+            return source
+    return normalized[0] if normalized else ""
+
+
 def build_default_sources(
     origin: str | None = None, dest: str | None = None
 ) -> tuple[list[FlightSource], list[FlightSource]]:
@@ -234,6 +303,10 @@ def build_default_sources(
 
         enrichment_sources.append(DuffelSource())
 
+    if origin and dest:
+        domestic = is_domestic_route(origin, dest)
+        search_sources = _apply_route_source_roles(search_sources, domestic)
+
     return search_sources, enrichment_sources
 
 
@@ -264,6 +337,7 @@ class FlightAggregator:
         raw_by_source = {}
         search_sources = self._ordered_search_sources(origin, dest)
         domestic_route = is_domestic_route(origin, dest)
+        route_type = route_type_for(origin, dest)
         print(f"[source-route] {origin}->{dest} is_domestic={domestic_route}")
         print(
             "[source-route] enabled sources: "
@@ -275,6 +349,7 @@ class FlightAggregator:
             source_role = getattr(source, "role", None) or (
                 "reference" if str(source_name).lower() == "travelpayouts" else "search"
             )
+            source_weight = float(getattr(source, "weight", 0) or 0)
             source_optional = len(all_flights) >= OPTIONAL_SOURCE_THRESHOLD
             source_count = 0
             source_succeeded = False
@@ -314,6 +389,10 @@ class FlightAggregator:
                             flight["data_source"] = source_name
                         flight["cabin_class"] = flight.get("cabin_class") or cabin_class
                         flight["source_role"] = flight.get("source_role") or source_role
+                        flight["source_weight"] = flight.get("source_weight") or source_weight
+                        flight["route_type"] = route_type
+                        if source_role == "primary":
+                            flight["primary_source"] = source_name
                         if source_role == "reference":
                             flight["reference_only"] = True
                             flight["reference_reason"] = (
@@ -370,6 +449,8 @@ class FlightAggregator:
                 "status": status,
                 "optional": source_optional,
                 "role": source_role,
+                "weight": source_weight,
+                "route_type": route_type,
             }
 
         total_raw = len(all_flights)
@@ -390,12 +471,14 @@ class FlightAggregator:
                 if source not in sources_by_combo[normalized_combo]:
                     sources_by_combo[normalized_combo].append(source)
 
-            current_price = seen.get(normalized_combo, {}).get("price", 99999)
+            current_flight = seen.get(normalized_combo, {})
             if normalized_combo in seen:
                 _append_sources(seen[normalized_combo], new_sources)
                 _merge_flight_fields(seen[normalized_combo], flight)
                 _append_source_price(seen[normalized_combo], source_name, flight.get("price"))
-            if normalized_combo not in seen or float(flight.get("price")) < float(current_price):
+            if normalized_combo not in seen or _should_replace_flight(
+                current_flight, flight, domestic_route
+            ):
                 previous = seen.get(normalized_combo)
                 seen[normalized_combo] = dict(flight)
                 _append_source_price(seen[normalized_combo], source_name, flight.get("price"))
@@ -410,6 +493,9 @@ class FlightAggregator:
             sources = sources_by_combo.get(normalized_combo, [])
             if sources:
                 flight["data_source"] = "+".join(sources)
+                flight["primary_source"] = flight.get("primary_source") or _primary_source_for_sources(
+                    sources, domestic_route
+                )
 
         unique_flights = sorted(
             unique_flights, key=lambda flight: float(flight.get("price") or 99999)
@@ -455,6 +541,9 @@ class FlightAggregator:
                     if enrichment_succeeded
                     else "失败（行李退改信息不可用）"
                 ),
+                "role": "enrichment",
+                "weight": 0.0,
+                "route_type": route_type,
             }
 
         enriched_count = 0
@@ -509,24 +598,26 @@ class FlightAggregator:
 
     def _ordered_search_sources(self, origin: str, dest: str) -> list[FlightSource]:
         sources = list(self.search_sources)
-        if is_domestic_route(origin, dest):
+        domestic = is_domestic_route(origin, dest)
+        if domestic:
             if not any(str(getattr(source, "name", "")).lower() == "juhe" for source in sources):
                 from sources.juhe_source import JuheSource
 
                 sources.append(JuheSource())
+            sources = _apply_route_source_roles(sources, domestic)
             sources.sort(
                 key=lambda source: 0
                 if str(getattr(source, "name", "")).lower() == "juhe"
                 else 1
             )
             return sources
-        return [
+        return _apply_route_source_roles([
             source
             for source in sources
             if str(getattr(source, "name", "")).lower() != "juhe"
-        ]
+        ], domestic)
 
-    def _merge_flights(self, results: list[dict]) -> list[dict]:
+    def _merge_flights(self, results: list[dict], is_domestic: bool = False) -> list[dict]:
         merged_by_combo = {}
         source_order_by_combo = {}
 
@@ -545,15 +636,7 @@ class FlightAggregator:
                     }
                     source_order_by_combo[combo] = []
                 else:
-                    current_price = merged_by_combo[combo].get("price")
-                    new_price = flight.get("price")
-                    if (
-                        new_price is not None
-                        and (
-                            current_price is None
-                            or float(new_price) < float(current_price)
-                        )
-                    ):
+                    if _should_replace_flight(merged_by_combo[combo], flight, is_domestic):
                         previous = merged_by_combo[combo]
                         merged_by_combo[combo] = {
                             **flight,
@@ -570,6 +653,9 @@ class FlightAggregator:
         for combo, sources in source_order_by_combo.items():
             if sources:
                 merged_by_combo[combo]["data_source"] = "+".join(sources)
+                merged_by_combo[combo]["primary_source"] = merged_by_combo[combo].get(
+                    "primary_source"
+                ) or _primary_source_for_sources(sources, is_domestic)
 
         return list(merged_by_combo.values())
 

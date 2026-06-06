@@ -827,6 +827,7 @@ def format_run_status(results: list[dict]) -> str:
 
 
 SOURCE_LABELS = {
+    "juhe": "聚合数据（国内报价）",
     "serpapi": "Google Flights（via SerpAPI）",
     "searchapi": "Google Flights（via SearchAPI）",
     "hasdata": "Google Flights（via HasData）",
@@ -4985,6 +4986,7 @@ def _layered_channel_links(link_html: str) -> str:
 def _payload_source_summary(source_stats: dict) -> str:
     names = []
     mapping = {
+        "juhe": "聚合数据",
         "serpapi": "Google Flights via SerpAPI",
         "searchapi": "Google Flights via SearchAPI",
         "hasdata": "Google Flights via HasData",
@@ -5296,6 +5298,7 @@ def build_notification_payload(
         "push_type": (push_meta or {}).get("type") or "价格提醒",
         "route": _payload_route_text(route_info),
         "route_airports": _payload_route_airports(route_info),
+        "route_type": _source_stats_route_type(source_stats),
         "trip_type": "round_trip" if is_roundtrip else "one_way",
         "is_roundtrip": is_roundtrip,
         "current_price": display_price,
@@ -5695,6 +5698,9 @@ def _render_payload_plan_card(plan: dict, compact: bool = False, primary_plan: d
             rows.append(("验证渠道", _layered_channel_links(links) or links))
     if plan.get("tags"):
         rows.append(("状态", html.escape(str(plan.get("tags") or ""))))
+    source_label = _plan_source_label(plan)
+    if source_label:
+        rows.append(("数据来源", html.escape(source_label)))
     if plan.get("tier_reason"):
         rows.append(("分级原因", html.escape(str(plan.get("tier_reason")))))
     suitable_condition = str(plan.get("suitable_condition") or "").strip()
@@ -6316,6 +6322,26 @@ def _render_payload_plan_cards(payload: dict, plans: list[dict], primary_plan: d
     )
 
 
+def _plan_source_label(plan: dict) -> str:
+    flights = []
+    for key in ("outbound_flight", "return_flight", "main_flight", "flight"):
+        flight = plan.get(key)
+        if isinstance(flight, dict) and flight:
+            flights.append(flight)
+    labels = []
+    for flight in flights:
+        primary = str(flight.get("primary_source") or "").lower()
+        if primary == "juhe":
+            label = "聚合数据(国内实时)"
+        elif primary in {"serpapi", "searchapi", "hasdata"}:
+            label = "Google Flights"
+        else:
+            label = _compact_source_label(flight)
+        if label and label not in labels:
+            labels.append(label)
+    return " / ".join(labels)
+
+
 def _detail_section(title: str, body: str, open_by_default: bool = False) -> str:
     open_attr = " open" if open_by_default else ""
     return (
@@ -6326,15 +6352,82 @@ def _detail_section(title: str, body: str, open_by_default: bool = False) -> str
     )
 
 
+def _source_stat_count(source_stats: dict, names: tuple[str, ...]) -> int:
+    count = 0
+    for name in names:
+        value = (source_stats or {}).get(name)
+        if not isinstance(value, dict):
+            continue
+        if not _source_stat_is_usable(value.get("status", "")):
+            continue
+        try:
+            count += int(value.get("count") or 0)
+        except (TypeError, ValueError):
+            continue
+    return count
+
+
+def _source_stats_route_type(source_stats: dict | None) -> str:
+    for value in (source_stats or {}).values():
+        if isinstance(value, dict) and value.get("route_type"):
+            return str(value.get("route_type"))
+    return ""
+
+
+def _email_source_rows(payload: dict) -> list[str]:
+    source_stats = payload.get("source_stats") or {}
+    route_type = str(payload.get("route_type") or _source_stats_route_type(source_stats) or "")
+    juhe_count = _source_stat_count(source_stats, ("juhe",))
+    google_count = _source_stat_count(source_stats, ("serpapi", "searchapi", "hasdata"))
+    duffel_count = _source_stat_count(source_stats, ("duffel",))
+    rows = []
+
+    if route_type == "domestic":
+        primary_count = f"— {juhe_count}个方案" if juhe_count else ""
+        google_suffix = f"— {google_count}个方案/价格比对" if google_count else "— 价格比对"
+        rows.append(f"<div>🔹 主源:聚合数据(国内实时报价){primary_count}</div>")
+        rows.append(f"<div>🔹 交叉验证:Google Flights {google_suffix}</div>")
+        if duffel_count:
+            rows.append(f"<div>🔹 行李/退改:Duffel 规则参考 — {duffel_count}条</div>")
+        else:
+            rows.append("<div>🔹 行李/退改:Duffel 规则参考</div>")
+        rows.append(
+            "<div style='margin-top:6px;color:#666;font-size:12px;'>"
+            "说明:国内航线以聚合数据实时报价为准,Google Flights用于交叉验证。"
+            "</div>"
+        )
+        return rows
+
+    primary_count = f"— {google_count}个方案" if google_count else ""
+    rows.append(f"<div>🔹 主源:Google Flights 多源(SerpAPI、HasData){primary_count}</div>")
+    if duffel_count:
+        rows.append(f"<div>🔹 行李/退改:Duffel 规则参考 — {duffel_count}条</div>")
+    else:
+        rows.append("<div>🔹 行李/退改:Duffel 规则参考</div>")
+    if juhe_count:
+        rows.append(f"<div>🔹 补充参考:聚合数据 — {juhe_count}个方案</div>")
+    rows.append(
+        "<div style='margin-top:6px;color:#666;font-size:12px;'>"
+        "说明:国际航线以 Google Flights 多源交叉验证为准。"
+        "</div>"
+    )
+    return rows
+
+
 def _email_source_body(payload: dict) -> str:
-    rows = [
-        "<div>- 价格:Google Flights 多源交叉验证</div>",
-        "<div>- 票规:Duffel 行李/退改规则参考</div>",
-        "<div>- 候选方案:已去重并筛选</div>",
-    ]
+    rows = _email_source_rows(payload)
+    rows.append("<div>🔹 候选方案:已去重并筛选</div>")
     rows.append(f"<div style='margin-top:8px;color:#666;font-size:12px;'>采集时间:{html.escape(_payload_freshness_text(payload))}</div>")
     rows.append("<div style='color:#666;font-size:12px;'>说明:技术明细见网页详情页,价格以平台支付页为准。</div>")
     return "".join(rows)
+
+
+def _compact_source_summary_lines(source_stats: dict | None) -> list[str]:
+    if not source_stats:
+        return []
+    route_type = _source_stats_route_type(source_stats)
+    body = _email_source_body({"source_stats": source_stats, "route_type": route_type})
+    return ["<b>数据来源</b>", body]
 
 
 def _email_technical_source_body(payload: dict) -> str:
