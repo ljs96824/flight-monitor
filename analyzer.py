@@ -3333,6 +3333,40 @@ def estimate_availability(flight, collected_at=None):
     }
 
 
+def classify_buyability(flight):
+    source = str(flight.get("data_source") or flight.get("source") or "").lower()
+    seat = str(flight.get("seat_status") or "").strip()
+    age = (flight.get("availability") or {}).get("age_minutes")
+
+    if "juhe" in source:
+        sold_out_values = {"0", "无", "售罄", "已售罄", "sold_out", "none", "null"}
+        if seat and seat.lower() not in sold_out_values:
+            return {
+                "status": "buyable",
+                "label": "可购买",
+                "note": f"余票{seat}, 实时价",
+            }
+        if not seat:
+            return {
+                "status": "need_verify",
+                "label": "需支付页确认",
+                "note": "国内报价，最终库存和实付价需支付页确认",
+            }
+        return {
+            "status": "sold_out",
+            "label": "已售罄",
+            "note": "聚合实时源显示无可售库存",
+        }
+
+    if age is None:
+        return {"status": "unknown", "label": "需验证", "note": "采集时间未知"}
+    if age <= 30:
+        return {"status": "need_verify", "label": "需验证", "note": "价格较新"}
+    if age <= 120:
+        return {"status": "reference", "label": "仅参考", "note": "价格需刷新确认"}
+    return {"status": "expired", "label": "已失效", "note": "建议刷新"}
+
+
 def calc_execution_risk(flight):
     score = 0
     factors = []
@@ -4872,6 +4906,7 @@ def analyze_all_flights(
             flight,
             flight.get("collected_at") or flight.get("snapshot_time") or flight.get("fetched_at"),
         )
+        flight["buyability"] = classify_buyability(flight)
         calc_execution_risk(flight)
         advice = price_tolerance_advice(
             flight.get("price"),

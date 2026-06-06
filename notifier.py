@@ -298,6 +298,15 @@ def _status_risk_label(flight: dict | None) -> str:
 def _status_availability_label(flight: dict | None) -> str:
     """Return a compact availability label from a flight dict."""
     flight = flight or {}
+    buyability = flight.get("buyability") or {}
+    if isinstance(buyability, dict):
+        label = str(buyability.get("label") or "").strip()
+        note = str(buyability.get("note") or "").strip()
+        if label and note:
+            return f"{label}({note})"
+        if label:
+            return label
+
     availability = flight.get("availability") or {}
     if not isinstance(availability, dict):
         return ""
@@ -421,6 +430,17 @@ def _price_estimate_summary_lines(flight: dict) -> list[str]:
     transaction_price = transaction_price or display_price
     if not display_price or not transaction_price:
         return []
+
+    source = str(flight.get("data_source") or flight.get("source") or "").lower()
+    if "juhe" in source:
+        lines = [f"💰 票面价：{_price_text(display_price)}"]
+        lines.append("　实付说明：支付页通常另含机建、燃油及平台服务费")
+        note = flight.get("price_note")
+        if note:
+            lines.append(f"　价格口径：{note}")
+        if abs(transaction_price - display_price) >= 1:
+            lines.append(f"💳 预估交易价：{_price_text(transaction_price)}")
+        return lines
 
     extra_items = [
         item for item in estimate.get("extra_items") or [] if isinstance(item, dict)

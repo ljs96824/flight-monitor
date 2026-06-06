@@ -86,9 +86,13 @@ def calc_transaction_price(flight, hard_constraints):
     extra_items = []
     extra_total = 0
 
-    # Google Flights family sources usually include taxes, fuel surcharges,
-    # and airport fees. Extras here are optional checkout costs.
-    price_includes = "含税费、含燃油附加费、含机场建设费"
+    source = str(flight.get("data_source") or flight.get("source") or "")
+    if "juhe" in source.lower():
+        price_includes = flight.get("price_includes") or "含票面、机建、燃油(实时)"
+    else:
+        # Google Flights family sources usually include taxes, fuel surcharges,
+        # and airport fees. Extras here are optional checkout costs.
+        price_includes = "含税费、含燃油附加费、含机场建设费"
 
     airline = _airline_text(flight)
     baggage_req = (hard_constraints or {}).get("baggage", "unknown")
@@ -114,7 +118,6 @@ def calc_transaction_price(flight, hard_constraints):
             {"name": "选座费", "amount": 50, "note": "廉航默认随机分配"}
         )
 
-    source = str(flight.get("data_source") or flight.get("source") or "")
     if "小代理" in source:
         extra_total += 80
         extra_items.append({"name": "平台服务费", "amount": 80, "note": "小代理可能收取"})

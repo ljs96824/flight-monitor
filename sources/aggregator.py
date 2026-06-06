@@ -10,6 +10,35 @@ from sources.base import FlightSource
 
 OPTIONAL_SOURCE_THRESHOLD = 8
 
+CN_AIRPORTS = {
+    "PVG",
+    "SHA",
+    "PEK",
+    "PKX",
+    "CAN",
+    "SZX",
+    "CTU",
+    "TFU",
+    "HGH",
+    "NKG",
+    "XIY",
+    "CKG",
+    "WUH",
+    "CSX",
+    "TAO",
+    "XMN",
+    "FOC",
+    "KMG",
+    "URC",
+    "CGO",
+    "TSN",
+    "DLC",
+    "SHE",
+    "HRB",
+    "SYX",
+    "HAK",
+}
+
 
 def normalize_combo(combo: str) -> str:
     return combo.replace(" ", "").upper()
@@ -155,10 +184,25 @@ def _flight_key(flight: dict) -> str:
     return f"{combo}::{cabin_class}"
 
 
-def build_default_sources() -> tuple[list[FlightSource], list[FlightSource]]:
+def is_domestic_route(origin: str, dest: str) -> bool:
+    return str(origin or "").upper() in CN_AIRPORTS and str(dest or "").upper() in CN_AIRPORTS
+
+
+def build_default_sources(
+    origin: str | None = None, dest: str | None = None
+) -> tuple[list[FlightSource], list[FlightSource]]:
     """Build search sources and enrichment sources separately."""
     search_sources = []
     enrichment_sources = []
+
+    if origin and dest:
+        domestic = is_domestic_route(origin, dest)
+        print(f"[source-route] {origin}->{dest} is_domestic={domestic}")
+
+    if os.environ.get("JUHE_FLIGHT_KEY"):
+        from sources.juhe_source import JuheSource
+
+        search_sources.append(JuheSource())
 
     if os.environ.get("SERPAPI_KEY"):
         from sources.serpapi_source import SerpAPISource
@@ -218,18 +262,31 @@ class FlightAggregator:
         source_errors = []
         price_insights = None
         raw_by_source = {}
+        search_sources = self._ordered_search_sources(origin, dest)
+        domestic_route = is_domestic_route(origin, dest)
+        print(f"[source-route] {origin}->{dest} is_domestic={domestic_route}")
+        print(
+            "[source-route] enabled sources: "
+            + str([getattr(source, "name", type(source).__name__) for source in search_sources])
+        )
 
-        for source in self.search_sources:
+        for source in search_sources:
             source_name = getattr(source, "name", type(source).__name__)
-            source_role = "reference" if str(source_name).lower() == "travelpayouts" else "search"
+            source_role = getattr(source, "role", None) or (
+                "reference" if str(source_name).lower() == "travelpayouts" else "search"
+            )
             source_optional = len(all_flights) >= OPTIONAL_SOURCE_THRESHOLD
             source_count = 0
             source_succeeded = False
+            source_statuses = []
             cabin_counts = {}
 
             for cabin_class in cabin_classes:
                 try:
                     result = source.fetch(origin, dest, date_str, cabin_class)
+                    source_status = result.get("source_status")
+                    if source_status:
+                        source_statuses.append(source_status)
                     raw_flights = result.get("flights", []) or []
                     flights = [
                         flight for flight in raw_flights if _valid_price(flight.get("price"))
@@ -238,6 +295,12 @@ class FlightAggregator:
                         f"[价格检查] {source_name} {cabin_class} 有效价格航班: "
                         f"{len(flights)}/{len(raw_flights)}"
                     )
+
+                    if source_status in {"not_configured", "skipped"}:
+                        cabin_counts[cabin_class] = 0
+                        raw_by_source[f"{source_name}:{cabin_class}"] = result.get("raw")
+                        print(f"[{source_name}] {cabin_class} skipped: {source_status}")
+                        continue
 
                     for flight in flights:
                         flight["collected_at"] = (
@@ -260,7 +323,7 @@ class FlightAggregator:
 
                     source_count += len(flights)
                     cabin_counts[cabin_class] = len(flights)
-                    source_succeeded = True
+                    source_succeeded = source_succeeded or bool(flights)
                     all_flights.extend(flights)
                     successful_results.append(
                         {
@@ -292,6 +355,10 @@ class FlightAggregator:
 
             if source_succeeded:
                 status = "成功"
+            elif "not_configured" in source_statuses:
+                status = "not_configured"
+            elif "cache" in source_statuses or "success" in source_statuses:
+                status = "empty"
             elif source_optional:
                 status = "可选失败"
             else:
@@ -439,6 +506,25 @@ class FlightAggregator:
             "raw_by_source": raw_by_source,
             "collected_at": run_collected_at,
         }
+
+    def _ordered_search_sources(self, origin: str, dest: str) -> list[FlightSource]:
+        sources = list(self.search_sources)
+        if is_domestic_route(origin, dest):
+            if not any(str(getattr(source, "name", "")).lower() == "juhe" for source in sources):
+                from sources.juhe_source import JuheSource
+
+                sources.append(JuheSource())
+            sources.sort(
+                key=lambda source: 0
+                if str(getattr(source, "name", "")).lower() == "juhe"
+                else 1
+            )
+            return sources
+        return [
+            source
+            for source in sources
+            if str(getattr(source, "name", "")).lower() != "juhe"
+        ]
 
     def _merge_flights(self, results: list[dict]) -> list[dict]:
         merged_by_combo = {}
