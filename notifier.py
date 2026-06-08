@@ -4651,6 +4651,8 @@ def _payload_combo_plan(combo: dict, route_info: dict, index: int, variant: str)
         "same_day_round_trip": bool(combo.get("same_day_round_trip")),
         "stay_hours": combo.get("stay_hours"),
         "same_day_tag": combo.get("tag") or ("当天往返可行" if combo.get("same_day_round_trip") else ""),
+        "same_day_windows": combo.get("same_day_windows") or {},
+        "schedule_note": combo.get("schedule_note") or "",
         "tags": _round_trip_combo_tags(combo, route_info, None),
         "risk": _combo_grade(combo),
         "buy_condition": _combo_human_recommendation(combo, route_info),
@@ -5477,6 +5479,11 @@ def build_notification_payload(
         "nearby_date_prices": _payload_nearby_date_rows(route_info, analysis_result, is_roundtrip),
         "price_calendar": price_calendar_payload,
         "airport_cost_comparison": analysis_result.get("airport_cost_comparison") or [],
+        "same_day_no_feasible_note": (
+            (analysis_result.get("round_trip_analysis") or {}).get("same_day_no_feasible_note")
+            or analysis_result.get("same_day_no_feasible_note")
+            or ""
+        ),
         "plan_status_change": plan_status_change,
         "plan_price_rows": _payload_plan_price_rows(all_items[:5]),
         "channel_price_rows": (all_items[0].get("channel_prices") if all_items else []),
@@ -5737,6 +5744,13 @@ def render_pushplus(payload: dict) -> str:
         stay = _to_float(primary_plan.get("stay_hours"))
         stay_line = f"停留:约{stay:g}小时(可办事)" if stay is not None else "当天往返可行"
         lines.append(stay_line)
+        windows = primary_plan.get("same_day_windows") or {}
+        if windows:
+            lines.append(
+                "当天往返安排:"
+                f"办事{windows.get('business_start')}-{windows.get('business_end')},"
+                f"车程约{windows.get('transport_min')}分钟+缓冲{windows.get('buffer_h')}小时"
+            )
     status_text = _plan_status_change_text(payload)
     if status_text:
         lines.extend(["", "上次方案追踪:" + html.escape(status_text)])
@@ -5800,6 +5814,19 @@ def _render_payload_plan_card(plan: dict, compact: bool = False, primary_plan: d
             stay = _to_float(plan.get("stay_hours"))
             stay_text = f"约{stay:g}小时（可办事）" if stay is not None else "当天往返可行"
             rows.append(("停留", html.escape(stay_text)))
+            windows = plan.get("same_day_windows") or {}
+            if windows:
+                rows.append(
+                    (
+                        "时间反推",
+                        html.escape(
+                            f"办事{windows.get('business_start')}-{windows.get('business_end')}，"
+                            f"预留车程约{windows.get('transport_min')}分钟+缓冲{windows.get('buffer_h')}小时"
+                        ),
+                    )
+                )
+            if plan.get("schedule_note"):
+                rows.append(("安排说明", html.escape(str(plan.get("schedule_note")))))
         if plan.get("same_day_tag"):
             rows.append(("商务模式", html.escape(str(plan.get("same_day_tag")))))
         links = plan.get("links") or {}
@@ -7053,6 +7080,14 @@ def render_email(payload: dict) -> tuple[str, str]:
         )
     )
 
+    if payload.get("same_day_no_feasible_note"):
+        cards.append(
+            _email_card(
+                "当天往返时间提示",
+                html.escape(str(payload.get("same_day_no_feasible_note"))),
+            )
+        )
+
     cards.append(_email_card("为什么不推荐更便宜方案", _email_excluded_compact_body(payload)))
 
     diff = _to_float((payload.get("diff_from_last") or {}).get("diff"))
@@ -7143,6 +7178,14 @@ def render_detail_html(payload: dict) -> str:
             + "<div style='margin-top:8px;color:#666;font-size:12px;'>若支付页最终价、行李和票规不满足上方条件，建议继续监控。</div>",
         )
     )
+
+    if payload.get("same_day_no_feasible_note"):
+        cards.append(
+            _detail_section(
+                "当天往返时间提示",
+                html.escape(str(payload.get("same_day_no_feasible_note"))),
+            )
+        )
 
     excluded_body = _email_excluded_compact_body(payload)
     excluded_full = []

@@ -699,6 +699,24 @@ FORM_TEMPLATE = """
         <input id="same_day_round_trip" name="same_day_round_trip" type="checkbox" value="true">
         当天往返（早上去、当天晚上回，适合国内商务）
       </label>
+      <div id="same-day-business-fields" class="precise-only" data-show-if="same_day_round_trip=true">
+        <label>当天往返安排</label>
+        <div class="inline-grid">
+          <label>目的地办事开始时间 <input name="business_start" type="time" value="10:00"></label>
+          <label>目的地办事结束时间 <input name="business_end" type="time" value="16:00"></label>
+        </div>
+        <label>预留缓冲（应对延误/值机/安检）</label>
+        <div class="choice">
+          <label><input type="radio" name="buffer_hours" value="2"> 2小时</label>
+          <label><input type="radio" name="buffer_hours" value="2.5" checked> 2.5小时（推荐）</label>
+          <label><input type="radio" name="buffer_hours" value="3"> 3小时</label>
+        </div>
+        <label>出行方式（影响机场往返时间）</label>
+        <div class="choice">
+          <label><input type="radio" name="transport_mode" value="taxi" checked> 打车</label>
+          <label><input type="radio" name="transport_mode" value="transit"> 地铁/公共交通</label>
+        </div>
+      </div>
 
       <div id="return-date-wrap" data-show-if="round_trip=true">
         <label for="return_date">返程日期</label>
@@ -1322,6 +1340,9 @@ FORM_TEMPLATE = """
       const selected = document.querySelector(`input[name="${name}"]:checked`);
       if (selected) return selected.value;
       const field = document.querySelector(`[name="${name}"]`);
+      if (field && field.type === 'checkbox') {
+        return field.checked ? field.value : '';
+      }
       return field ? field.value : "";
     }
 
@@ -2596,6 +2617,10 @@ FORM_TEMPLATE = """
       return {
         monitor_mode: checkedValue('monitor_mode'),
         same_day_round_trip: Boolean(document.querySelector('input[name="same_day_round_trip"]')?.checked),
+        business_start: document.querySelector('input[name="business_start"]')?.value || '',
+        business_end: document.querySelector('input[name="business_end"]')?.value || '',
+        buffer_hours: checkedValue('buffer_hours'),
+        transport_mode: checkedValue('transport_mode'),
         budget_strategy: checkedValue('price_strategy'),
         transfer_policy: checkedValue('transfer_policy'),
         baggage: checkedValue('baggage'),
@@ -2680,6 +2705,12 @@ FORM_TEMPLATE = """
       if (sameDayRoundTrip) {
         sameDayRoundTrip.checked = Boolean(data.same_day_round_trip);
       }
+      const businessStart = document.querySelector('input[name="business_start"]');
+      const businessEnd = document.querySelector('input[name="business_end"]');
+      if (businessStart && data.business_start) businessStart.value = data.business_start;
+      if (businessEnd && data.business_end) businessEnd.value = data.business_end;
+      if (data.buffer_hours) setRadio('buffer_hours', String(data.buffer_hours));
+      if (data.transport_mode) setRadio('transport_mode', data.transport_mode);
       if (form.trip_type && data.trip_type) {
         form.trip_type.value = data.trip_type;
       }
@@ -3339,6 +3370,13 @@ def parse_int(value: str | None, default: int = 0) -> int:
         return default
 
 
+def parse_float(value: str | None, default: float = 0.0) -> float:
+    try:
+        return float(value) if value not in (None, "") else default
+    except (TypeError, ValueError):
+        return default
+
+
 def parse_count_alias(form, *names: str) -> int:
     for name in names:
         value = form.get(name)
@@ -3512,6 +3550,10 @@ def build_subscription(form) -> dict:
     max_budget = None
     if budget_strategy == "explicit" and max_budget_mode == "fixed":
         max_budget = infer_max_budget(parse_int(form.get("max_budget"), 0), target_price)
+    business_start = form.get("business_start", "").strip()
+    business_end = form.get("business_end", "").strip()
+    buffer_hours = parse_float(form.get("buffer_hours"), 2.5)
+    transport_mode = form.get("transport_mode", "taxi")
     max_extra_duration_hours = None
     max_total_duration_hours = None
     if form.get("transfer_policy", "reasonable") in {"reasonable", "short_ok", "price_first"}:
@@ -3674,6 +3716,10 @@ def build_subscription(form) -> dict:
             "transfer_policy": form.get("transfer_policy", "reasonable"),
             "checked_baggage_required": form.get("baggage", "required") == "required",
             "same_day_round_trip": same_day_round_trip,
+            "business_start": business_start if same_day_round_trip else "",
+            "business_end": business_end if same_day_round_trip else "",
+            "buffer_hours": buffer_hours if same_day_round_trip else None,
+            "transport_mode": transport_mode if same_day_round_trip else "taxi",
         },
         "preferences": {
             "travelers": companions,
@@ -3754,6 +3800,10 @@ def build_subscription(form) -> dict:
             "target_price_mode": target_price_mode,
             "transfer_policy": form.get("transfer_policy", "reasonable"),
             "same_day_round_trip": same_day_round_trip,
+            "business_start": business_start if same_day_round_trip else "",
+            "business_end": business_end if same_day_round_trip else "",
+            "buffer_hours": buffer_hours if same_day_round_trip else None,
+            "transport_mode": transport_mode if same_day_round_trip else "taxi",
             "max_extra_duration_hours": max_extra_duration_hours,
             "max_total_duration_hours": max_total_duration_hours,
             "departure_time_policy": form.get("departure_time_policy", "no_redeye"),

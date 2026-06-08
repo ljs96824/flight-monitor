@@ -397,13 +397,96 @@ def _flight_arrival_minutes(flight: dict) -> int | None:
     return _parse_time_minutes(_first_time_text(flight or {}, "arrival_time", "arr_time"))
 
 
+def _minutes_to_text(minutes: int | float | None) -> str:
+    if minutes is None:
+        return ""
+    total = int(round(minutes)) % (24 * 60)
+    return f"{total // 60:02d}:{total % 60:02d}"
+
+
+def _flight_airport(flight: dict, *keys: str) -> str:
+    for key in keys:
+        value = str(flight.get(key) or "").strip().upper()
+        if value:
+            return value
+    segments = flight.get("segments") or flight.get("flights") or []
+    if segments and isinstance(segments[0], dict):
+        first = segments[0]
+        last = segments[-1] if isinstance(segments[-1], dict) else first
+        for key in keys:
+            candidates = {
+                "departure_airport": ("dep_airport", "departure_airport", "origin"),
+                "arrival_airport": ("arr_airport", "arrival_airport", "dest", "destination"),
+            }.get(key, (key,))
+            segment = last if key == "arrival_airport" else first
+            for segment_key in candidates:
+                value = str(segment.get(segment_key) or "").strip().upper()
+                if value:
+                    return value
+    return ""
+
+
+def _same_day_constraints(source: dict | None) -> dict:
+    source = source or {}
+    constraints = dict(source.get("constraints") or {})
+    hard = source.get("hard_constraints") or {}
+    for key in ("business_start", "business_end", "buffer_hours", "transport_mode"):
+        if key not in constraints and hard.get(key) is not None:
+            constraints[key] = hard.get(key)
+        if key not in constraints and source.get(key) is not None:
+            constraints[key] = source.get(key)
+    return constraints
+
+
+def compute_same_day_windows(
+    subscription: dict | None,
+    origin_airport: str | None = None,
+    dest_airport: str | None = None,
+) -> dict:
+    """Reverse-calculate flight windows from business time, transport and buffer."""
+    constraints = _same_day_constraints(subscription)
+    business_start = _parse_time_minutes(constraints.get("business_start"))
+    business_end = _parse_time_minutes(constraints.get("business_end"))
+    if business_start is None or business_end is None:
+        return {}
+    buffer_h = _to_float(constraints.get("buffer_hours"))
+    if buffer_h is None:
+        buffer_h = 2.5
+    mode = str(constraints.get("transport_mode") or "taxi").strip().lower()
+    logistics = get_airport_logistics(dest_airport or "")
+    transport_min = logistics.get("transit_min") if mode == "transit" else logistics.get("to_center_min")
+    try:
+        transport_min = int(transport_min)
+    except (TypeError, ValueError):
+        transport_min = 45
+    total_margin = transport_min + int(round(buffer_h * 60))
+    outbound_arrive_by = business_start - total_margin
+    return_depart_after = business_end + total_margin
+    return {
+        "outbound_arrive_by_minutes": outbound_arrive_by,
+        "return_depart_after_minutes": return_depart_after,
+        "outbound_arrive_by": _minutes_to_text(outbound_arrive_by),
+        "return_depart_after": _minutes_to_text(return_depart_after),
+        "business_start": _minutes_to_text(business_start),
+        "business_end": _minutes_to_text(business_end),
+        "transport_min": transport_min,
+        "buffer_h": buffer_h,
+        "transport_mode": "transit" if mode == "transit" else "taxi",
+    }
+
+
 def build_same_day_combos(
     outbound_flights: list[dict] | None,
     return_flights: list[dict] | None,
-    date_str: str | None,
+    windows_or_date: dict | str | None = None,
+    date_str: str | None = None,
     min_stay_hours: float = 4,
+    constraints: dict | None = None,
 ) -> list[dict]:
     """Build feasible same-day business round-trip combinations."""
+    windows = windows_or_date if isinstance(windows_or_date, dict) else None
+    if date_str is None and isinstance(windows_or_date, str):
+        date_str = windows_or_date
     combos: list[dict] = []
     for outbound in outbound_flights or []:
         outbound_dep = _flight_departure_minutes(outbound or {})
@@ -411,18 +494,30 @@ def build_same_day_combos(
         outbound_price = _to_float((outbound or {}).get("price"))
         if outbound_dep is None or outbound_arr is None or outbound_price is None:
             continue
-        if not (6 * 60 <= outbound_dep <= 10 * 60):
-            continue
-        if outbound_arr > 14 * 60:
-            continue
+        dest_airport = _flight_airport(outbound or {}, "arrival_airport")
+        active_windows = windows or compute_same_day_windows(constraints or {}, None, dest_airport)
+        if active_windows:
+            arrive_by = active_windows.get("outbound_arrive_by_minutes")
+            if arrive_by is not None and outbound_arr > arrive_by:
+                continue
+        else:
+            if not (6 * 60 <= outbound_dep <= 10 * 60):
+                continue
+            if outbound_arr > 14 * 60:
+                continue
         for return_flight in return_flights or []:
             return_dep = _flight_departure_minutes(return_flight or {})
             return_arr = _flight_arrival_minutes(return_flight or {})
             return_price = _to_float((return_flight or {}).get("price"))
             if return_dep is None or return_arr is None or return_price is None:
                 continue
-            if not (16 * 60 <= return_dep <= 22 * 60):
-                continue
+            if active_windows:
+                depart_after = active_windows.get("return_depart_after_minutes")
+                if depart_after is not None and return_dep < depart_after:
+                    continue
+            else:
+                if not (16 * 60 <= return_dep <= 22 * 60):
+                    continue
             if return_arr < return_dep:
                 continue
             stay_minutes = return_dep - outbound_arr
@@ -444,10 +539,55 @@ def build_same_day_combos(
                     "same_day_round_trip": True,
                     "stay_hours": round(stay_minutes / 60, 1),
                     "feasible": True,
+                    "same_day_windows": active_windows,
+                    "schedule_note": (
+                        f"去程{_minutes_to_text(outbound_arr)}到,返程{_minutes_to_text(return_dep)}走,办事时间充足"
+                        if active_windows
+                        else ""
+                    ),
                     "tag": "当天往返可行",
                 }
             )
+    for combo in combos:
+        if combo.get("same_day_round_trip"):
+            combo["tag"] = "当天往返可行"
+            if combo.get("same_day_windows"):
+                outbound_arr = _flight_arrival_minutes(combo.get("outbound") or {})
+                return_dep = _flight_departure_minutes(combo.get("return") or {})
+                combo["schedule_note"] = (
+                    f"去程{_minutes_to_text(outbound_arr)}到,返程{_minutes_to_text(return_dep)}走,办事时间充足"
+                )
     return sorted(combos, key=lambda item: item.get("total_price") or 999999)
+
+
+def _same_day_no_feasible_note(
+    outbound_flights: list[dict] | None,
+    return_flights: list[dict] | None,
+    constraints: dict | None,
+) -> str:
+    outbound_candidates = [
+        flight for flight in outbound_flights or [] if _flight_arrival_minutes(flight or {}) is not None
+    ]
+    return_candidates = [
+        flight for flight in return_flights or [] if _flight_departure_minutes(flight or {}) is not None
+    ]
+    if not outbound_candidates or not return_candidates:
+        return "按你的当天往返安排暂未找到航班时间完整的可行组合，建议查看详情或放宽条件。"
+    earliest_arrival = min(_flight_arrival_minutes(flight) for flight in outbound_candidates)
+    latest_departure = max(_flight_departure_minutes(flight) for flight in return_candidates)
+    dest_airport = _flight_airport(outbound_candidates[0], "arrival_airport")
+    windows = compute_same_day_windows(constraints or {}, None, dest_airport)
+    if not windows:
+        return "按默认早去晚回规则暂未找到当天往返可行组合，建议考虑放宽时间或前一天到达。"
+    parts = [
+        f"按你的办事安排({windows.get('business_start')}-{windows.get('business_end')})和{windows.get('buffer_h')}h缓冲，当天往返时间较紧"
+    ]
+    if earliest_arrival is not None:
+        parts.append(f"最早去程约{_minutes_to_text(earliest_arrival)}到，要求不晚于{windows.get('outbound_arrive_by')}")
+    if latest_departure is not None:
+        parts.append(f"最晚返程约{_minutes_to_text(latest_departure)}走，要求不早于{windows.get('return_depart_after')}")
+    parts.append("建议放宽缓冲到2h，或考虑前一天到达。")
+    return "；".join(parts)
 
 
 def _infer_travelers_from_passengers(passengers: dict, fallback: str = "solo") -> str:
@@ -1048,6 +1188,10 @@ def migrate_old_subscription(subscription: dict) -> dict:
     _set_if_missing(hard, "baggage", "required" if constraints.get("checked_baggage_required") else "unknown")
     _set_if_missing(hard, "date_flexibility", constraints.get("date_flexibility_days"))
     _set_if_missing(hard, "same_day_round_trip", constraints.get("same_day_round_trip"))
+    _set_if_missing(hard, "business_start", constraints.get("business_start"))
+    _set_if_missing(hard, "business_end", constraints.get("business_end"))
+    _set_if_missing(hard, "buffer_hours", constraints.get("buffer_hours"))
+    _set_if_missing(hard, "transport_mode", constraints.get("transport_mode"))
 
     transfer_rules = advanced.get("transfer") or {}
     _set_if_missing(hard, "max_total_duration_hours", transfer_rules.get("max_total_duration"))
@@ -6214,12 +6358,20 @@ def analyze_round_trip(
         or return_analysis.get("same_day_round_trip")
     )
     same_day_combos = []
+    same_day_no_feasible_note = ""
     if same_day_round_trip:
         same_day_combos = build_same_day_combos(
             _top_flights_for_round_trip(outbound_analysis, 12),
             _top_flights_for_round_trip(return_analysis, 12),
             outbound_analysis.get("depart_date") or outbound_analysis.get("departure_date"),
+            constraints=combined_preferences,
         )
+        if not same_day_combos:
+            same_day_no_feasible_note = _same_day_no_feasible_note(
+                _top_flights_for_round_trip(outbound_analysis, 12),
+                _top_flights_for_round_trip(return_analysis, 12),
+                combined_preferences,
+            )
 
     for outbound in outbound_top:
         for return_flight in return_top:
@@ -6326,6 +6478,7 @@ def analyze_round_trip(
         "top_combinations": combinations[:3],
         "same_day_round_trip": same_day_round_trip,
         "same_day_combos": same_day_combos[:3],
+        "same_day_no_feasible_note": same_day_no_feasible_note,
         "outbound_top3": outbound_top,
         "return_top3": return_top,
         "insight": insight,

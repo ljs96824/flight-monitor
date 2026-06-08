@@ -58,6 +58,11 @@ class WebFormTemplateStep2Test(unittest.TestCase):
 
     def test_same_day_round_trip_field_exists(self):
         self.assertIn('name="same_day_round_trip"', FORM_TEMPLATE)
+        self.assertIn('name="business_start"', FORM_TEMPLATE)
+        self.assertIn('name="business_end"', FORM_TEMPLATE)
+        self.assertIn('name="buffer_hours"', FORM_TEMPLATE)
+        self.assertIn('name="transport_mode"', FORM_TEMPLATE)
+        self.assertIn('data-show-if="same_day_round_trip=true"', FORM_TEMPLATE)
         self.assertIn("syncSameDayRoundTrip", FORM_TEMPLATE)
 
     def test_same_day_round_trip_is_saved_as_constraint(self):
@@ -72,6 +77,10 @@ class WebFormTemplateStep2Test(unittest.TestCase):
             {
                 "round_trip": "false",
                 "same_day_round_trip": "true",
+                "business_start": "10:00",
+                "business_end": "16:00",
+                "buffer_hours": "2.5",
+                "transport_mode": "taxi",
                 "origin_select": "PVG",
                 "destination": "PEK",
                 "depart_date": "2026-06-10",
@@ -89,6 +98,10 @@ class WebFormTemplateStep2Test(unittest.TestCase):
         self.assertTrue(subscription["round_trip"])
         self.assertTrue(subscription["same_day_round_trip"])
         self.assertTrue(subscription["constraints"]["same_day_round_trip"])
+        self.assertEqual(subscription["constraints"]["business_start"], "10:00")
+        self.assertEqual(subscription["constraints"]["business_end"], "16:00")
+        self.assertEqual(subscription["constraints"]["buffer_hours"], 2.5)
+        self.assertEqual(subscription["constraints"]["transport_mode"], "taxi")
         self.assertEqual(subscription["basic"]["return_date"], "2026-06-10")
 
 
