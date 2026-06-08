@@ -22,6 +22,7 @@ from analyzer import (
     analyze_all_flights,
     analyze_price_calendar,
     analyze_round_trip,
+    determine_cabins,
     get_total_passengers,
     migrate_old_subscription,
     price_position_description,
@@ -274,6 +275,11 @@ def _normalize_subscription(item: dict) -> dict:
             if value.strip()
         ]
 
+    hard_constraints_for_cabins = {
+        **hard_constraints,
+        **constraints,
+        "passenger_count": passenger_count,
+    }
     normalized = {
         "id": item.get("id"),
         "subscription_id": item.get("subscription_id"),
@@ -344,7 +350,7 @@ def _normalize_subscription(item: dict) -> dict:
         "hard_constraints": hard_constraints,
         "soft_preferences": soft_preferences,
         "mode": item.get("mode", "balanced"),
-        "cabin_classes": item.get("cabin_classes"),
+        "cabin_classes": item.get("cabin_classes") or determine_cabins(hard_constraints_for_cabins),
         "priorities": item.get("priorities"),
     }
     normalized = apply_default_rules(normalized)

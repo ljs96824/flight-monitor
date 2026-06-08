@@ -24,6 +24,7 @@ from airports import (
 from channels import CHANNEL_INFO
 from analyzer import (
     build_execution_advice,
+    build_cabin_policy_summary,
     build_price_signal,
     build_recommendation_basis,
     build_travel_profile,
@@ -5303,6 +5304,20 @@ def build_notification_payload(
             for index, flight in enumerate(flights[:5])
         ]
     all_items = _apply_plan_tiers(all_items)
+    constraints_for_cabin = {
+        **(subscription.get("hard_constraints") or {}),
+        **(subscription.get("constraints") or {}),
+        "passenger_count": (subscription.get("basic") or {}).get("passenger_count")
+        or subscription.get("passenger_count"),
+    }
+    cabin_policy_summary = (
+        analysis_result.get("cabin_policy_summary")
+        or outbound_analysis.get("cabin_policy_summary")
+        or build_cabin_policy_summary(
+            constraints_for_cabin,
+            _tracking_current_flights(analysis_result, all_items, is_roundtrip),
+        )
+    )
     plan_status_change = track_plan_status(
         route_info.get("subscription_id") or subscription.get("id") or route_key,
         _tracking_current_flights(analysis_result, all_items, is_roundtrip),
@@ -5479,6 +5494,7 @@ def build_notification_payload(
         "nearby_date_prices": _payload_nearby_date_rows(route_info, analysis_result, is_roundtrip),
         "price_calendar": price_calendar_payload,
         "airport_cost_comparison": analysis_result.get("airport_cost_comparison") or [],
+        "cabin_policy_summary": cabin_policy_summary,
         "same_day_no_feasible_note": (
             (analysis_result.get("round_trip_analysis") or {}).get("same_day_no_feasible_note")
             or analysis_result.get("same_day_no_feasible_note")
@@ -5902,6 +5918,61 @@ def _plan_feedback_link(plan: dict) -> str:
         f'<a href="{html.escape(url + sep + "plan=" + quote_plus(plan_code))}" target="_blank">'
         "价格不一致?反馈</a>"
     )
+
+
+def _cabin_policy_summary_body(payload: dict) -> str:
+    summary = payload.get("cabin_policy_summary") or {}
+    if not isinstance(summary, dict):
+        return ""
+    policy = str(summary.get("cabin_policy") or "economy_only")
+    cabins = summary.get("cabins") or []
+    if policy == "economy_only" and "business" not in cabins:
+        return ""
+    nature_label = {
+        "business_meeting": "商务会议",
+        "team_building": "团建/集体出行",
+    }.get(str(summary.get("trip_nature") or ""), str(summary.get("trip_nature") or ""))
+    policy_label = {
+        "economy_only": "仅经济舱报销",
+        "level_based": "部分职级可商务舱",
+        "business_allowed": "均可商务舱",
+    }.get(policy, policy)
+    rows = [
+        ("出行性质", html.escape(nature_label or "未设置")),
+        ("舱位政策", html.escape(policy_label)),
+        ("本次查询舱位", html.escape(" / ".join(_cabin_label(item) for item in cabins) or "经济舱")),
+    ]
+    if summary.get("economy_unit_price") is not None:
+        rows.append(("经济舱", f"参考单人价 {_price_text(summary.get('economy_unit_price'))}"))
+    if summary.get("business_unit_price") is not None:
+        rows.append(("商务舱", f"参考单人价 {_price_text(summary.get('business_unit_price'))}"))
+    if summary.get("business_seats") or summary.get("economy_seats"):
+        rows.append(
+            (
+                "团队席位",
+                html.escape(
+                    f"商务舱{int(summary.get('business_seats') or 0)}人，"
+                    f"经济舱{int(summary.get('economy_seats') or 0)}人"
+                ),
+            )
+        )
+    if summary.get("team_cost_note"):
+        rows.append(("团队合计", html.escape(str(summary.get("team_cost_note")))))
+    notes = [
+        str(summary.get("business_reimburse_note") or "").strip(),
+        str(summary.get("economy_reimburse_note") or "").strip(),
+    ]
+    notes = [note for note in notes if note]
+    if notes:
+        rows.append(("报销判断", "<br>".join(html.escape(note) for note in notes)))
+    rows.append(
+        (
+            "舱位差异",
+            "商务舱通常包含更灵活退改、优先值机/安检、休息室等；经济舱按具体舱位执行行李退改规则。",
+        )
+    )
+    rows.append(("说明", "系统仅客观展示是否在报销范围内和差价对应服务，最终舱位由你按公司规定选择。"))
+    return _email_table(rows)
 
 
 def _plan_inline_checklist(plan: dict) -> list[str]:
@@ -6997,6 +7068,9 @@ def render_email(payload: dict) -> tuple[str, str]:
         ),
     ]
     cards.append(_render_payload_plan_cards(payload, payload.get("recommended_plans") or [], primary_plan))
+    cabin_policy_body = _cabin_policy_summary_body(payload)
+    if cabin_policy_body:
+        cards.append(_email_card("经济舱 / 商务舱并列参考", cabin_policy_body))
     if payload.get("airport_cost_comparison"):
         cards.append(_email_card("机场选择对比", _email_airport_cost_comparison_body(payload)))
 
@@ -7162,6 +7236,9 @@ def render_detail_html(payload: dict) -> str:
     status_text = _plan_status_change_text(payload)
     if status_text:
         cards.insert(4, _email_card("上次推荐方案追踪", html.escape(status_text)))
+    cabin_policy_body = _cabin_policy_summary_body(payload)
+    if cabin_policy_body:
+        cards.insert(3, _email_card("经济舱 / 商务舱并列参考", cabin_policy_body))
     if payload.get("airport_cost_comparison"):
         cards.insert(3, _email_card("机场选择对比", _email_airport_cost_comparison_body(payload)))
 

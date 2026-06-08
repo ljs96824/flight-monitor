@@ -1041,6 +1041,37 @@ FORM_TEMPLATE = """
           <option value="family_elder">家庭老人同行</option>
           <option value="other">其他</option>
         </select>
+
+        <label>出行性质</label>
+        <div class="choice">
+          <label><input type="radio" name="trip_nature" value="business_meeting"> 商务会议</label>
+          <label><input type="radio" name="trip_nature" value="team_building"> 团建/集体出行</label>
+        </div>
+
+        <label>报销/舱位政策</label>
+        <div class="choice">
+          <label><input type="radio" name="cabin_policy" value="economy_only" checked> 仅经济舱报销</label>
+          <label><input type="radio" name="cabin_policy" value="level_based"> 部分职级可商务舱（总监及以上等）</label>
+          <label><input type="radio" name="cabin_policy" value="business_allowed"> 均可商务舱</label>
+        </div>
+
+        <div data-show-if="cabin_policy=level_based">
+          <label>你的职级</label>
+          <div class="choice">
+            <label><input type="radio" name="user_level" value="staff" checked> 普通员工</label>
+            <label><input type="radio" name="user_level" value="manager"> 经理</label>
+            <label><input type="radio" name="user_level" value="director"> 总监</label>
+            <label><input type="radio" name="user_level" value="vp"> 副总裁及以上</label>
+          </div>
+          <label>团队职级构成</label>
+          <div class="inline-grid">
+            <label>商务舱人数 <input type="number" name="business_seats" min="0" value="0"></label>
+            <label>经济舱人数 <input type="number" name="economy_seats" min="0" value="0"></label>
+          </div>
+        </div>
+
+        <label>每人报销上限（可选）</label>
+        <input name="reimburse_per_person" type="number" min="0" step="1" placeholder="例如 5000">
         </div>
         <p class="hint">这些偏好会影响推荐排序，不会影响是否创建监控</p>
       </fieldset>
@@ -2574,6 +2605,18 @@ FORM_TEMPLATE = """
         if (realNeeds.length) {
           summaryLine('实际需求', realNeeds.join('、'));
         }
+        summaryLine('出行性质', selectedLabel('trip_nature'));
+        summaryLine('舱位政策', selectedLabel('cabin_policy'));
+        if (checkedValue('cabin_policy') === 'level_based') {
+          summaryLine('职级', selectedLabel('user_level'));
+          const businessSeats = document.querySelector('input[name="business_seats"]')?.value || '';
+          const economySeats = document.querySelector('input[name="economy_seats"]')?.value || '';
+          if (businessSeats || economySeats) {
+            summaryLine('团队舱位', `商务${businessSeats || 0}人，经济${economySeats || 0}人`);
+          }
+        }
+        const reimburse = document.querySelector('input[name="reimburse_per_person"]')?.value || '';
+        if (reimburse) summaryLine('每人报销上限', money(reimburse));
         summaryLine('时间偏好', timePreferenceText());
         if (checkedValue('time_preference') === 'custom') {
           if (isRoundTrip) {
@@ -2628,6 +2671,12 @@ FORM_TEMPLATE = """
         refund_flexibility: checkedValue('refund_flexibility'),
         price_sensitivity: checkedValue('price_sensitivity'),
         trip_type: form.trip_type ? form.trip_type.value : '',
+        trip_nature: checkedValue('trip_nature'),
+        cabin_policy: checkedValue('cabin_policy'),
+        user_level: checkedValue('user_level'),
+        business_seats: Number(document.querySelector('input[name="business_seats"]')?.value || 0),
+        economy_seats: Number(document.querySelector('input[name="economy_seats"]')?.value || 0),
+        reimburse_per_person: Number(document.querySelector('input[name="reimburse_per_person"]')?.value || 0),
         travel_scenario: selectedTravelScenarios()[0],
         travel_scenarios: selectedTravelScenarios(),
         travel_purposes: checkedValues('travel_purpose'),
@@ -2714,6 +2763,15 @@ FORM_TEMPLATE = """
       if (form.trip_type && data.trip_type) {
         form.trip_type.value = data.trip_type;
       }
+      if (data.trip_nature) setRadio('trip_nature', data.trip_nature);
+      if (data.cabin_policy) setRadio('cabin_policy', data.cabin_policy);
+      if (data.user_level) setRadio('user_level', data.user_level);
+      const businessSeatsInput = document.querySelector('input[name="business_seats"]');
+      const economySeatsInput = document.querySelector('input[name="economy_seats"]');
+      const reimburseInput = document.querySelector('input[name="reimburse_per_person"]');
+      if (businessSeatsInput && data.business_seats !== undefined) businessSeatsInput.value = data.business_seats;
+      if (economySeatsInput && data.economy_seats !== undefined) economySeatsInput.value = data.economy_seats;
+      if (reimburseInput && data.reimburse_per_person !== undefined) reimburseInput.value = data.reimburse_per_person || '';
       document.querySelectorAll('input[name="companion_constraints"]').forEach(input => {
         input.checked = (data.companion_constraints || []).includes(input.value);
       });
@@ -2874,7 +2932,7 @@ FORM_TEMPLATE = """
     resetModuleButtons.forEach(button => {
       button.addEventListener('click', () => resetModule(button.dataset.resetModule));
     });
-    ['companions', 'travel_purpose', 'adult_count', 'child_count', 'elderly_count', 'infant_count', 'passenger_count', 'time_preference', 'refund_flexibility', 'airline_policy', 'accept_self_transfer', 'companion_constraints', 'solo_travel', 'no_late_arrival', 'prefer_daytime_arrival'].forEach(name => {
+    ['companions', 'travel_purpose', 'adult_count', 'child_count', 'elderly_count', 'infant_count', 'passenger_count', 'trip_nature', 'cabin_policy', 'user_level', 'business_seats', 'economy_seats', 'reimburse_per_person', 'time_preference', 'refund_flexibility', 'airline_policy', 'accept_self_transfer', 'companion_constraints', 'solo_travel', 'no_late_arrival', 'prefer_daytime_arrival'].forEach(name => {
       document.querySelectorAll(`input[name="${name}"]`).forEach(input => {
         input.addEventListener('change', () => {
           syncPrefCards();
@@ -3689,6 +3747,12 @@ def build_subscription(form) -> dict:
     solo_travel = parse_bool(form.get("solo_travel", "false"))
     no_late_arrival = parse_bool(form.get("no_late_arrival", "false"))
     prefer_daytime_arrival = parse_bool(form.get("prefer_daytime_arrival", "false"))
+    trip_nature = form.get("trip_nature", "").strip()
+    cabin_policy = form.get("cabin_policy", "economy_only").strip() or "economy_only"
+    user_level = form.get("user_level", "staff").strip() or "staff"
+    business_seats = parse_int(form.get("business_seats"), 0)
+    economy_seats = parse_int(form.get("economy_seats"), 0)
+    reimburse_per_person = parse_int(form.get("reimburse_per_person"), 0)
 
     return {
         "basic": {
@@ -3720,6 +3784,12 @@ def build_subscription(form) -> dict:
             "business_end": business_end if same_day_round_trip else "",
             "buffer_hours": buffer_hours if same_day_round_trip else None,
             "transport_mode": transport_mode if same_day_round_trip else "taxi",
+            "trip_nature": trip_nature,
+            "cabin_policy": cabin_policy,
+            "user_level": user_level,
+            "business_seats": business_seats,
+            "economy_seats": economy_seats,
+            "reimburse_per_person": reimburse_per_person or None,
         },
         "preferences": {
             "travelers": companions,
@@ -3804,6 +3874,12 @@ def build_subscription(form) -> dict:
             "business_end": business_end if same_day_round_trip else "",
             "buffer_hours": buffer_hours if same_day_round_trip else None,
             "transport_mode": transport_mode if same_day_round_trip else "taxi",
+            "trip_nature": trip_nature,
+            "cabin_policy": cabin_policy,
+            "user_level": user_level,
+            "business_seats": business_seats,
+            "economy_seats": economy_seats,
+            "reimburse_per_person": reimburse_per_person or None,
             "max_extra_duration_hours": max_extra_duration_hours,
             "max_total_duration_hours": max_total_duration_hours,
             "departure_time_policy": form.get("departure_time_policy", "no_redeye"),

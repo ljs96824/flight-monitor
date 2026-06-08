@@ -355,6 +355,91 @@ def get_total_passengers(subscription: dict | None) -> tuple[int, dict | None]:
     return max(1, count), None
 
 
+def determine_cabins(constraints: dict | None) -> list[str]:
+    """Return cabin classes to search from reimbursement and level policy."""
+    constraints = constraints or {}
+    policy = str(constraints.get("cabin_policy") or "economy_only").strip()
+    cabins = ["economy"]
+    if policy == "business_allowed":
+        cabins.append("business")
+    elif policy == "level_based":
+        level = str(constraints.get("user_level") or "staff").strip()
+        business_seats = _to_non_negative_int(constraints.get("business_seats"))
+        if level in {"director", "vp"} or business_seats > 0:
+            cabins.append("business")
+    return list(dict.fromkeys(cabins))
+
+
+def _cheapest_cabin_price(flights: list[dict] | None, cabin_class: str):
+    prices = [
+        _to_float(flight.get("price"))
+        for flight in flights or []
+        if (flight.get("cabin_class") or "economy") == cabin_class
+    ]
+    prices = [price for price in prices if price is not None and price > 0]
+    return min(prices) if prices else None
+
+
+def check_reimburse(cabin_label: str, price, per_person_cap) -> str:
+    price_value = _to_float(price)
+    cap = _to_float(per_person_cap)
+    if price_value is None or cap is None or cap <= 0:
+        return ""
+    if price_value > cap:
+        return f"{cabin_label}¥{price_value:,.0f}超出报销上限¥{cap:,.0f}"
+    return f"{cabin_label}¥{price_value:,.0f}在报销上限¥{cap:,.0f}内"
+
+
+def build_cabin_policy_summary(constraints: dict | None, flights: list[dict] | None) -> dict:
+    """Summarize economy/business options without deciding for the user."""
+    constraints = constraints or {}
+    cabins = determine_cabins(constraints)
+    economy_price = _cheapest_cabin_price(flights, "economy")
+    business_price = _cheapest_cabin_price(flights, "business")
+    business_seats = _to_non_negative_int(constraints.get("business_seats"))
+    economy_seats = _to_non_negative_int(constraints.get("economy_seats"))
+    if not business_seats and "business" in cabins and constraints.get("cabin_policy") == "business_allowed":
+        business_seats = _to_non_negative_int(constraints.get("passenger_count"), 0)
+    if not economy_seats and business_seats:
+        total = _to_non_negative_int(constraints.get("passenger_count"), 0)
+        economy_seats = max(0, total - business_seats) if total else economy_seats
+    team_total = None
+    if economy_price is not None or business_price is not None:
+        team_total = 0
+        if economy_price is not None:
+            team_total += economy_price * economy_seats
+        if business_price is not None:
+            team_total += business_price * business_seats
+        team_total = round(team_total) if (economy_seats or business_seats) else None
+    cap = _to_float(constraints.get("reimburse_per_person"))
+    business_note = check_reimburse("商务舱", business_price, cap)
+    economy_note = check_reimburse("经济舱", economy_price, cap)
+    team_cost_note = ""
+    if team_total is not None:
+        parts = []
+        if business_seats:
+            parts.append(f"{business_seats}商务")
+        if economy_seats:
+            parts.append(f"{economy_seats}经济")
+        seat_text = "+".join(parts) if parts else "团队"
+        team_cost_note = f"{seat_text}合计参考¥{team_total:,.0f}"
+    return {
+        "trip_nature": constraints.get("trip_nature") or "",
+        "cabin_policy": constraints.get("cabin_policy") or "economy_only",
+        "user_level": constraints.get("user_level") or "staff",
+        "cabins": cabins,
+        "business_seats": business_seats,
+        "economy_seats": economy_seats,
+        "reimburse_per_person": cap,
+        "economy_unit_price": economy_price,
+        "business_unit_price": business_price,
+        "team_total": team_total,
+        "business_reimburse_note": business_note,
+        "economy_reimburse_note": economy_note,
+        "team_cost_note": team_cost_note,
+    }
+
+
 def _first_time_text(flight: dict, *keys: str) -> str:
     for key in keys:
         value = str(flight.get(key) or "").strip()
@@ -1192,6 +1277,12 @@ def migrate_old_subscription(subscription: dict) -> dict:
     _set_if_missing(hard, "business_end", constraints.get("business_end"))
     _set_if_missing(hard, "buffer_hours", constraints.get("buffer_hours"))
     _set_if_missing(hard, "transport_mode", constraints.get("transport_mode"))
+    _set_if_missing(hard, "trip_nature", constraints.get("trip_nature"))
+    _set_if_missing(hard, "cabin_policy", constraints.get("cabin_policy"))
+    _set_if_missing(hard, "user_level", constraints.get("user_level"))
+    _set_if_missing(hard, "business_seats", constraints.get("business_seats"))
+    _set_if_missing(hard, "economy_seats", constraints.get("economy_seats"))
+    _set_if_missing(hard, "reimburse_per_person", constraints.get("reimburse_per_person"))
 
     transfer_rules = advanced.get("transfer") or {}
     _set_if_missing(hard, "max_total_duration_hours", transfer_rules.get("max_total_duration"))
@@ -1270,6 +1361,9 @@ def apply_default_rules(subscription: dict) -> dict:
         if "business" not in travel_scenarios:
             travel_scenarios.append("business")
         defaults_applied.append("当天往返商务模式：优先早去晚回、直飞和低执行风险方案")
+    if hard.get("trip_nature") == "business_meeting" and "business" not in travel_scenarios:
+        travel_scenarios.append("business")
+        defaults_applied.append("商务会议：提高时间稳定、可改签和低执行风险权重")
     soft["travel_scenarios"] = travel_scenarios
     if soft.get("travel_purposes"):
         soft["travel_purposes"] = travel_scenarios
@@ -5780,6 +5874,7 @@ def analyze_all_flights(
         "all_flights": display_flights,
         "price_range": [lowest_price, max(prices)],
         "cabin_price_ranges": cabin_price_ranges,
+        "cabin_policy_summary": build_cabin_policy_summary(merged_preferences, usable_flights),
         "duration_range": [min(durations), max(durations)],
         "market_context": market_context,
         "price_insights": price_insights,

@@ -65,6 +65,15 @@ class WebFormTemplateStep2Test(unittest.TestCase):
         self.assertIn('data-show-if="same_day_round_trip=true"', FORM_TEMPLATE)
         self.assertIn("syncSameDayRoundTrip", FORM_TEMPLATE)
 
+    def test_business_cabin_policy_fields_exist(self):
+        self.assertIn('name="trip_nature"', FORM_TEMPLATE)
+        self.assertIn('name="cabin_policy"', FORM_TEMPLATE)
+        self.assertIn('name="user_level"', FORM_TEMPLATE)
+        self.assertIn('name="business_seats"', FORM_TEMPLATE)
+        self.assertIn('name="economy_seats"', FORM_TEMPLATE)
+        self.assertIn('name="reimburse_per_person"', FORM_TEMPLATE)
+        self.assertIn('data-show-if="cabin_policy=level_based"', FORM_TEMPLATE)
+
     def test_same_day_round_trip_is_saved_as_constraint(self):
         class Form(dict):
             def getlist(self, key):
@@ -103,6 +112,50 @@ class WebFormTemplateStep2Test(unittest.TestCase):
         self.assertEqual(subscription["constraints"]["buffer_hours"], 2.5)
         self.assertEqual(subscription["constraints"]["transport_mode"], "taxi")
         self.assertEqual(subscription["basic"]["return_date"], "2026-06-10")
+
+    def test_business_cabin_policy_is_saved_as_constraint(self):
+        class Form(dict):
+            def getlist(self, key):
+                value = self.get(key)
+                if value is None:
+                    return []
+                return value if isinstance(value, list) else [value]
+
+        form = Form(
+            {
+                "monitor_mode": "precise",
+                "round_trip": "false",
+                "origin_select": "PVG",
+                "destination": "PEK",
+                "depart_date": "2026-06-10",
+                "price_strategy": "auto_judge",
+                "transfer_policy": "reasonable",
+                "baggage": "required",
+                "primary_goal": "buy_timing",
+                "notification_method": "pushplus",
+                "notification_frequency": "important_only",
+                "adult_count": "2",
+                "child_count": "0",
+                "elderly_count": "0",
+                "infant_count": "0",
+                "trip_nature": "business_meeting",
+                "cabin_policy": "level_based",
+                "user_level": "director",
+                "business_seats": "1",
+                "economy_seats": "1",
+                "reimburse_per_person": "5000",
+            }
+        )
+
+        subscription = build_subscription(form)
+
+        self.assertEqual(subscription["constraints"]["trip_nature"], "business_meeting")
+        self.assertEqual(subscription["constraints"]["cabin_policy"], "level_based")
+        self.assertEqual(subscription["constraints"]["user_level"], "director")
+        self.assertEqual(subscription["constraints"]["business_seats"], 1)
+        self.assertEqual(subscription["constraints"]["economy_seats"], 1)
+        self.assertEqual(subscription["constraints"]["reimburse_per_person"], 5000)
+        self.assertEqual(subscription["hard_constraints"]["cabin_policy"], "level_based")
 
 
 if __name__ == "__main__":
