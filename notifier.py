@@ -4757,6 +4757,23 @@ def _payload_nearby_date_rows(route_info: dict, analysis_result: dict, is_roundt
     return rows
 
 
+def _payload_price_calendar(route_info: dict, analysis_result: dict) -> dict:
+    calendar = route_info.get("price_calendar") or analysis_result.get("price_calendar") or {}
+    if not isinstance(calendar, dict):
+        return {}
+    rows = calendar.get("rows") or []
+    savings = calendar.get("savings") or []
+    weekday_pattern = calendar.get("weekday_pattern") or {}
+    return {
+        "route": calendar.get("route"),
+        "rows": rows if isinstance(rows, list) else [],
+        "savings": savings if isinstance(savings, list) else [],
+        "weekday_pattern": weekday_pattern if isinstance(weekday_pattern, dict) else {},
+        "scope": calendar.get("scope") or "oneway",
+        "note": calendar.get("note") or "为单程最低参考价，实付以支付页为准。",
+    }
+
+
 def _payload_plan_chart_description(plan: dict) -> str:
     plan = plan or {}
     tier = str(plan.get("tier") or plan.get("variant") or "").split(":", 1)[0].strip()
@@ -5313,6 +5330,25 @@ def build_notification_payload(
             "daily_summary": "daily_digest",
             "every_change": "price_change",
         }.get(goals.get("frequency") or "important_only", goals.get("frequency") or "important_only")
+    price_calendar_payload = _payload_price_calendar(route_info, analysis_result)
+    secondary_goals = goals.get("secondary") if isinstance(goals, dict) else []
+    if not isinstance(secondary_goals, list):
+        secondary_goals = []
+    calendar_goal_enabled = (
+        "cheaper_date" in secondary_goals
+        or "nearby_date_cheaper" in secondary_goals
+        or (isinstance(goals, dict) and goals.get("primary") == "cheaper_date")
+    )
+    calendar_savings = price_calendar_payload.get("savings") or []
+    if calendar_goal_enabled and calendar_savings:
+        best_saving = max(calendar_savings, key=lambda item: _to_float(item.get("save")) or 0)
+        if (_to_float(best_saving.get("save")) or 0) >= 200:
+            push_meta["type"] = "前后日期更便宜"
+            reason = (
+                best_saving.get("tip")
+                or f"{best_saving.get('date')}比目标日便宜{_price_text(best_saving.get('save'))}"
+            )
+            push_meta["reasons"] = _payload_dedupe_text([reason] + (push_meta.get("reasons") or []))[:4]
     form_url = _subscription_edit_url(route_info)
     feedback_url = _feedback_url(route_info)
     detail_url = f"{_subscription_form_url(route_info).rstrip('/')}/detail?sub={quote(str(route_info.get('subscription_id') or route_key))}"
@@ -5390,6 +5426,7 @@ def build_notification_payload(
         "source_count": ((primary_flight or {}).get("availability") or {}).get("source_count"),
         "frequency": frequency,
         "nearby_date_prices": _payload_nearby_date_rows(route_info, analysis_result, is_roundtrip),
+        "price_calendar": price_calendar_payload,
         "plan_price_rows": _payload_plan_price_rows(all_items[:5]),
         "channel_price_rows": (all_items[0].get("channel_prices") if all_items else []),
         "detail_url": detail_url,
@@ -6614,6 +6651,64 @@ def _email_trend_card_body(payload: dict) -> str:
     return body
 
 
+def _email_price_calendar_body(payload: dict) -> str:
+    calendar = payload.get("price_calendar") or {}
+    rows = calendar.get("rows") or []
+    if not rows:
+        return "<div style='color:#888;font-size:12px;'>暂无低价日历数据。</div>"
+
+    table = [
+        "<table style='width:100%;font-size:13px;line-height:1.6;border-collapse:collapse;'>",
+        "<thead><tr>",
+        "<th style='text-align:left;color:#666;border-bottom:1px solid #eee;padding:6px 4px;'>日期</th>",
+        "<th style='text-align:left;color:#666;border-bottom:1px solid #eee;padding:6px 4px;'>最低价</th>",
+        "<th style='text-align:left;color:#666;border-bottom:1px solid #eee;padding:6px 4px;'>说明</th>",
+        "</tr></thead><tbody>",
+    ]
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        date_text = f"{str(row.get('date') or '')[5:]} {row.get('weekday') or ''}".strip()
+        tags = []
+        if row.get("lowest"):
+            tags.append("最低")
+        if row.get("selected"):
+            tags.append("你选的")
+        tag_text = " / ".join(tags)
+        price_style = "color:#16a34a;font-weight:600;" if row.get("lowest") else "color:#333;"
+        if row.get("selected"):
+            price_style = "color:#2563eb;font-weight:600;"
+        table.append(
+            "<tr>"
+            f"<td style='padding:7px 4px;border-bottom:1px solid #f5f5f5;'>{html.escape(date_text)}</td>"
+            f"<td style='padding:7px 4px;border-bottom:1px solid #f5f5f5;{price_style}'>{_price_text(row.get('min_price'))}</td>"
+            f"<td style='padding:7px 4px;border-bottom:1px solid #f5f5f5;color:#666;'>{html.escape(tag_text)}</td>"
+            "</tr>"
+        )
+    table.append("</tbody></table>")
+
+    savings = calendar.get("savings") or []
+    if savings:
+        table.append("<div style='margin-top:10px;font-weight:600;'>省钱提示</div>")
+        for item in savings[:3]:
+            tip = item.get("tip") or (
+                f"{item.get('date')} {item.get('weekday')} 便宜{_price_text(item.get('save'))}"
+            )
+            table.append(f"<div style='color:#374151;'>- {html.escape(str(tip))}</div>")
+
+    weekday = calendar.get("weekday_pattern") or {}
+    if weekday and not weekday.get("data_insufficient") and weekday.get("tip"):
+        table.append(
+            f"<div style='margin-top:8px;color:#374151;'>{html.escape(str(weekday.get('tip')))}</div>"
+        )
+    elif weekday and weekday.get("data_insufficient"):
+        table.append("<div style='margin-top:8px;color:#888;font-size:12px;'>周几更便宜：数据积累中。</div>")
+
+    note = calendar.get("note") or "为单程最低参考价，实付以支付页为准。"
+    table.append(f"<div style='margin-top:8px;color:#666;font-size:12px;'>注:{html.escape(str(note))}</div>")
+    return "".join(table)
+
+
 def render_email(payload: dict) -> tuple[str, str]:
     """Render the full HTML email report from a normalized payload."""
     payload = payload or {}
@@ -6728,6 +6823,8 @@ def render_email(payload: dict) -> tuple[str, str]:
 
     cards.append(_email_card("为什么提醒你", _email_list(payload.get("trigger_reason") or [], 3)))
     cards.append(_email_card("价格走势", _email_trend_card_body(payload)))
+    if (payload.get("price_calendar") or {}).get("rows"):
+        cards.append(_email_card("低价日历", _email_price_calendar_body(payload)))
 
     action_rows = [
         ("购买条件", html.escape(str(payload.get("buy_condition") or "以支付页为准"))),
@@ -6845,6 +6942,9 @@ def render_detail_html(payload: dict) -> str:
     cards.append(_detail_section("展开:排除方案", excluded_body))
 
     cards.append(_detail_section("展开:价格走势详情", _email_trend_card_body(payload) + _email_detail_charts_body(payload)))
+
+    if (payload.get("price_calendar") or {}).get("rows"):
+        cards.append(_detail_section("展开:低价日历", _email_price_calendar_body(payload)))
 
     checklist = payload.get("checklist") or []
     checklist_body = "".join(f"<div>□ {html.escape(str(item))}</div>" for item in checklist) or "<div style='color:#888;font-size:12px;'>暂无检查清单。</div>"

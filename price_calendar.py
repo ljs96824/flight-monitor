@@ -1,0 +1,257 @@
+"""Rolling low-price calendar for route/date comparisons.
+
+The calendar is intentionally local and quota-friendly: it keeps per-route JSON
+snapshots and refreshes only a small set of nearby/sample dates when entries are
+stale.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import time
+from datetime import date, datetime, timedelta
+from pathlib import Path
+
+
+DEFAULT_DATA_DIR = Path(__file__).parent / "data" / "price_calendar"
+WEEKDAY_NAMES = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+
+
+def _safe_route(route: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", str(route or "").strip()) or "unknown"
+
+
+def calendar_path(route: str, data_dir: Path | None = None) -> Path:
+    base = data_dir or DEFAULT_DATA_DIR
+    return Path(base) / f"{_safe_route(route)}.json"
+
+
+def now_iso() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def parse_date(value: str | date | datetime) -> date:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    return date.fromisoformat(str(value)[:10])
+
+
+def is_stale(updated_at: str | None, hours: int = 6) -> bool:
+    if not updated_at:
+        return True
+    try:
+        dt = datetime.fromisoformat(str(updated_at).replace("Z", "+00:00"))
+        dt = dt.replace(tzinfo=None)
+    except (TypeError, ValueError):
+        return True
+    return datetime.now() - dt >= timedelta(hours=hours)
+
+
+def load_calendar(route: str, data_dir: Path | None = None) -> dict:
+    path = calendar_path(route, data_dir)
+    if not path.exists():
+        return {"route": route, "dates": {}}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"route": route, "dates": {}}
+    if not isinstance(payload, dict):
+        return {"route": route, "dates": {}}
+    payload.setdefault("route", route)
+    payload.setdefault("dates", {})
+    if not isinstance(payload["dates"], dict):
+        payload["dates"] = {}
+    return payload
+
+
+def save_calendar(route: str, calendar: dict, data_dir: Path | None = None) -> None:
+    path = calendar_path(route, data_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = dict(calendar or {})
+    payload["route"] = payload.get("route") or route
+    payload["dates"] = payload.get("dates") or {}
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+
+
+def _query_dates(target_date: str) -> list[date]:
+    target = parse_date(target_date)
+    offsets = list(range(-3, 4)) + [-14, -7, 7, 14]
+    seen = set()
+    dates = []
+    for offset in offsets:
+        current = target + timedelta(days=offset)
+        if current in seen:
+            continue
+        seen.add(current)
+        dates.append(current)
+    return dates
+
+
+def _source_fetch(source, origin: str, dest: str, date_str: str, cabin_class: str):
+    if hasattr(source, "fetch_and_parse"):
+        return source.fetch_and_parse(origin, dest, date_str)
+    result = source.fetch(origin, dest, date_str, cabin_class)
+    if isinstance(result, dict):
+        return result.get("flights") or []
+    return result or []
+
+
+def _valid_price(value) -> bool:
+    try:
+        return float(value) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def update_calendar(
+    route: str,
+    origin: str,
+    dest: str,
+    target_date: str,
+    source,
+    *,
+    cabin_class: str = "economy",
+    data_dir: Path | None = None,
+    cache_hours: int = 6,
+    sleep_seconds: float = 0.5,
+) -> dict:
+    """Refresh a small date set around target_date and persist the calendar."""
+    calendar = load_calendar(route, data_dir)
+    dates = calendar.setdefault("dates", {})
+
+    for query_date in _query_dates(target_date):
+        date_str = query_date.isoformat()
+        cached = dates.get(date_str)
+        if isinstance(cached, dict) and not is_stale(cached.get("updated_at"), cache_hours):
+            continue
+
+        flights = _source_fetch(source, origin, dest, date_str, cabin_class)
+        priced = [flight for flight in flights if isinstance(flight, dict) and _valid_price(flight.get("price"))]
+        if priced:
+            cheapest = min(priced, key=lambda flight: float(flight.get("price") or 10**9))
+            dates[date_str] = {
+                "min_price": float(cheapest.get("price")),
+                "airline": cheapest.get("airline") or cheapest.get("airline_code") or cheapest.get("airline_name"),
+                "flight_no": cheapest.get("flight_no") or cheapest.get("flight_combo"),
+                "updated_at": now_iso(),
+            }
+        if sleep_seconds:
+            time.sleep(sleep_seconds)
+
+    save_calendar(route, calendar, data_dir)
+    return calendar
+
+
+def analyze_date_savings(
+    calendar: dict,
+    target_date: str,
+    current_price,
+    *,
+    threshold: float = 100,
+    limit: int = 3,
+) -> list[dict]:
+    """Find nearby calendar dates that are materially cheaper than target."""
+    try:
+        current = float(current_price)
+    except (TypeError, ValueError):
+        return []
+
+    target = parse_date(target_date)
+    savings = []
+    for date_str, info in (calendar.get("dates") or {}).items():
+        if not isinstance(info, dict) or not _valid_price(info.get("min_price")):
+            continue
+        d = parse_date(date_str)
+        diff_days = (d - target).days
+        if diff_days == 0:
+            continue
+        price = float(info["min_price"])
+        price_diff = round(current - price)
+        if price_diff < threshold:
+            continue
+        direction = "提前" if diff_days < 0 else "推迟"
+        weekday = WEEKDAY_NAMES[d.weekday()]
+        savings.append(
+            {
+                "date": date_str,
+                "weekday": weekday,
+                "price": price,
+                "save": price_diff,
+                "offset": diff_days,
+                "tip": f"{direction}{abs(diff_days)}天({date_str} {weekday})出发，省¥{price_diff}",
+            }
+        )
+
+    savings.sort(key=lambda item: item["save"], reverse=True)
+    return savings[:limit]
+
+
+def analyze_weekday_pattern(calendar: dict, *, min_samples: int = 7) -> dict | None:
+    """Summarize which weekday tends to be cheaper, if enough samples exist."""
+    by_weekday = {i: [] for i in range(7)}
+    for date_str, info in (calendar.get("dates") or {}).items():
+        if not isinstance(info, dict) or not _valid_price(info.get("min_price")):
+            continue
+        weekday = parse_date(date_str).weekday()
+        by_weekday[weekday].append(float(info["min_price"]))
+
+    sample_count = sum(len(values) for values in by_weekday.values())
+    if sample_count < min_samples:
+        return {"data_insufficient": True}
+
+    averages = {
+        WEEKDAY_NAMES[index]: round(sum(values) / len(values))
+        for index, values in by_weekday.items()
+        if values
+    }
+    minimums = {
+        WEEKDAY_NAMES[index]: min(values)
+        for index, values in by_weekday.items()
+        if values
+    }
+    if not averages:
+        return {"data_insufficient": True}
+    cheapest = min(averages, key=averages.get)
+    return {
+        "cheapest_weekday": cheapest,
+        "by_weekday": averages,
+        "min_by_weekday": minimums,
+        "sample_count": sample_count,
+        "tip": f"本航线{cheapest}通常更便宜",
+    }
+
+
+def calendar_rows(calendar: dict, target_date: str) -> list[dict]:
+    target = parse_date(target_date)
+    rows = []
+    valid_prices = [
+        float(info["min_price"])
+        for info in (calendar.get("dates") or {}).values()
+        if isinstance(info, dict) and _valid_price(info.get("min_price"))
+    ]
+    lowest = min(valid_prices) if valid_prices else None
+    for date_str, info in sorted((calendar.get("dates") or {}).items()):
+        if not isinstance(info, dict) or not _valid_price(info.get("min_price")):
+            continue
+        d = parse_date(date_str)
+        price = float(info["min_price"])
+        rows.append(
+            {
+                "date": date_str,
+                "weekday": WEEKDAY_NAMES[d.weekday()],
+                "min_price": price,
+                "airline": info.get("airline"),
+                "selected": d == target,
+                "lowest": lowest is not None and price == lowest,
+                "scope": "oneway",
+                "label": f"{date_str[5:]} {WEEKDAY_NAMES[d.weekday()]}",
+                "value": price,
+            }
+        )
+    return rows

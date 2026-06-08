@@ -7,6 +7,11 @@ import re
 from datetime import date, datetime, time, timedelta
 
 from price_estimator import calc_transaction_price
+from price_calendar import (
+    analyze_date_savings as _calendar_date_savings,
+    analyze_weekday_pattern as _calendar_weekday_pattern,
+    calendar_rows as _calendar_rows,
+)
 from storage import get_all_history, get_latest_alternatives, get_target_history
 
 IATA_CITY_NAMES = {
@@ -3225,6 +3230,21 @@ def _parse_collected_at(value) -> datetime | None:
         except ValueError:
             pass
     return None
+
+
+def analyze_price_calendar(calendar: dict, target_date: str, current_price) -> dict:
+    """Analyze nearby date savings and weekday patterns from a rolling calendar."""
+    rows = _calendar_rows(calendar or {}, target_date)
+    savings = _calendar_date_savings(calendar or {}, target_date, current_price)
+    weekday_pattern = _calendar_weekday_pattern(calendar or {})
+    return {
+        "route": (calendar or {}).get("route"),
+        "rows": rows,
+        "savings": savings,
+        "weekday_pattern": weekday_pattern,
+        "scope": "oneway",
+        "note": "为单程最低参考价，实付以支付页为准。",
+    }
 
 
 def verify_fare_rules(flight, hard_constraints):

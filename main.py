@@ -20,6 +20,7 @@ load_dotenv(BASE_DIR / ".env", encoding="utf-8")
 from analyzer import (
     apply_default_rules,
     analyze_all_flights,
+    analyze_price_calendar,
     analyze_round_trip,
     get_total_passengers,
     migrate_old_subscription,
@@ -36,7 +37,8 @@ from notifier import (
     render_pushplus,
     send,
 )
-from sources.aggregator import FlightAggregator, build_default_sources
+from price_calendar import update_calendar
+from sources.aggregator import FlightAggregator, build_default_sources, is_domestic_route
 from storage import (
     get_roundtrip_price_history,
     get_lowest_price_history,
@@ -61,6 +63,20 @@ logging.basicConfig(
 ANALYSIS_LOG = DATA_DIR / "analysis_log.jsonl"
 SUBSCRIPTIONS_PATH = DATA_DIR / "subscriptions.json"
 PAGE_PAYLOADS_DIR = DATA_DIR / "payloads"
+
+
+def _first_airport(codes, fallback):
+    values = [str(code).strip().upper() for code in (codes or []) if str(code or "").strip()]
+    return values[0] if values else str(fallback or "").strip().upper()
+
+
+def _calendar_source_for_route(aggregator: FlightAggregator, origin: str, dest: str):
+    sources = aggregator._ordered_search_sources(origin, dest)
+    if is_domestic_route(origin, dest):
+        for source in sources:
+            if str(getattr(source, "name", "")).lower() == "juhe":
+                return source
+    return sources[0] if sources else None
 
 
 def _as_bool(value) -> bool:
@@ -842,6 +858,37 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
         current_min_price = (
             analysis.get("price_range", [0])[0] if analysis.get("price_range") else 0
         )
+        price_calendar_result = None
+        calendar_origin = _first_airport(sub.get("origin_airports"), sub["origin"])
+        calendar_dest = _first_airport(sub.get("destination_airports"), sub["destination"])
+        calendar_route = f"{calendar_origin}-{calendar_dest}"
+        if current_min_price and is_domestic_route(calendar_origin, calendar_dest):
+            try:
+                calendar_source = _calendar_source_for_route(agg, calendar_origin, calendar_dest)
+                if calendar_source:
+                    print(f"[低价日历] 更新 {calendar_route} {sub['depart_date']}")
+                    calendar = update_calendar(
+                        calendar_route,
+                        calendar_origin,
+                        calendar_dest,
+                        sub["depart_date"],
+                        calendar_source,
+                        cabin_class=(sub.get("cabin_classes") or ["economy"])[0]
+                        if isinstance(sub.get("cabin_classes"), list)
+                        else (sub.get("cabin_classes") or "economy"),
+                    )
+                    price_calendar_result = analyze_price_calendar(
+                        calendar,
+                        sub["depart_date"],
+                        current_min_price,
+                    )
+                    print(
+                        "[低价日历] 完成: "
+                        f"{len(price_calendar_result.get('rows') or [])}个日期, "
+                        f"{len(price_calendar_result.get('savings') or [])}条省钱提示"
+                    )
+            except Exception as exc:
+                print(f"[低价日历] 更新失败: {exc}")
         nearby_dates = collect_nearby_dates(
             agg,
             sub,
@@ -859,6 +906,8 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
         analysis["defaults_applied"] = sub.get("defaults_applied", [])
         analysis["collected_at"] = run_collected_at
         analysis["nearby_dates"] = nearby_dates
+        if price_calendar_result:
+            analysis["price_calendar"] = price_calendar_result
         analysis["source_stats"] = data.get("source_stats", {})
         analysis["price_position"] = price_position_description(
             current_min_price, price_history
@@ -1063,6 +1112,7 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
                 "soft_preferences": sub.get("soft_preferences", {}),
                 "notification_goals": sub.get("notification_goals", {}),
                 "nearby_dates": nearby_dates,
+                "price_calendar": price_calendar_result,
                 "previous_prices": previous_prices,
                 "lowest_price_history": lowest_price_history,
                 "source_stats": data.get("source_stats", {}),
