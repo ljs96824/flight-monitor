@@ -5427,6 +5427,7 @@ def build_notification_payload(
         "frequency": frequency,
         "nearby_date_prices": _payload_nearby_date_rows(route_info, analysis_result, is_roundtrip),
         "price_calendar": price_calendar_payload,
+        "airport_cost_comparison": analysis_result.get("airport_cost_comparison") or [],
         "plan_price_rows": _payload_plan_price_rows(all_items[:5]),
         "channel_price_rows": (all_items[0].get("channel_prices") if all_items else []),
         "detail_url": detail_url,
@@ -5760,6 +5761,15 @@ def _render_payload_plan_card(plan: dict, compact: bool = False, primary_plan: d
     refund_line = _plan_refund_line(plan)
     if refund_line:
         rows.append(("退改", refund_line))
+    punctuality_line = _plan_punctuality_line(plan)
+    if punctuality_line:
+        rows.append(("准点率", punctuality_line))
+    effective_cost_line = _plan_effective_cost_line(plan)
+    if effective_cost_line:
+        rows.append(("有效出行成本", effective_cost_line))
+    logistics_line = _plan_logistics_line(plan)
+    if logistics_line:
+        rows.append(("机场交通", logistics_line))
     source_label = _plan_source_label(plan)
     if source_label:
         rows.append(("数据来源", html.escape(source_label)))
@@ -6421,6 +6431,57 @@ def _plan_refund_line(plan: dict) -> str:
     return "<br>".join(html.escape(item) for item in lines[:3])
 
 
+def _plan_punctuality_line(plan: dict) -> str:
+    parts = []
+    for flight in _plan_flights(plan):
+        punctuality = flight.get("punctuality") or {}
+        level = str(punctuality.get("level") or "").strip()
+        if not level:
+            continue
+        note = str(punctuality.get("note") or "准点率参考，实际以航班动态为准").strip()
+        factors = [str(item).strip() for item in punctuality.get("risk_factors") or [] if str(item).strip()]
+        text = f"{level}（{note}）"
+        if factors:
+            text += "；" + "；".join(factors[:2])
+        if text not in parts:
+            parts.append(text)
+    return "<br>".join(html.escape(item) for item in parts[:2])
+
+
+def _plan_effective_cost_line(plan: dict) -> str:
+    values = []
+    notes = []
+    for flight in _plan_flights(plan):
+        effective = flight.get("effective_cost") or {}
+        value = _to_float(effective.get("effective_cost"))
+        if value is None:
+            continue
+        values.append(value)
+        if effective.get("breakdown_note"):
+            notes.append(str(effective.get("breakdown_note")))
+    if not values:
+        return ""
+    if len(values) > 1:
+        text = f"约{_price_text(sum(values))}（往返两程估算）"
+    else:
+        text = f"约{_price_text(values[0])}"
+    notes = list(dict.fromkeys(notes))
+    if notes:
+        text += "：" + "；".join(notes[:2])
+    text += "。参考性综合估算，非精确费用。"
+    return html.escape(text)
+
+
+def _plan_logistics_line(plan: dict) -> str:
+    notes = []
+    for flight in _plan_flights(plan):
+        for note in flight.get("logistics_notes") or []:
+            text = str(note).strip()
+            if text and text not in notes:
+                notes.append(text)
+    return "<br>".join(html.escape(item) for item in notes[:3])
+
+
 def _detail_section(title: str, body: str, open_by_default: bool = False) -> str:
     open_attr = " open" if open_by_default else ""
     return (
@@ -6709,6 +6770,39 @@ def _email_price_calendar_body(payload: dict) -> str:
     return "".join(table)
 
 
+def _email_airport_cost_comparison_body(payload: dict) -> str:
+    rows = payload.get("airport_cost_comparison") or []
+    if not rows:
+        return "<div style='color:#888;font-size:12px;'>暂无多机场成本对比数据。</div>"
+    parts = [
+        "<table style='width:100%;font-size:13px;line-height:1.6;border-collapse:collapse;'>",
+        "<thead><tr>",
+        "<th style='text-align:left;color:#666;border-bottom:1px solid #eee;padding:6px 4px;'>机场组合</th>",
+        "<th style='text-align:left;color:#666;border-bottom:1px solid #eee;padding:6px 4px;'>票价</th>",
+        "<th style='text-align:left;color:#666;border-bottom:1px solid #eee;padding:6px 4px;'>有效成本</th>",
+        "<th style='text-align:left;color:#666;border-bottom:1px solid #eee;padding:6px 4px;'>说明</th>",
+        "</tr></thead><tbody>",
+    ]
+    for item in rows[:4]:
+        dep = _airport_short_label(item.get("departure_airport"))
+        arr = _airport_short_label(item.get("arrival_airport"))
+        parts.append(
+            "<tr>"
+            f"<td style='padding:7px 4px;border-bottom:1px solid #f5f5f5;'>{html.escape(dep)} → {html.escape(arr)}</td>"
+            f"<td style='padding:7px 4px;border-bottom:1px solid #f5f5f5;'>{_price_text(item.get('ticket_price'))}</td>"
+            f"<td style='padding:7px 4px;border-bottom:1px solid #f5f5f5;color:#2563eb;font-weight:600;'>{_price_text(item.get('effective_cost'))}</td>"
+            f"<td style='padding:7px 4px;border-bottom:1px solid #f5f5f5;color:#666;'>{html.escape(str(item.get('note') or ''))}</td>"
+            "</tr>"
+        )
+    parts.append("</tbody></table>")
+    parts.append(
+        "<div style='margin-top:8px;color:#666;font-size:12px;'>"
+        "有效成本为参考估算，交通按打车估算，时间成本默认按¥50/小时估算。"
+        "</div>"
+    )
+    return "".join(parts)
+
+
 def render_email(payload: dict) -> tuple[str, str]:
     """Render the full HTML email report from a normalized payload."""
     payload = payload or {}
@@ -6766,6 +6860,8 @@ def render_email(payload: dict) -> tuple[str, str]:
         ),
     ]
     cards.append(_render_payload_plan_cards(payload, payload.get("recommended_plans") or [], primary_plan))
+    if payload.get("airport_cost_comparison"):
+        cards.append(_email_card("机场选择对比", _email_airport_cost_comparison_body(payload)))
 
     profile_explanation = payload.get("travel_profile_explanation") or {}
     recommendation_basis = payload.get("recommendation_basis") or {}
@@ -6915,6 +7011,8 @@ def render_detail_html(payload: dict) -> str:
         _email_card("为什么提醒你", _email_list(payload.get("trigger_reason") or [], 3)),
         _email_card("价格走势", _email_trend_card_body(payload)),
     ]
+    if payload.get("airport_cost_comparison"):
+        cards.insert(3, _email_card("机场选择对比", _email_airport_cost_comparison_body(payload)))
 
     action_rows = [
         ("购买条件", html.escape(str(payload.get("buy_condition") or "以支付页为准"))),

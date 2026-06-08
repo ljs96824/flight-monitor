@@ -6,6 +6,8 @@ import statistics
 import re
 from datetime import date, datetime, time, timedelta
 
+from airport_logistics import get_airport_logistics
+from on_time_data import estimate_punctuality
 from price_estimator import calc_transaction_price
 from price_calendar import (
     analyze_date_savings as _calendar_date_savings,
@@ -3361,6 +3363,131 @@ def _ensure_domestic_fare_rules(flight: dict) -> dict:
     return fare_rules
 
 
+def _flight_airports(flight: dict | None) -> tuple[str, str]:
+    flight = flight or {}
+    segments = flight.get("segments") or []
+    first = segments[0] if segments and isinstance(segments[0], dict) else {}
+    last = segments[-1] if segments and isinstance(segments[-1], dict) else {}
+    dep = (
+        flight.get("departure_airport")
+        or flight.get("dep_airport")
+        or flight.get("origin")
+        or first.get("dep_airport")
+        or first.get("departure_airport")
+        or ""
+    )
+    arr = (
+        flight.get("arrival_airport")
+        or flight.get("arr_airport")
+        or flight.get("destination")
+        or last.get("arr_airport")
+        or last.get("arrival_airport")
+        or ""
+    )
+    return str(dep).strip().upper(), str(arr).strip().upper()
+
+
+def _flight_duration_minutes(flight: dict | None) -> float:
+    flight = flight or {}
+    value = _to_float(flight.get("total_duration_min"))
+    if value is not None:
+        return value
+    hours = _to_float(flight.get("total_hours"))
+    if hours is not None:
+        return hours * 60
+    return 120
+
+
+def _needs_checked_baggage(preferences: dict | None) -> bool:
+    prefs = preferences or {}
+    baggage = prefs.get("baggage") or prefs.get("need_baggage") or prefs.get("checked_baggage_required")
+    return baggage in {"required", "must", True, "yes", "需要", "必须"}
+
+
+def calc_effective_cost(flight: dict, subscription, time_value_per_hour: float = 50) -> dict:
+    """Estimate effective travel cost with ground transport, time, and baggage."""
+    flight = flight or {}
+    preferences = subscription or {}
+    price = _to_float(flight.get("price")) or 0
+    dep_airport, arr_airport = _flight_airports(flight)
+    dep_logi = get_airport_logistics(dep_airport)
+    arr_logi = get_airport_logistics(arr_airport)
+    transport_cost = (dep_logi.get("taxi_cost") or 100) + (arr_logi.get("taxi_cost") or 100)
+    flight_min = _flight_duration_minutes(flight)
+    transport_min = (dep_logi.get("to_center_min") or 45) + (arr_logi.get("to_center_min") or 45)
+    time_cost = round(((flight_min + transport_min) / 60) * float(time_value_per_hour))
+
+    fare_rules = flight.get("fare_rules") or _ensure_domestic_fare_rules(flight)
+    baggage_info = (fare_rules or {}).get("baggage") or {}
+    baggage_cost = 0
+    if _needs_checked_baggage(preferences) and baggage_info.get("included") is False:
+        baggage_cost = 100
+
+    effective = round(price + transport_cost + time_cost + baggage_cost)
+    return {
+        "ticket_price": round(price),
+        "transport_cost": round(transport_cost),
+        "time_cost": time_cost,
+        "baggage_cost": baggage_cost,
+        "effective_cost": effective,
+        "time_value_per_hour": time_value_per_hour,
+        "transport_minutes": round(transport_min),
+        "breakdown_note": (
+            f"票价¥{round(price)}+机场交通约¥{round(transport_cost)}"
+            f"+时间成本约¥{time_cost}"
+            + (f"+行李加购约¥{baggage_cost}" if baggage_cost else "")
+        ),
+        "note": "参考性综合估算，交通按打车估算，时间成本按¥50/小时估算。",
+    }
+
+
+def enrich_travel_risk_and_cost(flight: dict, preferences: dict | None = None) -> dict:
+    """Attach punctuality, logistics notes, and effective cost to one flight."""
+    flight = flight or {}
+    if not _is_domestic_flight(flight):
+        return flight
+    dep_airport, arr_airport = _flight_airports(flight)
+    airline_code = _flight_airline_code(flight)
+    flight["punctuality"] = estimate_punctuality(airline_code, dep_airport, arr_airport)
+    dep_logi = get_airport_logistics(dep_airport)
+    arr_logi = get_airport_logistics(arr_airport)
+    notes = []
+    for airport, logistics in ((dep_airport, dep_logi), (arr_airport, arr_logi)):
+        note = logistics.get("note")
+        if note:
+            notes.append(
+                f"{note}{logistics.get('to_center_min', 45)}分钟"
+                if "分钟" not in str(note)
+                else str(note)
+            )
+    flight["logistics_notes"] = notes
+    flight["effective_cost"] = calc_effective_cost(flight, preferences or {})
+    return flight
+
+
+def build_airport_cost_comparison(flights: list[dict], limit: int = 4) -> list[dict]:
+    """Compare representative effective cost by departure/arrival airport pair."""
+    best_by_pair = {}
+    for flight in flights or []:
+        effective = flight.get("effective_cost") or {}
+        value = _to_float(effective.get("effective_cost"))
+        if value is None:
+            continue
+        dep, arr = _flight_airports(flight)
+        key = (dep, arr)
+        current = best_by_pair.get(key)
+        if not current or value < current["effective_cost"]:
+            best_by_pair[key] = {
+                "departure_airport": dep,
+                "arrival_airport": arr,
+                "ticket_price": _to_float(flight.get("price")),
+                "effective_cost": value,
+                "note": "；".join(flight.get("logistics_notes") or []),
+                "flight_no": flight.get("flight_no") or flight.get("flight_combo"),
+            }
+    return sorted(best_by_pair.values(), key=lambda item: item["effective_cost"])[:limit]
+
+
 def verify_fare_rules(flight, hard_constraints):
     issues = []
     matches = []
@@ -5183,6 +5310,7 @@ def analyze_all_flights(
         flight["scores"] = overall_score(flight, prices, durations, mode)
         flight["transfer_risk"] = transfer_risk(flight)
         flight["fare_verification"] = verify_fare_rules(flight, merged_preferences)
+        enrich_travel_risk_and_cost(flight, merged_preferences)
         flight["domestic_tags"] = make_domestic_tags(flight, travel_profile, lowest_price)
         flight["price_estimate"] = calc_transaction_price(flight, merged_preferences)
         flight["availability"] = estimate_availability(
@@ -5422,6 +5550,7 @@ def analyze_all_flights(
         "travel_profile_explanation": travel_profile_explanation(travel_profile),
         "recommendation_basis": build_recommendation_basis(travel_profile),
         "alert_policy": alert_policy,
+        "airport_cost_comparison": build_airport_cost_comparison(usable_flights),
         "mode": mode,
         "priorities": priority_config,
         "qualified_flights": qualified_flights,
