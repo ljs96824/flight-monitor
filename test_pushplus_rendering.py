@@ -4,7 +4,7 @@ import unittest
 
 sys.modules.setdefault("httpx", types.SimpleNamespace())
 
-from notifier import _payload_combo_plan, render_pushplus
+from notifier import _payload_combo_plan, _render_payload_plan_card, render_pushplus
 
 
 def _flight(combo, airline, dep, arr, dep_time, arr_time):
@@ -84,6 +84,37 @@ class PushPlusRenderingTest(unittest.TestCase):
             self.assertGreaterEqual(msg.count(f">{channel}</a>"), 2)
         self.assertIn("点击验证最终价格", msg)
         self.assertIn("价格以各平台支付页为准", msg)
+
+    def test_plan_card_channel_advice_does_not_fake_channel_prices(self):
+        route_info = {"depart_date": "2026-06-10", "return_date": "2026-06-10"}
+        combo = {
+            "outbound": _flight(
+                "MU5101",
+                "MU",
+                "SHA",
+                "PEK",
+                "2026-06-10 08:10",
+                "2026-06-10 10:25",
+            ),
+            "return": _flight(
+                "MU5108",
+                "MU",
+                "PEK",
+                "SHA",
+                "2026-06-10 18:40",
+                "2026-06-10 20:55",
+            ),
+            "total_price": 1520,
+        }
+        plan = _payload_combo_plan(combo, route_info, 0, "推荐")
+
+        rendered = _render_payload_plan_card(plan)
+
+        self.assertIn("购买渠道建议", rendered)
+        self.assertIn("支付页", rendered)
+        self.assertNotIn("携程 ¥", rendered)
+        self.assertNotIn("飞猪 ¥", rendered)
+        self.assertNotIn("去哪儿 ¥", rendered)
 
 
 if __name__ == "__main__":

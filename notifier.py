@@ -47,6 +47,7 @@ from storage import (
     save_last_push_price,
     save_push_snapshot,
 )
+from plan_tracker import save_pushed_plans, track_plan_status
 
 
 BUY_SIGNALS = {"strong_buy", "buy", "buy_now"}
@@ -4647,6 +4648,9 @@ def _payload_combo_plan(combo: dict, route_info: dict, index: int, variant: str)
         "baggage_line": _pushplus_baggage_line_for_combo(outbound, return_flight),
         "purchase_mode": purchase_mode,
         "purchase_note": _purchase_mode_note(purchase_mode),
+        "same_day_round_trip": bool(combo.get("same_day_round_trip")),
+        "stay_hours": combo.get("stay_hours"),
+        "same_day_tag": combo.get("tag") or ("当天往返可行" if combo.get("same_day_round_trip") else ""),
         "tags": _round_trip_combo_tags(combo, route_info, None),
         "risk": _combo_grade(combo),
         "buy_condition": _combo_human_recommendation(combo, route_info),
@@ -4684,6 +4688,39 @@ def _plan_flights(plan: dict) -> list[dict]:
         if isinstance(flight, dict) and flight:
             flights.append(flight)
     return flights
+
+
+def _tracking_current_flights(
+    analysis_result: dict,
+    all_items: list[dict],
+    is_roundtrip: bool,
+) -> list[dict]:
+    flights: list[dict] = []
+    for plan in all_items or []:
+        flights.extend(_plan_flights(plan))
+    if is_roundtrip:
+        for combo in _round_trip_combinations(analysis_result):
+            for key in ("outbound", "return"):
+                flight = combo.get(key)
+                if isinstance(flight, dict) and flight:
+                    flights.append(flight)
+    else:
+        flights.extend(_single_flights_for_sections(analysis_result))
+
+    seen: set[str] = set()
+    unique: list[dict] = []
+    for flight in flights:
+        key = str(
+            flight.get("flight_no")
+            or flight.get("flight_number")
+            or flight.get("flight_combo")
+            or id(flight)
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(flight)
+    return unique
 
 
 def _plan_total_stops(plan: dict) -> int:
@@ -5264,6 +5301,10 @@ def build_notification_payload(
             for index, flight in enumerate(flights[:5])
         ]
     all_items = _apply_plan_tiers(all_items)
+    plan_status_change = track_plan_status(
+        route_info.get("subscription_id") or subscription.get("id") or route_key,
+        _tracking_current_flights(analysis_result, all_items, is_roundtrip),
+    )
 
     primary_flight = None
     if is_roundtrip:
@@ -5314,6 +5355,13 @@ def build_notification_payload(
         push_meta["type"] = price_policy["push_type_hint"]
     if price_policy.get("reason"):
         push_meta["reasons"] = _payload_dedupe_text([price_policy["reason"]] + (push_meta.get("reasons") or []))[:4]
+    if plan_status_change:
+        status = plan_status_change.get("status")
+        msg = str(plan_status_change.get("msg") or "").strip()
+        if status in {"price_up", "sold_out"}:
+            push_meta["type"] = "涨价风险"
+        if msg:
+            push_meta["reasons"] = _payload_dedupe_text([msg] + (push_meta.get("reasons") or []))[:4]
 
     change = (push_meta or {}).get("price_change") or {}
     fallback_line = _trend_fallback_line(history)
@@ -5355,6 +5403,7 @@ def build_notification_payload(
     payload = {
         "push_type": (push_meta or {}).get("type") or "价格提醒",
         "route": _payload_route_text(route_info),
+        "subscription_id": route_info.get("subscription_id") or subscription.get("id"),
         "route_airports": _payload_route_airports(route_info),
         "route_type": _source_stats_route_type(source_stats),
         "trip_type": "round_trip" if is_roundtrip else "one_way",
@@ -5428,6 +5477,7 @@ def build_notification_payload(
         "nearby_date_prices": _payload_nearby_date_rows(route_info, analysis_result, is_roundtrip),
         "price_calendar": price_calendar_payload,
         "airport_cost_comparison": analysis_result.get("airport_cost_comparison") or [],
+        "plan_status_change": plan_status_change,
         "plan_price_rows": _payload_plan_price_rows(all_items[:5]),
         "channel_price_rows": (all_items[0].get("channel_prices") if all_items else []),
         "detail_url": detail_url,
@@ -5437,6 +5487,7 @@ def build_notification_payload(
         "collected_at": _message_collected_time(analysis_result, route_info),
         "snapshot": {
             "route": route_key,
+            "subscription_id": route_info.get("subscription_id") or subscription.get("id"),
             "depart_date": depart_key,
             "return_date": return_key,
             "channels": _snapshot_channels(primary_flight),
@@ -5643,6 +5694,11 @@ def _pushplus_plan_lines(payload: dict) -> list[str]:
     return ["", "推荐方案:"] + detail_lines
 
 
+def _plan_status_change_text(payload: dict) -> str:
+    status = payload.get("plan_status_change") or {}
+    return str(status.get("msg") or "").strip() if isinstance(status, dict) else ""
+
+
 def render_pushplus(payload: dict) -> str:
     """Render the strictly short PushPlus message from the unified payload."""
     payload = payload or {}
@@ -5677,6 +5733,13 @@ def render_pushplus(payload: dict) -> str:
         f"购买条件:{buy_condition}",
     ]
     lines.extend(_pushplus_plan_lines(payload))
+    if primary_plan.get("same_day_round_trip"):
+        stay = _to_float(primary_plan.get("stay_hours"))
+        stay_line = f"停留:约{stay:g}小时(可办事)" if stay is not None else "当天往返可行"
+        lines.append(stay_line)
+    status_text = _plan_status_change_text(payload)
+    if status_text:
+        lines.extend(["", "上次方案追踪:" + html.escape(status_text)])
     recommendation_basis = payload.get("recommendation_basis") or {}
     scenario_label = " + ".join(recommendation_basis.get("scenario_labels") or [])
     profile_explanation = payload.get("travel_profile_explanation") or {}
@@ -5733,6 +5796,12 @@ def _render_payload_plan_card(plan: dict, compact: bool = False, primary_plan: d
         )
         if plan.get("purchase_note"):
             rows.append(("说明", html.escape(str(plan.get("purchase_note")))))
+        if plan.get("same_day_round_trip"):
+            stay = _to_float(plan.get("stay_hours"))
+            stay_text = f"约{stay:g}小时（可办事）" if stay is not None else "当天往返可行"
+            rows.append(("停留", html.escape(stay_text)))
+        if plan.get("same_day_tag"):
+            rows.append(("商务模式", html.escape(str(plan.get("same_day_tag")))))
         links = plan.get("links") or {}
         link_lines = []
         if links.get("outbound"):
@@ -5773,6 +5842,9 @@ def _render_payload_plan_card(plan: dict, compact: bool = False, primary_plan: d
     source_label = _plan_source_label(plan)
     if source_label:
         rows.append(("数据来源", html.escape(source_label)))
+    channel_advice = _plan_channel_purchase_advice(plan)
+    if channel_advice:
+        rows.append(("购买渠道建议", channel_advice))
     if plan.get("tier_reason"):
         rows.append(("分级原因", html.escape(str(plan.get("tier_reason")))))
     suitable_condition = str(plan.get("suitable_condition") or "").strip()
@@ -6414,6 +6486,44 @@ def _plan_source_label(plan: dict) -> str:
     return " / ".join(labels)
 
 
+FULL_SERVICE_AIRLINE_CODES = {
+    "CA",
+    "MU",
+    "CZ",
+    "HU",
+    "MF",
+    "ZH",
+    "SC",
+    "3U",
+    "FM",
+    "GJ",
+    "EU",
+}
+LCC_AIRLINE_CODES = {"9C", "HO", "PN", "KN", "BK", "JD", "GS", "MM", "TR", "AK"}
+
+
+def _plan_airline_codes(plan: dict) -> list[str]:
+    codes: list[str] = []
+    for flight in _plan_flights(plan):
+        code = _first_airline_code(flight)
+        if code and code not in codes:
+            codes.append(code)
+    return codes
+
+
+def _plan_channel_purchase_advice(plan: dict) -> str:
+    codes = _plan_airline_codes(plan)
+    if not codes:
+        return "各渠道价格和服务费可能不同，以支付页最终价为准。"
+    if any(code in FULL_SERVICE_AIRLINE_CODES for code in codes):
+        focus = "重视售后/报销：优先航司官网；只看价格：再验证携程、飞猪、去哪儿。"
+    elif any(code in LCC_AIRLINE_CODES for code in codes):
+        focus = "廉航/特价方案：优先验证携程、飞猪、去哪儿低价，同时确认托运行李和服务费。"
+    else:
+        focus = "建议先验证携程、飞猪、去哪儿；如官网价格接近，售后/报销优先官网。"
+    return html.escape(focus + " 价格以各平台支付页为准。")
+
+
 def _plan_refund_line(plan: dict) -> str:
     lines = []
     for flight in _plan_flights(plan):
@@ -6918,6 +7028,9 @@ def render_email(payload: dict) -> tuple[str, str]:
     cards.append(_email_card("推荐依据", _email_table(profile_rows)))
 
     cards.append(_email_card("为什么提醒你", _email_list(payload.get("trigger_reason") or [], 3)))
+    status_text = _plan_status_change_text(payload)
+    if status_text:
+        cards.append(_email_card("上次推荐方案追踪", html.escape(status_text)))
     cards.append(_email_card("价格走势", _email_trend_card_body(payload)))
     if (payload.get("price_calendar") or {}).get("rows"):
         cards.append(_email_card("低价日历", _email_price_calendar_body(payload)))
@@ -7011,6 +7124,9 @@ def render_detail_html(payload: dict) -> str:
         _email_card("为什么提醒你", _email_list(payload.get("trigger_reason") or [], 3)),
         _email_card("价格走势", _email_trend_card_body(payload)),
     ]
+    status_text = _plan_status_change_text(payload)
+    if status_text:
+        cards.insert(4, _email_card("上次推荐方案追踪", html.escape(status_text)))
     if payload.get("airport_cost_comparison"):
         cards.insert(3, _email_card("机场选择对比", _email_airport_cost_comparison_body(payload)))
 
@@ -7102,6 +7218,13 @@ def persist_notification_payload(payload: dict) -> None:
         snapshot.get("fare_status") or "",
         payload.get("push_type"),
         now,
+    )
+    save_pushed_plans(
+        payload.get("snapshot", {}).get("subscription_id")
+        or payload.get("subscription_id")
+        or snapshot.get("subscription_id")
+        or route,
+        payload.get("recommended_plans") or [],
     )
 
 

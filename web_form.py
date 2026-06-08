@@ -695,6 +695,10 @@ FORM_TEMPLATE = """
 
       <label for="depart_date">出发日期</label>
       <input id="depart_date" name="depart_date" type="date" required>
+      <label class="hint" style="display:block;margin-top:8px;">
+        <input id="same_day_round_trip" name="same_day_round_trip" type="checkbox" value="true">
+        当天往返（早上去、当天晚上回，适合国内商务）
+      </label>
 
       <div id="return-date-wrap" data-show-if="round_trip=true">
         <label for="return_date">返程日期</label>
@@ -1251,6 +1255,7 @@ FORM_TEMPLATE = """
     const tripRadios = document.querySelectorAll('input[name="round_trip"]');
     const returnWrap = document.getElementById('return-date-wrap');
     const returnDate = document.getElementById('return_date');
+    const sameDayRoundTrip = document.getElementById('same_day_round_trip');
     const customTimeOptions = document.getElementById('custom-time-options');
     const preciseTimeToggle = document.getElementById('precise-time-toggle');
     const preciseTimeOptions = document.getElementById('precise-time-options');
@@ -1969,6 +1974,28 @@ FORM_TEMPLATE = """
       toggleTimePreference();
     }
 
+    function syncSameDayRoundTrip() {
+      if (!sameDayRoundTrip || !sameDayRoundTrip.checked) {
+        return;
+      }
+      setRadio('round_trip', 'true');
+      if (form.depart_date && returnDate) {
+        returnDate.value = form.depart_date.value || returnDate.value;
+      }
+      const direct = document.querySelector('input[name="transfer_policy"][value="direct_only"]');
+      if (direct) {
+        direct.checked = true;
+      }
+      const business = document.querySelector('input[name="travel_scenario"][value="business"]');
+      if (business) {
+        business.checked = true;
+      }
+      updateConditionalFields();
+      toggleReturnDate();
+      toggleShortTransferOptions();
+      refreshSummaryIfFinalStep();
+    }
+
     function toggleBudgetRequired() {
       const strategy = checkedValue('price_strategy');
       const explicit = strategy === 'explicit';
@@ -2568,6 +2595,7 @@ FORM_TEMPLATE = """
     function collectPreferenceTemplate() {
       return {
         monitor_mode: checkedValue('monitor_mode'),
+        same_day_round_trip: Boolean(document.querySelector('input[name="same_day_round_trip"]')?.checked),
         budget_strategy: checkedValue('price_strategy'),
         transfer_policy: checkedValue('transfer_policy'),
         baggage: checkedValue('baggage'),
@@ -2649,6 +2677,9 @@ FORM_TEMPLATE = """
       if (data.notification_frequency) {
         setRadio('notification_frequency_rule', data.notification_frequency);
       }
+      if (sameDayRoundTrip) {
+        sameDayRoundTrip.checked = Boolean(data.same_day_round_trip);
+      }
       if (form.trip_type && data.trip_type) {
         form.trip_type.value = data.trip_type;
       }
@@ -2667,6 +2698,7 @@ FORM_TEMPLATE = """
       applyMonitorMode();
       toggleBudgetRequired();
       toggleNotificationMethod();
+      syncSameDayRoundTrip();
       toggleReturnDate();
       updateRequiredProgress();
       syncPrefCards();
@@ -2760,11 +2792,19 @@ FORM_TEMPLATE = """
     });
 
     tripRadios.forEach(radio => radio.addEventListener('change', () => {
+      if (checkedValue('round_trip') !== 'true' && sameDayRoundTrip) {
+        sameDayRoundTrip.checked = false;
+      }
       toggleReturnDate();
       updateConditionalFields();
       updateStepper();
       updateRequiredProgress();
     }));
+    sameDayRoundTrip?.addEventListener('change', () => {
+      syncSameDayRoundTrip();
+      updateRequiredProgress();
+    });
+    form.depart_date?.addEventListener('change', syncSameDayRoundTrip);
     budgetStrategyRadios.forEach(radio => radio.addEventListener('change', toggleBudgetRequired));
     maxBudgetRadios.forEach(radio => radio.addEventListener('change', toggleBudgetRequired));
     targetPriceRadios.forEach(radio => radio.addEventListener('change', toggleBudgetRequired));
@@ -2843,6 +2883,7 @@ FORM_TEMPLATE = """
     companionRadios.forEach(radio => radio.addEventListener('change', applyCompanionDefaults));
     captureModuleDefaults();
     applyEditSubscription(editSubscription);
+    syncSameDayRoundTrip();
     toggleReturnDate();
     toggleBudgetRequired();
     toggleNotificationMethod();
@@ -3423,6 +3464,9 @@ def first_push_text() -> str:
 
 def build_subscription(form) -> dict:
     round_trip = parse_bool(form.get("round_trip", "false"))
+    same_day_round_trip = parse_bool(form.get("same_day_round_trip", "false"))
+    if same_day_round_trip:
+        round_trip = True
     monitor_mode = form.get("monitor_mode", "quick")
     origin_manual = form.get("origin_manual", "").strip()
     origin_select = form.get("origin_select", "").strip()
@@ -3615,7 +3659,11 @@ def build_subscription(form) -> dict:
             "destination_airports_active": destination_airports_active,
             "trip_type": "round_trip" if round_trip else "one_way",
             "departure_date": form.get("depart_date", "").strip(),
-            "return_date": form.get("return_date", "").strip() if round_trip else None,
+            "return_date": (
+                form.get("depart_date", "").strip()
+                if same_day_round_trip
+                else form.get("return_date", "").strip() if round_trip else None
+            ),
             "passenger_count": passenger_count,
         },
         "constraints": {
@@ -3625,6 +3673,7 @@ def build_subscription(form) -> dict:
             "date_flexibility_days": parse_int(form.get("date_flexibility"), 0),
             "transfer_policy": form.get("transfer_policy", "reasonable"),
             "checked_baggage_required": form.get("baggage", "required") == "required",
+            "same_day_round_trip": same_day_round_trip,
         },
         "preferences": {
             "travelers": companions,
@@ -3685,8 +3734,13 @@ def build_subscription(form) -> dict:
         "excluded_airports": excluded_airports,
         "monitor_mode": monitor_mode,
         "depart_date": form.get("depart_date", "").strip(),
-        "return_date": form.get("return_date", "").strip() if round_trip else None,
+        "return_date": (
+            form.get("depart_date", "").strip()
+            if same_day_round_trip
+            else form.get("return_date", "").strip() if round_trip else None
+        ),
         "round_trip": round_trip,
+        "same_day_round_trip": same_day_round_trip,
         "passenger_count": passenger_count,
         "date_flexibility": parse_int(form.get("date_flexibility"), 0),
         "return_date_flexibility": (
@@ -3699,6 +3753,7 @@ def build_subscription(form) -> dict:
             "target_price": target_price,
             "target_price_mode": target_price_mode,
             "transfer_policy": form.get("transfer_policy", "reasonable"),
+            "same_day_round_trip": same_day_round_trip,
             "max_extra_duration_hours": max_extra_duration_hours,
             "max_total_duration_hours": max_total_duration_hours,
             "departure_time_policy": form.get("departure_time_policy", "no_redeye"),

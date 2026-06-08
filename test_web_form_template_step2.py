@@ -21,18 +21,22 @@ class _DummyFlask:
 
 
 sys.modules.setdefault("dotenv", types.SimpleNamespace(load_dotenv=lambda *a, **k: None))
-sys.modules.setdefault(
-    "flask",
-    types.SimpleNamespace(
-        Flask=_DummyFlask,
-        redirect=lambda *a, **k: None,
-        render_template_string=lambda *a, **k: "",
-        request=types.SimpleNamespace(form={}),
-        url_for=lambda *a, **k: "",
-    ),
-)
+try:
+    import flask  # noqa: F401
+except ModuleNotFoundError:
+    sys.modules.setdefault(
+        "flask",
+        types.SimpleNamespace(
+            Flask=_DummyFlask,
+            redirect=lambda *a, **k: None,
+            render_template_string=lambda *a, **k: "",
+            request=types.SimpleNamespace(form={}),
+            url_for=lambda *a, **k: "",
+        ),
+    )
 
 from web_form import FORM_TEMPLATE
+from web_form import build_subscription
 
 
 class WebFormTemplateStep2Test(unittest.TestCase):
@@ -51,6 +55,41 @@ class WebFormTemplateStep2Test(unittest.TestCase):
     def test_transfer_rules_use_declarative_visibility(self):
         self.assertIn('data-show-if="transfer_policy=reasonable|price_first"', FORM_TEMPLATE)
         self.assertIn('data-show-if="transfer_policy=price_first"', FORM_TEMPLATE)
+
+    def test_same_day_round_trip_field_exists(self):
+        self.assertIn('name="same_day_round_trip"', FORM_TEMPLATE)
+        self.assertIn("syncSameDayRoundTrip", FORM_TEMPLATE)
+
+    def test_same_day_round_trip_is_saved_as_constraint(self):
+        class Form(dict):
+            def getlist(self, key):
+                value = self.get(key)
+                if value is None:
+                    return []
+                return value if isinstance(value, list) else [value]
+
+        form = Form(
+            {
+                "round_trip": "false",
+                "same_day_round_trip": "true",
+                "origin_select": "PVG",
+                "destination": "PEK",
+                "depart_date": "2026-06-10",
+                "price_strategy": "auto_judge",
+                "transfer_policy": "reasonable",
+                "baggage": "required",
+                "primary_goal": "buy_timing",
+                "notification_method": "pushplus",
+                "notification_frequency": "important_only",
+            }
+        )
+
+        subscription = build_subscription(form)
+
+        self.assertTrue(subscription["round_trip"])
+        self.assertTrue(subscription["same_day_round_trip"])
+        self.assertTrue(subscription["constraints"]["same_day_round_trip"])
+        self.assertEqual(subscription["basic"]["return_date"], "2026-06-10")
 
 
 if __name__ == "__main__":
