@@ -68,6 +68,12 @@ class RouteTypeDomesticCardTest(unittest.TestCase):
             "trigger_reason": ["国内实时参考价进入低价区间"],
             "detail_url": "https://example.com/detail",
             "source_stats": {"juhe": {"count": 12, "route_type": "domestic"}},
+            "invoice_preferences": {
+                "invoice_needed": True,
+                "invoice_special_vat": True,
+                "invoice_cabin_limit": True,
+                "cabin_policy": "economy_only",
+            },
         }
 
         _, html = render_email(payload)
@@ -80,6 +86,9 @@ class RouteTypeDomesticCardTest(unittest.TestCase):
         self.assertIn("准点率", html)
         self.assertIn("有效出行成本", html)
         self.assertIn("商务友好 | 低风险 | 价格偏低", html)
+        self.assertIn("开票/报销", html)
+        self.assertIn("航司官网/携程", html)
+        self.assertIn("企业差旅渠道", html)
 
 
 if __name__ == "__main__":

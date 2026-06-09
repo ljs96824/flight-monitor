@@ -85,6 +85,9 @@ class WebFormTemplateStep2Test(unittest.TestCase):
         self.assertIn('name="invoice_special_vat"', FORM_TEMPLATE)
         self.assertIn('name="invoice_cabin_limit"', FORM_TEMPLATE)
         self.assertIn("autoDetectRouteType", FORM_TEMPLATE)
+        self.assertIn("港澳通行证/台湾通行证", FORM_TEMPLATE)
+        self.assertIn("国内OTA", FORM_TEMPLATE)
+        self.assertIn('data-show-if="route_type=international">国际航线会把行李规则、时区时差、过境签', FORM_TEMPLATE)
 
     def test_same_day_round_trip_is_saved_as_constraint(self):
         class Form(dict):

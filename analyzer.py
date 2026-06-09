@@ -278,6 +278,30 @@ GOAL_TO_ALERTS = {
     "best_overall": ["better_same_day"],
 }
 
+ROUTE_TYPE_ALERTS = {
+    "domestic": {
+        "price_alert": ["low_price_alert", "price_risk_alert"],
+        "price_drop_alert": ["low_price_alert", "price_risk_alert"],
+        "buy_timing": ["price_risk_alert", "better_same_day"],
+        "cheaper_date": ["cheaper_date"],
+        "best_overall": ["better_same_day"],
+    },
+    "international": {
+        "price_alert": ["large_price_drop", "transfer_risk_change"],
+        "price_drop_alert": ["large_price_drop", "transfer_risk_change"],
+        "buy_timing": ["large_price_drop", "transfer_risk_change", "interline_risk_change"],
+        "cheaper_date": ["large_price_drop"],
+        "best_overall": ["transfer_risk_change", "interline_risk_change"],
+    },
+    "greater_china": {
+        "price_alert": ["low_price_alert", "large_price_drop"],
+        "price_drop_alert": ["low_price_alert", "large_price_drop"],
+        "buy_timing": ["price_risk_alert", "large_price_drop"],
+        "cheaper_date": ["cheaper_date"],
+        "best_overall": ["price_risk_alert"],
+    },
+}
+
 
 def _normalize_travel_scenarios(value) -> list[str]:
     """Normalize legacy single scenario and new multi-select values."""
@@ -1466,9 +1490,23 @@ def apply_default_rules(subscription: dict) -> dict:
         hard.setdefault("accept_overnight_transfer", False)
         defaults_applied.append("不推荐过夜中转")
 
+    route_type = str(
+        ((subscription.get("basic") or {}).get("route_type"))
+        or subscription.get("route_type")
+        or ((subscription.get("constraints") or {}).get("route_type"))
+        or ""
+    ).lower()
+    if route_type in {"domestic", "international", "greater_china"}:
+        hard["route_type"] = route_type
+
     if not goals.get("secondary"):
         primary_goal = goals.get("primary", "buy_timing")
-        default_alerts = list(GOAL_TO_ALERTS.get(primary_goal, GOAL_TO_ALERTS["buy_timing"]))
+        route_alerts = ROUTE_TYPE_ALERTS.get(route_type) or {}
+        default_alerts = list(
+            route_alerts.get(primary_goal)
+            or GOAL_TO_ALERTS.get(primary_goal)
+            or GOAL_TO_ALERTS["buy_timing"]
+        )
         goals["secondary"] = default_alerts
         if "cheaper_date" in default_alerts:
             defaults_applied.append("提醒前后日期更便宜方案")

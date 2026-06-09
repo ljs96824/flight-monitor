@@ -58,6 +58,32 @@ PUSHPLUS_MAX_CHARS = 30000
 PUSHPLUS_COMPACT_CHARS = 25000
 COMPACT_NOTICE = "瀹屾暣鏂规璇︽儏鍥犵瘒骞呴檺鍒跺凡绮剧畝锛屽闇€鏌ョ湅鍏ㄩ儴鏂规璇峰洖澶?璇︽儏'"
 
+TRANSIT_VISA_RISK_AIRPORTS = {
+    "JFK": ("美国", "美国转机通常需要核实签证/入境许可要求"),
+    "EWR": ("美国", "美国转机通常需要核实签证/入境许可要求"),
+    "LAX": ("美国", "美国转机通常需要核实签证/入境许可要求"),
+    "SFO": ("美国", "美国转机通常需要核实签证/入境许可要求"),
+    "SEA": ("美国", "美国转机通常需要核实签证/入境许可要求"),
+    "ORD": ("美国", "美国转机通常需要核实签证/入境许可要求"),
+    "DFW": ("美国", "美国转机通常需要核实签证/入境许可要求"),
+    "LHR": ("英国", "英国转机可能涉及空侧/陆侧过境规则"),
+    "LGW": ("英国", "英国转机可能涉及空侧/陆侧过境规则"),
+    "STN": ("英国", "英国转机可能涉及空侧/陆侧过境规则"),
+    "YVR": ("加拿大", "加拿大转机可能需要核实过境签或eTA要求"),
+    "YYZ": ("加拿大", "加拿大转机可能需要核实过境签或eTA要求"),
+}
+
+AIRPORT_UTC_OFFSETS = {
+    "PVG": 8, "SHA": 8, "PEK": 8, "PKX": 8, "CAN": 8, "SZX": 8,
+    "HKG": 8, "MFM": 8, "TPE": 8, "TSA": 8,
+    "NRT": 9, "HND": 9, "KIX": 9, "ITM": 9, "ICN": 9, "GMP": 9,
+    "SIN": 8, "BKK": 7, "DMK": 7, "DXB": 4, "DWC": 4, "DOH": 3,
+    "LHR": 0, "LGW": 0, "STN": 0, "CDG": 1, "ORY": 1, "FRA": 1, "AMS": 1,
+    "JFK": -5, "EWR": -5, "LGA": -5, "IAD": -5, "DCA": -5,
+    "LAX": -7, "SFO": -7, "OAK": -7, "SJC": -7, "SEA": -7,
+    "YVR": -8, "YYZ": -5,
+}
+
 
 def should_notify(analysis: dict, prev_signal: str | None) -> tuple[bool, str | None]:
     """Decide whether an analysis result should trigger a notification."""
@@ -5428,6 +5454,16 @@ def build_notification_payload(
             or route_info.get("route_type")
             or _source_stats_route_type(source_stats)
         ),
+        "invoice_preferences": {
+            "invoice_needed": bool((subscription.get("preferences") or {}).get("invoice_needed")),
+            "invoice_special_vat": bool((subscription.get("preferences") or {}).get("invoice_special_vat")),
+            "invoice_cabin_limit": bool((subscription.get("preferences") or {}).get("invoice_cabin_limit")),
+            "cabin_policy": (
+                ((subscription.get("constraints") or {}).get("cabin_policy"))
+                or ((subscription.get("hard_constraints") or {}).get("cabin_policy"))
+                or ""
+            ),
+        },
         "trip_type": "round_trip" if is_roundtrip else "one_way",
         "is_roundtrip": is_roundtrip,
         "current_price": display_price,
@@ -5803,6 +5839,154 @@ def render_pushplus(payload: dict) -> str:
     return "<br>".join(lines)
 
 
+def _plan_route_type(plan: dict) -> str:
+    route_type = str((plan or {}).get("route_type") or "").lower()
+    if route_type:
+        return route_type
+    for flight in _plan_flights(plan or {}):
+        route_type = str(flight.get("route_type") or "").lower()
+        if route_type:
+            return route_type
+    return ""
+
+
+def _transit_airports_for_flight(flight: dict | None) -> list[str]:
+    flight = flight or {}
+    airports: list[str] = []
+    for layover in flight.get("layovers") or []:
+        code = str((layover or {}).get("airport") or "").strip().upper()
+        if code and code not in airports:
+            airports.append(code)
+    segments = _email_plan_segments(flight)
+    for segment in segments[:-1]:
+        code = str(segment.get("arr_airport") or "").strip().upper()
+        if code and code not in airports:
+            airports.append(code)
+    return airports
+
+
+def _international_transit_visa_line(plan: dict) -> str:
+    warnings = []
+    for flight in _plan_flights(plan):
+        for airport in _transit_airports_for_flight(flight):
+            info = TRANSIT_VISA_RISK_AIRPORTS.get(airport)
+            if not info:
+                continue
+            country, note = info
+            city = _airport_short_label(airport)
+            text = f"该方案经{city}中转（{country}），部分国籍可能需过境签或入境许可；{note}，请自行核实。"
+            if text not in warnings:
+                warnings.append(text)
+    if not warnings:
+        return ""
+    return '<span style="color:#b91c1c;">⚠️ ' + html.escape(" / ".join(warnings[:2])) + "</span>"
+
+
+def _parse_datetime_loose(value):
+    text = str(value or "").strip()
+    if not text:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M", "%Y/%m/%d %H:%M"):
+        try:
+            return datetime.strptime(text[:16], fmt)
+        except ValueError:
+            pass
+    try:
+        return datetime.fromisoformat(text.replace("Z", "").split("+")[0])
+    except ValueError:
+        return None
+
+
+def _timezone_difference_line_for_flight(flight: dict | None) -> str:
+    segments = _email_plan_segments(flight)
+    if not segments:
+        return ""
+    dep_airport = str(segments[0].get("dep_airport") or "").strip().upper()
+    arr_airport = str(segments[-1].get("arr_airport") or "").strip().upper()
+    dep_offset = AIRPORT_UTC_OFFSETS.get(dep_airport)
+    arr_offset = AIRPORT_UTC_OFFSETS.get(arr_airport)
+    parts = []
+    if dep_offset is not None and arr_offset is not None and dep_offset != arr_offset:
+        diff = arr_offset - dep_offset
+        sign = "+" if diff > 0 else ""
+        parts.append(f"{_airport_short_label(arr_airport)}相对{_airport_short_label(dep_airport)}{sign}{diff}h时差")
+    dep_dt = _parse_datetime_loose(segments[0].get("dep_time"))
+    arr_dt = _parse_datetime_loose(segments[-1].get("arr_time"))
+    if dep_dt and arr_dt:
+        day_diff = (arr_dt.date() - dep_dt.date()).days
+        if day_diff > 0:
+            parts.append(f"到达日期+{day_diff}天")
+        elif day_diff < 0:
+            parts.append(f"到达日期{day_diff}天")
+    duration = _email_plan_duration_text(flight)
+    if duration:
+        parts.append(f"实际飞行/行程约{duration}")
+    return "；".join(parts)
+
+
+def _timezone_difference_line(plan: dict) -> str:
+    lines = []
+    for flight in _plan_flights(plan):
+        line = _timezone_difference_line_for_flight(flight)
+        if line and line not in lines:
+            lines.append(line)
+    if not lines:
+        return ""
+    return html.escape(" / ".join(lines[:2]))
+
+
+def _interline_purchase_line(plan: dict, route_type: str) -> str:
+    purchase_mode = str(plan.get("purchase_mode") or "").strip()
+    if route_type != "international" and "单程" not in purchase_mode and "非联程" not in purchase_mode:
+        return ""
+    if "非联程" in purchase_mode or "单程" in purchase_mode:
+        return '<span style="color:#b91c1c;">非联程（两张票分别购买，需自行转机提行李，误机风险自担）</span>'
+    if purchase_mode:
+        return html.escape(f"{purchase_mode}（一张票，通常可行李直挂，误机保障以票规为准）")
+    return ""
+
+
+def _route_specific_plan_rows(plan: dict) -> list[tuple[str, str]]:
+    route_type = _plan_route_type(plan)
+    rows: list[tuple[str, str]] = []
+    if route_type == "international":
+        transit_line = _international_transit_visa_line(plan)
+        if transit_line:
+            rows.append(("过境签提示", transit_line))
+        timezone_line = _timezone_difference_line(plan)
+        if timezone_line:
+            rows.append(("时区/时差", timezone_line))
+        interline_line = _interline_purchase_line(plan, route_type)
+        if interline_line:
+            rows.append(("联程/非联程", interline_line))
+        rows.append(("国际票务提示", "跨境支付、退改更复杂，建议优先信誉好的渠道，保留行程单和支付凭证。"))
+    elif route_type == "greater_china":
+        rows.append(("证件提示", "港澳台往返需港澳通行证/台湾通行证及有效签注，请确认证件。"))
+        rows.append(("渠道提示", "港澳台航线国内OTA基本都能买，建议用航司官网、携程、飞猪、去哪儿交叉验证。"))
+        timezone_line = _timezone_difference_line(plan)
+        if timezone_line:
+            rows.append(("时区提示", timezone_line))
+    invoice_line = _invoice_reimbursement_line(plan)
+    if invoice_line:
+        rows.append(("开票/报销", invoice_line))
+    return rows
+
+
+def _invoice_reimbursement_line(plan: dict) -> str:
+    prefs = (plan or {}).get("invoice_preferences") or {}
+    if not any(prefs.get(key) for key in ("invoice_needed", "invoice_special_vat", "invoice_cabin_limit")):
+        return ""
+    parts = []
+    if prefs.get("invoice_needed"):
+        parts.append("开票:航司官网/携程通常可开行程单和发票；部分OTA特价票开票可能受限，报销前请确认。")
+    if prefs.get("invoice_special_vat"):
+        parts.append("专票:优先航司官网或企业差旅渠道，具体开票主体和税票类型以渠道为准。")
+    if prefs.get("invoice_cabin_limit"):
+        cabin = str(prefs.get("cabin_policy") or "未填写").strip()
+        parts.append(f"舱位限制:已标记有报销舱位限制（当前政策:{cabin}），请核对经济舱/商务舱是否符合公司标准。")
+    return html.escape(" ".join(parts))
+
+
 def _render_payload_plan_card(plan: dict, compact: bool = False, primary_plan: dict | None = None) -> str:
     if _plan_is_domestic(plan):
         return _render_domestic_payload_plan_card(plan, compact=compact, primary_plan=primary_plan)
@@ -5880,6 +6064,7 @@ def _render_payload_plan_card(plan: dict, compact: bool = False, primary_plan: d
     refund_line = _plan_refund_line(plan)
     if refund_line:
         rows.append(("退改", refund_line))
+    rows.extend(_route_specific_plan_rows(plan))
     punctuality_line = _plan_punctuality_line(plan)
     if punctuality_line:
         rows.append(("准点率", punctuality_line))
@@ -6563,6 +6748,8 @@ def _plan_for_render(plan: dict, payload: dict) -> dict:
         rendered["feedback_url"] = payload.get("feedback_url")
     if payload.get("route_type") and not rendered.get("route_type"):
         rendered["route_type"] = payload.get("route_type")
+    if payload.get("invoice_preferences") and not rendered.get("invoice_preferences"):
+        rendered["invoice_preferences"] = payload.get("invoice_preferences")
     return rendered
 
 
@@ -6668,6 +6855,9 @@ def _render_domestic_payload_plan_card(plan: dict, compact: bool = False, primar
         ("行李", _domestic_baggage_line(plan)),
         ("退改签", _domestic_refund_line(plan)),
     ]
+    invoice_line = _invoice_reimbursement_line(plan)
+    if invoice_line:
+        rows.append(("开票/报销", invoice_line))
     punctuality_line = _plan_punctuality_line(plan)
     if punctuality_line:
         rows.append(("准点率", punctuality_line))
@@ -6875,13 +7065,28 @@ def _email_source_rows(payload: dict) -> list[str]:
         )
         return rows
 
+    if route_type == "greater_china":
+        primary_count = f"— {google_count}个方案" if google_count else ""
+        rows.append(f"<div>🔹 主源:Google Flights 多源(SerpAPI、HasData){primary_count}</div>")
+        if duffel_count:
+            rows.append(f"<div>🔹 行李/退改:Duffel 规则参考 — {duffel_count}条</div>")
+        else:
+            rows.append("<div>🔹 行李/退改:Duffel 规则参考</div>")
+        rows.append("<div>🔹 渠道:国内OTA和航司官网均可作为验证入口</div>")
+        rows.append(
+            "<div style='margin-top:6px;color:#666;font-size:12px;'>"
+            "说明:港澳台航线以 Google Flights 多源为主，不调用聚合国内源；价格以平台支付页为准。"
+            "</div>"
+        )
+        return rows
+
     primary_count = f"— {google_count}个方案" if google_count else ""
     rows.append(f"<div>🔹 主源:Google Flights 多源(SerpAPI、HasData){primary_count}</div>")
     if duffel_count:
         rows.append(f"<div>🔹 行李/退改:Duffel 规则参考 — {duffel_count}条</div>")
     else:
         rows.append("<div>🔹 行李/退改:Duffel 规则参考</div>")
-    if juhe_count:
+    if juhe_count and route_type != "international":
         rows.append(f"<div>🔹 补充参考:聚合数据 — {juhe_count}个方案</div>")
     rows.append(
         "<div style='margin-top:6px;color:#666;font-size:12px;'>"

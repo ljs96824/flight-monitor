@@ -686,8 +686,10 @@ FORM_TEMPLATE = """
       <p class="hint">系统会根据出发地/目的地自动判断默认值，你也可以手动修改。</p>
       <p class="hint" data-show-if="route_type=domestic">国内航线将重点启用多机场对比、当天往返、准点率、有效出行成本和报销友好提示。</p>
       <p class="hint" data-show-if="route_type=international">国际航线将重点提示中转风险、联程/非联程、过境签、时区时差、行李规则和OTA验证风险。</p>
-      <p class="hint" data-show-if="route_type=greater_china">港澳台航线会显示通行证/签注提示，并保留多机场和部分国际中转风险提醒。</p>
-      <p class="hint" data-show-if="route_type=international|greater_china">跨境航线会把行李规则、时区时差、过境签和联程风险作为重点提醒。</p>
+      <p class="hint" data-show-if="route_type=greater_china">港澳台航线会提示港澳通行证/台湾通行证及有效签注，并保留多机场、行李和渠道验证提示。</p>
+      <p class="hint" data-show-if="route_type=international|greater_china">跨境航线会把行李规则、渠道验证和票规差异作为共同重点提醒。</p>
+      <p class="hint" data-show-if="route_type=international">国际航线会把行李规则、时区时差、过境签和联程风险作为重点提醒。</p>
+      <p class="hint" data-show-if="route_type=greater_china">港澳台航线一般不做过境签判断，渠道建议按国内OTA+航司官网验证。</p>
 
       <label for="origin">出发地</label>
       <select id="origin" name="origin_select">
