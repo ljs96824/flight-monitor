@@ -6600,41 +6600,72 @@ def analyze_round_trip(
     same_day_combos = []
     same_day_no_feasible_note = ""
     if same_day_round_trip:
+        outbound_candidates = _top_flights_for_round_trip(outbound_analysis, 12)
+        return_candidates = _top_flights_for_round_trip(return_analysis, 12)
+        sample_dest = ""
+        for flight in outbound_candidates:
+            sample_dest = _flight_airport(flight or {}, "arrival_airport")
+            if sample_dest:
+                break
+        windows = compute_same_day_windows(combined_preferences, None, sample_dest)
+        print(
+            "[会议调试] "
+            f"same_day={combined_preferences.get('same_day_round_trip')}, "
+            f"会议开始={combined_preferences.get('business_start')}, "
+            f"会议结束={combined_preferences.get('business_end')}, "
+            f"缓冲={combined_preferences.get('buffer_hours')}"
+        )
+        if windows:
+            print(
+                "[会议调试] "
+                f"反推去程到达不晚于={windows['outbound_arrive_by']}, "
+                f"返程出发不早于={windows['return_depart_after']}"
+            )
         same_day_combos = build_same_day_combos(
-            _top_flights_for_round_trip(outbound_analysis, 12),
-            _top_flights_for_round_trip(return_analysis, 12),
-            outbound_analysis.get("depart_date") or outbound_analysis.get("departure_date"),
+            outbound_candidates,
+            return_candidates,
+            windows or (outbound_analysis.get("depart_date") or outbound_analysis.get("departure_date")),
             constraints=combined_preferences,
+        )
+        print(
+            "[会议调试] 去程符合窗口的航班: "
+            + str(
+                [
+                    f"{(combo.get('outbound') or {}).get('flight_no') or (combo.get('outbound') or {}).get('flight_combo')} "
+                    f"{(combo.get('outbound') or {}).get('arrival_time')}"
+                    for combo in same_day_combos
+                ]
+            )
         )
         if not same_day_combos:
             same_day_no_feasible_note = _same_day_no_feasible_note(
-                _top_flights_for_round_trip(outbound_analysis, 12),
-                _top_flights_for_round_trip(return_analysis, 12),
+                outbound_candidates,
+                return_candidates,
                 combined_preferences,
             )
 
-    for outbound in outbound_top:
-        for return_flight in return_top:
-            outbound_price = _to_float(outbound.get("price"))
-            return_price = _to_float(return_flight.get("price"))
-            if not outbound_price or outbound_price <= 0 or not return_price or return_price <= 0:
-                continue
-            combinations.append(
-                {
-                    "outbound": outbound,
-                    "return": return_flight,
-                    "outbound_price": outbound_price,
-                    "return_price": return_price,
-                    "total_price": outbound_price + return_price,
-                    "transaction_total": (
-                        (_flight_transaction_price(outbound) or outbound_price)
-                        + (_flight_transaction_price(return_flight) or return_price)
-                    ),
-                }
-            )
-
-    if same_day_combos:
-        combinations = same_day_combos + combinations
+    if same_day_round_trip:
+        combinations = list(same_day_combos)
+    else:
+        for outbound in outbound_top:
+            for return_flight in return_top:
+                outbound_price = _to_float(outbound.get("price"))
+                return_price = _to_float(return_flight.get("price"))
+                if not outbound_price or outbound_price <= 0 or not return_price or return_price <= 0:
+                    continue
+                combinations.append(
+                    {
+                        "outbound": outbound,
+                        "return": return_flight,
+                        "outbound_price": outbound_price,
+                        "return_price": return_price,
+                        "total_price": outbound_price + return_price,
+                        "transaction_total": (
+                            (_flight_transaction_price(outbound) or outbound_price)
+                            + (_flight_transaction_price(return_flight) or return_price)
+                        ),
+                    }
+                )
 
     combinations.sort(key=lambda item: item["total_price"])
     outbound_min = _to_float(outbound_top[0].get("price")) if outbound_top else None

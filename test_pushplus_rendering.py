@@ -116,6 +116,48 @@ class PushPlusRenderingTest(unittest.TestCase):
         self.assertNotIn("飞猪 ¥", rendered)
         self.assertNotIn("去哪儿 ¥", rendered)
 
+    def test_roundtrip_plan_card_separates_outbound_return_and_total_prices(self):
+        route_info = {"depart_date": "2026-06-10", "return_date": "2026-06-10"}
+        outbound = _flight(
+            "MU5101",
+            "东航",
+            "PVG",
+            "PKX",
+            "2026-06-10 08:00",
+            "2026-06-10 10:20",
+        )
+        outbound["price"] = 680
+        return_flight = _flight(
+            "MU5108",
+            "东航",
+            "PKX",
+            "PVG",
+            "2026-06-10 19:50",
+            "2026-06-10 22:05",
+        )
+        return_flight["price"] = 720
+        combo = {
+            "outbound": outbound,
+            "return": return_flight,
+            "outbound_price": 680,
+            "return_price": 720,
+            "total_price": 1400,
+            "transaction_total": 1400,
+        }
+        plan = _payload_combo_plan(combo, route_info, 0, "推荐")
+
+        rendered = _render_payload_plan_card(plan)
+
+        self.assertIn("━━ 去程 ━━", rendered)
+        self.assertIn("去程票价", rendered)
+        self.assertIn("¥680", rendered)
+        self.assertIn("━━ 返程 ━━", rendered)
+        self.assertIn("返程票价", rendered)
+        self.assertIn("¥720", rendered)
+        self.assertIn("━━ 合计 ━━", rendered)
+        self.assertIn("往返总价", rendered)
+        self.assertIn("去程¥680 + 返程¥720", rendered)
+
 
 if __name__ == "__main__":
     unittest.main()

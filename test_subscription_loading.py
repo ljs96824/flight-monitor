@@ -17,6 +17,36 @@ import main
 
 
 class SubscriptionLoadingTest(unittest.TestCase):
+    def test_collect_for_airport_matrix_filters_to_requested_active_airports(self):
+        class FakeAggregator:
+            def collect(self, origin, destination, date_str, cabin_classes=None):
+                return {
+                    "flights": [
+                        {
+                            "flight_combo": "ACTIVE",
+                            "price": 680,
+                            "departure_airport": origin,
+                            "arrival_airport": destination,
+                        },
+                        {
+                            "flight_combo": "INACTIVE_DEST",
+                            "price": 500,
+                            "departure_airport": origin,
+                            "arrival_airport": "PKX",
+                        },
+                    ],
+                    "source_stats": {},
+                }
+
+        data = main.collect_for_airport_matrix(
+            FakeAggregator(),
+            ["PVG"],
+            ["PEK"],
+            "2026-06-10",
+        )
+
+        self.assertEqual([flight["flight_combo"] for flight in data["flights"]], ["ACTIVE"])
+
     def test_bad_subscription_is_skipped_without_stopping_batch(self):
         records = [
             {

@@ -134,6 +134,49 @@ class SameDayBusinessModeTest(unittest.TestCase):
         self.assertIn("business", normalized["soft_preferences"]["travel_scenarios"])
         self.assertEqual(normalized["round_trip"], True)
 
+    def test_analyze_round_trip_same_day_does_not_fallback_to_non_window_combo(self):
+        from analyzer import analyze_round_trip
+
+        constraints = {
+            "same_day_round_trip": True,
+            "business_start": "10:00",
+            "business_end": "16:00",
+            "buffer_hours": 2.5,
+            "transport_mode": "taxi",
+        }
+        outbound = [
+            {
+                "flight_no": "MU5102",
+                "flight_combo": "MU5102",
+                "price": 500,
+                "arrival_airport": "PKX",
+                "departure_time": "07:00",
+                "arrival_time": "08:30",
+            }
+        ]
+        returns = [
+            {
+                "flight_no": "MU5109",
+                "flight_combo": "MU5109",
+                "price": 700,
+                "departure_airport": "PKX",
+                "departure_time": "18:20",
+                "arrival_time": "20:35",
+            }
+        ]
+
+        result = analyze_round_trip(
+            {
+                "all_flights": outbound,
+                "hard_constraints": constraints,
+                "days_to_dept": 10,
+            },
+            {"all_flights": returns, "hard_constraints": constraints},
+        )
+
+        self.assertEqual(result["top_combinations"], [])
+        self.assertIn("当天往返时间较紧", result["same_day_no_feasible_note"])
+
 
 if __name__ == "__main__":
     unittest.main()

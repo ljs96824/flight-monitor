@@ -71,6 +71,76 @@ def _first_airport(codes, fallback):
     return values[0] if values else str(fallback or "").strip().upper()
 
 
+def _clean_airport_codes(codes) -> list[str]:
+    if isinstance(codes, str):
+        codes = [codes]
+    return [str(code).strip().upper() for code in (codes or []) if str(code or "").strip()]
+
+
+def _subscription_airports(sub: dict, active_key: str, all_key: str, fallback_key: str) -> list[str]:
+    basic = sub.get("basic") or {}
+    active = _clean_airport_codes(sub.get(active_key) or basic.get(active_key))
+    all_codes = _clean_airport_codes(sub.get(all_key) or basic.get(all_key))
+    if not all_codes and all_key == "destination_airports":
+        all_codes = _clean_airport_codes(basic.get("dest_airports"))
+    fallback = _clean_airport_codes([sub.get(fallback_key)])
+    if active:
+        if all_codes:
+            filtered = [code for code in active if code in all_codes]
+            return filtered or active
+        return active
+    return all_codes or fallback
+
+
+def _flight_airport_value(flight: dict, kind: str) -> str:
+    if not isinstance(flight, dict):
+        return ""
+    if kind == "departure":
+        keys = ("departure_airport", "dep_airport", "origin", "from")
+        search_key = "search_origin"
+        segment_keys = ("dep_airport", "departure_airport", "origin")
+        segment_index = 0
+    else:
+        keys = ("arrival_airport", "arr_airport", "destination", "to")
+        search_key = "search_destination"
+        segment_keys = ("arr_airport", "arrival_airport", "destination")
+        segment_index = -1
+    for key in keys:
+        value = str(flight.get(key) or "").strip().upper()
+        if value:
+            return value
+    segments = flight.get("segments") or flight.get("flights") or flight.get("legs") or []
+    if isinstance(segments, list) and segments:
+        segment = segments[segment_index] if isinstance(segments[segment_index], dict) else {}
+        for key in segment_keys:
+            value = str(segment.get(key) or "").strip().upper()
+            if value:
+                return value
+    return str(flight.get(search_key) or "").strip().upper()
+
+
+def _filter_data_to_airports(data: dict | None, origins: list[str], destinations: list[str]) -> dict | None:
+    if not data:
+        return data
+    active_origins = set(_clean_airport_codes(origins))
+    active_dests = set(_clean_airport_codes(destinations))
+    filtered = []
+    for flight in data.get("flights", []) or []:
+        dep = _flight_airport_value(flight, "departure")
+        arr = _flight_airport_value(flight, "arrival")
+        if dep and active_origins and dep not in active_origins:
+            continue
+        if arr and active_dests and arr not in active_dests:
+            continue
+        filtered.append(flight)
+    data = dict(data)
+    data["flights"] = filtered
+    data["total_count"] = len(filtered)
+    if isinstance(data.get("source_stats"), dict):
+        data["source_stats"]["after_active_airport_filter"] = len(filtered)
+    return data
+
+
 def _calendar_source_for_route(aggregator: FlightAggregator, origin: str, dest: str):
     sources = aggregator._ordered_search_sources(origin, dest)
     if is_domestic_route(origin, dest):
@@ -188,18 +258,36 @@ def _normalize_subscription(item: dict) -> dict:
         raise ValueError(
             f"无法识别地点 {destination_info.get('value')},请输入机场三字码或已支持的城市"
         )
-    origin_airports = item.get("origin_airports") or origin_info["airports"]
+    origin_airports = (
+        item.get("origin_airports")
+        or basic.get("origin_airports")
+        or origin_info["airports"]
+    )
     destination_airports = (
-        item.get("destination_airports") or destination_info["airports"]
+        item.get("destination_airports")
+        or basic.get("destination_airports")
+        or basic.get("dest_airports")
+        or destination_info["airports"]
     )
-    origin_airports_active = item.get("origin_airports_active") or origin_airports
+    origin_airports = _clean_airport_codes(origin_airports)
+    destination_airports = _clean_airport_codes(destination_airports)
+    origin_airports_active = _clean_airport_codes(
+        item.get("origin_airports_active")
+        or basic.get("origin_airports_active")
+        or origin_airports
+    )
     destination_airports_active = (
-        item.get("destination_airports_active") or destination_airports
+        _clean_airport_codes(
+            item.get("destination_airports_active")
+            or basic.get("destination_airports_active")
+            or basic.get("dest_airports_active")
+            or destination_airports
+        )
     )
-    origin_airports = [
+    origin_airports_active = [
         code for code in origin_airports_active if code in origin_airports
     ] or origin_airports
-    destination_airports = [
+    destination_airports_active = [
         code for code in destination_airports_active if code in destination_airports
     ] or destination_airports
     origin_airport_preference = hard_constraints.get(
@@ -208,7 +296,7 @@ def _normalize_subscription(item: dict) -> dict:
     if origin_airport_preference and origin_airport_preference != "all":
         preferred_origin = str(origin_airport_preference).strip().upper()
         if preferred_origin in origin_airports:
-            origin_airports = [preferred_origin]
+            origin_airports_active = [preferred_origin]
 
     legacy_budget = hard_constraints.get("budget", item.get("budget"))
     max_budget = hard_constraints.get(
@@ -288,12 +376,12 @@ def _normalize_subscription(item: dict) -> dict:
         "origin": origin_info["value"],
         "origin_type": item.get("origin_type") or origin_info["type"],
         "origin_airports": origin_airports,
-        "origin_airports_active": origin_airports,
+        "origin_airports_active": origin_airports_active,
         "origin_airport_preference": origin_airport_preference,
         "destination": destination_info["value"],
         "destination_type": item.get("destination_type") or destination_info["type"],
         "destination_airports": destination_airports,
-        "destination_airports_active": destination_airports,
+        "destination_airports_active": destination_airports_active,
         "monitor_mode": item.get("monitor_mode", "quick"),
         "depart_date": item.get("depart_date", ""),
         "budget": max_budget,
@@ -639,18 +727,23 @@ def collect_for_airport_matrix(
     date_str: str,
     cabin_classes=None,
 ) -> dict | None:
-    origins = [code for code in origins if code]
-    destinations = [code for code in destinations if code]
+    origins = _clean_airport_codes(origins)
+    destinations = _clean_airport_codes(destinations)
     if not origins or not destinations:
         return None
 
     if len(origins) == 1 and len(destinations) == 1:
-        return aggregator.collect(
+        data = aggregator.collect(
             origins[0],
             destinations[0],
             date_str,
             cabin_classes=cabin_classes,
         )
+        if data:
+            for flight in data.get("flights", []) or []:
+                flight["search_origin"] = flight.get("search_origin") or origins[0]
+                flight["search_destination"] = flight.get("search_destination") or destinations[0]
+        return _filter_data_to_airports(data, origins, destinations)
 
     combinations = [(origins[0], destinations[0])]
     combinations.extend((origins[0], dest) for dest in destinations[1:])
@@ -705,6 +798,7 @@ def collect_for_airport_matrix(
             if source and source not in sources_used:
                 sources_used.append(source)
 
+    merged = _filter_data_to_airports(merged, origins, destinations)
     merged["flights"] = _dedupe_flights(merged["flights"])
     merged["total_count"] = len(merged["flights"])
     merged["source_stats"]["after_dedup"] = len(merged["flights"])
@@ -757,8 +851,12 @@ def collect_nearby_dates(
             try:
                 data = collect_for_airport_matrix(
                     primary_aggregator,
-                    sub.get("origin_airports") or [sub["origin"]],
-                    sub.get("destination_airports") or [sub["destination"]],
+                    _subscription_airports(
+                        sub, "origin_airports_active", "origin_airports", "origin"
+                    ),
+                    _subscription_airports(
+                        sub, "destination_airports_active", "destination_airports", "destination"
+                    ),
                     date_str,
                     cabin_classes=cabin_classes,
                 )
@@ -809,10 +907,19 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
     try:
         search_sources, enrichment_sources = build_default_sources()
         agg = FlightAggregator(search_sources, enrichment_sources)
+        active_origins = _subscription_airports(
+            sub, "origin_airports_active", "origin_airports", "origin"
+        )
+        active_dests = _subscription_airports(
+            sub, "destination_airports_active", "destination_airports", "destination"
+        )
+        print(f"[机场调试] 全部目的地机场={sub.get('destination_airports')}")
+        print(f"[机场调试] 激活的目的地机场={sub.get('destination_airports_active')}")
+        print(f"[机场调试] 实际采集用的机场={active_dests}")
         data = collect_for_airport_matrix(
             agg,
-            sub.get("origin_airports") or [sub["origin"]],
-            sub.get("destination_airports") or [sub["destination"]],
+            active_origins,
+            active_dests,
             sub["depart_date"],
             cabin_classes=sub.get("cabin_classes"),
         )
@@ -830,6 +937,11 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
         ]
         for flight in normalized_flights:
             flight["collected_at"] = flight.get("collected_at") or run_collected_at
+        normalized_flights = _filter_data_to_airports(
+            {"flights": normalized_flights},
+            active_origins,
+            active_dests,
+        ).get("flights", [])
         flights = [
             flight
             for flight in normalized_flights
@@ -865,8 +977,8 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
             analysis.get("price_range", [0])[0] if analysis.get("price_range") else 0
         )
         price_calendar_result = None
-        calendar_origin = _first_airport(sub.get("origin_airports"), sub["origin"])
-        calendar_dest = _first_airport(sub.get("destination_airports"), sub["destination"])
+        calendar_origin = _first_airport(active_origins, sub["origin"])
+        calendar_dest = _first_airport(active_dests, sub["destination"])
         calendar_route = f"{calendar_origin}-{calendar_dest}"
         if current_min_price and is_domestic_route(calendar_origin, calendar_dest):
             try:
@@ -938,8 +1050,8 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
             print(f"[DEBUG] 开始采集返程: {return_origin}→{return_dest} {return_date}")
             return_data = collect_for_airport_matrix(
                 agg,
-                sub.get("destination_airports") or [return_origin],
-                sub.get("origin_airports") or [return_dest],
+                active_dests,
+                active_origins,
                 return_date,
                 cabin_classes=sub.get("cabin_classes"),
             )
@@ -952,6 +1064,11 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
             ]
             for flight in normalized_return_flights:
                 flight["collected_at"] = flight.get("collected_at") or return_collected_at
+            normalized_return_flights = _filter_data_to_airports(
+                {"flights": normalized_return_flights},
+                active_dests,
+                active_origins,
+            ).get("flights", [])
             return_flights = [
                 flight
                 for flight in normalized_return_flights
@@ -999,8 +1116,10 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
                     **sub,
                     "origin": sub["destination"],
                     "destination": sub["origin"],
-                    "origin_airports": sub.get("destination_airports") or [sub["destination"]],
-                    "destination_airports": sub.get("origin_airports") or [sub["origin"]],
+                    "origin_airports": active_dests,
+                    "origin_airports_active": active_dests,
+                    "destination_airports": active_origins,
+                    "destination_airports_active": active_origins,
                     "depart_date": return_date,
                     "date_flexibility": sub.get("return_date_flexibility", 0),
                 }
@@ -1083,10 +1202,12 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
                 "origin": sub["origin"],
                 "origin_type": sub.get("origin_type"),
                 "origin_airports": sub.get("origin_airports"),
+                "origin_airports_active": active_origins,
                 "origin_airport_preference": sub.get("origin_airport_preference", "all"),
                 "destination": sub["destination"],
                 "destination_type": sub.get("destination_type"),
                 "destination_airports": sub.get("destination_airports"),
+                "destination_airports_active": active_dests,
                 "depart_date": sub["depart_date"],
                 "cabin_classes": sub.get("cabin_classes"),
                 "mode": sub.get("mode", "balanced"),

@@ -5758,8 +5758,19 @@ def _pushplus_plan_lines(payload: dict) -> list[str]:
     for index, plan in enumerate(primary[:2]):
         if plan.get("is_roundtrip"):
             current = [
+                "━━ 去程 ━━",
                 str(plan.get("outbound_push_line") or ""),
+                f"去程票价:{_price_text(plan.get('outbound_price'))}",
+                "━━ 返程 ━━",
                 str(plan.get("return_push_line") or ""),
+                f"返程票价:{_price_text(plan.get('return_price'))}",
+                "━━ 合计 ━━",
+                (
+                    f"往返总价:{_price_text(plan.get('price'))}"
+                    f"(去程{_price_text(plan.get('outbound_price'))} + "
+                    f"返程{_price_text(plan.get('return_price'))})"
+                ),
+                f"购票方式:{plan.get('purchase_mode') or '待确认'}",
             ]
         else:
             current = [str(plan.get("main_push_line") or "")]
@@ -6018,14 +6029,29 @@ def _render_payload_plan_card(plan: dict, compact: bool = False, primary_plan: d
     rows = []
     if plan.get("is_roundtrip"):
         body_parts.append(
-            _email_plan_leg_group("去程", plan.get("outbound_flight"), str(plan.get("outbound_line") or ""))
+            _email_plan_leg_group("━━ 去程 ━━", plan.get("outbound_flight"), str(plan.get("outbound_line") or ""))
         )
         body_parts.append(
-            _email_plan_leg_group("返程", plan.get("return_flight"), str(plan.get("return_line") or ""))
+            _email_plan_price_group([("去程票价", _price_text(plan.get("outbound_price")))])
+        )
+        body_parts.append(
+            _email_plan_leg_group("━━ 返程 ━━", plan.get("return_flight"), str(plan.get("return_line") or ""))
+        )
+        body_parts.append(
+            _email_plan_price_group([("返程票价", _price_text(plan.get("return_price")))])
+        )
+        outbound_price_text = _price_text(plan.get("outbound_price"))
+        return_price_text = _price_text(plan.get("return_price"))
+        body_parts.append(
+            '<div style="font-weight:600;color:#111;margin:12px 0 6px;'
+            'background:#f5f7fa;padding:4px 8px;border-radius:4px;">━━ 合计 ━━</div>'
         )
         rows.extend(
             [
-                ("搜索参考价", f"往返 {_price_text(plan.get('price'))}"),
+                (
+                    "往返总价",
+                    f"{_price_text(plan.get('price'))}(去程{outbound_price_text} + 返程{return_price_text})",
+                ),
                 ("预估实付价", _price_text(plan.get("estimated_price"))),
                 ("购票方式", html.escape(str(plan.get("purchase_mode") or "待确认"))),
                 ("行李状态", f'<span style="color:#d97706;">{html.escape(str(plan.get("baggage_line") or "支付页需确认"))}</span>'),
@@ -6878,10 +6904,16 @@ def _render_domestic_payload_plan_card(plan: dict, compact: bool = False, primar
     body_parts: list[str] = [_plan_tradeoff_summary_html(plan, primary_plan)]
     if plan.get("is_roundtrip"):
         body_parts.append(
-            _email_plan_leg_group("去程", plan.get("outbound_flight"), str(plan.get("outbound_line") or ""))
+            _email_plan_leg_group("━━ 去程 ━━", plan.get("outbound_flight"), str(plan.get("outbound_line") or ""))
         )
         body_parts.append(
-            _email_plan_leg_group("返程", plan.get("return_flight"), str(plan.get("return_line") or ""))
+            _email_plan_price_group([("去程票价", _price_text(plan.get("outbound_price")))])
+        )
+        body_parts.append(
+            _email_plan_leg_group("━━ 返程 ━━", plan.get("return_flight"), str(plan.get("return_line") or ""))
+        )
+        body_parts.append(
+            _email_plan_price_group([("返程票价", _price_text(plan.get("return_price")))])
         )
     else:
         main_flight = plan.get("main_flight") or plan.get("outbound_flight") or plan.get("flight")
@@ -6891,12 +6923,30 @@ def _render_domestic_payload_plan_card(plan: dict, compact: bool = False, primar
     link_value = links.get("main") or links.get("outbound") or ""
     if isinstance(link_value, dict):
         link_value = " | ".join(str(item) for item in link_value.values() if item)
-    rows = [
+    rows = []
+    if plan.get("is_roundtrip"):
+        body_parts.append(
+            '<div style="font-weight:600;color:#111;margin:12px 0 6px;'
+            'background:#f5f7fa;padding:4px 8px;border-radius:4px;">━━ 合计 ━━</div>'
+        )
+        rows.extend(
+            [
+                (
+                    "往返总价",
+                    f"{_price_text(plan.get('price'))}"
+                    f"(去程{_price_text(plan.get('outbound_price'))} + "
+                    f"返程{_price_text(plan.get('return_price'))})",
+                ),
+                ("预估实付", _price_text(plan.get("estimated_price"))),
+                ("购票方式", html.escape(str(plan.get("purchase_mode") or "待确认"))),
+            ]
+        )
+    rows.extend([
         ("实时含税价", _domestic_reference_price_line(plan)),
         ("库存状态", html.escape(_domestic_buyability_line(plan))),
         ("行李", _domestic_baggage_line(plan)),
         ("退改签", _domestic_refund_line(plan)),
-    ]
+    ])
     invoice_line = _invoice_reimbursement_line(plan)
     if invoice_line:
         rows.append(("开票/报销", invoice_line))
