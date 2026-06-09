@@ -382,6 +382,11 @@ def get_total_passengers(subscription: dict | None) -> tuple[int, dict | None]:
 def determine_cabins(constraints: dict | None) -> list[str]:
     """Return cabin classes to search from reimbursement and level policy."""
     constraints = constraints or {}
+    arrangement = str(constraints.get("cabin_arrangement") or "").strip()
+    if arrangement == "economy_all":
+        return ["economy"]
+    if arrangement in {"business_all", "mixed"}:
+        return ["economy", "business"]
     policy = str(constraints.get("cabin_policy") or "economy_only").strip()
     cabins = ["economy"]
     if policy == "business_allowed":
@@ -418,10 +423,24 @@ def build_cabin_policy_summary(constraints: dict | None, flights: list[dict] | N
     """Summarize economy/business options without deciding for the user."""
     constraints = constraints or {}
     cabins = determine_cabins(constraints)
+    trip_natures = constraints.get("trip_natures") or []
+    if isinstance(trip_natures, str):
+        trip_natures = [trip_natures]
+    if not trip_natures and constraints.get("trip_nature"):
+        legacy = str(constraints.get("trip_nature") or "")
+        trip_natures = [{"business_meeting": "meeting"}.get(legacy, legacy)]
+    cabin_arrangement = str(constraints.get("cabin_arrangement") or "").strip() or "economy_all"
     economy_price = _cheapest_cabin_price(flights, "economy")
     business_price = _cheapest_cabin_price(flights, "business")
     business_seats = _to_non_negative_int(constraints.get("business_seats"))
     economy_seats = _to_non_negative_int(constraints.get("economy_seats"))
+    passenger_count = _to_non_negative_int(constraints.get("passenger_count"), 0)
+    if cabin_arrangement == "business_all" and passenger_count:
+        business_seats = passenger_count
+        economy_seats = 0
+    elif cabin_arrangement == "economy_all" and passenger_count:
+        business_seats = 0
+        economy_seats = passenger_count
     if not business_seats and "business" in cabins and constraints.get("cabin_policy") == "business_allowed":
         business_seats = _to_non_negative_int(constraints.get("passenger_count"), 0)
     if not economy_seats and business_seats:
@@ -449,6 +468,8 @@ def build_cabin_policy_summary(constraints: dict | None, flights: list[dict] | N
         team_cost_note = f"{seat_text}合计参考¥{team_total:,.0f}"
     return {
         "trip_nature": constraints.get("trip_nature") or "",
+        "trip_natures": trip_natures,
+        "cabin_arrangement": cabin_arrangement,
         "cabin_policy": constraints.get("cabin_policy") or "economy_only",
         "user_level": constraints.get("user_level") or "staff",
         "cabins": cabins,
@@ -738,6 +759,23 @@ def build_travel_profile(soft_prefs: dict | None) -> dict:
     if not passengers:
         passengers = _passengers_from_legacy_companions(fallback_travelers)
     travelers = _infer_travelers_from_passengers(passengers, fallback_travelers)
+    raw_trip_natures = soft_prefs.get("trip_natures") or []
+    if isinstance(raw_trip_natures, str):
+        raw_trip_natures = [raw_trip_natures]
+    if not raw_trip_natures and soft_prefs.get("trip_nature"):
+        raw_trip_natures = [soft_prefs.get("trip_nature")]
+    nature_map = {
+        "business_meeting": "meeting",
+        "business_trip": "business",
+        "business": "business",
+        "meeting": "meeting",
+        "team_building": "team_building",
+    }
+    trip_natures = []
+    for item in raw_trip_natures:
+        value = nature_map.get(str(item or "").strip(), str(item or "").strip())
+        if value and value not in trip_natures:
+            trip_natures.append(value)
     profiles = {
         "personal": {
             "price": "high",
@@ -817,7 +855,22 @@ def build_travel_profile(soft_prefs: dict | None) -> dict:
         scenario_profile = profiles.get(item, profiles["personal"])
         for dim in merged:
             merged[dim] = max(merged[dim], level.get(scenario_profile.get(dim), 2))
+    profile_by_nature = {
+        "business": {"time": "high", "risk_averse": "high", "comfort": "high"},
+        "meeting": {"time": "high", "risk_averse": "high", "comfort": "medium"},
+        "team_building": {"comfort": "medium"},
+    }
+    for nature in trip_natures:
+        nature_profile = profile_by_nature.get(nature, {})
+        for dim, value in nature_profile.items():
+            if dim in merged:
+                merged[dim] = max(merged[dim], level.get(value, 2))
     profile = {dim: level_rev[value] for dim, value in merged.items()}
+    if "meeting" in trip_natures:
+        profile["punctuality"] = "critical"
+    if "team_building" in trip_natures:
+        profile["stock_check"] = "high"
+        profile["date_flex"] = "maybe"
     if travelers in ("with_child", "with_elderly_child"):
         profile["comfort"] = "high"
         profile["risk_averse"] = "high"
@@ -838,6 +891,7 @@ def build_travel_profile(soft_prefs: dict | None) -> dict:
     profile["scenarios"] = scenarios
     profile["scenario_combo"] = "+".join(scenarios)
     profile["travelers"] = travelers
+    profile["trip_natures"] = trip_natures
     profile["passengers"] = passengers or {"adult": passenger_count, "child": 0, "elderly": 0, "infant": 0}
     profile["passenger_count"] = passenger_count
     return profile
@@ -962,6 +1016,15 @@ def build_recommendation_basis(profile: dict | None, defaults_applied: list[str]
     scenarios = _normalize_travel_scenarios(profile.get("scenarios") or profile.get("scenario"))
     scenario_set = set(scenarios)
     scenario_labels = _travel_scenario_labels(scenarios)
+    trip_natures = profile.get("trip_natures") or []
+    if isinstance(trip_natures, str):
+        trip_natures = [trip_natures]
+    normalized_trip_natures = []
+    for item in trip_natures:
+        value = str(item or "").strip()
+        if value and value not in normalized_trip_natures:
+            normalized_trip_natures.append(value)
+    trip_nature_set = set(normalized_trip_natures)
     applied_rules: list[str] = []
 
     if "tourism" in scenario_set:
@@ -989,6 +1052,12 @@ def build_recommendation_basis(profile: dict | None, defaults_applied: list[str]
         applied_rules.append("稳定到达和低执行风险优先（重要事项）")
     if "price_first" in scenario_set:
         applied_rules.append("保留低价敏感度，但高风险方案会被提示或降权（价格优先）")
+    if "business" in trip_nature_set:
+        applied_rules.append("商务出差提高准点、可改签和低执行风险权重")
+    if "meeting" in trip_nature_set:
+        applied_rules.append("商务会议按会议时间窗口筛选，准点和缓冲优先")
+    if "team_building" in trip_nature_set:
+        applied_rules.append("公司团建提高多人库存、同行程和日期弹性权重")
 
     if not applied_rules:
         applied_rules.append("按价格、时间、舒适度和执行风险均衡排序")
@@ -1004,6 +1073,8 @@ def build_recommendation_basis(profile: dict | None, defaults_applied: list[str]
         conflict_note = "重要事项先保证可靠性，再比较价格"
     elif "business" in scenario_set and "price_first" in scenario_set:
         conflict_note = "先保证准点和低风险，再在稳妥方案中比较价格"
+    elif "meeting" in trip_nature_set and "team_building" in trip_nature_set:
+        conflict_note = "会议时间刚性优先，团建日期弹性只在不影响会议窗口时参与比较"
 
     sort_factors = [
         ("价格", TRAVEL_PROFILE_LEVEL_LABELS.get(profile.get("price", "medium"), "中")),
@@ -1013,7 +1084,19 @@ def build_recommendation_basis(profile: dict | None, defaults_applied: list[str]
         ("行李重要性", TRAVEL_PROFILE_LEVEL_LABELS.get(profile.get("baggage", "medium"), "中")),
     ]
 
-    if "tourism" in scenario_set and "family" in scenario_set:
+    if "meeting" in trip_nature_set and "team_building" in trip_nature_set:
+        plain_language = "先保证会议时间窗口和准点缓冲，再检查团队是否能同航班/分舱位成行。"
+        recommendation_text = "该方案按会议时间优先筛选，同时兼顾团队多人库存和分舱位安排，适合商务会议叠加公司团建。"
+    elif "meeting" in trip_nature_set:
+        plain_language = "先保证会议时间窗口、准点率和低执行风险，再比较价格。"
+        recommendation_text = "该方案更重视准点、缓冲和可执行性，适合商务会议行程。"
+    elif "team_building" in trip_nature_set:
+        plain_language = "先确认团队人数库存和同行程可行，再比较价格和日期弹性。"
+        recommendation_text = "该方案会重点检查多人库存、同行程和团队总成本，适合公司团建。"
+    elif "business" in trip_nature_set:
+        plain_language = "先保证商务出差的准点、退改和低风险，再比较同类方案价格。"
+        recommendation_text = "该方案优先考虑准点、可改签和低执行风险，适合商务出差。"
+    elif "tourism" in scenario_set and "family" in scenario_set:
         plain_language = "先保证适合带孩子（白天/直飞/行李），再在其中挑便宜的。"
         recommendation_text = "该方案白天直飞、行李明确，价格也在合理区间，适合带孩子的旅行，兼顾省心和性价比。"
     elif ("elderly" in scenario_set or "with_elderly" in scenario_set) and (
@@ -1039,6 +1122,7 @@ def build_recommendation_basis(profile: dict | None, defaults_applied: list[str]
 
     return {
         "scenarios": scenarios,
+        "trip_natures": normalized_trip_natures,
         "scenario_labels": scenario_labels,
         "applied_rules": applied_rules,
         "sort_factors": sort_factors,
@@ -1302,6 +1386,7 @@ def migrate_old_subscription(subscription: dict) -> dict:
     _set_if_missing(hard, "buffer_hours", constraints.get("buffer_hours"))
     _set_if_missing(hard, "transport_mode", constraints.get("transport_mode"))
     _set_if_missing(hard, "trip_nature", constraints.get("trip_nature"))
+    _set_if_missing(hard, "trip_natures", constraints.get("trip_natures"))
     _set_if_missing(hard, "cabin_policy", constraints.get("cabin_policy"))
     _set_if_missing(hard, "user_level", constraints.get("user_level"))
     _set_if_missing(hard, "business_seats", constraints.get("business_seats"))
@@ -1385,9 +1470,31 @@ def apply_default_rules(subscription: dict) -> dict:
         if "business" not in travel_scenarios:
             travel_scenarios.append("business")
         defaults_applied.append("当天往返商务模式：优先早去晚回、直飞和低执行风险方案")
-    if hard.get("trip_nature") == "business_meeting" and "business" not in travel_scenarios:
+    raw_trip_natures = hard.get("trip_natures") or []
+    if isinstance(raw_trip_natures, str):
+        raw_trip_natures = [raw_trip_natures]
+    if not raw_trip_natures and hard.get("trip_nature"):
+        raw_trip_natures = [hard.get("trip_nature")]
+    trip_nature_map = {
+        "business_meeting": "meeting",
+        "business_trip": "business",
+        "business": "business",
+        "meeting": "meeting",
+        "team_building": "team_building",
+    }
+    trip_natures = []
+    for item in raw_trip_natures:
+        value = trip_nature_map.get(str(item or "").strip(), str(item or "").strip())
+        if value and value not in trip_natures:
+            trip_natures.append(value)
+    if ("business" in trip_natures or "meeting" in trip_natures) and "business" not in travel_scenarios:
         travel_scenarios.append("business")
-        defaults_applied.append("商务会议：提高时间稳定、可改签和低执行风险权重")
+    if "meeting" in trip_natures:
+        defaults_applied.append("商务会议：按会议时间窗口提高准点、缓冲和低执行风险权重")
+    if "team_building" in trip_natures:
+        defaults_applied.append("公司团建：提高多人库存、同行程和日期弹性权重")
+    if trip_natures:
+        soft["trip_natures"] = trip_natures
     soft["travel_scenarios"] = travel_scenarios
     if soft.get("travel_purposes"):
         soft["travel_purposes"] = travel_scenarios

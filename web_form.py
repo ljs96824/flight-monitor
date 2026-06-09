@@ -1065,10 +1065,31 @@ FORM_TEMPLATE = """
           <option value="other">其他</option>
         </select>
 
-        <label>出行性质</label>
+        <label>出行性质（可多选）</label>
         <div class="choice">
-          <label><input type="radio" name="trip_nature" value="business_meeting"> 商务会议</label>
-          <label><input type="radio" name="trip_nature" value="team_building"> 团建/集体出行</label>
+          <label><input type="checkbox" name="trip_natures" value="business"> 商务出差</label>
+          <label><input type="checkbox" name="trip_natures" value="meeting"> 商务会议</label>
+          <label><input type="checkbox" name="trip_natures" value="team_building"> 公司团建</label>
+        </div>
+
+        <div data-show-if="trip_natures=business|meeting|team_building">
+        <label>同行总人数</label>
+        <input name="team_passenger_count" type="number" min="1" step="1" placeholder="例如 8">
+
+        <label>舱位安排</label>
+        <div class="choice">
+          <label><input type="radio" name="cabin_arrangement" value="economy_all" checked> 全部经济舱</label>
+          <label><input type="radio" name="cabin_arrangement" value="business_all"> 全部商务舱</label>
+          <label><input type="radio" name="cabin_arrangement" value="mixed"> 混合舱位</label>
+        </div>
+        <div id="cabin-arrangement-warning" class="field-error">商务舱人数 + 经济舱人数应等于同行总人数</div>
+
+        <div data-show-if="cabin_arrangement=mixed">
+          <label>分舱位人数</label>
+          <div class="inline-grid">
+            <label>商务舱 <input type="number" name="business_seats" min="0" value="0"></label>
+            <label>经济舱 <input type="number" name="economy_seats" min="0" value="0"></label>
+          </div>
         </div>
 
         <label>报销/舱位政策</label>
@@ -1077,8 +1098,10 @@ FORM_TEMPLATE = """
           <label><input type="radio" name="cabin_policy" value="level_based"> 部分职级可商务舱（总监及以上等）</label>
           <label><input type="radio" name="cabin_policy" value="business_allowed"> 均可商务舱</label>
         </div>
+        <p class="hint" data-show-if="cabin_policy=level_based">按职级报销时，系统会结合职级和分舱位人数判断是否需要查询商务舱。</p>
+        </div>
 
-        <div data-show-if="cabin_policy=level_based">
+        <div data-show-if="trip_natures=business">
           <label>你的职级</label>
           <div class="choice">
             <label><input type="radio" name="user_level" value="staff" checked> 普通员工</label>
@@ -1086,10 +1109,27 @@ FORM_TEMPLATE = """
             <label><input type="radio" name="user_level" value="director"> 总监</label>
             <label><input type="radio" name="user_level" value="vp"> 副总裁及以上</label>
           </div>
-          <label>团队职级构成</label>
+        </div>
+
+        <div data-show-if="trip_natures=meeting">
+          <label>会议时间</label>
           <div class="inline-grid">
-            <label>商务舱人数 <input type="number" name="business_seats" min="0" value="0"></label>
-            <label>经济舱人数 <input type="number" name="economy_seats" min="0" value="0"></label>
+            <label>会议开始时间 <input name="meeting_start" type="time" value="10:00"></label>
+            <label>会议结束时间 <input name="meeting_end" type="time" value="16:00"></label>
+          </div>
+          <p class="hint">系统会复用当天往返逻辑，按会议时间 + 车程 + 缓冲反推航班时间窗口。</p>
+        </div>
+
+        <div data-show-if="trip_natures=team_building">
+          <label>团建日期弹性</label>
+          <div class="choice">
+            <label><input type="radio" name="team_date_flexibility" value="fixed" checked> 固定</label>
+            <label><input type="radio" name="team_date_flexibility" value="flexible"> 可前后调整（找更便宜日期）</label>
+          </div>
+          <label>是否需要同行程（全员同一航班）</label>
+          <div class="choice">
+            <label><input type="radio" name="same_flight_required" value="true" checked> 是</label>
+            <label><input type="radio" name="same_flight_required" value="false"> 否</label>
           </div>
         </div>
 
@@ -1419,6 +1459,14 @@ FORM_TEMPLATE = """
       return field ? field.value : "";
     }
 
+    function currentValues(name) {
+      const checked = Array.from(document.querySelectorAll(`input[name="${name}"]:checked`))
+        .map(input => input.value);
+      if (checked.length) return checked;
+      const value = checkedValue(name);
+      return value ? [value] : [];
+    }
+
     function updateConditionalFields() {
       document.querySelectorAll('[data-show-if]').forEach(el => {
         const rule = el.dataset.showIf || '';
@@ -1429,8 +1477,8 @@ FORM_TEMPLATE = """
           .every(item => {
             const [field, rawValue] = item.split('=');
             const values = String(rawValue || '').split('|');
-            const current = checkedValue(field);
-            return Boolean(field && values.includes(current));
+            const current = currentValues(field);
+            return Boolean(field && current.some(value => values.includes(value)));
           });
         el.style.display = shouldShow ? 'block' : 'none';
       });
@@ -2595,6 +2643,25 @@ FORM_TEMPLATE = """
       return false;
     }
 
+    function validateCabinArrangement(showAlert = false) {
+      const warning = document.getElementById('cabin-arrangement-warning');
+      const hasBusinessNature = checkedValues('trip_natures').length > 0;
+      const arrangement = checkedValue('cabin_arrangement');
+      if (!hasBusinessNature || arrangement !== 'mixed') {
+        if (warning) warning.style.display = 'none';
+        return true;
+      }
+      const total = Number(document.querySelector('input[name="team_passenger_count"]')?.value || 0);
+      const business = Number(document.querySelector('input[name="business_seats"]')?.value || 0);
+      const economy = Number(document.querySelector('input[name="economy_seats"]')?.value || 0);
+      const valid = !total || business + economy === total;
+      if (warning) warning.style.display = valid ? 'none' : 'block';
+      if (!valid && showAlert) {
+        alert('商务舱人数 + 经济舱人数应等于同行总人数');
+      }
+      return valid;
+    }
+
     function customTimeSummary() {
       const isRoundTrip = checkedValue('round_trip') === 'true';
       if (isRoundTrip) {
@@ -2711,10 +2778,22 @@ FORM_TEMPLATE = """
         if (realNeeds.length) {
           summaryLine('实际需求', realNeeds.join('、'));
         }
-        summaryLine('出行性质', selectedLabel('trip_nature'));
+        const tripNatureLabels = selectedLabels('trip_natures');
+        summaryLine('出行性质', tripNatureLabels.join(' + '));
+        if (checkedValues('trip_natures').includes('meeting')) {
+          const meetingStart = document.querySelector('input[name="meeting_start"]')?.value || '';
+          const meetingEnd = document.querySelector('input[name="meeting_end"]')?.value || '';
+          if (meetingStart || meetingEnd) summaryLine('会议时间', `${meetingStart || '未填'}-${meetingEnd || '未填'}（系统将按此反推航班+预留车程缓冲）`);
+        }
+        if (checkedValues('trip_natures').includes('team_building')) {
+          summaryLine('团建规则', `${selectedLabel('team_date_flexibility')}，全员同航班：${selectedLabel('same_flight_required')}`);
+        }
         summaryLine('舱位政策', selectedLabel('cabin_policy'));
-        if (checkedValue('cabin_policy') === 'level_based') {
+        if (checkedValues('trip_natures').length) {
           summaryLine('职级', selectedLabel('user_level'));
+          const teamCount = document.querySelector('input[name="team_passenger_count"]')?.value || '';
+          if (teamCount) summaryLine('团队人数', `${teamCount}人`);
+          summaryLine('舱位安排', selectedLabel('cabin_arrangement'));
           const businessSeats = document.querySelector('input[name="business_seats"]')?.value || '';
           const economySeats = document.querySelector('input[name="economy_seats"]')?.value || '';
           if (businessSeats || economySeats) {
@@ -2785,7 +2864,14 @@ FORM_TEMPLATE = """
         refund_flexibility: checkedValue('refund_flexibility'),
         price_sensitivity: checkedValue('price_sensitivity'),
         trip_type: form.trip_type ? form.trip_type.value : '',
-        trip_nature: checkedValue('trip_nature'),
+        trip_nature: checkedValues('trip_natures')[0] || checkedValue('trip_nature'),
+        trip_natures: checkedValues('trip_natures'),
+        meeting_start: document.querySelector('input[name="meeting_start"]')?.value || '',
+        meeting_end: document.querySelector('input[name="meeting_end"]')?.value || '',
+        team_date_flexibility: checkedValue('team_date_flexibility'),
+        same_flight_required: checkedValue('same_flight_required'),
+        team_passenger_count: Number(document.querySelector('input[name="team_passenger_count"]')?.value || 0),
+        cabin_arrangement: checkedValue('cabin_arrangement'),
         cabin_policy: checkedValue('cabin_policy'),
         user_level: checkedValue('user_level'),
         business_seats: Number(document.querySelector('input[name="business_seats"]')?.value || 0),
@@ -2880,7 +2966,16 @@ FORM_TEMPLATE = """
       if (form.trip_type && data.trip_type) {
         form.trip_type.value = data.trip_type;
       }
-      if (data.trip_nature) setRadio('trip_nature', data.trip_nature);
+      const templateTripNatures = data.trip_natures || (data.trip_nature ? [data.trip_nature] : []);
+      document.querySelectorAll('input[name="trip_natures"]').forEach(input => {
+        input.checked = templateTripNatures.includes(input.value);
+      });
+      if (data.meeting_start) document.querySelector('input[name="meeting_start"]').value = data.meeting_start;
+      if (data.meeting_end) document.querySelector('input[name="meeting_end"]').value = data.meeting_end;
+      if (data.team_date_flexibility) setRadio('team_date_flexibility', data.team_date_flexibility);
+      if (data.same_flight_required !== undefined) setRadio('same_flight_required', String(data.same_flight_required));
+      if (data.team_passenger_count !== undefined) document.querySelector('input[name="team_passenger_count"]').value = data.team_passenger_count || '';
+      if (data.cabin_arrangement) setRadio('cabin_arrangement', data.cabin_arrangement);
       if (data.route_type) {
         routeTypeTouched = true;
         setRadio('route_type', data.route_type);
@@ -2988,6 +3083,9 @@ FORM_TEMPLATE = """
         targetPriceInput.focus();
         return;
       }
+      if (!validateCabinArrangement(true)) {
+        return;
+      }
       if (!form.reportValidity()) {
         return;
       }
@@ -3065,14 +3163,16 @@ FORM_TEMPLATE = """
       updateConditionalFields();
       refreshSummaryIfFinalStep();
     }));
-    ['companions', 'travel_purpose', 'adult_count', 'child_count', 'elderly_count', 'infant_count', 'passenger_count', 'trip_nature', 'cabin_policy', 'user_level', 'business_seats', 'economy_seats', 'reimburse_per_person', 'invoice_needed', 'invoice_special_vat', 'invoice_cabin_limit', 'time_preference', 'refund_flexibility', 'airline_policy', 'accept_self_transfer', 'companion_constraints', 'solo_travel', 'no_late_arrival', 'prefer_daytime_arrival'].forEach(name => {
+    ['companions', 'travel_purpose', 'adult_count', 'child_count', 'elderly_count', 'infant_count', 'passenger_count', 'trip_natures', 'team_passenger_count', 'cabin_arrangement', 'meeting_start', 'meeting_end', 'team_date_flexibility', 'same_flight_required', 'cabin_policy', 'user_level', 'business_seats', 'economy_seats', 'reimburse_per_person', 'invoice_needed', 'invoice_special_vat', 'invoice_cabin_limit', 'time_preference', 'refund_flexibility', 'airline_policy', 'accept_self_transfer', 'companion_constraints', 'solo_travel', 'no_late_arrival', 'prefer_daytime_arrival'].forEach(name => {
       document.querySelectorAll(`input[name="${name}"]`).forEach(input => {
         input.addEventListener('change', () => {
           syncPrefCards();
+          validateCabinArrangement(false);
           refreshSummaryIfFinalStep();
         });
         input.addEventListener('input', () => {
           syncPrefCards();
+          validateCabinArrangement(false);
           refreshSummaryIfFinalStep();
         });
       });
@@ -3149,6 +3249,10 @@ FORM_TEMPLATE = """
         event.preventDefault();
         alert('理想入手价应低于最高可接受价，请确认是否填反了');
         targetPriceInput.focus();
+        return;
+      }
+      if (!validateCabinArrangement(true)) {
+        event.preventDefault();
         return;
       }
       if (!validateEmailField(true)) {
@@ -3902,11 +4006,49 @@ def build_subscription(form) -> dict:
     invoice_needed = parse_bool(form.get("invoice_needed", "false"))
     invoice_special_vat = parse_bool(form.get("invoice_special_vat", "false"))
     invoice_cabin_limit = parse_bool(form.get("invoice_cabin_limit", "false"))
-    trip_nature = form.get("trip_nature", "").strip()
+    raw_trip_natures = form.getlist("trip_natures") if hasattr(form, "getlist") else []
+    if not raw_trip_natures:
+        legacy_trip_nature = form.get("trip_nature", "").strip()
+        raw_trip_natures = [legacy_trip_nature] if legacy_trip_nature else []
+    trip_nature_map = {
+        "business_meeting": "meeting",
+        "business_trip": "business",
+        "team_building": "team_building",
+        "business": "business",
+        "meeting": "meeting",
+    }
+    trip_natures = []
+    for item in raw_trip_natures:
+        value = trip_nature_map.get(str(item or "").strip(), str(item or "").strip())
+        if value and value not in trip_natures:
+            trip_natures.append(value)
+    trip_nature = "meeting" if "meeting" in trip_natures else trip_natures[0] if trip_natures else ""
+    meeting_start = form.get("meeting_start", "").strip()
+    meeting_end = form.get("meeting_end", "").strip()
+    if "meeting" in trip_natures and (meeting_start or meeting_end):
+        same_day_round_trip = True
+        round_trip = True
+        business_start = meeting_start or business_start
+        business_end = meeting_end or business_end
+    team_passenger_count = parse_int(form.get("team_passenger_count"), 0)
+    if team_passenger_count > 0:
+        passenger_count = team_passenger_count
+    cabin_arrangement = form.get("cabin_arrangement", "economy_all").strip() or "economy_all"
     cabin_policy = form.get("cabin_policy", "economy_only").strip() or "economy_only"
     user_level = form.get("user_level", "staff").strip() or "staff"
     business_seats = parse_int(form.get("business_seats"), 0)
     economy_seats = parse_int(form.get("economy_seats"), 0)
+    if cabin_arrangement == "business_all" and passenger_count:
+        business_seats = passenger_count
+        economy_seats = 0
+        cabin_policy = "business_allowed"
+    elif cabin_arrangement == "economy_all" and passenger_count:
+        business_seats = 0
+        economy_seats = passenger_count
+    elif cabin_arrangement == "mixed" and business_seats + economy_seats > 0:
+        passenger_count = business_seats + economy_seats
+    team_date_flexibility = form.get("team_date_flexibility", "fixed").strip() or "fixed"
+    same_flight_required = parse_bool(form.get("same_flight_required", "false"))
     reimburse_per_person = parse_int(form.get("reimburse_per_person"), 0)
 
     return {
@@ -3941,6 +4083,13 @@ def build_subscription(form) -> dict:
             "buffer_hours": buffer_hours if same_day_round_trip else None,
             "transport_mode": transport_mode if same_day_round_trip else "taxi",
             "trip_nature": trip_nature,
+            "trip_natures": trip_natures,
+            "meeting_start": meeting_start,
+            "meeting_end": meeting_end,
+            "team_date_flexibility": team_date_flexibility,
+            "same_flight_required": same_flight_required,
+            "team_passenger_count": team_passenger_count or None,
+            "cabin_arrangement": cabin_arrangement,
             "cabin_policy": cabin_policy,
             "user_level": user_level,
             "business_seats": business_seats,
@@ -4035,6 +4184,13 @@ def build_subscription(form) -> dict:
             "buffer_hours": buffer_hours if same_day_round_trip else None,
             "transport_mode": transport_mode if same_day_round_trip else "taxi",
             "trip_nature": trip_nature,
+            "trip_natures": trip_natures,
+            "meeting_start": meeting_start,
+            "meeting_end": meeting_end,
+            "team_date_flexibility": team_date_flexibility,
+            "same_flight_required": same_flight_required,
+            "team_passenger_count": team_passenger_count or None,
+            "cabin_arrangement": cabin_arrangement,
             "cabin_policy": cabin_policy,
             "user_level": user_level,
             "business_seats": business_seats,

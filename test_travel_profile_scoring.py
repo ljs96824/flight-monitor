@@ -1,6 +1,6 @@
 import unittest
 
-from analyzer import build_recommendation_basis, build_travel_profile, calc_final_score
+from analyzer import apply_default_rules, build_recommendation_basis, build_travel_profile, calc_final_score
 
 
 class TravelProfileScoringTest(unittest.TestCase):
@@ -74,6 +74,42 @@ class TravelProfileScoringTest(unittest.TestCase):
         self.assertEqual(profile["passenger_count"], 3)
         self.assertTrue(profile["infant"])
         self.assertEqual(profile["risk_averse"], "high")
+
+    def test_trip_natures_merge_business_meeting_and_team_building_profile(self):
+        profile = build_travel_profile(
+            {
+                "trip_natures": ["meeting", "team_building"],
+                "passengers": {"adult": 8, "child": 0, "elderly": 0, "infant": 0},
+            }
+        )
+
+        self.assertIn("meeting", profile["trip_natures"])
+        self.assertIn("team_building", profile["trip_natures"])
+        self.assertEqual(profile["time"], "high")
+        self.assertEqual(profile["risk_averse"], "high")
+        self.assertEqual(profile["stock_check"], "high")
+        self.assertEqual(profile["punctuality"], "critical")
+
+        basis = build_recommendation_basis(profile)
+        self.assertIn("meeting", basis["trip_natures"])
+        self.assertIn("team_building", basis["trip_natures"])
+        self.assertIn("会议时间窗口", basis["plain_language"])
+        self.assertIn("团队多人库存", basis["recommendation_text"])
+
+    def test_apply_default_rules_carries_business_trip_natures(self):
+        sub = apply_default_rules(
+            {
+                "constraints": {"trip_natures": ["meeting", "team_building"]},
+                "hard_constraints": {"trip_natures": ["meeting", "team_building"]},
+                "soft_preferences": {},
+                "notification_goals": {},
+            }
+        )
+
+        self.assertEqual(sub["soft_preferences"]["trip_natures"], ["meeting", "team_building"])
+        self.assertIn("business", sub["soft_preferences"]["travel_scenarios"])
+        self.assertTrue(any("商务会议" in item for item in sub["defaults_applied"]))
+        self.assertTrue(any("公司团建" in item for item in sub["defaults_applied"]))
 
     def test_recommendation_basis_uses_same_combined_profile(self):
         profile = build_travel_profile({"travel_scenarios": ["tourism", "family"]})

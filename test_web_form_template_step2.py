@@ -66,8 +66,26 @@ class WebFormTemplateStep2Test(unittest.TestCase):
         self.assertIn("syncSameDayRoundTrip", FORM_TEMPLATE)
 
     def test_business_cabin_policy_fields_exist(self):
-        self.assertIn('name="trip_nature"', FORM_TEMPLATE)
+        self.assertIn('name="trip_natures"', FORM_TEMPLATE)
+        self.assertIn('value="business"', FORM_TEMPLATE)
+        self.assertIn('value="meeting"', FORM_TEMPLATE)
+        self.assertIn('value="team_building"', FORM_TEMPLATE)
+        self.assertIn('data-show-if="trip_natures=business|meeting|team_building"', FORM_TEMPLATE)
+        self.assertIn('data-show-if="trip_natures=meeting"', FORM_TEMPLATE)
+        self.assertIn('name="meeting_start"', FORM_TEMPLATE)
+        self.assertIn('name="meeting_end"', FORM_TEMPLATE)
+        self.assertIn('data-show-if="trip_natures=team_building"', FORM_TEMPLATE)
+        self.assertIn('name="team_date_flexibility"', FORM_TEMPLATE)
+        self.assertIn('name="same_flight_required"', FORM_TEMPLATE)
+        self.assertIn('data-show-if="trip_natures=business"', FORM_TEMPLATE)
         self.assertIn('name="cabin_policy"', FORM_TEMPLATE)
+        self.assertIn('name="team_passenger_count"', FORM_TEMPLATE)
+        self.assertIn('name="cabin_arrangement"', FORM_TEMPLATE)
+        self.assertIn('value="economy_all"', FORM_TEMPLATE)
+        self.assertIn('value="business_all"', FORM_TEMPLATE)
+        self.assertIn('value="mixed"', FORM_TEMPLATE)
+        self.assertIn('data-show-if="cabin_arrangement=mixed"', FORM_TEMPLATE)
+        self.assertIn("validateCabinArrangement", FORM_TEMPLATE)
         self.assertIn('name="user_level"', FORM_TEMPLATE)
         self.assertIn('name="business_seats"', FORM_TEMPLATE)
         self.assertIn('name="economy_seats"', FORM_TEMPLATE)
@@ -153,22 +171,37 @@ class WebFormTemplateStep2Test(unittest.TestCase):
                 "child_count": "0",
                 "elderly_count": "0",
                 "infant_count": "0",
-                "trip_nature": "business_meeting",
+                "trip_natures": ["business", "meeting", "team_building"],
+                "meeting_start": "10:00",
+                "meeting_end": "16:00",
+                "team_date_flexibility": "flexible",
+                "same_flight_required": "true",
+                "team_passenger_count": "8",
+                "cabin_arrangement": "mixed",
                 "cabin_policy": "level_based",
                 "user_level": "director",
-                "business_seats": "1",
-                "economy_seats": "1",
+                "business_seats": "2",
+                "economy_seats": "6",
                 "reimburse_per_person": "5000",
             }
         )
 
         subscription = build_subscription(form)
 
-        self.assertEqual(subscription["constraints"]["trip_nature"], "business_meeting")
+        self.assertEqual(subscription["constraints"]["trip_natures"], ["business", "meeting", "team_building"])
+        self.assertEqual(subscription["constraints"]["trip_nature"], "meeting")
+        self.assertEqual(subscription["constraints"]["meeting_start"], "10:00")
+        self.assertEqual(subscription["constraints"]["meeting_end"], "16:00")
+        self.assertEqual(subscription["constraints"]["business_start"], "10:00")
+        self.assertEqual(subscription["constraints"]["business_end"], "16:00")
+        self.assertEqual(subscription["constraints"]["team_date_flexibility"], "flexible")
+        self.assertTrue(subscription["constraints"]["same_flight_required"])
+        self.assertEqual(subscription["constraints"]["cabin_arrangement"], "mixed")
         self.assertEqual(subscription["constraints"]["cabin_policy"], "level_based")
         self.assertEqual(subscription["constraints"]["user_level"], "director")
-        self.assertEqual(subscription["constraints"]["business_seats"], 1)
-        self.assertEqual(subscription["constraints"]["economy_seats"], 1)
+        self.assertEqual(subscription["constraints"]["business_seats"], 2)
+        self.assertEqual(subscription["constraints"]["economy_seats"], 6)
+        self.assertEqual(subscription["basic"]["passenger_count"], 8)
         self.assertEqual(subscription["constraints"]["reimburse_per_person"], 5000)
         self.assertEqual(subscription["hard_constraints"]["cabin_policy"], "level_based")
 

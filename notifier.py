@@ -5183,14 +5183,30 @@ def _payload_travel_profile(analysis_result: dict, subscription: dict) -> tuple[
     subscription = subscription or {}
     soft = dict(subscription.get("soft_preferences") or {})
     preferences = subscription.get("preferences") or {}
+    constraints = subscription.get("constraints") or {}
+    hard_constraints = subscription.get("hard_constraints") or {}
     for key in ("travel_purposes", "travel_scenarios", "travel_scenario"):
         if not soft.get(key) and preferences.get(key):
             soft[key] = preferences.get(key)
+    for key in ("trip_natures", "trip_nature"):
+        if not soft.get(key):
+            if preferences.get(key):
+                soft[key] = preferences.get(key)
+            elif constraints.get(key):
+                soft[key] = constraints.get(key)
+            elif hard_constraints.get(key):
+                soft[key] = hard_constraints.get(key)
     total_passengers, passenger_breakdown = get_total_passengers(subscription)
     if passenger_breakdown:
         soft["passengers"] = passenger_breakdown
     soft["passenger_count"] = total_passengers
-    subscription_scenarios = soft.get("travel_purposes") or soft.get("travel_scenarios") or soft.get("travel_scenario")
+    subscription_scenarios = (
+        soft.get("travel_purposes")
+        or soft.get("travel_scenarios")
+        or soft.get("travel_scenario")
+        or soft.get("trip_natures")
+        or soft.get("trip_nature")
+    )
     subscription_profile = build_travel_profile(soft) if subscription_scenarios else None
     profile = (
         round_trip.get("travel_profile")
@@ -6120,34 +6136,60 @@ def _cabin_policy_summary_body(payload: dict) -> str:
     cabins = summary.get("cabins") or []
     if policy == "economy_only" and "business" not in cabins:
         return ""
-    nature_label = {
+    nature_labels = {
+        "business": "商务出差",
+        "business_trip": "商务出差",
+        "meeting": "商务会议",
         "business_meeting": "商务会议",
-        "team_building": "团建/集体出行",
-    }.get(str(summary.get("trip_nature") or ""), str(summary.get("trip_nature") or ""))
+        "team_building": "公司团建",
+    }
+    raw_natures = summary.get("trip_natures") or []
+    if isinstance(raw_natures, str):
+        raw_natures = [raw_natures]
+    if not raw_natures and summary.get("trip_nature"):
+        raw_natures = [summary.get("trip_nature")]
+    natures = []
+    for item in raw_natures:
+        value = str(item or "").strip()
+        if value and value not in natures:
+            natures.append(value)
+    nature_label = " + ".join(nature_labels.get(item, item) for item in natures)
+    arrangement_label = {
+        "economy_all": "全部经济舱",
+        "business_all": "全部商务舱",
+        "mixed": "混合舱位",
+    }.get(str(summary.get("cabin_arrangement") or ""), str(summary.get("cabin_arrangement") or ""))
     policy_label = {
         "economy_only": "仅经济舱报销",
         "level_based": "部分职级可商务舱",
         "business_allowed": "均可商务舱",
     }.get(policy, policy)
+    business_seats = int(summary.get("business_seats") or 0)
+    economy_seats = int(summary.get("economy_seats") or 0)
+    team_count = business_seats + economy_seats
     rows = [
         ("出行性质", html.escape(nature_label or "未设置")),
+        ("团队人数", html.escape(f"{team_count}人" if team_count else "未设置")),
+        ("舱位安排", html.escape(arrangement_label or "未设置")),
         ("舱位政策", html.escape(policy_label)),
         ("本次查询舱位", html.escape(" / ".join(_cabin_label(item) for item in cabins) or "经济舱")),
     ]
-    if summary.get("economy_unit_price") is not None:
-        rows.append(("经济舱", f"参考单人价 {_price_text(summary.get('economy_unit_price'))}"))
-    if summary.get("business_unit_price") is not None:
-        rows.append(("商务舱", f"参考单人价 {_price_text(summary.get('business_unit_price'))}"))
-    if summary.get("business_seats") or summary.get("economy_seats"):
-        rows.append(
-            (
-                "团队席位",
-                html.escape(
-                    f"商务舱{int(summary.get('business_seats') or 0)}人，"
-                    f"经济舱{int(summary.get('economy_seats') or 0)}人"
-                ),
-            )
-        )
+    if business_seats or economy_seats:
+        rows.append(("团队席位", html.escape(f"商务舱{business_seats}人，经济舱{economy_seats}人")))
+    economy_price = summary.get("economy_unit_price")
+    business_price = summary.get("business_unit_price")
+    if business_price is not None:
+        business_total = float(business_price) * business_seats if business_seats else None
+        business_text = f"参考单人价 {_price_text(business_price)}"
+        if business_total is not None:
+            business_text += f" × {business_seats} = {_price_text(round(business_total))}"
+        rows.append(("商务舱", html.escape(business_text)))
+    if economy_price is not None:
+        economy_total = float(economy_price) * economy_seats if economy_seats else None
+        economy_text = f"参考单人价 {_price_text(economy_price)}"
+        if economy_total is not None:
+            economy_text += f" × {economy_seats} = {_price_text(round(economy_total))}"
+        rows.append(("经济舱", html.escape(economy_text)))
     if summary.get("team_cost_note"):
         rows.append(("团队合计", html.escape(str(summary.get("team_cost_note")))))
     notes = [
