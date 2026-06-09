@@ -74,6 +74,18 @@ class WebFormTemplateStep2Test(unittest.TestCase):
         self.assertIn('name="reimburse_per_person"', FORM_TEMPLATE)
         self.assertIn('data-show-if="cabin_policy=level_based"', FORM_TEMPLATE)
 
+    def test_route_type_selector_and_domestic_invoice_fields_exist(self):
+        self.assertIn('name="route_type"', FORM_TEMPLATE)
+        self.assertIn('value="domestic"', FORM_TEMPLATE)
+        self.assertIn('value="international"', FORM_TEMPLATE)
+        self.assertIn('value="greater_china"', FORM_TEMPLATE)
+        self.assertIn('data-show-if="route_type=domestic|greater_china"', FORM_TEMPLATE)
+        self.assertIn('data-show-if="route_type=international|greater_china"', FORM_TEMPLATE)
+        self.assertIn('name="invoice_needed"', FORM_TEMPLATE)
+        self.assertIn('name="invoice_special_vat"', FORM_TEMPLATE)
+        self.assertIn('name="invoice_cabin_limit"', FORM_TEMPLATE)
+        self.assertIn("autoDetectRouteType", FORM_TEMPLATE)
+
     def test_same_day_round_trip_is_saved_as_constraint(self):
         class Form(dict):
             def getlist(self, key):
@@ -156,6 +168,41 @@ class WebFormTemplateStep2Test(unittest.TestCase):
         self.assertEqual(subscription["constraints"]["economy_seats"], 1)
         self.assertEqual(subscription["constraints"]["reimburse_per_person"], 5000)
         self.assertEqual(subscription["hard_constraints"]["cabin_policy"], "level_based")
+
+    def test_route_type_and_domestic_invoice_are_saved(self):
+        class Form(dict):
+            def getlist(self, key):
+                value = self.get(key)
+                if value is None:
+                    return []
+                return value if isinstance(value, list) else [value]
+
+        form = Form(
+            {
+                "monitor_mode": "precise",
+                "route_type": "domestic",
+                "round_trip": "false",
+                "origin_select": "PVG",
+                "destination": "PEK",
+                "depart_date": "2026-06-10",
+                "price_strategy": "auto_judge",
+                "transfer_policy": "reasonable",
+                "baggage": "required",
+                "primary_goal": "buy_timing",
+                "notification_method": "pushplus",
+                "notification_frequency": "important_only",
+                "invoice_needed": "true",
+                "invoice_special_vat": "true",
+                "invoice_cabin_limit": "true",
+            }
+        )
+
+        subscription = build_subscription(form)
+
+        self.assertEqual(subscription["basic"]["route_type"], "domestic")
+        self.assertTrue(subscription["preferences"]["invoice_needed"])
+        self.assertTrue(subscription["preferences"]["invoice_special_vat"])
+        self.assertTrue(subscription["preferences"]["invoice_cabin_limit"])
 
 
 if __name__ == "__main__":

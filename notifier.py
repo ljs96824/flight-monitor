@@ -5422,7 +5422,12 @@ def build_notification_payload(
         "route": _payload_route_text(route_info),
         "subscription_id": route_info.get("subscription_id") or subscription.get("id"),
         "route_airports": _payload_route_airports(route_info),
-        "route_type": _source_stats_route_type(source_stats),
+        "route_type": (
+            ((subscription.get("basic") or {}).get("route_type"))
+            or subscription.get("route_type")
+            or route_info.get("route_type")
+            or _source_stats_route_type(source_stats)
+        ),
         "trip_type": "round_trip" if is_roundtrip else "one_way",
         "is_roundtrip": is_roundtrip,
         "current_price": display_price,
@@ -5799,6 +5804,8 @@ def render_pushplus(payload: dict) -> str:
 
 
 def _render_payload_plan_card(plan: dict, compact: bool = False, primary_plan: dict | None = None) -> str:
+    if _plan_is_domestic(plan):
+        return _render_domestic_payload_plan_card(plan, compact=compact, primary_plan=primary_plan)
     label = str(plan.get("label", "方案"))
     tier = str(plan.get("tier") or plan.get("variant") or "").split(":", 1)[0].strip()
     if tier == "推荐":
@@ -6551,9 +6558,12 @@ def _first_anchor_href(link_html: str) -> str:
 def _plan_for_render(plan: dict, payload: dict) -> dict:
     if not isinstance(plan, dict):
         return {}
-    if plan.get("feedback_url"):
-        return plan
-    return {**plan, "feedback_url": payload.get("feedback_url")}
+    rendered = {**plan}
+    if not rendered.get("feedback_url"):
+        rendered["feedback_url"] = payload.get("feedback_url")
+    if payload.get("route_type") and not rendered.get("route_type"):
+        rendered["route_type"] = payload.get("route_type")
+    return rendered
 
 
 def _render_payload_plan_cards(payload: dict, plans: list[dict], primary_plan: dict, compact: bool = False) -> str:
@@ -6562,6 +6572,125 @@ def _render_payload_plan_cards(payload: dict, plans: list[dict], primary_plan: d
         for plan in plans
         if isinstance(plan, dict)
     )
+
+
+def _plan_is_domestic(plan: dict) -> bool:
+    if str(plan.get("route_type") or "") == "domestic":
+        return True
+    return any(str(flight.get("route_type") or "") == "domestic" for flight in _plan_flights(plan))
+
+
+def _domestic_reference_price_line(plan: dict) -> str:
+    flight = (_plan_flights(plan) or [{}])[0] or {}
+    price = plan.get("price") or flight.get("price")
+    bare = _to_float(flight.get("bare_price") or flight.get("ticket_price"))
+    airport_tax = _to_float(flight.get("airport_tax"))
+    fuel_tax = _to_float(flight.get("fuel_tax"))
+    price_text = _price_text(price)
+    if bare is not None and airport_tax is not None and fuel_tax is not None:
+        return (
+            f"{price_text}"
+            f"（票面{_price_text(bare)}+机建{_price_text(airport_tax)}+燃油{_price_text(fuel_tax)}）"
+        )
+    note = str(flight.get("price_note") or flight.get("price_includes") or "实付以支付页为准").strip()
+    return f"{price_text}（{html.escape(note)}）"
+
+
+def _domestic_buyability_line(plan: dict) -> str:
+    labels = []
+    for flight in _plan_flights(plan):
+        buyability = flight.get("buyability") or {}
+        availability = flight.get("availability") or {}
+        label = str(buyability.get("label") or availability.get("label") or "").strip()
+        if label and label not in labels:
+            labels.append(label)
+    return " / ".join(labels) or "需支付页确认"
+
+
+def _domestic_baggage_line(plan: dict) -> str:
+    if plan.get("baggage_line"):
+        return html.escape(str(plan.get("baggage_line")))
+    parts = []
+    for flight in _plan_flights(plan):
+        baggage = ((flight.get("fare_rules") or {}).get("baggage") or {})
+        note = str(baggage.get("note") or "").strip()
+        if baggage.get("included") is True and baggage.get("checked_kg"):
+            note = note or f"含{baggage.get('checked_kg')}kg托运"
+        elif baggage.get("included") is False:
+            note = note or "托运需另购"
+        if note and note not in parts:
+            parts.append(note)
+    return html.escape(" / ".join(parts) or "支付页需确认")
+
+
+def _domestic_refund_line(plan: dict) -> str:
+    refund_line = _plan_refund_line(plan)
+    if refund_line:
+        return refund_line
+    parts = []
+    for flight in _plan_flights(plan):
+        refund = ((flight.get("fare_rules") or {}).get("refund") or {})
+        text = "，".join(
+            item
+            for item in [str(refund.get("label") or "").strip(), str(refund.get("note") or "").strip()]
+            if item
+        )
+        if text and text not in parts:
+            parts.append(text)
+    return html.escape(" / ".join(parts) or "支付页确认")
+
+
+def _render_domestic_payload_plan_card(plan: dict, compact: bool = False, primary_plan: dict | None = None) -> str:
+    label = str(plan.get("label", "方案"))
+    tier = str(plan.get("tier") or plan.get("variant") or "首选推荐").split(":", 1)[0].strip()
+    if tier == "推荐":
+        tier = "首选推荐"
+    title = html.escape(f"国内航班推荐卡 · {label} ｜ {tier}".strip(" ｜"))
+    body_parts: list[str] = [_plan_tradeoff_summary_html(plan, primary_plan)]
+    if plan.get("is_roundtrip"):
+        body_parts.append(
+            _email_plan_leg_group("去程", plan.get("outbound_flight"), str(plan.get("outbound_line") or ""))
+        )
+        body_parts.append(
+            _email_plan_leg_group("返程", plan.get("return_flight"), str(plan.get("return_line") or ""))
+        )
+    else:
+        main_flight = plan.get("main_flight") or plan.get("outbound_flight") or plan.get("flight")
+        body_parts.append(_email_plan_leg_group("去程", main_flight, str(plan.get("summary") or "")))
+
+    links = plan.get("links") or {}
+    link_value = links.get("main") or links.get("outbound") or ""
+    if isinstance(link_value, dict):
+        link_value = " | ".join(str(item) for item in link_value.values() if item)
+    rows = [
+        ("实时含税价", _domestic_reference_price_line(plan)),
+        ("库存状态", html.escape(_domestic_buyability_line(plan))),
+        ("行李", _domestic_baggage_line(plan)),
+        ("退改签", _domestic_refund_line(plan)),
+    ]
+    punctuality_line = _plan_punctuality_line(plan)
+    if punctuality_line:
+        rows.append(("准点率", punctuality_line))
+    effective_cost_line = _plan_effective_cost_line(plan)
+    if effective_cost_line:
+        rows.append(("有效出行成本", effective_cost_line))
+    logistics_line = _plan_logistics_line(plan)
+    if logistics_line:
+        rows.append(("机场交通", logistics_line))
+    channel_advice = _plan_channel_purchase_advice(plan)
+    if channel_advice:
+        rows.append(("渠道建议", channel_advice))
+    if link_value:
+        rows.append(("渠道", _layered_channel_links(str(link_value)) or str(link_value)))
+    if plan.get("tags"):
+        rows.append(("标签", html.escape(str(plan.get("tags")))))
+    source_label = _plan_source_label(plan)
+    if source_label:
+        rows.append(("数据来源", html.escape(source_label)))
+    if not compact:
+        rows.append(("操作建议", f'<span style="color:#16a34a;">{html.escape(str(plan.get("buy_condition") or "以支付页为准"))}</span>'))
+    body_parts.append(_email_plan_price_group(rows))
+    return _email_card(title, "".join(body_parts), _plan_card_style(plan, tier))
 
 
 def _plan_source_label(plan: dict) -> str:

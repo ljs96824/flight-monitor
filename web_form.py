@@ -103,6 +103,13 @@ COMMON_ORIGINS = [
     ("OTHER", "其他（手动输入）"),
 ]
 
+GREATER_CHINA_AIRPORTS = {"HKG", "MFM", "TPE", "TSA"}
+DOMESTIC_ROUTE_AIRPORTS = {
+    "PVG", "SHA", "PEK", "PKX", "CAN", "SZX", "CTU", "TFU", "HGH", "NKG",
+    "XIY", "CKG", "WUH", "CSX", "TAO", "XMN", "FOC", "KMG", "SHE", "DLC",
+    "TSN", "CGO", "URC", "HRB",
+}
+
 TIME_SLOT_LABELS = {
     "dawn": "清晨 06:00-09:00",
     "morning": "早上 09:00-12:00",
@@ -670,6 +677,18 @@ FORM_TEMPLATE = """
     <fieldset class="form-step active" data-step="1">
       <legend>行程信息</legend>
 
+      <label>航线类型</label>
+      <div class="choice">
+        <label><input type="radio" name="route_type" value="domestic" checked> 国内</label>
+        <label><input type="radio" name="route_type" value="international"> 国际</label>
+        <label><input type="radio" name="route_type" value="greater_china"> 港澳台</label>
+      </div>
+      <p class="hint">系统会根据出发地/目的地自动判断默认值，你也可以手动修改。</p>
+      <p class="hint" data-show-if="route_type=domestic">国内航线将重点启用多机场对比、当天往返、准点率、有效出行成本和报销友好提示。</p>
+      <p class="hint" data-show-if="route_type=international">国际航线将重点提示中转风险、联程/非联程、过境签、时区时差、行李规则和OTA验证风险。</p>
+      <p class="hint" data-show-if="route_type=greater_china">港澳台航线会显示通行证/签注提示，并保留多机场和部分国际中转风险提醒。</p>
+      <p class="hint" data-show-if="route_type=international|greater_china">跨境航线会把行李规则、时区时差、过境签和联程风险作为重点提醒。</p>
+
       <label for="origin">出发地</label>
       <select id="origin" name="origin_select">
         {% for code, label in origins %}
@@ -695,10 +714,12 @@ FORM_TEMPLATE = """
 
       <label for="depart_date">出发日期</label>
       <input id="depart_date" name="depart_date" type="date" required>
-      <label class="hint" style="display:block;margin-top:8px;">
-        <input id="same_day_round_trip" name="same_day_round_trip" type="checkbox" value="true">
-        当天往返（早上去、当天晚上回，适合国内商务）
-      </label>
+      <div data-show-if="route_type=domestic">
+        <label class="hint" style="display:block;margin-top:8px;">
+          <input id="same_day_round_trip" name="same_day_round_trip" type="checkbox" value="true">
+          当天往返（早上去、当天晚上回，适合国内商务）
+        </label>
+      </div>
       <div id="same-day-business-fields" class="precise-only" data-show-if="same_day_round_trip=true">
         <label>当天往返安排</label>
         <div class="inline-grid">
@@ -1072,6 +1093,16 @@ FORM_TEMPLATE = """
 
         <label>每人报销上限（可选）</label>
         <input name="reimburse_per_person" type="number" min="0" step="1" placeholder="例如 5000">
+
+        <div data-show-if="route_type=domestic|greater_china">
+          <label>（国内）报销需求</label>
+          <div class="choice">
+            <label><input type="checkbox" name="invoice_needed" value="true"> 需要行程单/发票</label>
+            <label><input type="checkbox" name="invoice_special_vat" value="true"> 优先可开专票的渠道</label>
+            <label><input type="checkbox" name="invoice_cabin_limit" value="true"> 报销有舱位限制</label>
+          </div>
+          <p class="hint">国内航线会优先提示航司官网、携程、飞猪、去哪儿等渠道的报销友好度，具体开票能力以平台支付页为准。</p>
+        </div>
         </div>
         <p class="hint">这些偏好会影响推荐排序，不会影响是否创建监控</p>
       </fieldset>
@@ -1099,7 +1130,9 @@ FORM_TEMPLATE = """
             </div>
           </div>
 
-          <div id="overnight-transfer-options" class="sub-options" data-show-if="transfer_policy=price_first">
+          <p class="hint" data-show-if="transfer_policy=price_first">价格优先时会显示更细的中转规则；国内航线会自动弱化非联程和过境签相关项。</p>
+
+          <div id="overnight-transfer-options" class="sub-options" data-show-if="transfer_policy=price_first;route_type=international|greater_china">
             <label>是否接受过夜中转</label>
             <div class="choice">
               <label><input type="radio" name="accept_overnight_transfer" value="false" checked> 不接受</label>
@@ -1108,7 +1141,7 @@ FORM_TEMPLATE = """
           </div>
 
           <div id="pref-detail-self_transfer" class="pref-card-detail">
-          <div id="self-transfer-options" class="sub-options" data-show-if="transfer_policy=price_first">
+          <div id="self-transfer-options" class="sub-options" data-show-if="transfer_policy=price_first;route_type=international|greater_china">
             <label>是否接受非联程</label>
             <div class="choice">
               <label><input type="radio" name="accept_self_transfer" value="false" checked> 不接受</label>
@@ -1342,6 +1375,7 @@ FORM_TEMPLATE = """
     const primaryGoalRadios = document.querySelectorAll('input[name="primary_goal"]');
     const secondaryGoalChecks = document.querySelectorAll('input[name="secondary_goals"]');
     const dateFlexRadios = document.querySelectorAll('input[name="date_flexibility"]');
+    const routeTypeRadios = document.querySelectorAll('input[name="route_type"]');
     const dateFlexWarning = document.getElementById('date-flex-warning');
     const cheaperDateCheck = document.querySelector('input[name="secondary_goals"][value="cheaper_date"]');
     const cheaperDateLabel = cheaperDateCheck ? cheaperDateCheck.closest('label') : null;
@@ -1361,7 +1395,13 @@ FORM_TEMPLATE = """
     const prefCardDetails = document.querySelectorAll('.pref-card-detail');
     const resetModuleButtons = document.querySelectorAll('.reset-module');
     const stepTitles = ['行程信息', '价格底线', '监控目标', '完成'];
+    const greaterChinaAirports = new Set(['HKG', 'MFM', 'TPE', 'TSA']);
+    const domesticAirports = new Set([
+      'PVG','SHA','PEK','PKX','CAN','SZX','CTU','TFU','HGH','NKG','XIY','CKG',
+      'WUH','CSX','TAO','XMN','FOC','KMG','SHE','DLC','TSN','CGO','URC','HRB'
+    ]);
     let currentStep = 1;
+    let routeTypeTouched = false;
 
     if (stepTimePreferences && customTimeOptions) {
       stepTimePreferences.appendChild(customTimeOptions);
@@ -1380,10 +1420,16 @@ FORM_TEMPLATE = """
     function updateConditionalFields() {
       document.querySelectorAll('[data-show-if]').forEach(el => {
         const rule = el.dataset.showIf || '';
-        const [field, rawValue] = rule.split('=');
-        const values = String(rawValue || '').split('|');
-        const current = checkedValue(field);
-        const shouldShow = field && values.includes(current);
+        const shouldShow = rule
+          .split(';')
+          .map(item => item.trim())
+          .filter(Boolean)
+          .every(item => {
+            const [field, rawValue] = item.split('=');
+            const values = String(rawValue || '').split('|');
+            const current = checkedValue(field);
+            return Boolean(field && values.includes(current));
+          });
         el.style.display = shouldShow ? 'block' : 'none';
       });
     }
@@ -1574,6 +1620,7 @@ FORM_TEMPLATE = """
       const destination = destinationInput.value.trim();
       const isRoundTrip = checkedValue('round_trip') === 'true';
       const items = [
+        {done: Boolean(checkedValue('route_type')), label: '航线类型', step: 1},
         {done: Boolean(origin && origin !== '\u5176\u4ed6'), label: '\u51fa\u53d1\u5730', step: 1},
         {done: Boolean(destination), label: '\u76ee\u7684\u5730', step: 1},
         {done: Boolean(checkedValue('round_trip')), label: '\u5355\u7a0b/\u5f80\u8fd4', step: 1},
@@ -1722,6 +1769,7 @@ FORM_TEMPLATE = """
           }
           state.active = state.active.filter(item => item !== code);
           renderAirportTags(kind);
+          autoDetectRouteType();
           refreshSummaryIfFinalStep();
         });
         tag.appendChild(remove);
@@ -1746,6 +1794,7 @@ FORM_TEMPLATE = """
       airportState[kind].all = airports;
       airportState[kind].active = savedActive.length ? savedActive : airports.slice();
       renderAirportTags(kind);
+      autoDetectRouteType();
       refreshSummaryIfFinalStep();
     }
 
@@ -1765,6 +1814,51 @@ FORM_TEMPLATE = """
     function activeAirportText(kind) {
       const active = airportState[kind].active;
       return active.length ? active.join('、') : '';
+    }
+
+    function inferRouteTypeFromAirports(originAirports, destinationAirports) {
+      const airports = [...(originAirports || []), ...(destinationAirports || [])]
+        .map(code => String(code || '').trim().toUpperCase())
+        .filter(Boolean);
+      if (airports.some(code => greaterChinaAirports.has(code))) {
+        return 'greater_china';
+      }
+      const originDomestic = (originAirports || []).every(code => domesticAirports.has(String(code || '').toUpperCase()));
+      const destDomestic = (destinationAirports || []).every(code => domesticAirports.has(String(code || '').toUpperCase()));
+      if (originAirports.length && destinationAirports.length && originDomestic && destDomestic) {
+        return 'domestic';
+      }
+      return 'international';
+    }
+
+    function routeTypeLabel(value) {
+      return {
+        domestic: '国内',
+        international: '国际',
+        greater_china: '港澳台'
+      }[value] || value || '';
+    }
+
+    function routeTypeEnabledFeatures(value) {
+      if (value === 'domestic') {
+        return '已启用：多机场对比、当天往返、准点率、有效出行成本、报销友好';
+      }
+      if (value === 'greater_china') {
+        return '已启用：通行证/签注提示、多机场对比、行李与部分中转风险提示';
+      }
+      return '已启用：中转风险、联程/非联程、过境签、时区时差、国际OTA验证';
+    }
+
+    function autoDetectRouteType(force = false) {
+      if (!force && routeTypeTouched) {
+        return;
+      }
+      const inferred = inferRouteTypeFromAirports(airportState.origin.active, airportState.destination.active);
+      setRadio('route_type', inferred);
+      if (inferred !== 'domestic' && sameDayRoundTrip) {
+        sameDayRoundTrip.checked = false;
+      }
+      updateConditionalFields();
     }
 
     function setSmartPanel(panel, open) {
@@ -2027,6 +2121,9 @@ FORM_TEMPLATE = """
     }
 
     function syncSameDayRoundTrip() {
+      if (checkedValue('route_type') !== 'domestic' && sameDayRoundTrip) {
+        sameDayRoundTrip.checked = false;
+      }
       if (!sameDayRoundTrip || !sameDayRoundTrip.checked) {
         return;
       }
@@ -2292,6 +2389,11 @@ FORM_TEMPLATE = """
       destinationInput.value = data.destination || '';
       updateOriginAirportHint(data.origin_airports_active || data.origin_airports);
       updateDestinationAirportHint(data.destination_airports_active || data.destination_airports || data.dest_airports);
+      const savedRouteType = (data.basic && data.basic.route_type) || data.route_type || '';
+      if (savedRouteType) {
+        routeTypeTouched = true;
+        setRadio('route_type', savedRouteType);
+      }
       setRadio('round_trip', String(Boolean(data.round_trip)));
       form.depart_date.value = data.depart_date || '';
       if (data.return_date) {
@@ -2558,6 +2660,8 @@ FORM_TEMPLATE = """
       const targetPriceMode = checkedValue('target_price_mode');
 
       addSummaryHeader('【你填写的条件】');
+      const routeType = checkedValue('route_type');
+      summaryLine('航线类型', routeType ? `${routeTypeLabel(routeType)}（${routeTypeEnabledFeatures(routeType)}）` : '');
       summaryLine(
         '路线',
         origin && destination
@@ -2617,6 +2721,13 @@ FORM_TEMPLATE = """
         }
         const reimburse = document.querySelector('input[name="reimburse_per_person"]')?.value || '';
         if (reimburse) summaryLine('每人报销上限', money(reimburse));
+        const invoiceNeeds = [];
+        if (document.querySelector('input[name="invoice_needed"]')?.checked) invoiceNeeds.push('需要行程单/发票');
+        if (document.querySelector('input[name="invoice_special_vat"]')?.checked) invoiceNeeds.push('优先可开专票渠道');
+        if (document.querySelector('input[name="invoice_cabin_limit"]')?.checked) invoiceNeeds.push('报销有舱位限制');
+        if (invoiceNeeds.length) {
+          summaryLine('报销需求', invoiceNeeds.join('、'));
+        }
         summaryLine('时间偏好', timePreferenceText());
         if (checkedValue('time_preference') === 'custom') {
           if (isRoundTrip) {
@@ -2659,6 +2770,7 @@ FORM_TEMPLATE = """
     function collectPreferenceTemplate() {
       return {
         monitor_mode: checkedValue('monitor_mode'),
+        route_type: checkedValue('route_type'),
         same_day_round_trip: Boolean(document.querySelector('input[name="same_day_round_trip"]')?.checked),
         business_start: document.querySelector('input[name="business_start"]')?.value || '',
         business_end: document.querySelector('input[name="business_end"]')?.value || '',
@@ -2677,6 +2789,9 @@ FORM_TEMPLATE = """
         business_seats: Number(document.querySelector('input[name="business_seats"]')?.value || 0),
         economy_seats: Number(document.querySelector('input[name="economy_seats"]')?.value || 0),
         reimburse_per_person: Number(document.querySelector('input[name="reimburse_per_person"]')?.value || 0),
+        invoice_needed: Boolean(document.querySelector('input[name="invoice_needed"]')?.checked),
+        invoice_special_vat: Boolean(document.querySelector('input[name="invoice_special_vat"]')?.checked),
+        invoice_cabin_limit: Boolean(document.querySelector('input[name="invoice_cabin_limit"]')?.checked),
         travel_scenario: selectedTravelScenarios()[0],
         travel_scenarios: selectedTravelScenarios(),
         travel_purposes: checkedValues('travel_purpose'),
@@ -2764,6 +2879,10 @@ FORM_TEMPLATE = """
         form.trip_type.value = data.trip_type;
       }
       if (data.trip_nature) setRadio('trip_nature', data.trip_nature);
+      if (data.route_type) {
+        routeTypeTouched = true;
+        setRadio('route_type', data.route_type);
+      }
       if (data.cabin_policy) setRadio('cabin_policy', data.cabin_policy);
       if (data.user_level) setRadio('user_level', data.user_level);
       const businessSeatsInput = document.querySelector('input[name="business_seats"]');
@@ -2772,6 +2891,10 @@ FORM_TEMPLATE = """
       if (businessSeatsInput && data.business_seats !== undefined) businessSeatsInput.value = data.business_seats;
       if (economySeatsInput && data.economy_seats !== undefined) economySeatsInput.value = data.economy_seats;
       if (reimburseInput && data.reimburse_per_person !== undefined) reimburseInput.value = data.reimburse_per_person || '';
+      ['invoice_needed', 'invoice_special_vat', 'invoice_cabin_limit'].forEach(name => {
+        const input = document.querySelector(`input[name="${name}"]`);
+        if (input && data[name] !== undefined) input.checked = Boolean(data[name]);
+      });
       document.querySelectorAll('input[name="companion_constraints"]').forEach(input => {
         input.checked = (data.companion_constraints || []).includes(input.value);
       });
@@ -2932,7 +3055,15 @@ FORM_TEMPLATE = """
     resetModuleButtons.forEach(button => {
       button.addEventListener('click', () => resetModule(button.dataset.resetModule));
     });
-    ['companions', 'travel_purpose', 'adult_count', 'child_count', 'elderly_count', 'infant_count', 'passenger_count', 'trip_nature', 'cabin_policy', 'user_level', 'business_seats', 'economy_seats', 'reimburse_per_person', 'time_preference', 'refund_flexibility', 'airline_policy', 'accept_self_transfer', 'companion_constraints', 'solo_travel', 'no_late_arrival', 'prefer_daytime_arrival'].forEach(name => {
+    routeTypeRadios.forEach(radio => radio.addEventListener('change', () => {
+      routeTypeTouched = true;
+      if (checkedValue('route_type') !== 'domestic' && sameDayRoundTrip) {
+        sameDayRoundTrip.checked = false;
+      }
+      updateConditionalFields();
+      refreshSummaryIfFinalStep();
+    }));
+    ['companions', 'travel_purpose', 'adult_count', 'child_count', 'elderly_count', 'infant_count', 'passenger_count', 'trip_nature', 'cabin_policy', 'user_level', 'business_seats', 'economy_seats', 'reimburse_per_person', 'invoice_needed', 'invoice_special_vat', 'invoice_cabin_limit', 'time_preference', 'refund_flexibility', 'airline_policy', 'accept_self_transfer', 'companion_constraints', 'solo_travel', 'no_late_arrival', 'prefer_daytime_arrival'].forEach(name => {
       document.querySelectorAll(`input[name="${name}"]`).forEach(input => {
         input.addEventListener('change', () => {
           syncPrefCards();
@@ -3486,6 +3617,21 @@ def parse_active_airports(raw: str | None, fallback: list[str]) -> list[str]:
     return airports or list(fallback or [])
 
 
+def infer_route_type(origin_airports: list[str], destination_airports: list[str]) -> str:
+    airports = {str(code or "").strip().upper() for code in (origin_airports or []) + (destination_airports or [])}
+    if airports & GREATER_CHINA_AIRPORTS:
+        return "greater_china"
+    origin_domestic = bool(origin_airports) and all(
+        str(code or "").strip().upper() in DOMESTIC_ROUTE_AIRPORTS for code in origin_airports
+    )
+    destination_domestic = bool(destination_airports) and all(
+        str(code or "").strip().upper() in DOMESTIC_ROUTE_AIRPORTS for code in destination_airports
+    )
+    if origin_domestic and destination_domestic:
+        return "domestic"
+    return "international"
+
+
 def time_slots_from_preference(form, field_name: str, default_slots: list[str]) -> list[str]:
     preference = form.get("time_preference", "any")
     if preference in {"any", "unlimited"}:
@@ -3582,6 +3728,10 @@ def build_subscription(form) -> dict:
     )
     destination_airports_active = parse_active_airports(
         form.get("destination_airports_active"), destination_info["airports"]
+    )
+    route_type = form.get("route_type") or infer_route_type(
+        origin_airports_active,
+        destination_airports_active,
     )
     excluded_airports = sorted(
         (
@@ -3747,6 +3897,9 @@ def build_subscription(form) -> dict:
     solo_travel = parse_bool(form.get("solo_travel", "false"))
     no_late_arrival = parse_bool(form.get("no_late_arrival", "false"))
     prefer_daytime_arrival = parse_bool(form.get("prefer_daytime_arrival", "false"))
+    invoice_needed = parse_bool(form.get("invoice_needed", "false"))
+    invoice_special_vat = parse_bool(form.get("invoice_special_vat", "false"))
+    invoice_cabin_limit = parse_bool(form.get("invoice_cabin_limit", "false"))
     trip_nature = form.get("trip_nature", "").strip()
     cabin_policy = form.get("cabin_policy", "economy_only").strip() or "economy_only"
     user_level = form.get("user_level", "staff").strip() or "staff"
@@ -3763,6 +3916,7 @@ def build_subscription(form) -> dict:
             "dest_airports": destination_info["airports"],
             "destination_airports": destination_info["airports"],
             "destination_airports_active": destination_airports_active,
+            "route_type": route_type,
             "trip_type": "round_trip" if round_trip else "one_way",
             "departure_date": form.get("depart_date", "").strip(),
             "return_date": (
@@ -3802,6 +3956,9 @@ def build_subscription(form) -> dict:
             "solo_travel": solo_travel,
             "no_late_arrival": no_late_arrival,
             "prefer_daytime_arrival": prefer_daytime_arrival,
+            "invoice_needed": invoice_needed,
+            "invoice_special_vat": invoice_special_vat,
+            "invoice_cabin_limit": invoice_cabin_limit,
             "time_pref": time_mode,
             "refund_policy": form.get("refund_flexibility", "preferred"),
             "price_sensitivity": form.get("price_sensitivity", "low"),
@@ -3847,6 +4004,7 @@ def build_subscription(form) -> dict:
         "destination_type": destination_info["type"],
         "destination_airports": destination_info["airports"],
         "destination_airports_active": destination_airports_active,
+        "route_type": route_type,
         "excluded_airports": excluded_airports,
         "monitor_mode": monitor_mode,
         "depart_date": form.get("depart_date", "").strip(),
@@ -3916,6 +4074,9 @@ def build_subscription(form) -> dict:
             "solo_travel": solo_travel,
             "no_late_arrival": no_late_arrival,
             "prefer_daytime_arrival": prefer_daytime_arrival,
+            "invoice_needed": invoice_needed,
+            "invoice_special_vat": invoice_special_vat,
+            "invoice_cabin_limit": invoice_cabin_limit,
             "price_sensitivity": form.get("price_sensitivity", "low"),
             "trip_rigidity": form.get("trip_rigidity", "confirmed"),
             "refund_flexibility": form.get("refund_flexibility", "preferred"),
