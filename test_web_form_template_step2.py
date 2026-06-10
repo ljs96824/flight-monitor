@@ -146,6 +146,12 @@ class WebFormTemplateStep2Test(unittest.TestCase):
         self.assertEqual(subscription["constraints"]["transport_mode"], "taxi")
         self.assertEqual(subscription["basic"]["return_date"], "2026-06-10")
 
+    def test_same_day_business_time_fields_are_available_in_quick_mode(self):
+        self.assertIn('id="same-day-business-fields" data-show-if="same_day_round_trip=true"', FORM_TEMPLATE)
+        self.assertNotIn('id="same-day-business-fields" class="precise-only"', FORM_TEMPLATE)
+        self.assertIn("会议/办事开始时间", FORM_TEMPLATE)
+        self.assertIn("缓冲默认2.5小时，可在精准模式调整。", FORM_TEMPLATE)
+
     def test_business_cabin_policy_is_saved_as_constraint(self):
         class Form(dict):
             def getlist(self, key):

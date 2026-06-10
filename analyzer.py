@@ -918,6 +918,32 @@ def _closest_same_day_outbound_options(
     return [item for _, item in options[:limit]]
 
 
+def _same_day_candidate_debug_rows(
+    outbound_flights: list[dict] | None,
+    date_str: str | None,
+    limit: int = 8,
+) -> list[tuple[str, str, str]]:
+    rows = []
+    for flight in outbound_flights or []:
+        arrival_dt = _flight_arrival_datetime(flight or {}, date_str)
+        arrival_minutes = _flight_arrival_minutes(flight or {})
+        if arrival_dt is None and arrival_minutes is None:
+            continue
+        sort_key = arrival_dt
+        if sort_key is None:
+            sort_key = _minutes_datetime(date_str, arrival_minutes) or datetime(1900, 1, 1) + timedelta(minutes=arrival_minutes)
+        rows.append(
+            (
+                sort_key,
+                str(flight.get("flight_no") or flight.get("flight_combo") or ""),
+                _first_time_text(flight or {}, "departure_time", "dep_time"),
+                _first_time_text(flight or {}, "arrival_time", "arr_time"),
+            )
+        )
+    rows.sort(key=lambda row: row[0])
+    return [(flight_no, dep, arr) for _, flight_no, dep, arr in rows[:limit]]
+
+
 def _infer_travelers_from_passengers(passengers: dict, fallback: str = "solo") -> str:
     if not passengers:
         return fallback or "solo"
@@ -1775,6 +1801,18 @@ def apply_default_rules(subscription: dict) -> dict:
     if same_day_enabled:
         hard["same_day_round_trip"] = True
         soft["same_day_round_trip"] = True
+        buffer_h = (
+            hard.get("buffer_hours")
+            or (subscription.get("constraints") or {}).get("buffer_hours")
+            or subscription.get("buffer_hours")
+            or 2.5
+        )
+        if hard.get("business_start") and hard.get("business_end"):
+            hard["meeting_time_priority"] = True
+            soft["meeting_time_priority"] = True
+            defaults_applied.append(
+                f"当天往返会议模式:以会议时间为最高优先,清晨早班/晚班返程均可选,已含{buffer_h}小时预留(车程+冗余)"
+            )
         defaults_applied.append("当天往返:返程晚班视为正常,深夜限制放宽至午夜前到达")
 
     if quick_mode and hard.get("baggage") == "required":
@@ -5278,6 +5316,13 @@ def _apply_user_preferences(
         "custom",
     }
     direction = preferences.get("direction", "outbound")
+    same_day_meeting_time_override = bool(
+        preferences.get("same_day_round_trip")
+        and preferences.get("business_start")
+        and preferences.get("business_end")
+    )
+    if same_day_meeting_time_override:
+        use_legacy_time_filters = False
     preferred_departure_slots, preferred_arrival_slots = _direction_time_slots(
         preferences, direction
     )
@@ -5352,7 +5397,10 @@ def _apply_user_preferences(
         stops = _stops_count(flight)
         price = _to_float(flight.get("price")) or 0
 
-        time_ok, time_note = match_time_preference(flight, preferences)
+        if same_day_meeting_time_override:
+            time_ok, time_note = True, "当天往返会议模式：以会议时间窗口为最高优先，清晨早班/晚班返程可选"
+        else:
+            time_ok, time_note = match_time_preference(flight, preferences)
         if not time_ok:
             excluded.append({**flight, "exclude_reason": time_note or "时间不符合订阅偏好"})
             continue
@@ -5452,10 +5500,10 @@ def _apply_user_preferences(
             excluded.append({**flight, "exclude_reason": "出行风险画像：中转时间低于90分钟"})
             continue
 
-        if red_eye == "reject" and _is_red_eye(flight):
+        if not same_day_meeting_time_override and red_eye == "reject" and _is_red_eye(flight):
             excluded.append({**flight, "exclude_reason": "用户不接受红眼/过早航班"})
             continue
-        if red_eye in {"accept", "flexible", "cheap_ok"} and _is_red_eye(flight):
+        if not same_day_meeting_time_override and red_eye in {"accept", "flexible", "cheap_ok"} and _is_red_eye(flight):
             penalty += 2 if red_eye in {"accept", "flexible"} else 1
             if cheapest_non_red_eye and price < cheapest_non_red_eye:
                 notes.append(f"红眼但便宜¥{cheapest_non_red_eye - price:,.0f}")
@@ -5513,7 +5561,7 @@ def _apply_user_preferences(
                 notes.append("适合家庭出行：退改较灵活")
             else:
                 penalty += 1
-            if _is_red_eye(flight):
+            if not same_day_meeting_time_override and _is_red_eye(flight):
                 penalty += 3
             if _max_layover_minutes(flight) > 360:
                 penalty += 2
@@ -5526,14 +5574,14 @@ def _apply_user_preferences(
             if stops > 0:
                 penalty += 2
                 penalties.append("商务/会议更适合直飞或低风险中转")
-            if not _is_daytime_flight(flight):
+            if not same_day_meeting_time_override and not _is_daytime_flight(flight):
                 penalty += 1
                 penalties.append("商务/会议时段稳定性一般")
         if "important" in travel_scenario_set:
             if stops > 0:
                 penalty += 3
                 penalties.append("重要事项不适合复杂中转")
-            if _is_red_eye(flight):
+            if not same_day_meeting_time_override and _is_red_eye(flight):
                 penalty += 3
                 penalties.append("重要事项不适合红眼/凌晨航班")
         if "price_first" in travel_scenario_set:
@@ -5552,17 +5600,17 @@ def _apply_user_preferences(
         if "need_refund_change" in companion_constraints and not _has_refund_change_flexibility(flight):
             penalty += 3
             penalties.append("同行约束：退改签需确认")
-        if no_late_arrival:
+        if not same_day_meeting_time_override and no_late_arrival:
             arrival_hour = _last_arrival_hour(flight)
             if arrival_hour is not None and (arrival_hour >= 23 or arrival_hour < 6):
                 penalty += 3
                 penalties.append("不接受深夜/凌晨到达")
-        if prefer_daytime_arrival:
+        if not same_day_meeting_time_override and prefer_daytime_arrival:
             arrival_hour = _last_arrival_hour(flight)
             if arrival_hour is not None and not (6 <= arrival_hour < 22):
                 penalty += 2
                 penalties.append("希望白天到达")
-        if solo_travel and _is_red_eye(flight):
+        if not same_day_meeting_time_override and solo_travel and _is_red_eye(flight):
             penalty += 2
             penalties.append("独自出行降低红眼方案权重")
         if companions == "group":
@@ -5571,13 +5619,13 @@ def _apply_user_preferences(
         if price_sensitivity == "low":
             if stops > 0:
                 penalty += 2
-            if _is_red_eye(flight) or _max_layover_minutes(flight) > 360:
+            if (not same_day_meeting_time_override and _is_red_eye(flight)) or _max_layover_minutes(flight) > 360:
                 penalty += 2
             notes.append("便利稳定优先")
         elif price_sensitivity == "medium":
             notes.append("便宜时可接受轻微不便")
         elif price_sensitivity == "high":
-            if stops > 0 or _is_red_eye(flight):
+            if stops > 0 or (not same_day_meeting_time_override and _is_red_eye(flight)):
                 notes.append("便宜但便利性较低")
         elif price_sensitivity == "max":
             penalty = max(0, penalty - 2)
@@ -5596,7 +5644,7 @@ def _apply_user_preferences(
         trip_type = preferences.get("trip_type")
         if trip_type == "business_meeting":
             penalty += stops
-            if _is_red_eye(flight):
+            if not same_day_meeting_time_override and _is_red_eye(flight):
                 penalty += 2
         elif trip_type == "tourism":
             penalty += 0
@@ -6873,6 +6921,11 @@ def analyze_round_trip(
             if sample_dest:
                 break
         windows = compute_same_day_windows(combined_preferences, None, sample_dest)
+        depart_date_for_same_day = outbound_analysis.get("depart_date") or outbound_analysis.get("departure_date")
+        print(
+            "[会议候选] 去程候选按到达时间排序: "
+            + str(_same_day_candidate_debug_rows(outbound_candidates, depart_date_for_same_day))
+        )
         print(
             "[会议调试] "
             f"same_day={combined_preferences.get('same_day_round_trip')}, "
@@ -6889,8 +6942,8 @@ def analyze_round_trip(
         same_day_combos = build_same_day_combos(
             outbound_candidates,
             return_candidates,
-            windows or (outbound_analysis.get("depart_date") or outbound_analysis.get("departure_date")),
-            outbound_analysis.get("depart_date") or outbound_analysis.get("departure_date"),
+            windows or depart_date_for_same_day,
+            depart_date_for_same_day,
             constraints=combined_preferences,
         )
         if same_day_combos:

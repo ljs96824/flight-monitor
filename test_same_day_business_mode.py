@@ -415,6 +415,37 @@ class SameDayBusinessModeTest(unittest.TestCase):
 
         self.assertEqual(push["type"], "时间冲突提示")
 
+    def test_same_day_meeting_skips_generic_redeye_time_filters(self):
+        from analyzer import _apply_user_preferences
+
+        flight = {
+            "flight_no": "MU5099",
+            "flight_combo": "MU5099",
+            "price": 900,
+            "stops": 0,
+            "departure_time": "05:00",
+            "arrival_time": "07:15",
+            "total_duration_min": 135,
+        }
+
+        kept, excluded, _ = _apply_user_preferences(
+            [flight],
+            {
+                "same_day_round_trip": True,
+                "business_start": "10:00",
+                "business_end": "16:00",
+                "time_preference_mode": "no_redeye",
+                "departure_time_policy": "no_redeye",
+                "arrival_time_policy": "daytime_only",
+                "red_eye": "reject",
+                "preferred_departure_slots": ["morning"],
+                "direction": "outbound",
+            },
+        )
+
+        self.assertEqual([item["flight_no"] for item in kept], ["MU5099"])
+        self.assertEqual(excluded, [])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -720,25 +720,28 @@ FORM_TEMPLATE = """
       <div data-show-if="route_type=domestic">
         <label class="hint" style="display:block;margin-top:8px;">
           <input id="same_day_round_trip" name="same_day_round_trip" type="checkbox" value="true">
-          当天往返（早上去、当天晚上回，适合国内商务）
+          当天往返（商务/会议）
         </label>
       </div>
-      <div id="same-day-business-fields" class="precise-only" data-show-if="same_day_round_trip=true">
+      <div id="same-day-business-fields" data-show-if="same_day_round_trip=true">
         <label>当天往返安排</label>
         <div class="inline-grid">
-          <label>目的地办事开始时间 <input name="business_start" type="time" value="10:00"></label>
-          <label>目的地办事结束时间 <input name="business_end" type="time" value="16:00"></label>
+          <label>会议/办事开始时间 <input name="business_start" type="time" value="10:00"></label>
+          <label>会议/办事结束时间 <input name="business_end" type="time" value="16:00"></label>
         </div>
-        <label>预留缓冲（应对延误/值机/安检）</label>
-        <div class="choice">
-          <label><input type="radio" name="buffer_hours" value="2"> 2小时</label>
-          <label><input type="radio" name="buffer_hours" value="2.5" checked> 2.5小时（推荐）</label>
-          <label><input type="radio" name="buffer_hours" value="3"> 3小时</label>
-        </div>
-        <label>出行方式（影响机场往返时间）</label>
-        <div class="choice">
-          <label><input type="radio" name="transport_mode" value="taxi" checked> 打车</label>
-          <label><input type="radio" name="transport_mode" value="transit"> 地铁/公共交通</label>
+        <p class="hint">缓冲默认2.5小时，可在精准模式调整。</p>
+        <div class="precise-only">
+          <label>预留缓冲（应对延误/值机/安检）</label>
+          <div class="choice">
+            <label><input type="radio" name="buffer_hours" value="2"> 2小时</label>
+            <label><input type="radio" name="buffer_hours" value="2.5" checked> 2.5小时（推荐）</label>
+            <label><input type="radio" name="buffer_hours" value="3"> 3小时</label>
+          </div>
+          <label>出行方式（影响机场往返时间）</label>
+          <div class="choice">
+            <label><input type="radio" name="transport_mode" value="taxi" checked> 打车</label>
+            <label><input type="radio" name="transport_mode" value="transit"> 地铁/公共交通</label>
+          </div>
         </div>
       </div>
 
