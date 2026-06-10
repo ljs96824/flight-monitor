@@ -5820,9 +5820,14 @@ def render_pushplus(payload: dict) -> str:
         f"预估实付价:{transaction_text}",
         f"本次验证价:支付页≤{verify_text}",
         baggage_line,
+    ]
+    same_day_note = str(payload.get("same_day_no_feasible_note") or "").strip()
+    if same_day_note:
+        lines.append("当天往返提示:" + html.escape(same_day_note))
+    lines.extend([
         f"结论:{recommendation}",
         f"购买条件:{buy_condition}",
-    ]
+    ])
     lines.extend(_pushplus_plan_lines(payload))
     if primary_plan.get("same_day_round_trip"):
         stay = _to_float(primary_plan.get("stay_hours"))

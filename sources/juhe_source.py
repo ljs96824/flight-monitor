@@ -12,6 +12,7 @@ import os
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from filename_utils import sanitize_filename
 from sources.base import FlightSource
 
 
@@ -245,7 +246,7 @@ class JuheSource(FlightSource):
         return normalized
 
     def _cache_path(self, origin: str, dest: str, date_str: str, cabin_class: str) -> Path:
-        safe = "_".join([origin.upper(), dest.upper(), date_str, cabin_class])
+        safe = sanitize_filename("_".join([origin.upper(), dest.upper(), date_str, cabin_class]))
         return _cache_dir() / f"juhe_{safe}.json"
 
     def _read_cache(self, origin: str, dest: str, date_str: str, cabin_class: str):

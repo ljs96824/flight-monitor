@@ -5,6 +5,7 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.modules.setdefault("dotenv", types.SimpleNamespace(load_dotenv=lambda *a, **k: None))
 sys.modules.setdefault(
@@ -123,6 +124,27 @@ class SubscriptionLoadingTest(unittest.TestCase):
             {"adult": 2, "child": 1, "elderly": 2, "infant": 0},
         )
         self.assertEqual(normalized["soft_preferences"]["passengers"]["elderly"], 2)
+
+    def test_deliver_notification_ignores_persist_failure_after_send_success(self):
+        payload = {"push_type": "低价提醒", "route": "上海 → 北京", "recommended_plans": []}
+        with patch.object(main, "build_notification_payload", return_value=payload), \
+             patch.object(main, "render_email", return_value=("subject", "<html></html>", {})), \
+             patch.object(main, "render_detail_html", return_value="<html></html>"), \
+             patch.object(main, "_save_result_for_page"), \
+             patch.object(main, "render_pushplus", return_value="<b>push</b>"), \
+             patch.object(main, "send", return_value=True), \
+             patch.object(main, "persist_notification_payload", side_effect=OSError("bad filename")):
+            ok = main._deliver_notification(
+                {
+                    "id": "上海|北京 会议",
+                    "notification_goals": {"method": "pushplus"},
+                    "depart_date": "2026-06-10",
+                },
+                "上海-北京",
+                {"analysis_result": {}, "route_info": {}},
+            )
+
+        self.assertTrue(ok)
 
 
 if __name__ == "__main__":

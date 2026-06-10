@@ -53,7 +53,7 @@ class SameDayBusinessModeTest(unittest.TestCase):
             {
                 "constraints": {
                     "business_start": "10:00",
-                    "business_end": "16:00",
+                    "business_end": "18:00",
                     "buffer_hours": 2.5,
                     "transport_mode": "taxi",
                 }
@@ -62,10 +62,11 @@ class SameDayBusinessModeTest(unittest.TestCase):
             "PKX",
         )
 
-        self.assertEqual(windows["outbound_arrive_by"], "06:20")
-        self.assertEqual(windows["return_depart_after"], "19:40")
+        self.assertEqual(windows["outbound_arrive_by"], "07:30")
+        self.assertEqual(windows["return_depart_after"], "20:30")
         self.assertEqual(windows["transport_min"], 70)
         self.assertEqual(windows["buffer_h"], 2.5)
+        self.assertEqual(windows["reserve_minutes"], 150)
 
     def test_build_same_day_combos_uses_computed_business_window(self):
         from analyzer import build_same_day_combos, compute_same_day_windows
@@ -116,8 +117,46 @@ class SameDayBusinessModeTest(unittest.TestCase):
         )
 
         self.assertIn("当天往返时间较紧", note)
-        self.assertIn("要求不晚于06:20", note)
-        self.assertIn("要求不早于19:40", note)
+        self.assertIn("要求不晚于07:30", note)
+        self.assertIn("要求不早于18:30", note)
+
+    def test_same_day_return_allows_late_evening_arrival_before_midnight(self):
+        from analyzer import match_time_preference
+
+        ok, note = match_time_preference(
+            {"departure_time": "21:30", "arrival_time": "23:55"},
+            {
+                "time_preference_mode": "no_redeye",
+                "same_day_round_trip": True,
+                "direction": "return",
+            },
+        )
+
+        self.assertTrue(ok)
+        self.assertIn("返程晚班", note)
+
+    def test_same_day_no_feasible_note_counts_relaxed_two_hour_candidates(self):
+        from analyzer import _same_day_no_feasible_note
+
+        note = _same_day_no_feasible_note(
+            [
+                {"flight_no": "CA1521", "arrival_airport": "PEK", "arrival_time": "08:00"},
+                {"flight_no": "CA1523", "arrival_airport": "PEK", "arrival_time": "08:40"},
+            ],
+            [{"flight_no": "CA1510", "departure_airport": "PEK", "departure_time": "21:30"}],
+            {
+                "constraints": {
+                    "business_start": "10:00",
+                    "business_end": "18:00",
+                    "buffer_hours": 2.5,
+                    "transport_mode": "taxi",
+                }
+            },
+        )
+
+        self.assertIn("缩短预留至2小时", note)
+        self.assertIn("有1个航班可选", note)
+        self.assertIn("CA1521 08:00到，比要求晚30分钟", note)
 
     def test_same_day_defaults_upgrade_business_profile(self):
         from analyzer import apply_default_rules

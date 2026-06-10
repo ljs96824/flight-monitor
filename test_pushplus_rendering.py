@@ -158,6 +158,25 @@ class PushPlusRenderingTest(unittest.TestCase):
         self.assertIn("往返总价", rendered)
         self.assertIn("去程¥680 + 返程¥720", rendered)
 
+    def test_pushplus_surfaces_same_day_no_feasible_note_near_top(self):
+        msg = render_pushplus(
+            {
+                "push_type": "商务会议时间提示",
+                "route": "上海 → 北京",
+                "current_price": None,
+                "transaction_price": None,
+                "verify_price": None,
+                "recommendation": "时间窗口太紧",
+                "buy_condition": "建议调整会议缓冲或前一晚到达",
+                "same_day_no_feasible_note": "按你的会议安排(10:00开始，2.5h预留)，去程需07:30前到达，当天无符合的早班直飞。",
+                "recommended_plans": [],
+                "detail_url": "https://example.com/detail",
+            }
+        )
+
+        self.assertIn("当天往返提示", msg)
+        self.assertLess(msg.index("当天往返提示"), msg.index("结论:"))
+
 
 if __name__ == "__main__":
     unittest.main()

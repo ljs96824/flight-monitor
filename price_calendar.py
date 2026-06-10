@@ -8,18 +8,18 @@ stale.
 from __future__ import annotations
 
 import json
-import re
 import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+from filename_utils import sanitize_filename
 
 DEFAULT_DATA_DIR = Path(__file__).parent / "data" / "price_calendar"
 WEEKDAY_NAMES = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
 
 
 def _safe_route(route: str) -> str:
-    return re.sub(r"[^A-Za-z0-9_.-]+", "_", str(route or "").strip()) or "unknown"
+    return sanitize_filename(route)
 
 
 def calendar_path(route: str, data_dir: Path | None = None) -> Path:

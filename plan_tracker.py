@@ -6,6 +6,8 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+from filename_utils import sanitize_filename
+
 
 BASE_DIR = Path(__file__).parent
 DEFAULT_DATA_DIR = BASE_DIR / "data" / "pushed_plans"
@@ -16,8 +18,7 @@ def _storage_dir(data_dir=None) -> Path:
 
 
 def _storage_path(sub_id, data_dir=None) -> Path:
-    safe_id = str(sub_id or "unknown").replace("/", "_").replace("\\", "_")
-    return _storage_dir(data_dir) / f"{safe_id}.json"
+    return _storage_dir(data_dir) / f"{sanitize_filename(sub_id)}.json"
 
 
 def _to_float(value) -> float | None:

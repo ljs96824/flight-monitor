@@ -30,6 +30,7 @@ from analyzer import (
 )
 from collector import _normalize_detail_flight, save_raw_response
 from email_notifier import render_email, send_email
+from filename_utils import sanitize_filename
 from health_check import system_health_check
 from notifier import (
     build_notification_payload,
@@ -475,8 +476,7 @@ def _email_subject(html_content: str, route_info: dict) -> str:
 
 def _save_result_for_page(subscription_id: str, html_content: str, payload: dict | None = None) -> None:
     PAGE_PAYLOADS_DIR.mkdir(exist_ok=True)
-    safe_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(subscription_id or "unknown")).strip("_") or "unknown"
-    payload_path = PAGE_PAYLOADS_DIR / f"{safe_id}.json"
+    payload_path = PAGE_PAYLOADS_DIR / f"{sanitize_filename(subscription_id)}.json"
     record = {
         "subscription_id": str(subscription_id),
         "created_at": datetime.now().isoformat(timespec="seconds"),
@@ -580,7 +580,12 @@ def _deliver_notification(sub: dict, route: str, message_kwargs: dict) -> bool:
 
         if sent:
             print("[推送] 开始保存推送payload/页面详情")
-            persist_notification_payload(payload)
+            try:
+                persist_notification_payload(payload)
+            except Exception as exc:
+                print(f"[推送存档失败] {type(exc).__name__}: {exc}")
+                print(traceback.format_exc())
+                logging.warning(f"{route} 推送已发送但存档失败: {exc}", exc_info=True)
             print("[推送] 发送完成")
         else:
             print(f"[推送] 发送结果为False，method={method}, email={'yes' if email else 'no'}")
@@ -634,6 +639,8 @@ def subscription_preferences(sub: dict) -> dict:
     soft = sub.get("soft_preferences") or {}
     preferences = sub.get("preferences") or {}
     basic = sub.get("basic") or {}
+    hard = sub.get("hard_constraints") or {}
+    constraints = sub.get("constraints") or {}
     travel_scenarios = soft.get("travel_scenarios") or sub.get("travel_scenarios")
     if isinstance(travel_scenarios, str):
         travel_scenarios = [item.strip() for item in travel_scenarios.split(",") if item.strip()]
@@ -676,6 +683,15 @@ def subscription_preferences(sub: dict) -> dict:
         "round_trip": sub.get("round_trip", False),
         "return_date": sub.get("return_date"),
         "return_date_flexibility": sub.get("return_date_flexibility", 0),
+        "same_day_round_trip": bool(
+            hard.get("same_day_round_trip")
+            or constraints.get("same_day_round_trip")
+            or sub.get("same_day_round_trip")
+        ),
+        "business_start": hard.get("business_start") or constraints.get("business_start") or sub.get("business_start"),
+        "business_end": hard.get("business_end") or constraints.get("business_end") or sub.get("business_end"),
+        "buffer_hours": hard.get("buffer_hours") or constraints.get("buffer_hours") or sub.get("buffer_hours"),
+        "transport_mode": hard.get("transport_mode") or constraints.get("transport_mode") or sub.get("transport_mode"),
         "airline_policy": sub.get("airline_policy", "any"),
         "exclude_airlines": sub.get("exclude_airlines", []),
         "max_extra_duration_hours": sub.get("max_extra_duration_hours"),

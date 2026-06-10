@@ -64,6 +64,25 @@ class PlanTrackerTest(unittest.TestCase):
         self.assertEqual(record["last_pushed"]["plan_a"]["flight_no"], "KN5978")
         self.assertEqual(record["last_pushed"]["plan_a"]["price"], 527)
 
+    def test_illegal_subscription_id_is_sanitized_for_windows_filename(self):
+        from filename_utils import sanitize_filename
+        from plan_tracker import load_pushed_plans, save_pushed_plans
+
+        sub_id = "上海|北京 会议/当天往返"
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            save_pushed_plans(
+                sub_id,
+                [{"label": "方案A", "main_flight": {"flight_no": "CA1510", "price": 720}}],
+                data_dir=data_dir,
+            )
+            expected_path = data_dir / f"{sanitize_filename(sub_id)}.json"
+            loaded = load_pushed_plans(sub_id, data_dir=data_dir)
+            saved = expected_path.exists()
+
+        self.assertTrue(saved)
+        self.assertEqual(loaded["last_pushed"]["plan_a"]["flight_no"], "CA1510")
+
 
 if __name__ == "__main__":
     unittest.main()

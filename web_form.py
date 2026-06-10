@@ -14,6 +14,7 @@ from flask import Flask, redirect, render_template_string, request, url_for
 
 from airports import AIRPORT_SHORT_NAMES, CITY_AIRPORTS, format_airport, resolve_location
 from analyzer import apply_default_rules
+from filename_utils import sanitize_filename
 
 
 BASE_DIR = Path(__file__).parent
@@ -3495,7 +3496,7 @@ def load_page_results() -> list[dict]:
 
 
 def _safe_payload_id(subscription_id: str) -> str:
-    return re.sub(r"[^A-Za-z0-9_.-]+", "_", str(subscription_id or "unknown")).strip("_") or "unknown"
+    return sanitize_filename(subscription_id)
 
 
 def _load_payload_result(subscription_id: str) -> dict | None:

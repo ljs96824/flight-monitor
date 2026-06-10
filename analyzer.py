@@ -589,9 +589,10 @@ def compute_same_day_windows(
         transport_min = int(transport_min)
     except (TypeError, ValueError):
         transport_min = 45
-    total_margin = transport_min + int(round(buffer_h * 60))
-    outbound_arrive_by = business_start - total_margin
-    return_depart_after = business_end + total_margin
+    buffer_minutes = int(round(buffer_h * 60))
+    reserve_minutes = max(buffer_minutes, transport_min + 60)
+    outbound_arrive_by = business_start - reserve_minutes
+    return_depart_after = business_end + reserve_minutes
     return {
         "outbound_arrive_by_minutes": outbound_arrive_by,
         "return_depart_after_minutes": return_depart_after,
@@ -601,6 +602,8 @@ def compute_same_day_windows(
         "business_end": _minutes_to_text(business_end),
         "transport_min": transport_min,
         "buffer_h": buffer_h,
+        "reserve_minutes": reserve_minutes,
+        "reserve_h": round(reserve_minutes / 60, 2),
         "transport_mode": "transit" if mode == "transit" else "taxi",
     }
 
@@ -710,13 +713,42 @@ def _same_day_no_feasible_note(
     if not windows:
         return "按默认早去晚回规则暂未找到当天往返可行组合，建议考虑放宽时间或前一天到达。"
     parts = [
-        f"按你的办事安排({windows.get('business_start')}-{windows.get('business_end')})和{windows.get('buffer_h')}h缓冲，当天往返时间较紧"
+        f"按你的会议安排({windows.get('business_start')}开始，{windows.get('buffer_h')}h预留)，当天往返时间较紧"
     ]
     if earliest_arrival is not None:
         parts.append(f"最早去程约{_minutes_to_text(earliest_arrival)}到，要求不晚于{windows.get('outbound_arrive_by')}")
     if latest_departure is not None:
         parts.append(f"最晚返程约{_minutes_to_text(latest_departure)}走，要求不早于{windows.get('return_depart_after')}")
-    parts.append("建议放宽缓冲到2h，或考虑前一天到达。")
+    relaxed_constraints = dict(_same_day_constraints(constraints or {}))
+    relaxed_constraints["buffer_hours"] = 2
+    relaxed_windows = compute_same_day_windows({"constraints": relaxed_constraints}, None, dest_airport)
+    relaxed_arrive_by = relaxed_windows.get("outbound_arrive_by_minutes")
+    relaxed_count = 0
+    if relaxed_arrive_by is not None:
+        relaxed_count = sum(
+            1
+            for flight in outbound_candidates
+            if (_flight_arrival_minutes(flight) is not None and _flight_arrival_minutes(flight) <= relaxed_arrive_by)
+        )
+    if relaxed_windows:
+        parts.append(
+            f"建议缩短预留至2小时(到达上限{relaxed_windows.get('outbound_arrive_by')}，有{relaxed_count}个航班可选)"
+        )
+    closest_late = None
+    required = windows.get("outbound_arrive_by_minutes")
+    if required is not None:
+        for flight in outbound_candidates:
+            arrival = _flight_arrival_minutes(flight)
+            if arrival is None or arrival <= required:
+                continue
+            diff = arrival - required
+            if closest_late is None or diff < closest_late[0]:
+                closest_late = (diff, flight, arrival)
+    if closest_late:
+        diff, flight, arrival = closest_late
+        flight_no = flight.get("flight_no") or flight.get("flight_combo") or "最接近方案"
+        parts.append(f"{flight_no} {_minutes_to_text(arrival)}到，比要求晚{diff}分钟")
+    parts.append("或考虑前一晚到达。")
     return "；".join(parts)
 
 
@@ -1568,6 +1600,16 @@ def apply_default_rules(subscription: dict) -> dict:
         if not hard.get("arrival_time_policy") or hard.get("arrival_time_policy") == "any":
             hard["arrival_time_policy"] = "no_midnight"
         defaults_applied.append("不推荐红眼/凌晨到达")
+
+    same_day_enabled = bool(
+        hard.get("same_day_round_trip")
+        or (subscription.get("constraints") or {}).get("same_day_round_trip")
+        or subscription.get("same_day_round_trip")
+    )
+    if same_day_enabled:
+        hard["same_day_round_trip"] = True
+        soft["same_day_round_trip"] = True
+        defaults_applied.append("当天往返:返程晚班视为正常,深夜限制放宽至午夜前到达")
 
     if quick_mode and hard.get("baggage") == "required":
         defaults_applied.append("优先含托运行李方案")
@@ -3391,16 +3433,16 @@ def _hour_from_time(value: str | None) -> int | None:
 
 def _first_departure_hour(flight: dict) -> int | None:
     segments = flight.get("segments") or []
-    if not segments:
-        return None
-    return _hour_from_time(segments[0].get("dep_time"))
+    if segments:
+        return _hour_from_time(segments[0].get("dep_time") or segments[0].get("departure_time"))
+    return _hour_from_time(flight.get("departure_time") or flight.get("dep_time"))
 
 
 def _last_arrival_hour(flight: dict) -> int | None:
     segments = flight.get("segments") or []
-    if not segments:
-        return None
-    return _hour_from_time(segments[-1].get("arr_time"))
+    if segments:
+        return _hour_from_time(segments[-1].get("arr_time") or segments[-1].get("arrival_time"))
+    return _hour_from_time(flight.get("arrival_time") or flight.get("arr_time"))
 
 
 TIME_SLOT_LABELS = {
@@ -3589,6 +3631,12 @@ def match_time_preference(flight: dict, soft_prefs: dict) -> tuple[bool, str]:
         return True, "白天航班" if is_daytime else "非白天，排序降权"
 
     if mode == "no_redeye":
+        if soft_prefs.get("same_day_round_trip") and soft_prefs.get("direction") == "return":
+            if dep_red_eye or (arr_hour is not None and arr_hour < 6):
+                return False, "红眼/凌晨航班，已排除"
+            if arr_hour is not None and arr_hour >= 23:
+                return True, "当天往返：返程晚班视为正常，深夜限制放宽至午夜前到达"
+            return True, ""
         if dep_red_eye or arr_red_eye:
             return False, "红眼/凌晨航班，已排除"
         return True, ""
