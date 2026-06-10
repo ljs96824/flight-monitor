@@ -1810,8 +1810,15 @@ def apply_default_rules(subscription: dict) -> dict:
         if hard.get("business_start") and hard.get("business_end"):
             hard["meeting_time_priority"] = True
             soft["meeting_time_priority"] = True
+            hard["time_source"] = "meeting_derived"
+            constraints = dict(subscription.get("constraints") or {})
+            constraints["time_source"] = "meeting_derived"
+            subscription["constraints"] = constraints
             defaults_applied.append(
                 f"当天往返会议模式:以会议时间为最高优先,清晨早班/晚班返程均可选,已含{buffer_h}小时预留(车程+冗余)"
+            )
+            defaults_applied.append(
+                f"会议模式接管时间设置:按会议{hard.get('business_start')}-{hard.get('business_end')}+预留推算,用户时间偏好本次不生效"
             )
         defaults_applied.append("当天往返:返程晚班视为正常,深夜限制放宽至午夜前到达")
 

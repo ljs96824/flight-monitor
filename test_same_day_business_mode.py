@@ -446,6 +446,35 @@ class SameDayBusinessModeTest(unittest.TestCase):
         self.assertEqual([item["flight_no"] for item in kept], ["MU5099"])
         self.assertEqual(excluded, [])
 
+    def test_same_day_meeting_marks_time_source_as_meeting_derived(self):
+        from analyzer import apply_default_rules
+
+        sub = apply_default_rules(
+            {
+                "monitor_mode": "precise",
+                "constraints": {
+                    "same_day_round_trip": True,
+                    "business_start": "10:00",
+                    "business_end": "16:00",
+                    "buffer_hours": 2.5,
+                },
+                "preferences": {
+                    "time_pref": "custom",
+                    "time_windows": {
+                        "departure": [["09:00", "12:00"]],
+                        "arrival": [["09:00", "12:00"]],
+                    },
+                },
+                "notification_goals": {},
+            }
+        )
+
+        self.assertEqual(sub["constraints"]["time_source"], "meeting_derived")
+        self.assertEqual(sub["hard_constraints"]["time_source"], "meeting_derived")
+        self.assertTrue(
+            any("会议模式接管时间设置" in item for item in sub["defaults_applied"])
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

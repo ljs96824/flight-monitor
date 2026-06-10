@@ -116,6 +116,23 @@ class PushPlusRenderingTest(unittest.TestCase):
         self.assertNotIn("飞猪 ¥", rendered)
         self.assertNotIn("去哪儿 ¥", rendered)
 
+    def test_pushplus_mentions_meeting_time_handoff(self):
+        msg = render_pushplus(
+            {
+                "push_type": "低价提醒",
+                "route": "上海 → 北京",
+                "current_price": 1520,
+                "recommendation": "值得验证",
+                "buy_condition": "支付页最终价≤¥1,600",
+                "recommended_plans": [],
+                "trigger_reason": ["进入低价区间"],
+                "time_filter_note": "时间筛选:按会议安排(10:00-16:00)+2.5h预留推算,你的通用时间偏好本次未参与筛选。",
+                "detail_url": "https://example.com/detail",
+            }
+        )
+
+        self.assertIn("通用时间偏好本次未参与筛选", msg)
+
     def test_roundtrip_plan_card_separates_outbound_return_and_total_prices(self):
         route_info = {"depart_date": "2026-06-10", "return_date": "2026-06-10"}
         outbound = _flight(

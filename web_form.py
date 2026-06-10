@@ -553,6 +553,26 @@ FORM_TEMPLATE = """
       margin: 14px 0;
       font-size: 14px;
     }
+    .meeting-handoff-card {
+      display: none;
+      border: 1px solid #c8d6f0;
+      background: #f7f9fc;
+      color: #333;
+      border-radius: 8px;
+      padding: 12px;
+      margin: 10px 0 14px;
+      font-size: 14px;
+    }
+    .meeting-handoff-card strong {
+      display: block;
+      margin-bottom: 6px;
+      color: #174ea6;
+    }
+    .time-controls-disabled {
+      opacity: 0.48;
+      pointer-events: none;
+      filter: grayscale(0.2);
+    }
     .auto-suggested {
       color: #174ea6;
       text-decoration: underline;
@@ -942,6 +962,14 @@ FORM_TEMPLATE = """
           <label>时间偏好</label>
           <button class="reset-module" type="button" data-reset-module="time">恢复默认</button>
         </div>
+        <div id="meeting-time-handoff-card" class="meeting-handoff-card" aria-live="polite">
+          <strong>⏱ 时间安排已由会议模式接管</strong>
+          <div id="meeting-time-handoff-text">
+            系统将按你的会议时间 + 预留时间自动推算航班窗口。
+          </div>
+          <p class="hint">精确窗口会按目的地机场车程计算，提交后生效。想手动设置时间？取消会议模式。</p>
+        </div>
+        <div id="time-preference-controls">
         <div class="choice">
           <label><input type="radio" name="time_preference" value="unlimited" checked> 不限制</label>
           <label><input type="radio" name="time_preference" value="daytime"> 白天优先</label>
@@ -1038,6 +1066,7 @@ FORM_TEMPLATE = """
           <label>最晚到达</label>
           <input type="time" name="arrival_time_end">
           <p class="hint">填写后会覆盖上面的自然语言时段。</p>
+        </div>
         </div>
         </div>
         </div>
@@ -1384,6 +1413,9 @@ FORM_TEMPLATE = """
     const returnWrap = document.getElementById('return-date-wrap');
     const returnDate = document.getElementById('return_date');
     const sameDayRoundTrip = document.getElementById('same_day_round_trip');
+    const meetingTimeHandoffCard = document.getElementById('meeting-time-handoff-card');
+    const meetingTimeHandoffText = document.getElementById('meeting-time-handoff-text');
+    const timePreferenceControls = document.getElementById('time-preference-controls');
     const customTimeOptions = document.getElementById('custom-time-options');
     const preciseTimeToggle = document.getElementById('precise-time-toggle');
     const preciseTimeOptions = document.getElementById('precise-time-options');
@@ -1960,6 +1992,7 @@ FORM_TEMPLATE = """
       setSmartPanel(advanced, precise);
       setSmartPanel(advancedRules, precise);
       toggleTimePreference();
+      updateMeetingTimeHandoff();
       toggleShortTransferOptions();
       updateConditionalFields();
       refreshSummaryIfFinalStep();
@@ -2008,6 +2041,54 @@ FORM_TEMPLATE = """
 
     function timePreferenceText() {
       return timePreferenceTextFromValue(checkedValue('time_preference'));
+    }
+
+    function addMinutesToTime(value, minutes) {
+      if (!value || !value.includes(':')) return '';
+      const [hour, minute] = value.split(':').map(Number);
+      if (Number.isNaN(hour) || Number.isNaN(minute)) return '';
+      const total = (hour * 60 + minute + minutes + 24 * 60) % (24 * 60);
+      return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+    }
+
+    function meetingHandoffActive() {
+      const start = document.querySelector('input[name="business_start"]')?.value || '';
+      const end = document.querySelector('input[name="business_end"]')?.value || '';
+      return checkedValue('monitor_mode') === 'precise'
+        && Boolean(sameDayRoundTrip?.checked)
+        && Boolean(start)
+        && Boolean(end);
+    }
+
+    function hasManualTimeSettings() {
+      if (checkedValue('time_preference') === 'custom') return true;
+      return Array.from(document.querySelectorAll('#precise-time-options input[type="time"]'))
+        .some(input => Boolean(input.value));
+    }
+
+    function updateMeetingTimeHandoff() {
+      const active = meetingHandoffActive();
+      const start = document.querySelector('input[name="business_start"]')?.value || '';
+      const end = document.querySelector('input[name="business_end"]')?.value || '';
+      const buffer = Number(checkedValue('buffer_hours') || 2.5);
+      const bufferMinutes = Math.round(buffer * 60);
+      if (meetingTimeHandoffCard) {
+        meetingTimeHandoffCard.style.display = active ? 'block' : 'none';
+      }
+      if (timePreferenceControls) {
+        timePreferenceControls.classList.toggle('time-controls-disabled', active);
+        timePreferenceControls.querySelectorAll('input, select, button').forEach(input => {
+          input.disabled = active;
+        });
+      }
+      if (meetingTimeHandoffText && active) {
+        const outboundBy = addMinutesToTime(start, -bufferMinutes) || '提交后计算';
+        const returnAfter = addMinutesToTime(end, bufferMinutes) || '提交后计算';
+        meetingTimeHandoffText.innerHTML =
+          `系统将按你的会议时间(${start}-${end}) + 预留${buffer}小时自动推算:<br>` +
+          `• 去程:约${outboundBy}前到达即可,不限起飞时段(清晨早班可选)<br>` +
+          `• 返程:约${returnAfter}后出发即可(晚班正常)`;
+      }
     }
 
     function timePreferenceTextFromValue(value) {
@@ -2179,6 +2260,7 @@ FORM_TEMPLATE = """
         sameDayRoundTrip.checked = false;
       }
       if (!sameDayRoundTrip || !sameDayRoundTrip.checked) {
+        updateMeetingTimeHandoff();
         return;
       }
       setRadio('round_trip', 'true');
@@ -2196,6 +2278,7 @@ FORM_TEMPLATE = """
       updateConditionalFields();
       toggleReturnDate();
       toggleShortTransferOptions();
+      updateMeetingTimeHandoff();
       refreshSummaryIfFinalStep();
     }
 
@@ -2608,7 +2691,9 @@ FORM_TEMPLATE = """
       if (scenarios.includes('price_first') && scenarios.includes('important')) {
         rules.push('✓ 冲突权衡：重要事项先保证可靠性，再比较价格');
       }
-      if (!precise || !moduleIsDirty('time')) {
+      if (meetingHandoffActive()) {
+        rules.push('✓ 会议模式接管时间设置：通用时间偏好本次不生效');
+      } else if (!precise || !moduleIsDirty('time')) {
         rules.push('✓ 不推荐红眼/凌晨到达');
       }
       if (!precise || checkedValue('baggage') === 'unknown') {
@@ -2813,8 +2898,18 @@ FORM_TEMPLATE = """
         if (invoiceNeeds.length) {
           summaryLine('报销需求', invoiceNeeds.join('、'));
         }
-        summaryLine('时间偏好', timePreferenceText());
-        if (checkedValue('time_preference') === 'custom') {
+        if (meetingHandoffActive()) {
+          const start = document.querySelector('input[name="business_start"]')?.value || '';
+          const end = document.querySelector('input[name="business_end"]')?.value || '';
+          const buffer = Number(checkedValue('buffer_hours') || 2.5);
+          summaryLine(
+            '时间安排',
+            `由会议时间推算：会议${start || '未填'}-${end || '未填'} | 预留${buffer}小时 → 去程约${addMinutesToTime(start, -Math.round(buffer * 60)) || '提交后计算'}前到达 | 返程约${addMinutesToTime(end, Math.round(buffer * 60)) || '提交后计算'}后出发`
+          );
+        } else {
+          summaryLine('时间偏好', timePreferenceText());
+        }
+        if (!meetingHandoffActive() && checkedValue('time_preference') === 'custom') {
           if (isRoundTrip) {
             summaryLine('去程起飞时段', slotSummary('outbound_departure_slots', labels.departureSlots));
             summaryLine('返程起飞时段', slotSummary('return_departure_slots', labels.departureSlots));
@@ -3111,12 +3206,19 @@ FORM_TEMPLATE = """
       if (checkedValue('round_trip') !== 'true' && sameDayRoundTrip) {
         sameDayRoundTrip.checked = false;
       }
+      updateMeetingTimeHandoff();
       toggleReturnDate();
       updateConditionalFields();
       updateStepper();
       updateRequiredProgress();
     }));
     sameDayRoundTrip?.addEventListener('change', () => {
+      if (sameDayRoundTrip.checked && checkedValue('monitor_mode') === 'precise' && hasManualTimeSettings()) {
+        const confirmed = window.confirm('会议模式将接管时间设置,你已填的时间窗口将不生效,确认启用?');
+        if (!confirmed) {
+          sameDayRoundTrip.checked = false;
+        }
+      }
       syncSameDayRoundTrip();
       updateRequiredProgress();
     });
@@ -3164,19 +3266,22 @@ FORM_TEMPLATE = """
       if (checkedValue('route_type') !== 'domestic' && sameDayRoundTrip) {
         sameDayRoundTrip.checked = false;
       }
+      updateMeetingTimeHandoff();
       updateConditionalFields();
       refreshSummaryIfFinalStep();
     }));
-    ['companions', 'travel_purpose', 'adult_count', 'child_count', 'elderly_count', 'infant_count', 'passenger_count', 'trip_natures', 'team_passenger_count', 'cabin_arrangement', 'meeting_start', 'meeting_end', 'team_date_flexibility', 'same_flight_required', 'cabin_policy', 'user_level', 'business_seats', 'economy_seats', 'reimburse_per_person', 'invoice_needed', 'invoice_special_vat', 'invoice_cabin_limit', 'time_preference', 'refund_flexibility', 'airline_policy', 'accept_self_transfer', 'companion_constraints', 'solo_travel', 'no_late_arrival', 'prefer_daytime_arrival'].forEach(name => {
+    ['companions', 'travel_purpose', 'adult_count', 'child_count', 'elderly_count', 'infant_count', 'passenger_count', 'trip_natures', 'team_passenger_count', 'cabin_arrangement', 'business_start', 'business_end', 'buffer_hours', 'meeting_start', 'meeting_end', 'team_date_flexibility', 'same_flight_required', 'cabin_policy', 'user_level', 'business_seats', 'economy_seats', 'reimburse_per_person', 'invoice_needed', 'invoice_special_vat', 'invoice_cabin_limit', 'time_preference', 'refund_flexibility', 'airline_policy', 'accept_self_transfer', 'companion_constraints', 'solo_travel', 'no_late_arrival', 'prefer_daytime_arrival'].forEach(name => {
       document.querySelectorAll(`input[name="${name}"]`).forEach(input => {
         input.addEventListener('change', () => {
           syncPrefCards();
           validateCabinArrangement(false);
+          updateMeetingTimeHandoff();
           refreshSummaryIfFinalStep();
         });
         input.addEventListener('input', () => {
           syncPrefCards();
           validateCabinArrangement(false);
+          updateMeetingTimeHandoff();
           refreshSummaryIfFinalStep();
         });
       });
@@ -4086,6 +4191,7 @@ def build_subscription(form) -> dict:
             "business_end": business_end if same_day_round_trip else "",
             "buffer_hours": buffer_hours if same_day_round_trip else None,
             "transport_mode": transport_mode if same_day_round_trip else "taxi",
+            "time_source": "meeting_derived" if same_day_round_trip and business_start and business_end else "user_defined",
             "trip_nature": trip_nature,
             "trip_natures": trip_natures,
             "meeting_start": meeting_start,
@@ -4187,6 +4293,7 @@ def build_subscription(form) -> dict:
             "business_end": business_end if same_day_round_trip else "",
             "buffer_hours": buffer_hours if same_day_round_trip else None,
             "transport_mode": transport_mode if same_day_round_trip else "taxi",
+            "time_source": "meeting_derived" if same_day_round_trip and business_start and business_end else "user_defined",
             "trip_nature": trip_nature,
             "trip_natures": trip_natures,
             "meeting_start": meeting_start,

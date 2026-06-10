@@ -144,6 +144,8 @@ class WebFormTemplateStep2Test(unittest.TestCase):
         self.assertEqual(subscription["constraints"]["business_end"], "16:00")
         self.assertEqual(subscription["constraints"]["buffer_hours"], 2.5)
         self.assertEqual(subscription["constraints"]["transport_mode"], "taxi")
+        self.assertEqual(subscription["constraints"]["time_source"], "meeting_derived")
+        self.assertEqual(subscription["hard_constraints"]["time_source"], "meeting_derived")
         self.assertEqual(subscription["basic"]["return_date"], "2026-06-10")
 
     def test_same_day_business_time_fields_are_available_in_quick_mode(self):
@@ -151,6 +153,13 @@ class WebFormTemplateStep2Test(unittest.TestCase):
         self.assertNotIn('id="same-day-business-fields" class="precise-only"', FORM_TEMPLATE)
         self.assertIn("会议/办事开始时间", FORM_TEMPLATE)
         self.assertIn("缓冲默认2.5小时，可在精准模式调整。", FORM_TEMPLATE)
+
+    def test_precise_meeting_mode_takes_over_time_preferences(self):
+        self.assertIn('id="meeting-time-handoff-card"', FORM_TEMPLATE)
+        self.assertIn('id="time-preference-controls"', FORM_TEMPLATE)
+        self.assertIn("时间安排已由会议模式接管", FORM_TEMPLATE)
+        self.assertIn("updateMeetingTimeHandoff", FORM_TEMPLATE)
+        self.assertIn("会议模式将接管时间设置", FORM_TEMPLATE)
 
     def test_business_cabin_policy_is_saved_as_constraint(self):
         class Form(dict):

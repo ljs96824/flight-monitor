@@ -5461,6 +5461,20 @@ def build_notification_payload(
     form_url = _subscription_edit_url(route_info)
     feedback_url = _feedback_url(route_info)
     detail_url = f"{_subscription_form_url(route_info).rstrip('/')}/detail?sub={quote(str(route_info.get('subscription_id') or route_key))}"
+    merged_constraints = {
+        **(subscription.get("hard_constraints") or {}),
+        **(subscription.get("constraints") or {}),
+    }
+    time_filter_note = ""
+    if merged_constraints.get("time_source") == "meeting_derived" or (
+        merged_constraints.get("same_day_round_trip")
+        and merged_constraints.get("business_start")
+        and merged_constraints.get("business_end")
+    ):
+        time_filter_note = (
+            f"时间筛选:按会议安排({merged_constraints.get('business_start')}-{merged_constraints.get('business_end')})"
+            f"+{merged_constraints.get('buffer_hours') or 2.5}h预留推算,你的通用时间偏好本次未参与筛选。"
+        )
     payload = {
         "push_type": (push_meta or {}).get("type") or "价格提醒",
         "route": _payload_route_text(route_info),
@@ -5502,6 +5516,7 @@ def build_notification_payload(
         "travel_profile_explanation": profile_explanation,
         "travel_scenarios": travel_profile.get("scenarios") or [],
         "recommendation_basis": recommendation_basis,
+        "time_filter_note": time_filter_note,
         "scenario_recommendation": _scenario_recommendation_text(
             profile_explanation,
             travel_profile,
@@ -5859,6 +5874,8 @@ def render_pushplus(payload: dict) -> str:
                 html.escape(str(basis_line)),
             ]
         )
+    if payload.get("time_filter_note"):
+        lines.extend(["", html.escape(str(payload.get("time_filter_note")))])
     lines.extend(
         [
             "",
@@ -7546,6 +7563,8 @@ def render_email(payload: dict) -> tuple[str, str]:
     if not sort_factors:
         for key, value in profile_dimensions.items():
             profile_rows.append((str(key), html.escape(str(value))))
+    if payload.get("time_filter_note"):
+        profile_rows.append(("时间筛选", html.escape(str(payload.get("time_filter_note")))))
     if (payload.get("travel_profile") or {}).get("stock_check") == "high":
         travel_profile = payload.get("travel_profile") or {}
         passenger_count = travel_profile.get("passenger_count")
