@@ -268,5 +268,153 @@ class SameDayBusinessModeTest(unittest.TestCase):
         self.assertIn("当天往返时间较紧", result["same_day_no_feasible_note"])
 
 
+    def test_analyze_round_trip_same_day_uses_all_candidates_before_recommendation(self):
+        from analyzer import analyze_round_trip
+
+        constraints = {
+            "same_day_round_trip": True,
+            "business_start": "10:00",
+            "business_end": "16:00",
+            "buffer_hours": 2.5,
+            "transport_mode": "taxi",
+        }
+        late_price_pick = {
+            "flight_no": "HU7612",
+            "flight_combo": "HU7612",
+            "price": 300,
+            "arrival_airport": "PEK",
+            "departure_date": "2026-06-19",
+            "arrival_date": "2026-06-19",
+            "departure_time": "21:30",
+            "arrival_time": "23:55",
+        }
+        feasible = {
+            "flight_no": "MU5099",
+            "flight_combo": "MU5099",
+            "price": 900,
+            "arrival_airport": "PEK",
+            "departure_date": "2026-06-19",
+            "arrival_date": "2026-06-19",
+            "departure_time": "05:00",
+            "arrival_time": "07:15",
+        }
+        returns = [
+            {
+                "flight_no": "CA1510",
+                "flight_combo": "CA1510",
+                "price": 700,
+                "departure_airport": "PEK",
+                "departure_date": "2026-06-19",
+                "arrival_date": "2026-06-19",
+                "departure_time": "19:00",
+                "arrival_time": "21:20",
+            }
+        ]
+
+        result = analyze_round_trip(
+            {
+                "economy_recommendations": [late_price_pick],
+                "all_flights": [late_price_pick, feasible],
+                "hard_constraints": constraints,
+                "depart_date": "2026-06-19",
+            },
+            {
+                "all_flights": returns,
+                "hard_constraints": constraints,
+                "depart_date": "2026-06-19",
+            },
+        )
+
+        self.assertEqual(result["top_combinations"][0]["outbound"]["flight_no"], "MU5099")
+
+    def test_analyze_round_trip_same_day_time_conflict_lists_closest_by_arrival(self):
+        from analyzer import analyze_round_trip
+
+        constraints = {
+            "same_day_round_trip": True,
+            "business_start": "10:00",
+            "business_end": "16:00",
+            "buffer_hours": 2.5,
+            "transport_mode": "taxi",
+        }
+        outbound = [
+            {
+                "flight_no": "CA1510",
+                "flight_combo": "CA1510",
+                "price": 300,
+                "arrival_airport": "PEK",
+                "departure_date": "2026-06-19",
+                "arrival_date": "2026-06-19",
+                "departure_time": "21:30",
+                "arrival_time": "23:55",
+            },
+            {
+                "flight_no": "MU5099",
+                "flight_combo": "MU5099",
+                "price": 900,
+                "arrival_airport": "PEK",
+                "departure_date": "2026-06-19",
+                "arrival_date": "2026-06-19",
+                "departure_time": "07:00",
+                "arrival_time": "09:15",
+            },
+            {
+                "flight_no": "HO1001",
+                "flight_combo": "HO1001",
+                "price": 800,
+                "arrival_airport": "PEK",
+                "departure_date": "2026-06-19",
+                "arrival_date": "2026-06-19",
+                "departure_time": "08:00",
+                "arrival_time": "10:20",
+            },
+        ]
+        returns = [
+            {
+                "flight_no": "CA1511",
+                "flight_combo": "CA1511",
+                "price": 700,
+                "departure_airport": "PEK",
+                "departure_date": "2026-06-19",
+                "arrival_date": "2026-06-19",
+                "departure_time": "19:00",
+                "arrival_time": "21:20",
+            }
+        ]
+
+        result = analyze_round_trip(
+            {
+                "all_flights": outbound,
+                "hard_constraints": constraints,
+                "depart_date": "2026-06-19",
+            },
+            {
+                "all_flights": returns,
+                "hard_constraints": constraints,
+                "depart_date": "2026-06-19",
+            },
+        )
+
+        self.assertTrue(result["same_day_time_conflict"])
+        self.assertEqual(result["top_combinations"], [])
+        self.assertEqual(result["closest_same_day_outbound_options"][0]["flight_no"], "MU5099")
+        self.assertNotEqual(result["closest_same_day_outbound_options"][0]["flight_no"], "CA1510")
+
+    def test_determine_push_type_reports_same_day_time_conflict(self):
+        from analyzer import determine_push_type
+
+        push = determine_push_type(
+            1000,
+            analysis_result={
+                "round_trip_analysis": {
+                    "same_day_time_conflict": True,
+                    "top_combinations": [],
+                }
+            },
+        )
+
+        self.assertEqual(push["type"], "时间冲突提示")
+
+
 if __name__ == "__main__":
     unittest.main()

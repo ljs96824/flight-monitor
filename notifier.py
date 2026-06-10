@@ -2996,6 +2996,8 @@ def _combo_direct_first_key(combo: dict) -> tuple[int, float]:
 def _round_trip_combinations(analysis_result: dict) -> list[dict]:
     round_trip = analysis_result.get("round_trip_analysis") or {}
     combos = [combo for combo in (round_trip.get("top_combinations") or []) if combo]
+    if not combos and round_trip.get("same_day_time_conflict"):
+        return []
     if not combos:
         outbound_flights = (round_trip.get("outbound_top3") or _round_trip_top_flights(analysis_result))[:3]
         return_analysis = analysis_result.get("return_analysis") or {}

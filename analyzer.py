@@ -705,6 +705,9 @@ def build_same_day_combos(
     if date_str is None and isinstance(windows_or_date, str):
         date_str = windows_or_date
     combos: list[dict] = []
+    outbound_flights = outbound_flights or []
+    return_flights = return_flights or []
+    print(f"[会议比较] 待比较去程数量={len(outbound_flights)}")
     for outbound in outbound_flights or []:
         outbound_dep = _flight_departure_minutes(outbound or {})
         outbound_arr = _flight_arrival_minutes(outbound or {})
@@ -745,7 +748,7 @@ def build_same_day_combos(
                 continue
             if outbound_arr > 14 * 60:
                 continue
-        for return_flight in return_flights or []:
+        for return_flight in return_flights:
             return_dep = _flight_departure_minutes(return_flight or {})
             return_arr = _flight_arrival_minutes(return_flight or {})
             return_dep_dt = _flight_departure_datetime(return_flight or {}, date_str)
@@ -878,6 +881,41 @@ def _same_day_no_feasible_note(
         parts.append(f"{flight_no} {_minutes_to_text(arrival)}到，比要求晚{diff}分钟")
     parts.append("或考虑前一晚到达。")
     return "；".join(parts)
+
+
+def _closest_same_day_outbound_options(
+    outbound_flights: list[dict] | None,
+    windows: dict | None,
+    date_str: str | None,
+    limit: int = 3,
+) -> list[dict]:
+    arrive_by_dt, _ = _same_day_window_datetimes(windows or {}, date_str)
+    arrive_by_minutes = (windows or {}).get("outbound_arrive_by_minutes")
+    options = []
+    for flight in outbound_flights or []:
+        arrival_dt = _flight_arrival_datetime(flight or {}, date_str)
+        arrival_minutes = _flight_arrival_minutes(flight or {})
+        if arrival_dt is None and arrival_minutes is None:
+            continue
+        item = dict(flight)
+        if arrival_dt is not None and arrive_by_dt is not None:
+            delay = max(0, int(round((arrival_dt - arrive_by_dt).total_seconds() / 60)))
+            sort_key = arrival_dt
+        elif arrival_minutes is not None:
+            delay = max(0, int(arrival_minutes - (arrive_by_minutes or arrival_minutes)))
+            sort_key = _minutes_datetime(date_str, arrival_minutes) or datetime(1900, 1, 1) + timedelta(minutes=arrival_minutes)
+        else:
+            continue
+        item["meeting_arrival_delay_minutes"] = delay
+        if delay >= 60:
+            item["meeting_arrival_note"] = f"比要求晚{delay // 60}小时{delay % 60}分钟"
+        elif delay > 0:
+            item["meeting_arrival_note"] = f"比要求晚{delay}分钟"
+        else:
+            item["meeting_arrival_note"] = "满足去程到达窗口"
+        options.append((sort_key, item))
+    options.sort(key=lambda pair: pair[0])
+    return [item for _, item in options[:limit]]
 
 
 def _infer_travelers_from_passengers(passengers: dict, fallback: str = "solo") -> str:
@@ -4922,9 +4960,17 @@ def determine_push_type(
     transaction_over_verify = bool(
         verify_price and transaction_price is not None and transaction_price > verify_price
     )
+    round_trip_result = analysis_result.get("round_trip_analysis") or analysis_result
+    same_day_conflict = bool(
+        isinstance(round_trip_result, dict)
+        and round_trip_result.get("same_day_time_conflict")
+        and not (round_trip_result.get("top_combinations") or [])
+    )
 
     push_type = "同日更优方案"
-    if display_price is None:
+    if same_day_conflict:
+        push_type = "时间冲突提示"
+    elif display_price is None:
         push_type = "价格已失效"
     elif _has_stale_primary_price(analysis_result):
         push_type = "价格已失效"
@@ -6250,6 +6296,40 @@ def _top_flights_for_round_trip(analysis: dict, limit: int = 3) -> list[dict]:
     )[:limit]
 
 
+def _all_roundtrip_flights_for_same_day(analysis: dict) -> list[dict]:
+    """Return the full post-filter candidate list before recommendation ranking."""
+    candidates = []
+    seen = set()
+
+    def add(flight: dict) -> None:
+        if not isinstance(flight, dict) or not flight:
+            return
+        if (_to_float(flight.get("price")) or 0) <= 0:
+            return
+        key = (
+            flight.get("flight_combo") or flight.get("flight_no") or flight.get("flight_number"),
+            flight.get("departure_date"),
+            flight.get("departure_time") or flight.get("dep_time"),
+            flight.get("arrival_date"),
+            flight.get("arrival_time") or flight.get("arr_time"),
+            flight.get("price"),
+        )
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append(flight)
+
+    for flight in analysis.get("all_flights") or []:
+        add(flight)
+    if not candidates:
+        for flight in analysis.get("qualified_flights") or []:
+            add(flight)
+    if not candidates:
+        for flight in analysis.get("economy_recommendations") or []:
+            add(flight)
+    return candidates
+
+
 def _flight_transaction_price(flight: dict):
     estimate = flight.get("price_estimate") or {}
     value = _to_float(estimate.get("transaction_price"))
@@ -6782,9 +6862,11 @@ def analyze_round_trip(
     )
     same_day_combos = []
     same_day_no_feasible_note = ""
+    same_day_time_conflict = False
+    closest_same_day_outbound_options = []
     if same_day_round_trip:
-        outbound_candidates = _top_flights_for_round_trip(outbound_analysis, 12)
-        return_candidates = _top_flights_for_round_trip(return_analysis, 12)
+        outbound_candidates = _all_roundtrip_flights_for_same_day(outbound_analysis)
+        return_candidates = _all_roundtrip_flights_for_same_day(return_analysis)
         sample_dest = ""
         for flight in outbound_candidates:
             sample_dest = _flight_airport(flight or {}, "arrival_airport")
@@ -6834,11 +6916,26 @@ def analyze_round_trip(
             )
         )
         if not same_day_combos:
+            same_day_time_conflict = True
+            closest_same_day_outbound_options = _closest_same_day_outbound_options(
+                outbound_candidates,
+                windows,
+                outbound_analysis.get("depart_date") or outbound_analysis.get("departure_date"),
+            )
             same_day_no_feasible_note = _same_day_no_feasible_note(
                 outbound_candidates,
                 return_candidates,
                 combined_preferences,
             )
+            if closest_same_day_outbound_options:
+                closest = closest_same_day_outbound_options[0]
+                flight_no = closest.get("flight_no") or closest.get("flight_combo") or "最接近航班"
+                arrival = _first_time_text(closest, "arrival_time", "arr_time") or "待确认"
+                note = closest.get("meeting_arrival_note") or "不满足会议时间要求"
+                same_day_no_feasible_note = (
+                    f"{same_day_no_feasible_note}；最接近去程:{flight_no} {arrival}到，{note}；"
+                    "建议:前一晚到达、缩短预留时间或调整会议开始时间。"
+                )
 
     if same_day_round_trip:
         combinations = list(same_day_combos)
@@ -6946,7 +7043,9 @@ def analyze_round_trip(
         "same_day_round_trip": same_day_round_trip,
         "same_day_combos": same_day_combos[:3],
         "same_day_no_feasible_note": same_day_no_feasible_note,
-        "outbound_top3": outbound_top,
+        "same_day_time_conflict": same_day_time_conflict,
+        "closest_same_day_outbound_options": closest_same_day_outbound_options,
+        "outbound_top3": [] if same_day_time_conflict else outbound_top,
         "return_top3": return_top,
         "insight": insight,
         "mix_match_tip": _mix_match_tip(combinations),

@@ -4,7 +4,7 @@ import unittest
 
 sys.modules.setdefault("httpx", types.SimpleNamespace())
 
-from notifier import _payload_combo_plan, _render_payload_plan_card, render_pushplus
+from notifier import _payload_combo_plan, _render_payload_plan_card, _round_trip_combinations, render_pushplus
 
 
 def _flight(combo, airline, dep, arr, dep_time, arr_time):
@@ -176,6 +176,31 @@ class PushPlusRenderingTest(unittest.TestCase):
 
         self.assertIn("当天往返提示", msg)
         self.assertLess(msg.index("当天往返提示"), msg.index("结论:"))
+
+
+    def test_round_trip_combinations_do_not_fallback_when_same_day_time_conflicts(self):
+        combos = _round_trip_combinations(
+            {
+                "round_trip_analysis": {
+                    "same_day_time_conflict": True,
+                    "top_combinations": [],
+                    "outbound_top3": [],
+                    "return_top3": [
+                        {"flight_no": "CA1511", "price": 700, "departure_time": "19:00"}
+                    ],
+                },
+                "all_flights": [
+                    {"flight_no": "CA1510", "price": 300, "arrival_time": "23:55"}
+                ],
+                "return_analysis": {
+                    "all_flights": [
+                        {"flight_no": "CA1511", "price": 700, "departure_time": "19:00"}
+                    ]
+                },
+            }
+        )
+
+        self.assertEqual(combos, [])
 
 
 if __name__ == "__main__":
