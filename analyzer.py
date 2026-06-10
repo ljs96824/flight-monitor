@@ -519,6 +519,90 @@ def _parse_time_minutes(value) -> int | None:
     return hour * 60 + minute
 
 
+def parse_flight_time(time_str, date_str: str | None = None) -> datetime | None:
+    """Parse flight time with a 24-hour clock and optional flight date."""
+    if not time_str:
+        return None
+    text = str(time_str).strip()
+    if not text:
+        return None
+
+    day_offset = 0
+    offset_match = re.search(r"\+(\d+)\s*$", text)
+    if offset_match:
+        day_offset = int(offset_match.group(1))
+        text = text[: offset_match.start()].strip()
+
+    normalized = text.replace("T", " ")
+    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S"):
+        try:
+            parsed = datetime.strptime(normalized, fmt)
+            return parsed + timedelta(days=day_offset)
+        except ValueError:
+            pass
+
+    time_match = re.search(r"(\d{1,2}):(\d{2})", normalized)
+    if not time_match or not date_str:
+        return None
+    compact_time = f"{int(time_match.group(1)):02d}:{time_match.group(2)}"
+    try:
+        parsed = datetime.strptime(f"{date_str} {compact_time}", "%Y-%m-%d %H:%M")
+    except ValueError:
+        return None
+    return parsed + timedelta(days=day_offset)
+
+
+def _minutes_datetime(date_str: str | None, minutes: int | float | None) -> datetime | None:
+    if date_str is None or minutes is None:
+        return None
+    try:
+        base = datetime.strptime(str(date_str), "%Y-%m-%d")
+    except ValueError:
+        return None
+    return base + timedelta(minutes=int(round(minutes)))
+
+
+def _flight_date_text(flight: dict, kind: str) -> str:
+    keys = (
+        ("departure_date", "dep_date", "date")
+        if kind == "departure"
+        else ("arrival_date", "arr_date", "date")
+    )
+    for key in keys:
+        value = str((flight or {}).get(key) or "").strip()
+        if value:
+            return value
+
+    segments = (flight or {}).get("segments") or (flight or {}).get("flights") or []
+    if segments and isinstance(segments[0], dict):
+        segment = segments[0] if kind == "departure" else segments[-1]
+        for key in keys:
+            value = str(segment.get(key) or "").strip()
+            if value:
+                return value
+    return ""
+
+
+def _flight_departure_datetime(flight: dict, default_date: str | None = None) -> datetime | None:
+    raw = _first_time_text(flight or {}, "departure_time", "dep_time")
+    date_text = _flight_date_text(flight or {}, "departure") or default_date
+    return parse_flight_time(raw, date_text)
+
+
+def _flight_arrival_datetime(flight: dict, default_date: str | None = None) -> datetime | None:
+    raw = _first_time_text(flight or {}, "arrival_time", "arr_time")
+    date_text = _flight_date_text(flight or {}, "arrival") or default_date
+    return parse_flight_time(raw, date_text)
+
+
+def _same_day_window_datetimes(windows: dict | None, date_str: str | None) -> tuple[datetime | None, datetime | None]:
+    windows = windows or {}
+    return (
+        _minutes_datetime(date_str, windows.get("outbound_arrive_by_minutes")),
+        _minutes_datetime(date_str, windows.get("return_depart_after_minutes")),
+    )
+
+
 def _flight_departure_minutes(flight: dict) -> int | None:
     return _parse_time_minutes(_first_time_text(flight or {}, "departure_time", "dep_time"))
 
@@ -624,6 +708,7 @@ def build_same_day_combos(
     for outbound in outbound_flights or []:
         outbound_dep = _flight_departure_minutes(outbound or {})
         outbound_arr = _flight_arrival_minutes(outbound or {})
+        outbound_arr_dt = _flight_arrival_datetime(outbound or {}, date_str)
         outbound_price = _to_float((outbound or {}).get("price"))
         if outbound_dep is None or outbound_arr is None or outbound_price is None:
             continue
@@ -631,7 +716,29 @@ def build_same_day_combos(
         active_windows = windows or compute_same_day_windows(constraints or {}, None, dest_airport)
         if active_windows:
             arrive_by = active_windows.get("outbound_arrive_by_minutes")
-            if arrive_by is not None and outbound_arr > arrive_by:
+            arrive_by_dt, return_after_dt = _same_day_window_datetimes(active_windows, date_str)
+            arrive_limit = arrive_by_dt or active_windows.get("outbound_arrive_by")
+            print(
+                f"[会议窗口] 去程到达上限={arrive_limit} "
+                f"类型={type(arrive_limit)}"
+            )
+            print(
+                f"[会议窗口] 返程出发下限={return_after_dt or active_windows.get('return_depart_after')} "
+                f"类型={type(return_after_dt or active_windows.get('return_depart_after'))}"
+            )
+            passed = True
+            if arrive_by_dt is not None and outbound_arr_dt is not None:
+                passed = outbound_arr_dt <= arrive_by_dt
+            elif arrive_by is not None:
+                passed = outbound_arr <= arrive_by
+            print(
+                f"[会议比较] 去程{outbound.get('flight_no') or outbound.get('flight_combo')} "
+                f"原始到达={repr(_first_time_text(outbound or {}, 'arrival_time', 'arr_time'))} "
+                f"解析后={outbound_arr_dt if outbound_arr_dt is not None else outbound_arr} "
+                f"类型={type(outbound_arr_dt if outbound_arr_dt is not None else outbound_arr)} "
+                f"通过={passed}"
+            )
+            if not passed:
                 continue
         else:
             if not (6 * 60 <= outbound_dep <= 10 * 60):
@@ -641,19 +748,40 @@ def build_same_day_combos(
         for return_flight in return_flights or []:
             return_dep = _flight_departure_minutes(return_flight or {})
             return_arr = _flight_arrival_minutes(return_flight or {})
+            return_dep_dt = _flight_departure_datetime(return_flight or {}, date_str)
+            return_arr_dt = _flight_arrival_datetime(return_flight or {}, date_str)
             return_price = _to_float((return_flight or {}).get("price"))
             if return_dep is None or return_arr is None or return_price is None:
                 continue
             if active_windows:
                 depart_after = active_windows.get("return_depart_after_minutes")
-                if depart_after is not None and return_dep < depart_after:
+                _, return_after_dt = _same_day_window_datetimes(active_windows, date_str)
+                passed = True
+                if return_after_dt is not None and return_dep_dt is not None:
+                    passed = return_dep_dt >= return_after_dt
+                elif depart_after is not None:
+                    passed = return_dep >= depart_after
+                print(
+                    f"[会议比较] 返程{return_flight.get('flight_no') or return_flight.get('flight_combo')} "
+                    f"原始出发={repr(_first_time_text(return_flight or {}, 'departure_time', 'dep_time'))} "
+                    f"解析后={return_dep_dt if return_dep_dt is not None else return_dep} "
+                    f"类型={type(return_dep_dt if return_dep_dt is not None else return_dep)} "
+                    f"通过={passed}"
+                )
+                if not passed:
                     continue
             else:
                 if not (16 * 60 <= return_dep <= 22 * 60):
                     continue
-            if return_arr < return_dep:
+            if return_arr_dt is not None and return_dep_dt is not None:
+                if return_arr_dt < return_dep_dt:
+                    continue
+            elif return_arr < return_dep:
                 continue
-            stay_minutes = return_dep - outbound_arr
+            if return_dep_dt is not None and outbound_arr_dt is not None:
+                stay_minutes = (return_dep_dt - outbound_arr_dt).total_seconds() / 60
+            else:
+                stay_minutes = return_dep - outbound_arr
             if stay_minutes < min_stay_hours * 60:
                 continue
             total = outbound_price + return_price
@@ -3422,13 +3550,18 @@ def _priority_boundary_notes(flight: dict, priorities: dict) -> list[str]:
 
 
 def _hour_from_time(value: str | None) -> int | None:
+    parsed = parse_flight_time(value)
+    if parsed is not None:
+        return parsed.hour
     text = str(value or "").replace("T", " ")
-    if " " in text:
-        text = text.split(" ", 1)[1]
+    match = re.search(r"(\d{1,2}):(\d{2})", text)
+    if not match:
+        return None
     try:
-        return int(text[:2])
+        hour = int(match.group(1))
     except (TypeError, ValueError):
         return None
+    return hour if 0 <= hour <= 23 else None
 
 
 def _first_departure_hour(flight: dict) -> int | None:
@@ -3567,6 +3700,8 @@ def _time_to_minutes(value) -> int | None:
         return None
     hour = int(match.group(1))
     minute = int(match.group(2))
+    if not 0 <= hour <= 23 or not 0 <= minute <= 59:
+        return None
     return hour * 60 + minute
 
 
@@ -6673,8 +6808,21 @@ def analyze_round_trip(
             outbound_candidates,
             return_candidates,
             windows or (outbound_analysis.get("depart_date") or outbound_analysis.get("departure_date")),
+            outbound_analysis.get("depart_date") or outbound_analysis.get("departure_date"),
             constraints=combined_preferences,
         )
+        if same_day_combos:
+            first_combo = same_day_combos[0]
+            first_outbound = first_combo.get("outbound") or {}
+            first_return = first_combo.get("return") or {}
+            print(
+                f"[会议验证] 推荐方案A去程到达={_first_time_text(first_outbound, 'arrival_time', 'arr_time')} "
+                f"(要求<={windows.get('outbound_arrive_by') if windows else ''})"
+            )
+            print(
+                f"[会议验证] 推荐方案A返程出发={_first_time_text(first_return, 'departure_time', 'dep_time')} "
+                f"(要求>={windows.get('return_depart_after') if windows else ''})"
+            )
         print(
             "[会议调试] 去程符合窗口的航班: "
             + str(

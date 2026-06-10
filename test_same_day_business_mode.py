@@ -100,6 +100,57 @@ class SameDayBusinessModeTest(unittest.TestCase):
         self.assertIn("06:10", combos[0]["schedule_note"])
         self.assertIn("19:50", combos[0]["schedule_note"])
 
+    def test_parse_flight_time_keeps_24_hour_clock(self):
+        from analyzer import parse_flight_time
+
+        parsed = parse_flight_time("2026-06-19 21:30")
+
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed.hour, 21)
+        self.assertEqual(parsed.minute, 30)
+
+    def test_same_day_window_rejects_next_day_early_arrival(self):
+        from analyzer import build_same_day_combos, compute_same_day_windows
+
+        windows = compute_same_day_windows(
+            {
+                "constraints": {
+                    "business_start": "10:00",
+                    "business_end": "18:00",
+                    "buffer_hours": 2.5,
+                    "transport_mode": "taxi",
+                }
+            },
+            "PVG",
+            "PEK",
+        )
+        outbound = [
+            {
+                "flight_no": "CA999",
+                "price": 400,
+                "arrival_airport": "PEK",
+                "departure_date": "2026-06-19",
+                "arrival_date": "2026-06-20",
+                "departure_time": "22:30",
+                "arrival_time": "00:30",
+            }
+        ]
+        returns = [
+            {
+                "flight_no": "CA1510",
+                "price": 700,
+                "departure_airport": "PEK",
+                "departure_date": "2026-06-19",
+                "arrival_date": "2026-06-19",
+                "departure_time": "21:30",
+                "arrival_time": "23:55",
+            }
+        ]
+
+        combos = build_same_day_combos(outbound, returns, windows, "2026-06-19")
+
+        self.assertEqual(combos, [])
+
     def test_same_day_no_feasible_note_explains_tight_schedule(self):
         from analyzer import _same_day_no_feasible_note
 
