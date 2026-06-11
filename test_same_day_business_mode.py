@@ -89,10 +89,55 @@ class SameDayBusinessModeTest(unittest.TestCase):
         self.assertEqual(windows["checkin_buffer_min"], 110)
         self.assertEqual(windows["transport_min"], 60)
         self.assertEqual(windows["redundancy_min"], 25)
-        self.assertEqual(windows["outbound_reserve_minutes"], 205)
-        self.assertEqual(windows["return_reserve_minutes"], 195)
-        self.assertEqual(windows["outbound_arrive_by"], "06:35")
-        self.assertEqual(windows["return_depart_after"], "19:15")
+        self.assertEqual(windows["outbound_transport_margin_min"], 24)
+        self.assertTrue(windows["outbound_transport_rush"])
+        self.assertEqual(windows["return_transport_margin_min"], 18)
+        self.assertFalse(windows["return_transport_rush"])
+        self.assertEqual(windows["outbound_reserve_minutes"], 229)
+        self.assertEqual(windows["return_reserve_minutes"], 213)
+        self.assertEqual(windows["outbound_arrive_by"], "06:11")
+        self.assertEqual(windows["return_depart_after"], "19:33")
+
+    def test_transport_margin_uses_ratio_rush_hour_and_minimum(self):
+        from analyzer import calc_transport_margin
+
+        margin, ratio, rush = calc_transport_margin(60, "standard")
+        self.assertEqual(margin, 18)
+        self.assertEqual(ratio, 0.30)
+        self.assertFalse(rush)
+
+        rush_margin, rush_ratio, rush = calc_transport_margin(60, "standard", travel_hour=8)
+        self.assertEqual(rush_margin, 24)
+        self.assertEqual(rush_ratio, 0.40)
+        self.assertTrue(rush)
+
+        small_margin, _, _ = calc_transport_margin(20, "standard")
+        self.assertEqual(small_margin, 15)
+
+    def test_compute_same_day_windows_adds_transport_margin(self):
+        from analyzer import compute_same_day_windows
+
+        windows = compute_same_day_windows(
+            {
+                "constraints": {
+                    "business_start": "09:00",
+                    "business_end": "16:00",
+                    "user_transport_min": 60,
+                    "redundancy_min": 25,
+                    "transport_margin_mode": "standard",
+                }
+            },
+            "SHA",
+            "PKX",
+        )
+
+        self.assertEqual(windows["outbound_transport_margin_min"], 24)
+        self.assertEqual(windows["outbound_transport_margin_ratio"], 0.40)
+        self.assertTrue(windows["outbound_transport_rush"])
+        self.assertEqual(windows["return_transport_margin_min"], 18)
+        self.assertFalse(windows["return_transport_rush"])
+        self.assertEqual(windows["outbound_reserve_minutes"], 229)
+        self.assertEqual(windows["outbound_arrive_by"], "05:11")
 
     def test_city_airport_uses_shorter_standard_buffer(self):
         from analyzer import compute_same_day_windows

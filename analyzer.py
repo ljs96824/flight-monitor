@@ -650,6 +650,7 @@ def _same_day_constraints(source: dict | None) -> dict:
         "buffer_hours",
         "transport_mode",
         "user_transport_min",
+        "transport_margin_mode",
         "redundancy_min",
         "time_source",
     ):
@@ -667,6 +668,28 @@ def _optional_int(value, default: int | None = None) -> int | None:
         return int(round(float(value)))
     except (TypeError, ValueError):
         return default
+
+
+def calc_transport_margin(
+    transport_min: int | float | None,
+    margin_mode: str | None,
+    travel_hour: int | float | None = None,
+) -> tuple[int, float, bool]:
+    """Calculate traffic margin on top of the estimated transport time."""
+    RATIOS = {"tight": 0.15, "standard": 0.30, "loose": 0.50}
+    transport = _optional_int(transport_min, 0) or 0
+    ratio = RATIOS.get(margin_mode or "standard", 0.30)
+    rush = False
+    if travel_hour is not None:
+        try:
+            hour = float(travel_hour)
+            if 7 <= hour < 9.5 or 17 <= hour < 19.5:
+                ratio += 0.10
+                rush = True
+        except (TypeError, ValueError):
+            pass
+    margin = max(round(transport * ratio), 15)
+    return margin, ratio, rush
 
 
 def compute_same_day_windows(
@@ -696,10 +719,23 @@ def compute_same_day_windows(
         redundancy_min = _optional_int(constraints.get("redundancy_min"), 25)
         if redundancy_min is None:
             redundancy_min = 25
+        margin_mode = str(constraints.get("transport_margin_mode") or "standard").strip().lower()
         arrival_buffer_min = _optional_int(logistics.get("arrival_buffer_min"), 90) or 90
         checkin_buffer_min = _optional_int(logistics.get("checkin_buffer_min"), 90) or 90
-        outbound_reserve = arrival_buffer_min + transport_min + redundancy_min
-        return_reserve = transport_min + checkin_buffer_min + redundancy_min
+        outbound_travel_hour = (business_start - transport_min) / 60
+        return_travel_hour = business_end / 60
+        outbound_margin, outbound_ratio, outbound_rush = calc_transport_margin(
+            transport_min,
+            margin_mode,
+            outbound_travel_hour,
+        )
+        return_margin, return_ratio, return_rush = calc_transport_margin(
+            transport_min,
+            margin_mode,
+            return_travel_hour,
+        )
+        outbound_reserve = arrival_buffer_min + transport_min + outbound_margin + redundancy_min
+        return_reserve = transport_min + return_margin + checkin_buffer_min + redundancy_min
         outbound_arrive_by = business_start - outbound_reserve
         return_depart_after = business_end + return_reserve
         return {
@@ -714,6 +750,13 @@ def compute_same_day_windows(
             "estimated_transport_min": _optional_int(estimated_transport, 45) or 45,
             "user_transport_min": _optional_int(constraints.get("user_transport_min")),
             "redundancy_min": redundancy_min,
+            "transport_margin_mode": margin_mode,
+            "outbound_transport_margin_min": outbound_margin,
+            "return_transport_margin_min": return_margin,
+            "outbound_transport_margin_ratio": round(outbound_ratio, 2),
+            "return_transport_margin_ratio": round(return_ratio, 2),
+            "outbound_transport_rush": outbound_rush,
+            "return_transport_rush": return_rush,
             "arrival_buffer_min": arrival_buffer_min,
             "checkin_buffer_min": checkin_buffer_min,
             "outbound_reserve_minutes": outbound_reserve,
@@ -911,7 +954,7 @@ def _same_day_no_feasible_note(
         parts.append(f"最晚返程约{_minutes_to_text(latest_departure)}走，要求不早于{windows.get('return_depart_after')}")
     relaxed_constraints = dict(_same_day_constraints(constraints or {}))
     if windows.get("buffer_model") == "airport_split":
-        relaxed_constraints["redundancy_min"] = 15
+        relaxed_constraints["transport_margin_mode"] = "tight"
     else:
         relaxed_constraints["buffer_hours"] = 2
     relaxed_windows = compute_same_day_windows({"constraints": relaxed_constraints}, None, dest_airport)
@@ -924,7 +967,7 @@ def _same_day_no_feasible_note(
             if (_flight_arrival_minutes(flight) is not None and _flight_arrival_minutes(flight) <= relaxed_arrive_by)
         )
     if relaxed_windows:
-        relaxed_label = "冗余缩短到15分钟" if windows.get("buffer_model") == "airport_split" else "缩短预留至2小时"
+        relaxed_label = "路途冗余改为紧凑(+15%)" if windows.get("buffer_model") == "airport_split" else "缩短预留至2小时"
         parts.append(
             f"建议{relaxed_label}(到达上限{relaxed_windows.get('outbound_arrive_by')}，有{relaxed_count}个航班可选)"
         )
@@ -1819,6 +1862,7 @@ def migrate_old_subscription(subscription: dict) -> dict:
     _set_if_missing(hard, "buffer_hours", constraints.get("buffer_hours"))
     _set_if_missing(hard, "transport_mode", constraints.get("transport_mode"))
     _set_if_missing(hard, "user_transport_min", constraints.get("user_transport_min"))
+    _set_if_missing(hard, "transport_margin_mode", constraints.get("transport_margin_mode"))
     _set_if_missing(hard, "redundancy_min", constraints.get("redundancy_min"))
     _set_if_missing(hard, "trip_nature", constraints.get("trip_nature"))
     _set_if_missing(hard, "trip_natures", constraints.get("trip_natures"))
@@ -2016,7 +2060,11 @@ def apply_default_rules(subscription: dict) -> dict:
             hard.get("buffer_hours")
             or (subscription.get("constraints") or {}).get("buffer_hours")
             or subscription.get("buffer_hours")
-            or 2.5
+        )
+        margin_mode = (
+            hard.get("transport_margin_mode")
+            or (subscription.get("constraints") or {}).get("transport_margin_mode")
+            or "standard"
         )
         if hard.get("business_start") and hard.get("business_end"):
             hard["meeting_time_priority"] = True
@@ -2025,8 +2073,13 @@ def apply_default_rules(subscription: dict) -> dict:
             constraints = dict(subscription.get("constraints") or {})
             constraints["time_source"] = "meeting_derived"
             subscription["constraints"] = constraints
+            reserve_text = (
+                f"{buffer_h}小时预留"
+                if buffer_h
+                else f"机场缓冲+车程+路途冗余({margin_mode})+安全余量"
+            )
             defaults_applied.append(
-                f"当天往返会议模式:以会议时间为最高优先,清晨早班/晚班返程均可选,已含{buffer_h}小时预留(车程+冗余)"
+                f"当天往返会议模式:以会议时间为最高优先,清晨早班/晚班返程均可选,已含{reserve_text}"
             )
             defaults_applied.append(
                 f"会议模式接管时间设置:按会议{hard.get('business_start')}-{hard.get('business_end')}+预留推算,用户时间偏好本次不生效"

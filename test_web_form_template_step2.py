@@ -62,6 +62,7 @@ class WebFormTemplateStep2Test(unittest.TestCase):
         self.assertIn('name="business_end"', FORM_TEMPLATE)
         self.assertIn('name="user_transport_min"', FORM_TEMPLATE)
         self.assertIn('name="redundancy_min"', FORM_TEMPLATE)
+        self.assertIn('name="transport_margin_mode"', FORM_TEMPLATE)
         self.assertIn('id="airport-buffer-preview"', FORM_TEMPLATE)
         self.assertIn('data-show-if="same_day_round_trip=true"', FORM_TEMPLATE)
         self.assertIn("syncSameDayRoundTrip", FORM_TEMPLATE)
@@ -124,6 +125,7 @@ class WebFormTemplateStep2Test(unittest.TestCase):
                 "business_end": "16:00",
                 "user_transport_min": "60",
                 "redundancy_min": "25",
+                "transport_margin_mode": "loose",
                 "origin_select": "PVG",
                 "destination": "PEK",
                 "depart_date": "2026-06-10",
@@ -145,6 +147,7 @@ class WebFormTemplateStep2Test(unittest.TestCase):
         self.assertEqual(subscription["constraints"]["business_end"], "16:00")
         self.assertEqual(subscription["constraints"]["user_transport_min"], 60)
         self.assertEqual(subscription["constraints"]["redundancy_min"], 25)
+        self.assertEqual(subscription["constraints"]["transport_margin_mode"], "loose")
         self.assertEqual(subscription["constraints"]["time_source"], "meeting_derived")
         self.assertEqual(subscription["hard_constraints"]["time_source"], "meeting_derived")
         self.assertEqual(subscription["basic"]["return_date"], "2026-06-10")

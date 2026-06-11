@@ -756,6 +756,13 @@ FORM_TEMPLATE = """
           <label>机场⇄会议地点车程(分钟,选填)
             <input name="user_transport_min" type="number" min="0" step="5" placeholder="不填则按机场到市区估算">
           </label>
+          <label>路途冗余(在车程之上额外预留)</label>
+          <div class="choice">
+            <label><input type="radio" name="transport_margin_mode" value="tight"> 紧凑 +15%</label>
+            <label><input type="radio" name="transport_margin_mode" value="standard" checked> 标准 +30%(推荐)</label>
+            <label><input type="radio" name="transport_margin_mode" value="loose"> 宽松 +50%</label>
+          </div>
+          <p id="transport-margin-hint" class="hint"></p>
           <label>冗余余量</label>
           <div class="choice">
             <label><input type="radio" name="redundancy_min" value="15"> 15分钟</label>
@@ -2092,15 +2099,57 @@ FORM_TEMPLATE = """
       const userTransport = Number(transportInput?.value || 0);
       const transport = userTransport > 0 ? userTransport : estimatedTransportFor(destAirport);
       const redundancy = Number(checkedValue('redundancy_min') || 25);
+      const marginMode = checkedValue('transport_margin_mode') || 'standard';
+      const start = document.querySelector('input[name="business_start"]')?.value || '';
+      const end = document.querySelector('input[name="business_end"]')?.value || '';
+      const startMinutes = timeToMinutes(start);
+      const endMinutes = timeToMinutes(end);
+      const outboundTravelHour = startMinutes === null ? null : (startMinutes - transport) / 60;
+      const returnTravelHour = endMinutes === null ? null : endMinutes / 60;
+      const outboundMargin = transportMarginFor(transport, marginMode, outboundTravelHour);
+      const returnMargin = transportMarginFor(transport, marginMode, returnTravelHour);
       return {
         destAirport,
         arrivalBuffer: buffers.arrival,
         checkinBuffer: buffers.checkin,
         transport,
         redundancy,
-        outboundReserve: buffers.arrival + transport + redundancy,
-        returnReserve: transport + buffers.checkin + redundancy,
+        marginMode,
+        outboundMargin,
+        returnMargin,
+        outboundReserve: buffers.arrival + transport + outboundMargin.minutes + redundancy,
+        returnReserve: transport + returnMargin.minutes + buffers.checkin + redundancy,
       };
+    }
+
+    function timeToMinutes(value) {
+      if (!value || !value.includes(':')) return null;
+      const [hour, minute] = value.split(':').map(Number);
+      if (Number.isNaN(hour) || Number.isNaN(minute)) return null;
+      return hour * 60 + minute;
+    }
+
+    function transportMarginFor(transport, mode, travelHour) {
+      const ratios = { tight: 0.15, standard: 0.30, loose: 0.50 };
+      let ratio = ratios[mode] || ratios.standard;
+      let rush = false;
+      if (travelHour !== null && travelHour !== undefined) {
+        const hour = Number(travelHour);
+        if (!Number.isNaN(hour) && ((hour >= 7 && hour < 9.5) || (hour >= 17 && hour < 19.5))) {
+          ratio += 0.10;
+          rush = true;
+        }
+      }
+      return {
+        minutes: Math.max(Math.round((Number(transport) || 0) * ratio), 15),
+        ratio,
+        rush
+      };
+    }
+
+    function marginModeText(mode) {
+      const map = { tight: '紧凑15%', standard: '标准30%', loose: '宽松50%' };
+      return map[mode] || map.standard;
     }
 
     function formatReserveMinutes(minutes) {
@@ -2134,10 +2183,28 @@ FORM_TEMPLATE = """
       if (meetingTimeHandoffText && active) {
         const outboundBy = addMinutesToTime(start, -reserve.outboundReserve) || '提交后计算';
         const returnAfter = addMinutesToTime(end, reserve.returnReserve) || '提交后计算';
+        const outboundRushText = reserve.outboundMargin.rush ? '+早高峰10%' : '';
+        const returnRushText = reserve.returnMargin.rush ? '+晚高峰10%' : '';
         meetingTimeHandoffText.innerHTML =
           `系统将按你的会议时间(${start}-${end})自动推算,通用时间偏好本次不生效:<br>` +
-          `• 去程总预留 = 机场缓冲${reserve.arrivalBuffer}min + 车程${reserve.transport}min + 冗余${reserve.redundancy}min ≈ ${formatReserveMinutes(reserve.outboundReserve)}<br>` +
+          `• 去程总预留 ≈ ${formatReserveMinutes(reserve.outboundReserve)},构成:<br>` +
+          `- 机场到达缓冲:${reserve.arrivalBuffer}分钟<br>` +
+          `- 车程:${reserve.transport}分钟<br>` +
+          `- 路途冗余:${reserve.outboundMargin.minutes}分钟(${marginModeText(reserve.marginMode)}${outboundRushText})<br>` +
+          `- 安全余量:${reserve.redundancy}分钟<br>` +
+          `• 返程总预留 ≈ ${formatReserveMinutes(reserve.returnReserve)},其中路途冗余${reserve.returnMargin.minutes}分钟(${marginModeText(reserve.marginMode)}${returnRushText})<br>` +
           `→ 去程需 ${outboundBy} 前到达; 返程需 ${returnAfter} 后出发`;
+      }
+      const marginHint = document.getElementById('transport-margin-hint');
+      if (marginHint) {
+        const hints = [];
+        if (reserve.outboundMargin.rush) {
+          hints.push('去程车程处于早高峰/晚高峰,系统已自动上浮10%,建议必要时选宽松档。');
+        }
+        if (reserve.returnMargin.rush) {
+          hints.push('返程车程处于早高峰/晚高峰,系统已自动上浮10%,建议必要时选宽松档。');
+        }
+        marginHint.textContent = hints.join(' ');
       }
     }
 
@@ -2952,10 +3019,10 @@ FORM_TEMPLATE = """
           const start = document.querySelector('input[name="business_start"]')?.value || '';
           const end = document.querySelector('input[name="business_end"]')?.value || '';
           const reserve = meetingReserveParts();
-          summaryLine(
-            '时间安排',
-            `由会议时间推算:会议${start || '未填'}-${end || '未填'} | 去程预留${formatReserveMinutes(reserve.outboundReserve)} → ${addMinutesToTime(start, -reserve.outboundReserve) || '提交后计算'}前到达 | 返程预留${formatReserveMinutes(reserve.returnReserve)} → ${addMinutesToTime(end, reserve.returnReserve) || '提交后计算'}后出发`
-          );
+            summaryLine(
+              '时间安排',
+              `由会议时间推算:会议${start || '未填'}-${end || '未填'} | 去程预留${formatReserveMinutes(reserve.outboundReserve)}(含路途冗余${reserve.outboundMargin.minutes}分钟) → ${addMinutesToTime(start, -reserve.outboundReserve) || '提交后计算'}前到达 | 返程预留${formatReserveMinutes(reserve.returnReserve)}(含路途冗余${reserve.returnMargin.minutes}分钟) → ${addMinutesToTime(end, reserve.returnReserve) || '提交后计算'}后出发`
+            );
         } else {
           summaryLine('时间偏好', timePreferenceText());
         }
@@ -3005,6 +3072,7 @@ FORM_TEMPLATE = """
         business_start: document.querySelector('input[name="business_start"]')?.value || '',
         business_end: document.querySelector('input[name="business_end"]')?.value || '',
         user_transport_min: document.querySelector('input[name="user_transport_min"]')?.value || '',
+        transport_margin_mode: checkedValue('transport_margin_mode'),
         redundancy_min: checkedValue('redundancy_min'),
         budget_strategy: checkedValue('price_strategy'),
         transfer_policy: checkedValue('transfer_policy'),
@@ -3112,6 +3180,7 @@ FORM_TEMPLATE = """
       if (businessEnd && data.business_end) businessEnd.value = data.business_end;
       const userTransportInput = document.querySelector('input[name="user_transport_min"]');
       if (userTransportInput && data.user_transport_min !== undefined) userTransportInput.value = data.user_transport_min || '';
+      if (data.transport_margin_mode) setRadio('transport_margin_mode', String(data.transport_margin_mode));
       if (data.redundancy_min) setRadio('redundancy_min', String(data.redundancy_min));
       if (form.trip_type && data.trip_type) {
         form.trip_type.value = data.trip_type;
@@ -3321,7 +3390,7 @@ FORM_TEMPLATE = """
       updateConditionalFields();
       refreshSummaryIfFinalStep();
     }));
-    ['companions', 'travel_purpose', 'adult_count', 'child_count', 'elderly_count', 'infant_count', 'passenger_count', 'trip_natures', 'team_passenger_count', 'cabin_arrangement', 'business_start', 'business_end', 'user_transport_min', 'redundancy_min', 'meeting_start', 'meeting_end', 'team_date_flexibility', 'same_flight_required', 'cabin_policy', 'user_level', 'business_seats', 'economy_seats', 'reimburse_per_person', 'invoice_needed', 'invoice_special_vat', 'invoice_cabin_limit', 'time_preference', 'refund_flexibility', 'airline_policy', 'accept_self_transfer', 'companion_constraints', 'solo_travel', 'no_late_arrival', 'prefer_daytime_arrival'].forEach(name => {
+    ['companions', 'travel_purpose', 'adult_count', 'child_count', 'elderly_count', 'infant_count', 'passenger_count', 'trip_natures', 'team_passenger_count', 'cabin_arrangement', 'business_start', 'business_end', 'user_transport_min', 'transport_margin_mode', 'redundancy_min', 'meeting_start', 'meeting_end', 'team_date_flexibility', 'same_flight_required', 'cabin_policy', 'user_level', 'business_seats', 'economy_seats', 'reimburse_per_person', 'invoice_needed', 'invoice_special_vat', 'invoice_cabin_limit', 'time_preference', 'refund_flexibility', 'airline_policy', 'accept_self_transfer', 'companion_constraints', 'solo_travel', 'no_late_arrival', 'prefer_daytime_arrival'].forEach(name => {
       document.querySelectorAll(`input[name="${name}"]`).forEach(input => {
         input.addEventListener('change', () => {
           syncPrefCards();
@@ -4027,6 +4096,9 @@ def build_subscription(form) -> dict:
     business_start = form.get("business_start", "").strip()
     business_end = form.get("business_end", "").strip()
     user_transport_min = parse_int(form.get("user_transport_min"), 0)
+    transport_margin_mode = form.get("transport_margin_mode", "standard").strip() or "standard"
+    if transport_margin_mode not in {"tight", "standard", "loose"}:
+        transport_margin_mode = "standard"
     redundancy_min = parse_int(form.get("redundancy_min"), 25)
     max_extra_duration_hours = None
     max_total_duration_hours = None
@@ -4241,6 +4313,7 @@ def build_subscription(form) -> dict:
             "business_start": business_start if same_day_round_trip else "",
             "business_end": business_end if same_day_round_trip else "",
             "user_transport_min": user_transport_min if same_day_round_trip and user_transport_min > 0 else None,
+            "transport_margin_mode": transport_margin_mode if same_day_round_trip else "standard",
             "redundancy_min": redundancy_min if same_day_round_trip else 25,
             "time_source": "meeting_derived" if same_day_round_trip and business_start and business_end else "user_defined",
             "trip_nature": trip_nature,
@@ -4343,6 +4416,7 @@ def build_subscription(form) -> dict:
             "business_start": business_start if same_day_round_trip else "",
             "business_end": business_end if same_day_round_trip else "",
             "user_transport_min": user_transport_min if same_day_round_trip and user_transport_min > 0 else None,
+            "transport_margin_mode": transport_margin_mode if same_day_round_trip else "standard",
             "redundancy_min": redundancy_min if same_day_round_trip else 25,
             "time_source": "meeting_derived" if same_day_round_trip and business_start and business_end else "user_defined",
             "trip_nature": trip_nature,

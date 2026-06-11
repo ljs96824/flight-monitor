@@ -5472,7 +5472,7 @@ def build_notification_payload(
         and merged_constraints.get("business_end")
     ):
         reserve_note = (
-            "机场标准缓冲+车程估算+冗余"
+            "机场标准缓冲+车程估算+路途冗余+安全余量"
             if not merged_constraints.get("buffer_hours")
             else f"{merged_constraints.get('buffer_hours') or 2.5}h预留"
         )
@@ -5907,9 +5907,19 @@ def render_pushplus(payload: dict) -> str:
         windows = primary_plan.get("same_day_windows") or {}
         if windows:
             if windows.get("buffer_model") == "airport_split":
+                outbound_margin = windows.get("outbound_transport_margin_min")
+                return_margin = windows.get("return_transport_margin_min")
+                rush_note = ""
+                if windows.get("outbound_transport_rush") or windows.get("return_transport_rush"):
+                    rush_note = ",含高峰上浮"
                 reserve_text = (
-                    f"去程预留约{windows.get('outbound_reserve_minutes')}分钟,"
+                    f"去程预留约{windows.get('outbound_reserve_minutes')}分钟"
+                    f"(机场{windows.get('arrival_buffer_min')}+车程{windows.get('transport_min')}"
+                    f"+路途冗余{outbound_margin}+安全余量{windows.get('redundancy_min')});"
                     f"返程预留约{windows.get('return_reserve_minutes')}分钟"
+                    f"(车程{windows.get('transport_min')}+路途冗余{return_margin}"
+                    f"+值机{windows.get('checkin_buffer_min')}+安全余量{windows.get('redundancy_min')})"
+                    f"{rush_note}"
                 )
             else:
                 reserve_text = f"车程约{windows.get('transport_min')}分钟+缓冲{windows.get('buffer_h')}小时"
@@ -6150,13 +6160,26 @@ def _render_payload_plan_card(plan: dict, compact: bool = False, primary_plan: d
             rows.append(("停留", html.escape(stay_text)))
             windows = plan.get("same_day_windows") or {}
             if windows:
+                if windows.get("buffer_model") == "airport_split":
+                    reserve_text = (
+                        f"办事{windows.get('business_start')}-{windows.get('business_end')}，"
+                        f"去程预留{windows.get('outbound_reserve_minutes')}分钟="
+                        f"机场缓冲{windows.get('arrival_buffer_min')}+车程{windows.get('transport_min')}"
+                        f"+路途冗余{windows.get('outbound_transport_margin_min')}"
+                        f"+安全余量{windows.get('redundancy_min')}；"
+                        f"返程预留{windows.get('return_reserve_minutes')}分钟="
+                        f"车程{windows.get('transport_min')}+路途冗余{windows.get('return_transport_margin_min')}"
+                        f"+值机安检{windows.get('checkin_buffer_min')}+安全余量{windows.get('redundancy_min')}"
+                    )
+                else:
+                    reserve_text = (
+                        f"办事{windows.get('business_start')}-{windows.get('business_end')}，"
+                        f"预留车程约{windows.get('transport_min')}分钟+缓冲{windows.get('buffer_h')}小时"
+                    )
                 rows.append(
                     (
                         "时间反推",
-                        html.escape(
-                            f"办事{windows.get('business_start')}-{windows.get('business_end')}，"
-                            f"预留车程约{windows.get('transport_min')}分钟+缓冲{windows.get('buffer_h')}小时"
-                        ),
+                        html.escape(reserve_text),
                     )
                 )
             if plan.get("schedule_note"):
