@@ -4,7 +4,15 @@ import unittest
 
 sys.modules.setdefault("httpx", types.SimpleNamespace())
 
-from notifier import _payload_combo_plan, _render_payload_plan_card, _round_trip_combinations, render_pushplus
+from notifier import (
+    _payload_combo_plan,
+    _render_payload_plan_card,
+    _round_trip_combinations,
+    _same_day_alternatives_body,
+    render_detail_html,
+    render_email,
+    render_pushplus,
+)
 
 
 def _flight(combo, airline, dep, arr, dep_time, arr_time):
@@ -192,7 +200,7 @@ class PushPlusRenderingTest(unittest.TestCase):
         )
 
         self.assertIn("当天往返提示", msg)
-        self.assertLess(msg.index("当天往返提示"), msg.index("结论:"))
+        self.assertLess(msg.index("当前判断:"), msg.index("当天往返提示"))
 
 
     def test_pushplus_surfaces_same_day_alternatives(self):
@@ -238,6 +246,123 @@ class PushPlusRenderingTest(unittest.TestCase):
         self.assertIn("HU7610", msg)
         self.assertIn("MU5099", msg)
         self.assertIn("620", msg)
+
+    def test_pushplus_no_primary_uses_no_plan_action_panel_and_alternatives_first(self):
+        msg = render_pushplus(
+            {
+                "push_type": "business time conflict",
+                "route": "SHA -> PEK",
+                "recommendation": "time window too tight",
+                "buy_condition": "consider alternatives",
+                "same_day_no_feasible_note": "need arrive before 06:45, earliest arrival is 09:15",
+                "same_day_alternatives": [
+                    {
+                        "category": "previous_evening",
+                        "title": "Alternative A previous evening",
+                        "flight": {"flight_no": "MU5137", "departure_time": "19:00", "arrival_time": "21:15"},
+                        "price": 620,
+                        "tradeoff": "extra hotel cost, most stable",
+                    },
+                    {
+                        "category": "previous_redeye",
+                        "title": "Alternative B late night",
+                        "flight": {"flight_no": "HU7610", "departure_time": "22:30", "arrival_time": "00:40"},
+                        "price": 520,
+                        "tradeoff": "fatigue risk",
+                    },
+                    {
+                        "category": "same_day_earliest",
+                        "title": "Alternative C same day earliest",
+                        "flight": {"flight_no": "MU5099", "departure_time": "07:00", "arrival_time": "09:15"},
+                        "price": 894,
+                        "tradeoff": "late arrival risk",
+                    },
+                ],
+                "recommended_plans": [],
+                "detail_url": "https://example.com/detail",
+            }
+        )
+
+        self.assertIn("无符合方案", msg)
+        self.assertIn("当前判断:❌ 未找到完全符合条件的方案", msg)
+        self.assertIn("可用备选:3个", msg)
+        self.assertLess(msg.index("可用备选:3个"), msg.index("Alternative A"))
+        self.assertIn("航班:MU5137", msg)
+        self.assertIn("价格:¥620", msg)
+
+    def test_same_day_alternatives_body_uses_table_cards_and_booking_links(self):
+        body = _same_day_alternatives_body(
+            {
+                "route": "SHA -> PEK",
+                "depart_date": "2026-06-19",
+                "same_day_alternatives": [
+                    {
+                        "category": "previous_evening",
+                        "title": "Alternative A previous evening",
+                        "date": "2026-06-18",
+                        "flight": {
+                            "flight_no": "MU5137",
+                            "flight_combo": "MU5137",
+                            "departure_airport": "SHA",
+                            "arrival_airport": "PEK",
+                            "departure_time": "19:00",
+                            "arrival_time": "21:15",
+                            "airline": "MU",
+                            "aircraft": "A330",
+                            "price": 620,
+                            "stops": 0,
+                        },
+                        "price": 620,
+                        "tradeoff": "extra hotel cost, most stable",
+                        "feasibility": "next day meeting is relaxed",
+                    }
+                ],
+            }
+        )
+
+        self.assertIn("<table", body)
+        self.assertIn("Alternative A previous evening", body)
+        self.assertIn("日期", body)
+        self.assertIn("出发前一天", body)
+        self.assertIn("航班", body)
+        self.assertIn("验证购票", body)
+        self.assertIn("携程", body)
+        self.assertIn("飞猪", body)
+        self.assertIn("去哪儿", body)
+
+    def test_email_and_detail_put_alternatives_before_analysis_when_no_primary(self):
+        payload = {
+            "push_type": "business time conflict",
+            "route": "SHA -> PEK",
+            "same_day_no_feasible_note": "need arrive before 06:45, earliest arrival is 09:15",
+            "same_day_alternatives": [
+                {
+                    "category": "previous_evening",
+                    "title": "Alternative A previous evening",
+                    "date": "2026-06-18",
+                    "flight": {
+                        "flight_no": "MU5137",
+                        "departure_airport": "SHA",
+                        "arrival_airport": "PEK",
+                        "departure_time": "19:00",
+                        "arrival_time": "21:15",
+                        "price": 620,
+                    },
+                    "price": 620,
+                    "tradeoff": "extra hotel cost, most stable",
+                }
+            ],
+            "recommended_plans": [],
+            "detail_url": "https://example.com/detail",
+            "form_url": "https://example.com/",
+        }
+
+        subject, email_html = render_email(payload)
+        detail_html = render_detail_html(payload)
+
+        self.assertIn("【无符合方案】", subject)
+        self.assertLess(email_html.index("可选备选方案"), email_html.index("价格口径与信号"))
+        self.assertLess(detail_html.index("可选备选方案"), detail_html.index("为什么提醒你"))
 
     def test_round_trip_combinations_do_not_fallback_when_same_day_time_conflicts(self):
         combos = _round_trip_combinations(

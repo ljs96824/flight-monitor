@@ -7,7 +7,7 @@ import re
 import json
 import time
 import html
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote, quote_plus
 
@@ -5118,6 +5118,9 @@ def _payload_dedupe_text(items) -> list[str]:
 def _email_subject(payload: dict) -> str:
     push_type = payload.get("push_type") or "价格提醒"
     route = payload.get("route") or "航班监控"
+    alternatives = payload.get("same_day_alternatives") or []
+    if _no_primary_plan_state(payload):
+        return f"【无符合方案】{route}｜提供{len(alternatives[:3])}个备选"
     primary_plan = _plan_for_render((payload.get("recommended_plans") or [{}])[0] or {}, payload)
     display = _price_text(primary_plan.get("price") or payload.get("display_price") or payload.get("current_price"))
     tier = str(primary_plan.get("tier") or "").strip()
@@ -5558,11 +5561,21 @@ def build_notification_payload(
             f"时间筛选:按会议安排({merged_constraints.get('business_start')}-{merged_constraints.get('business_end')})"
             f"+{reserve_note}推算,你的通用时间偏好本次未参与筛选。"
         )
+    same_day_alternatives = (
+        (analysis_result.get("round_trip_analysis") or {}).get("same_day_alternatives")
+        or analysis_result.get("same_day_alternatives")
+        or []
+    )
+    payload_push_type = (push_meta or {}).get("type") or "价格提醒"
+    if not all_items:
+        payload_push_type = "无符合方案·备选参考"
     payload = {
-        "push_type": (push_meta or {}).get("type") or "价格提醒",
+        "push_type": payload_push_type,
         "route": _payload_route_text(route_info),
         "subscription_id": route_info.get("subscription_id") or subscription.get("id"),
         "route_airports": _payload_route_airports(route_info),
+        "depart_date": route_info.get("depart_date"),
+        "return_date": route_info.get("return_date"),
         "route_type": payload_route_type,
         "invoice_preferences": {
             "invoice_needed": bool((subscription.get("preferences") or {}).get("invoice_needed")),
@@ -5654,9 +5667,7 @@ def build_notification_payload(
             or ""
         ),
         "same_day_alternatives": (
-            (analysis_result.get("round_trip_analysis") or {}).get("same_day_alternatives")
-            or analysis_result.get("same_day_alternatives")
-            or []
+            same_day_alternatives
         ),
         "plan_status_change": plan_status_change,
         "plan_price_rows": _payload_plan_price_rows(all_items[:5]),
@@ -5922,14 +5933,214 @@ def _alternative_flight_text(item: dict) -> str:
     return f"{flight_no} {dep}-{arr} {price} {tradeoff}".strip()
 
 
+def _has_primary_plans(payload: dict) -> bool:
+    return bool(payload.get("recommended_plans") or [])
+
+
+def _no_primary_plan_state(payload: dict) -> bool:
+    return not _has_primary_plans(payload)
+
+
+def _no_primary_reason(payload: dict) -> str:
+    note = str(payload.get("same_day_no_feasible_note") or "").strip()
+    if note:
+        return note
+    for key in ("no_primary_reason", "risk_summary", "price_policy_reason"):
+        value = str(payload.get(key) or "").strip()
+        if value:
+            return value
+    reasons = [str(item).strip() for item in (payload.get("trigger_reason") or []) if str(item or "").strip()]
+    if reasons:
+        return reasons[0]
+    return "当前约束或数据条件下没有可推荐的可执行航班"
+
+
+def _alternative_labels(alternatives: list[dict]) -> str:
+    labels = []
+    fallback = {
+        "previous_evening": "前一晚到达",
+        "previous_redeye": "前夜深夜班",
+        "same_day_earliest": "当天最早班",
+    }
+    for item in alternatives[:3]:
+        category = str((item or {}).get("category") or "").strip()
+        title = str((item or {}).get("title") or "").strip()
+        label = fallback.get(category)
+        if not label and title:
+            label = title
+        if label:
+            labels.append(label)
+    return " / ".join(labels)
+
+
+def _payload_depart_date(payload: dict) -> str:
+    return str(
+        payload.get("depart_date")
+        or (payload.get("snapshot") or {}).get("depart_date")
+        or ""
+    )
+
+
+def _same_day_alternative_date(item: dict, payload: dict) -> str:
+    item = item or {}
+    flight = item.get("flight") or {}
+    for key in ("date", "date_str", "departure_date", "depart_date"):
+        value = item.get(key) or flight.get(key)
+        if value:
+            return str(value)[:10]
+    flight_date = _flight_search_date(flight, None)
+    if flight_date:
+        return flight_date[:10]
+    base_date = _payload_depart_date(payload)
+    category = str(item.get("category") or "")
+    if base_date and category.startswith("previous"):
+        try:
+            return (datetime.fromisoformat(base_date[:10]) - timedelta(days=1)).strftime("%Y-%m-%d")
+        except ValueError:
+            return base_date
+    return base_date
+
+
+def _same_day_alternative_date_label(item: dict, payload: dict) -> str:
+    date_str = _same_day_alternative_date(item, payload)
+    if not date_str:
+        return "日期待确认"
+    category = str((item or {}).get("category") or "")
+    base_date = _payload_depart_date(payload)
+    previous = category.startswith("previous")
+    if not previous and base_date:
+        try:
+            previous = datetime.fromisoformat(date_str[:10]).date() < datetime.fromisoformat(base_date[:10]).date()
+        except ValueError:
+            previous = False
+    suffix = "(出发前一天)" if previous else ""
+    return f"{date_str}{suffix}"
+
+
+def _same_day_alternative_links(item: dict, payload: dict, limit: int = 6) -> str:
+    item = item or {}
+    flight = item.get("flight") or {}
+    date_str = _same_day_alternative_date(item, payload)
+    segments = _email_plan_segments(flight)
+    first = segments[0] if segments else {}
+    last = segments[-1] if segments else {}
+    origin = (
+        first.get("dep_airport")
+        or _safe_flight_field(flight, "departure_airport", "dep_airport", "origin_airport", "origin")
+    )
+    dest = (
+        last.get("arr_airport")
+        or _safe_flight_field(flight, "arrival_airport", "arr_airport", "destination_airport", "destination")
+    )
+    route_info = {
+        "depart_date": date_str,
+        "origin": origin,
+        "destination": dest,
+    }
+    links = _payload_booking_links_for_flight(flight, route_info, date_str, limit)
+    if links:
+        return links
+    if origin and dest and date_str:
+        return _compact_link_text(
+            generate_booking_links(origin, dest, date_str, flight.get("flight_no") or flight.get("flight_combo") or ""),
+            limit,
+        )
+    return ""
+
+
+def _same_day_alternative_feasibility(item: dict) -> str:
+    item = item or {}
+    feasibility = item.get("feasibility")
+    if isinstance(feasibility, dict):
+        for key in ("summary", "label", "note", "message"):
+            if feasibility.get(key):
+                return str(feasibility.get(key))
+        level = feasibility.get("level")
+        if level:
+            return str(level)
+    if feasibility:
+        return str(feasibility)
+    return str(item.get("schedule_note") or item.get("note") or item.get("tradeoff") or "以实际行程安排为准")
+
+
+def _same_day_alternative_card(item: dict, payload: dict) -> str:
+    item = item or {}
+    flight = item.get("flight") or {}
+    title = html.escape(str(item.get("title") or "备选方案"))
+    tradeoff = html.escape(str(item.get("tradeoff") or item.get("note") or "请根据时间、成本和疲劳风险自行取舍"))
+    segments = _email_plan_segments(flight)
+    first = segments[0] if segments else {}
+    last = segments[-1] if segments else {}
+    dep_airport = str(first.get("dep_airport") or "").strip().upper()
+    arr_airport = str(last.get("arr_airport") or "").strip().upper()
+    price = item.get("price") if item.get("price") is not None else flight.get("price")
+    fare_rules = flight.get("fare_rules") if isinstance(flight.get("fare_rules"), dict) else {}
+    baggage_rules = fare_rules.get("baggage") if isinstance(fare_rules.get("baggage"), dict) else {}
+    baggage = (
+        item.get("baggage")
+        or flight.get("baggage_line")
+        or baggage_rules.get("note")
+        or "以支付页为准"
+    )
+    rows = [
+        ("日期", html.escape(_same_day_alternative_date_label(item, payload))),
+        ("航班", _email_plan_flight_text(flight)),
+        ("起飞", _email_plan_local_time(dep_airport, first.get("dep_time")) if segments else "时间待确认"),
+        ("到达", _email_plan_local_time(arr_airport, last.get("arr_time")) if segments else "时间待确认"),
+        ("中转", html.escape(_email_plan_transfer_text(flight))),
+        ("机型", html.escape(_email_plan_aircraft_text(flight))),
+        ("票面价", f"{_price_text(price)}(单程)"),
+        ("行李", html.escape(str(baggage))),
+        ("可行性", html.escape(_same_day_alternative_feasibility(item))),
+    ]
+    links = _same_day_alternative_links(item, payload, 6)
+    link_block = ""
+    if links:
+        link_block = (
+            "<div style='margin-top:10px;padding-top:8px;border-top:1px solid #f0f0f0;'>"
+            "验证购票:" + links + "</div>"
+        )
+    return (
+        "<div style='border:1px solid #e5e7eb;border-radius:10px;padding:16px;margin:14px 0;background:#fff;'>"
+        "<div style='font-weight:600;color:#d97706;margin-bottom:4px;'>"
+        f"{title}</div>"
+        f"<div style='font-size:13px;color:#666;margin-bottom:10px;'>权衡:{tradeoff}</div>"
+        f"{_email_leg_table(rows)}"
+        f"{link_block}"
+        "</div>"
+    )
+
+
 def _pushplus_same_day_alternative_lines(payload: dict) -> list[str]:
     alternatives = payload.get("same_day_alternatives") or []
     if not alternatives:
         return []
     lines = ["", "可选备选(由你决定):"]
-    for item in alternatives[:4]:
+    for item in alternatives[:3]:
+        item = item or {}
         title = html.escape(str(item.get("title") or "备选方案"))
-        lines.append(f"{title}:{_alternative_flight_text(item)}")
+        flight = item.get("flight") or {}
+        flight_no = html.escape(str(flight.get("flight_no") or flight.get("flight_combo") or "航班待确认"))
+        segments = _email_plan_segments(flight)
+        first = segments[0] if segments else {}
+        last = segments[-1] if segments else {}
+        dep = html.escape(_time_only(first.get("dep_time") if segments else flight.get("departure_time")) or "--:--")
+        arr = html.escape(_time_only(last.get("arr_time") if segments else flight.get("arrival_time")) or "--:--")
+        dep_airport = html.escape(str(first.get("dep_airport") if segments else flight.get("departure_airport") or ""))
+        arr_airport = html.escape(str(last.get("arr_airport") if segments else flight.get("arrival_airport") or ""))
+        price = _price_text(item.get("price") or flight.get("price"))
+        links = _same_day_alternative_links(item, payload, 6)
+        lines.append(title)
+        lines.append(f"航班:{flight_no}")
+        time_airports = f"{dep_airport} " if dep_airport else ""
+        time_airports += dep
+        time_airports += " → "
+        time_airports += f"{arr_airport} " if arr_airport else ""
+        time_airports += arr
+        lines.append(f"时间:{time_airports}")
+        lines.append(f"价格:{price}")
+        if links:
+            lines.append(f"验证购票:{links}")
     return lines
 
 
@@ -5937,26 +6148,51 @@ def _same_day_alternatives_body(payload: dict) -> str:
     alternatives = payload.get("same_day_alternatives") or []
     if not alternatives:
         return ""
-    rows = []
-    for item in alternatives[:4]:
-        title = html.escape(str(item.get("title") or "备选方案"))
-        rows.append(
-            "<tr>"
-            f"<td style='color:#666;width:120px;'>{title}</td>"
-            f"<td>{_alternative_flight_text(item)}</td>"
-            "</tr>"
-        )
     return (
         "<div style='margin-bottom:8px;color:#444;'>可选备选(三种取舍,由你决定):</div>"
-        "<table style='width:100%;font-size:14px;line-height:1.7;border-collapse:collapse;'>"
-        + "".join(rows)
-        + "</table>"
+        + "".join(_same_day_alternative_card(item, payload) for item in alternatives[:3])
     )
 
 
 def render_pushplus(payload: dict) -> str:
     """Render the strictly short PushPlus message from the unified payload."""
     payload = payload or {}
+    no_primary = _no_primary_plan_state(payload)
+    alternatives = payload.get("same_day_alternatives") or []
+    if no_primary:
+        route = html.escape(str(payload.get("route") or "航班监控"))
+        reason = html.escape(_no_primary_reason(payload))
+        alt_labels = _alternative_labels(alternatives)
+        alt_text = f"{len(alternatives[:3])}个"
+        if alt_labels:
+            alt_text += f"({html.escape(alt_labels)})"
+        else:
+            alt_text = "暂无可展示备选"
+        lines = [
+            f"<b>【无符合方案】{route} 提供{len(alternatives[:3])}个备选</b>",
+            "",
+            "当前判断:❌ 未找到完全符合条件的方案",
+            f"原因:{reason}",
+            f"可用备选:{alt_text}",
+            "下一步:查看备选方案 ↓ | 放宽条件重新订阅 | 继续监控等待新航班",
+        ]
+        same_day_note = str(payload.get("same_day_no_feasible_note") or "").strip()
+        if same_day_note:
+            lines.append("当天往返提示:" + html.escape(same_day_note))
+        time_filter_note = str(payload.get("time_filter_note") or "").strip()
+        if time_filter_note:
+            lines.append(html.escape(time_filter_note))
+        lines.extend(_pushplus_same_day_alternative_lines(payload))
+        detail_url = str(payload.get("detail_url") or "").strip()
+        form_url = str(payload.get("form_url") or "").strip()
+        if detail_url:
+            lines.extend(["", f'完整分析:<a href="{html.escape(detail_url)}" target="_blank">{html.escape(detail_url)}</a>'])
+        if form_url:
+            lines.append(f'修改偏好:<a href="{html.escape(form_url)}" target="_blank">{html.escape(form_url)}</a>')
+        lines.append("")
+        lines.append("提示:备选方案为取舍参考,最终价、库存、行李和票规以下单页为准")
+        return "<br>".join(lines)
+
     push_type = html.escape(str(payload.get("push_type") or "价格提醒"))
     route = html.escape(str(payload.get("route") or "航班监控"))
     display_text = _payload_price(payload.get("display_price") or payload.get("current_price"))
@@ -6852,6 +7088,25 @@ def _email_action_panel_body(
     price_reason: str,
     interactive_channels: bool = False,
 ) -> str:
+    if _no_primary_plan_state(payload):
+        alternatives = payload.get("same_day_alternatives") or []
+        reason = _no_primary_reason(payload)
+        labels = _alternative_labels(alternatives)
+        alt_text = f"{len(alternatives[:3])}个"
+        if labels:
+            alt_text += f"({labels})"
+        else:
+            alt_text = "暂无可展示备选"
+        blocks = [
+            "<div>当前判断:❌ 未找到完全符合条件的方案</div>",
+            f"<div>原因:{html.escape(reason)}</div>",
+            f"<div>可用备选:{html.escape(alt_text)}</div>",
+            "<div>下一步:查看备选方案 ↓ | 放宽条件重新订阅 | 继续监控等待新航班</div>",
+            "<div style='margin-top:8px;color:#666;font-size:12px;'>触发类型:无符合方案 | 备选参考 | 非直接购买</div>",
+            _email_action_links(payload, None, interactive_channels=interactive_channels),
+        ]
+        return "".join(blocks)
+
     conclusion = str(payload.get("recommendation") or "可以观察")
     primary_line = _email_primary_plan_line(payload, primary_plan)
     buy_condition = str(payload.get("buy_condition") or "以支付页为准")
@@ -7683,6 +7938,7 @@ def render_email(payload: dict) -> tuple[str, str]:
     price_reason = str(payload.get("price_policy_reason") or "请以预估实付价和支付页最终价为准")
     baggage_line = ""
     primary_plan = (payload.get("recommended_plans") or [{}])[0] or {}
+    no_primary = _no_primary_plan_state(payload)
     price_signal = payload.get("price_signal") or {}
     execution_advice = payload.get("execution_advice") or {}
     primary_plan_line = "方案待确认"
@@ -7697,8 +7953,9 @@ def render_email(payload: dict) -> tuple[str, str]:
         baggage_line = f"<div><span style='color:#888;'>行李状态：</span>{html.escape(str(primary_plan.get('baggage_line')))}</div>"
         if "确认" in str(primary_plan.get("baggage_line")) or "不含" in str(primary_plan.get("baggage_line")):
             baggage_line += "<div style='color:#666;font-size:12px;'>当前价格可能不含托运行李；若支付页加行李后超过本次方案验证价，则不建议购买。</div>"
+    heading_push_type = "无符合方案" if no_primary else str(payload.get("push_type") or "价格提醒")
     cards = [
-        f"<h2 style='font-size:18px;color:#111;margin:0 0 12px;'>【{html.escape(str(payload.get('push_type') or '价格提醒'))}】{html.escape(str(payload.get('route') or '航班监控'))}</h2>",
+        f"<h2 style='font-size:18px;color:#111;margin:0 0 12px;'>【{html.escape(heading_push_type)}】{html.escape(str(payload.get('route') or '航班监控'))}</h2>",
         _email_card(
             "行动面板",
             _email_action_panel_body(payload, primary_plan, verify_text, price_reason),
@@ -7731,6 +7988,20 @@ def render_email(payload: dict) -> tuple[str, str]:
             "</div>"
         ),
     ]
+    if no_primary:
+        insert_at = 2
+        same_day_alternatives_body = _same_day_alternatives_body(payload)
+        if same_day_alternatives_body:
+            cards.insert(insert_at, _email_card("可选备选方案", same_day_alternatives_body))
+            insert_at += 1
+        if payload.get("same_day_no_feasible_note"):
+            cards.insert(
+                insert_at,
+                _email_card(
+                    "为什么没有符合方案",
+                    html.escape(str(payload.get("same_day_no_feasible_note"))),
+                ),
+            )
     cards.append(_render_payload_plan_cards(payload, payload.get("recommended_plans") or [], primary_plan))
     adjustment_plans = payload.get("adjustment_required_plans") or []
     if adjustment_plans:
@@ -7829,7 +8100,7 @@ def render_email(payload: dict) -> tuple[str, str]:
         )
     )
 
-    if payload.get("same_day_no_feasible_note"):
+    if (not no_primary) and payload.get("same_day_no_feasible_note"):
         cards.append(
             _email_card(
                 "当天往返时间提示",
@@ -7837,7 +8108,7 @@ def render_email(payload: dict) -> tuple[str, str]:
             )
         )
     same_day_alternatives_body = _same_day_alternatives_body(payload)
-    if same_day_alternatives_body:
+    if (not no_primary) and same_day_alternatives_body:
         cards.append(_email_card("可选备选方案", same_day_alternatives_body))
 
     cards.append(_email_card("为什么不推荐更便宜方案", _email_excluded_compact_body(payload)))
@@ -7895,6 +8166,7 @@ def render_detail_html(payload: dict) -> str:
     verify_text = f"支付页≤{_price_text(payload.get('verify_price'))}" if payload.get("verify_price") else "以支付页为准"
     price_reason = str(payload.get("price_policy_reason") or "请以预估实付价和支付页最终价为准")
     primary_plan = _plan_for_render((payload.get("recommended_plans") or [{}])[0] or {}, payload)
+    no_primary = _no_primary_plan_state(payload)
     cards = [
         f"<h2 style='font-size:18px;color:#111;margin:0 0 12px;'>{html.escape(subject)}</h2>",
         _email_card(
@@ -7911,6 +8183,20 @@ def render_detail_html(payload: dict) -> str:
         _email_card("为什么提醒你", _email_list(payload.get("trigger_reason") or [], 3)),
         _email_card("价格走势", _email_trend_card_body(payload)),
     ]
+    if no_primary:
+        insert_at = 2
+        same_day_alternatives_body = _same_day_alternatives_body(payload)
+        if same_day_alternatives_body:
+            cards.insert(insert_at, _email_card("可选备选方案", same_day_alternatives_body))
+            insert_at += 1
+        if payload.get("same_day_no_feasible_note"):
+            cards.insert(
+                insert_at,
+                _email_card(
+                    "为什么没有符合方案",
+                    html.escape(str(payload.get("same_day_no_feasible_note"))),
+                ),
+            )
     status_text = _plan_status_change_text(payload)
     if status_text:
         cards.insert(4, _email_card("上次推荐方案追踪", html.escape(status_text)))
@@ -7934,7 +8220,7 @@ def render_detail_html(payload: dict) -> str:
         )
     )
 
-    if payload.get("same_day_no_feasible_note"):
+    if (not no_primary) and payload.get("same_day_no_feasible_note"):
         cards.append(
             _detail_section(
                 "当天往返时间提示",
@@ -7942,7 +8228,7 @@ def render_detail_html(payload: dict) -> str:
             )
         )
     same_day_alternatives_body = _same_day_alternatives_body(payload)
-    if same_day_alternatives_body:
+    if (not no_primary) and same_day_alternatives_body:
         cards.append(_detail_section("可选备选方案", same_day_alternatives_body))
 
     excluded_body = _email_excluded_compact_body(payload)
