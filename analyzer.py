@@ -1097,6 +1097,68 @@ def _closest_same_day_outbound_options(
     return [item for _, item in options[:limit]]
 
 
+def pick_earliest_same_day(
+    raw_valid_outbound: list[dict] | None,
+    depart_date: str | None,
+    windows: dict | None = None,
+    source_label: str = "raw_valid_outbound",
+) -> dict | None:
+    """Pick the objectively earliest same-day arrival from the raw valid outbound pool."""
+    raw_valid_outbound = raw_valid_outbound or []
+    target_date = None
+    if depart_date:
+        try:
+            target_date = datetime.strptime(str(depart_date)[:10], "%Y-%m-%d").date()
+        except ValueError:
+            target_date = None
+    arrive_by_dt, _ = _same_day_window_datetimes(windows or {}, depart_date)
+    candidates: list[tuple[datetime, dict]] = []
+    for flight in raw_valid_outbound:
+        dep = _flight_departure_datetime(flight or {}, depart_date)
+        arr = _flight_arrival_datetime(flight or {}, depart_date)
+        if not dep or not arr:
+            continue
+        if target_date and dep.date() != target_date:
+            continue
+        if target_date and arr.date() != target_date:
+            continue
+        item = dict(flight)
+        if arrive_by_dt:
+            delay = max(0, int(round((arr - arrive_by_dt).total_seconds() / 60)))
+            item["meeting_arrival_delay_minutes"] = delay
+            if delay >= 60:
+                item["meeting_arrival_note"] = f"比要求晚{delay // 60}小时{delay % 60}分钟"
+            elif delay > 0:
+                item["meeting_arrival_note"] = f"比要求晚{delay}分钟"
+            else:
+                item["meeting_arrival_note"] = "满足去程到达窗口"
+        candidates.append((arr, item))
+
+    candidates.sort(key=lambda pair: pair[0])
+    print(f"[最早班调试] 候选池来源变量名和数量: {source_label}={len(raw_valid_outbound)}")
+    print(
+        "[最早班调试] 按到达时间排序前5: "
+        + str(
+            [
+                (
+                    flight.get("flight_no") or flight.get("flight_combo"),
+                    flight.get("departure_time") or flight.get("dep_time"),
+                    flight.get("arrival_time") or flight.get("arr_time"),
+                )
+                for _, flight in candidates[:5]
+            ]
+        )
+    )
+    selected = candidates[0][1] if candidates else None
+    if selected:
+        print(
+            f"[最早班调试] 当前选中的最早班: "
+            f"{selected.get('flight_no') or selected.get('flight_combo')} "
+            f"{selected.get('departure_time') or selected.get('dep_time')}"
+        )
+    return selected
+
+
 def _date_minus_one(date_str: str | None) -> str:
     try:
         return (datetime.strptime(str(date_str), "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
@@ -1185,9 +1247,8 @@ def build_same_day_alternatives(
             }
         )
 
-    closest = _closest_same_day_outbound_options(outbound_flights, windows, date_str, limit=1)
-    if closest:
-        flight = closest[0]
+    flight = pick_earliest_same_day(outbound_flights, date_str, windows, "raw_valid_outbound")
+    if flight:
         arrival_minutes = _flight_arrival_minutes(flight or {})
         business_start = _parse_time_minutes(windows.get("business_start"))
         meeting_arrival = None
@@ -1202,6 +1263,8 @@ def build_same_day_alternatives(
             late_text = f"预计到会晚{late_minutes}分钟"
         else:
             late_text = "时间仍较紧,需自行确认会议弹性"
+        if flight.get("meeting_arrival_note"):
+            late_text = flight.get("meeting_arrival_note")
         alternatives.append(
             {
                 "category": "same_day_earliest",
@@ -6349,6 +6412,7 @@ def analyze_all_flights(
     else:
         direct_policy_excluded = []
 
+    same_day_base_flights = list(usable_flights)
     usable_flights, preference_excluded, preference_summary = _apply_user_preferences(
         usable_flights, merged_preferences
     )
@@ -6637,6 +6701,7 @@ def analyze_all_flights(
         "recommendations": recommendations,
         "economy_recommendations": economy_recommendations,
         "business_recommendation": business_recommendation,
+        "same_day_base_flights": same_day_base_flights,
         "all_flights": display_flights,
         "price_range": [lowest_price, max(prices)],
         "cabin_price_ranges": cabin_price_ranges,
@@ -6689,7 +6754,7 @@ def _top_flights_for_round_trip(analysis: dict, limit: int = 3) -> list[dict]:
 
 
 def _all_roundtrip_flights_for_same_day(analysis: dict) -> list[dict]:
-    """Return the full post-filter candidate list before recommendation ranking."""
+    """Return the full hard-valid candidate list before recommendation ranking."""
     candidates = []
     seen = set()
 
@@ -6711,13 +6776,15 @@ def _all_roundtrip_flights_for_same_day(analysis: dict) -> list[dict]:
         seen.add(key)
         candidates.append(flight)
 
-    for flight in analysis.get("all_flights") or []:
-        add(flight)
-    if not candidates:
-        for flight in analysis.get("qualified_flights") or []:
-            add(flight)
-    if not candidates:
-        for flight in analysis.get("economy_recommendations") or []:
+    for source_key in (
+        "same_day_base_flights",
+        "raw_valid_flights",
+        "raw_valid_outbound",
+        "all_flights",
+        "qualified_flights",
+        "economy_recommendations",
+    ):
+        for flight in analysis.get(source_key) or []:
             add(flight)
     return candidates
 

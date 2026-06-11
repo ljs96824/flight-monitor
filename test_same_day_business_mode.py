@@ -603,6 +603,97 @@ class SameDayBusinessModeTest(unittest.TestCase):
         self.assertEqual(result["closest_same_day_outbound_options"][0]["flight_no"], "MU5099")
         self.assertNotEqual(result["closest_same_day_outbound_options"][0]["flight_no"], "CA1510")
 
+    def test_same_day_earliest_alternative_uses_raw_valid_pool_not_price_display_pool(self):
+        from analyzer import analyze_round_trip
+
+        constraints = {
+            "same_day_round_trip": True,
+            "business_start": "10:00",
+            "business_end": "16:00",
+            "buffer_hours": 2.5,
+            "transport_mode": "taxi",
+        }
+        afternoon_price_pick = {
+            "flight_no": "CA1510",
+            "flight_combo": "CA1510",
+            "price": 300,
+            "arrival_airport": "PEK",
+            "departure_date": "2026-06-19",
+            "arrival_date": "2026-06-19",
+            "departure_time": "14:30",
+            "arrival_time": "16:55",
+        }
+        real_earliest = {
+            "flight_no": "MU5099",
+            "flight_combo": "MU5099",
+            "price": 900,
+            "arrival_airport": "PEK",
+            "departure_date": "2026-06-19",
+            "arrival_date": "2026-06-19",
+            "departure_time": "07:00",
+            "arrival_time": "09:15",
+        }
+        returns = [
+            {
+                "flight_no": "CA1511",
+                "flight_combo": "CA1511",
+                "price": 700,
+                "departure_airport": "PEK",
+                "departure_date": "2026-06-19",
+                "arrival_date": "2026-06-19",
+                "departure_time": "19:00",
+                "arrival_time": "21:20",
+            }
+        ]
+
+        result = analyze_round_trip(
+            {
+                "all_flights": [afternoon_price_pick],
+                "same_day_base_flights": [afternoon_price_pick, real_earliest],
+                "hard_constraints": constraints,
+                "depart_date": "2026-06-19",
+            },
+            {
+                "all_flights": returns,
+                "same_day_base_flights": returns,
+                "hard_constraints": constraints,
+                "depart_date": "2026-06-19",
+            },
+        )
+
+        earliest = next(
+            item for item in result["same_day_alternatives"] if item["category"] == "same_day_earliest"
+        )
+        self.assertEqual(earliest["flight"]["flight_no"], "MU5099")
+        self.assertNotEqual(earliest["flight"]["flight_no"], "CA1510")
+
+    def test_pick_earliest_same_day_sorts_by_parsed_datetime_not_raw_string(self):
+        from analyzer import pick_earliest_same_day
+
+        picked = pick_earliest_same_day(
+            [
+                {
+                    "flight_no": "PM999",
+                    "departure_date": "2026-06-19",
+                    "arrival_date": "2026-06-19",
+                    "departure_time": "2026-06-19 14:30",
+                    "arrival_time": "2026-06-19 16:55",
+                    "price": 300,
+                },
+                {
+                    "flight_no": "AM001",
+                    "departure_date": "2026-06-19",
+                    "arrival_date": "2026-06-19",
+                    "departure_time": "07:00",
+                    "arrival_time": "09:15",
+                    "price": 900,
+                },
+            ],
+            "2026-06-19",
+        )
+
+        self.assertEqual(picked["flight_no"], "AM001")
+
     def test_determine_push_type_reports_same_day_time_conflict(self):
         from analyzer import determine_push_type
 
