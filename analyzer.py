@@ -658,11 +658,15 @@ def _same_day_constraints(source: dict | None) -> dict:
         "transport_margin_mode",
         "redundancy_min",
         "time_source",
+        "route_type",
     ):
         if key not in constraints and hard.get(key) is not None:
             constraints[key] = hard.get(key)
         if key not in constraints and source.get(key) is not None:
             constraints[key] = source.get(key)
+        basic = source.get("basic") or {}
+        if key not in constraints and basic.get(key) is not None:
+            constraints[key] = basic.get(key)
     return constraints
 
 
@@ -695,6 +699,95 @@ def calc_transport_margin(
             pass
     margin = max(round(transport * ratio), 15)
     return margin, ratio, rush
+
+
+def compute_reserve_breakdown(
+    subscription: dict | None,
+    direction: str,
+    airport_iata: str | None,
+    route_type: str | None,
+) -> dict:
+    """Return the single reserve breakdown used by both filtering and rendering."""
+    constraints = _same_day_constraints(subscription)
+    airport = str(airport_iata or "").strip().upper()
+    mode = str(constraints.get("transport_mode") or "taxi").strip().lower()
+    logistics = get_airport_logistics(airport)
+    estimated_transport = logistics.get("transit_min") if mode == "transit" else logistics.get("to_center_min")
+    user_transport_raw = constraints.get("user_transport_min")
+    user_filled = user_transport_raw not in (None, "")
+    transport_min = _optional_int(user_transport_raw, _optional_int(estimated_transport, 45))
+    if transport_min is None:
+        transport_min = 45
+    transport_source = "用户填写" if user_filled else "机场估算"
+
+    margin_mode = str(constraints.get("transport_margin_mode") or "standard").strip().lower()
+    if margin_mode not in {"tight", "standard", "loose"}:
+        margin_mode = "standard"
+    safety_min = _optional_int(constraints.get("redundancy_min"), 25)
+    if safety_min is None:
+        safety_min = 25
+    business_start = _parse_time_minutes(constraints.get("business_start"))
+    business_end = _parse_time_minutes(constraints.get("business_end"))
+    if direction == "outbound":
+        airport_buffer = get_arrival_buffer(airport, route_type)
+        buffer_label = "到达机场缓冲"
+        display_label = route_type_buffer_label(route_type, "arrival")
+        travel_hour = (business_start - transport_min) / 60 if business_start is not None else None
+    else:
+        airport_buffer = get_departure_buffer(airport, route_type)
+        buffer_label = "值机安检缓冲"
+        display_label = route_type_buffer_label(route_type, "departure")
+        travel_hour = business_end / 60 if business_end is not None else None
+
+    margin, ratio, rush = calc_transport_margin(transport_min, margin_mode, travel_hour)
+    total = airport_buffer + transport_min + margin + safety_min
+    breakdown = {
+        "airport_iata": airport,
+        "airport_size": logistics.get("size") or "medium",
+        "airport_buffer_min": airport_buffer,
+        "buffer_label": buffer_label,
+        "buffer_detail_label": display_label,
+        "transport_min": transport_min,
+        "transport_source": transport_source,
+        "estimated_transport_min": _optional_int(estimated_transport, 45) or 45,
+        "margin_min": margin,
+        "margin_ratio": round(ratio, 2),
+        "margin_mode": margin_mode,
+        "rush_hour": rush,
+        "safety_min": safety_min,
+        "total_min": total,
+        "route_type": str(route_type or "domestic").strip() or "domestic",
+        "direction": direction,
+        "legacy": False,
+    }
+    print(
+        f"[预留-计算侧] {direction} 机场缓冲={airport_buffer} 车程={transport_min} "
+        f"车程来源={transport_source} 路途冗余={margin}(系数{round(ratio, 2)},高峰={rush}) "
+        f"安全余量={safety_min} 总计={total}分钟"
+    )
+    return breakdown
+
+
+def _legacy_reserve_breakdown(
+    reserve_minutes: int,
+    buffer_h: float,
+    transport_min: int,
+    airport_iata: str | None,
+) -> dict:
+    airport = str(airport_iata or "").strip().upper()
+    base = {
+        "airport_iata": airport,
+        "transport_min": transport_min,
+        "transport_source": "机场估算",
+        "buffer_hours": buffer_h,
+        "total_min": reserve_minutes,
+        "legacy": True,
+    }
+    return {
+        "legacy": True,
+        "outbound": {**base, "direction": "outbound"},
+        "return": {**base, "direction": "return"},
+    }
 
 
 def _time_text(dt: datetime | None) -> str:
@@ -785,29 +878,45 @@ def compute_same_day_windows(
         or constraints.get("buffer_hours") in (None, "")
     )
     if has_new_buffer_fields:
-        redundancy_min = _optional_int(constraints.get("redundancy_min"), 25)
-        if redundancy_min is None:
-            redundancy_min = 25
-        margin_mode = str(constraints.get("transport_margin_mode") or "standard").strip().lower()
         route_type = str(constraints.get("route_type") or "domestic").strip() or "domestic"
-        arrival_buffer_min = get_arrival_buffer(dest_airport or "", route_type)
-        checkin_buffer_min = get_departure_buffer(dest_airport or "", route_type)
-        outbound_travel_hour = (business_start - transport_min) / 60
-        return_travel_hour = business_end / 60
-        outbound_margin, outbound_ratio, outbound_rush = calc_transport_margin(
-            transport_min,
-            margin_mode,
-            outbound_travel_hour,
+        outbound_breakdown = compute_reserve_breakdown(
+            {"constraints": constraints},
+            "outbound",
+            dest_airport,
+            route_type,
         )
-        return_margin, return_ratio, return_rush = calc_transport_margin(
-            transport_min,
-            margin_mode,
-            return_travel_hour,
+        return_breakdown = compute_reserve_breakdown(
+            {"constraints": constraints},
+            "return",
+            dest_airport,
+            route_type,
         )
-        outbound_reserve = arrival_buffer_min + transport_min + outbound_margin + redundancy_min
-        return_reserve = transport_min + return_margin + checkin_buffer_min + redundancy_min
+        transport_min = outbound_breakdown["transport_min"]
+        redundancy_min = outbound_breakdown["safety_min"]
+        margin_mode = outbound_breakdown["margin_mode"]
+        arrival_buffer_min = outbound_breakdown["airport_buffer_min"]
+        checkin_buffer_min = return_breakdown["airport_buffer_min"]
+        outbound_margin = outbound_breakdown["margin_min"]
+        return_margin = return_breakdown["margin_min"]
+        outbound_ratio = outbound_breakdown["margin_ratio"]
+        return_ratio = return_breakdown["margin_ratio"]
+        outbound_rush = outbound_breakdown["rush_hour"]
+        return_rush = return_breakdown["rush_hour"]
+        outbound_reserve = outbound_breakdown["total_min"]
+        return_reserve = return_breakdown["total_min"]
         outbound_arrive_by = business_start - outbound_reserve
         return_depart_after = business_end + return_reserve
+        reserve_breakdown = {
+            "legacy": False,
+            "outbound": outbound_breakdown,
+            "return": return_breakdown,
+            "windows": {
+                "arrive_by": _minutes_to_text(outbound_arrive_by),
+                "depart_after": _minutes_to_text(return_depart_after),
+                "arrive_by_minutes": outbound_arrive_by,
+                "depart_after_minutes": return_depart_after,
+            },
+        }
         return {
             "buffer_model": "airport_split",
             "outbound_arrive_by_minutes": outbound_arrive_by,
@@ -839,6 +948,7 @@ def compute_same_day_windows(
             "buffer_h": round(outbound_reserve / 60, 2),
             "transport_mode": "transit" if mode == "transit" else "taxi",
             "airport_size": logistics.get("size") or "medium",
+            "reserve_breakdown": reserve_breakdown,
         }
     buffer_h = _to_float(constraints.get("buffer_hours"))
     if buffer_h is None:
@@ -847,6 +957,13 @@ def compute_same_day_windows(
     reserve_minutes = max(buffer_minutes, transport_min + 60)
     outbound_arrive_by = business_start - reserve_minutes
     return_depart_after = business_end + reserve_minutes
+    reserve_breakdown = _legacy_reserve_breakdown(reserve_minutes, buffer_h, transport_min, dest_airport)
+    reserve_breakdown["windows"] = {
+        "arrive_by": _minutes_to_text(outbound_arrive_by),
+        "depart_after": _minutes_to_text(return_depart_after),
+        "arrive_by_minutes": outbound_arrive_by,
+        "depart_after_minutes": return_depart_after,
+    }
     return {
         "outbound_arrive_by_minutes": outbound_arrive_by,
         "return_depart_after_minutes": return_depart_after,
@@ -859,6 +976,7 @@ def compute_same_day_windows(
         "reserve_minutes": reserve_minutes,
         "reserve_h": round(reserve_minutes / 60, 2),
         "transport_mode": "transit" if mode == "transit" else "taxi",
+        "reserve_breakdown": reserve_breakdown,
     }
 
 

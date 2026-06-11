@@ -5917,6 +5917,94 @@ def _pushplus_feasibility_summary(plan: dict) -> str:
     return "可行性:" + "；".join(parts) if parts else ""
 
 
+def _reserve_ratio_text(value) -> str:
+    ratio = _to_float(value)
+    if ratio is None:
+        return ""
+    return f"{round(ratio * 100):g}%"
+
+
+def _reserve_breakdown_part(item: dict | None, direction_label: str) -> str:
+    item = item or {}
+    if item.get("legacy"):
+        total = item.get("total_min")
+        buffer_h = item.get("buffer_hours")
+        transport = item.get("transport_min")
+        return f"{direction_label}预留{total}分钟(旧版设置{buffer_h}小时,车程约{transport}分钟)"
+    buffer_label = str(item.get("buffer_label") or "机场缓冲")
+    airport = str(item.get("airport_iata") or "").strip()
+    size = str(item.get("airport_size") or "").strip()
+    airport_label = f"({airport}·{size})" if airport or size else ""
+    ratio = _reserve_ratio_text(item.get("margin_ratio"))
+    rush = "+高峰上浮" if item.get("rush_hour") else ""
+    return (
+        f"{direction_label}总预留≈{item.get('total_min')}分钟="
+        f"{buffer_label}{item.get('airport_buffer_min')}分钟{airport_label}"
+        f"+车程{item.get('transport_min')}分钟({item.get('transport_source') or '未知'})"
+        f"+路途冗余{item.get('margin_min')}分钟({ratio}{rush})"
+        f"+安全余量{item.get('safety_min')}分钟"
+    )
+
+
+def _same_day_reserve_text(windows: dict | None) -> str:
+    windows = windows or {}
+    breakdown = windows.get("reserve_breakdown") or {}
+    if not isinstance(breakdown, dict) or not breakdown:
+        if windows.get("buffer_model") == "airport_split":
+            breakdown = {
+                "legacy": False,
+                "outbound": {
+                    "total_min": windows.get("outbound_reserve_minutes"),
+                    "buffer_label": "到达机场缓冲",
+                    "airport_buffer_min": windows.get("arrival_buffer_min"),
+                    "transport_min": windows.get("transport_min"),
+                    "transport_source": "未知",
+                    "margin_min": windows.get("outbound_transport_margin_min"),
+                    "margin_ratio": windows.get("outbound_transport_margin_ratio"),
+                    "rush_hour": windows.get("outbound_transport_rush"),
+                    "safety_min": windows.get("redundancy_min"),
+                },
+                "return": {
+                    "total_min": windows.get("return_reserve_minutes"),
+                    "buffer_label": "值机安检缓冲",
+                    "airport_buffer_min": windows.get("checkin_buffer_min"),
+                    "transport_min": windows.get("transport_min"),
+                    "transport_source": "未知",
+                    "margin_min": windows.get("return_transport_margin_min"),
+                    "margin_ratio": windows.get("return_transport_margin_ratio"),
+                    "rush_hour": windows.get("return_transport_rush"),
+                    "safety_min": windows.get("redundancy_min"),
+                },
+            }
+        else:
+            breakdown = {
+                "legacy": True,
+                "outbound": {
+                    "legacy": True,
+                    "total_min": windows.get("reserve_minutes"),
+                    "buffer_hours": windows.get("buffer_h"),
+                    "transport_min": windows.get("transport_min"),
+                },
+                "return": {
+                    "legacy": True,
+                    "total_min": windows.get("reserve_minutes"),
+                    "buffer_hours": windows.get("buffer_h"),
+                    "transport_min": windows.get("transport_min"),
+                },
+            }
+    outbound = _reserve_breakdown_part(breakdown.get("outbound"), "去程")
+    ret = _reserve_breakdown_part(breakdown.get("return"), "返程")
+    windows_info = breakdown.get("windows") if isinstance(breakdown.get("windows"), dict) else {}
+    arrive_by = windows_info.get("arrive_by") or windows.get("outbound_arrive_by")
+    depart_after = windows_info.get("depart_after") or windows.get("return_depart_after")
+    legacy_note = "，按旧版设置展示" if breakdown.get("legacy") else ""
+    return (
+        f"办事{windows.get('business_start')}-{windows.get('business_end')}{legacy_note}，"
+        f"{outbound} → 去程需{arrive_by}前到达；"
+        f"{ret} → 返程{depart_after}后出发"
+    )
+
+
 def _plan_status_change_text(payload: dict) -> str:
     status = payload.get("plan_status_change") or {}
     return str(status.get("msg") or "").strip() if isinstance(status, dict) else ""
@@ -6236,27 +6324,9 @@ def render_pushplus(payload: dict) -> str:
         lines.append(stay_line)
         windows = primary_plan.get("same_day_windows") or {}
         if windows:
-            if windows.get("buffer_model") == "airport_split":
-                outbound_margin = windows.get("outbound_transport_margin_min")
-                return_margin = windows.get("return_transport_margin_min")
-                rush_note = ""
-                if windows.get("outbound_transport_rush") or windows.get("return_transport_rush"):
-                    rush_note = ",含高峰上浮"
-                reserve_text = (
-                    f"去程预留约{windows.get('outbound_reserve_minutes')}分钟"
-                    f"(机场{windows.get('arrival_buffer_min')}+车程{windows.get('transport_min')}"
-                    f"+路途冗余{outbound_margin}+安全余量{windows.get('redundancy_min')});"
-                    f"返程预留约{windows.get('return_reserve_minutes')}分钟"
-                    f"(车程{windows.get('transport_min')}+路途冗余{return_margin}"
-                    f"+值机{windows.get('checkin_buffer_min')}+安全余量{windows.get('redundancy_min')})"
-                    f"{rush_note}"
-                )
-            else:
-                reserve_text = f"车程约{windows.get('transport_min')}分钟+缓冲{windows.get('buffer_h')}小时"
             lines.append(
                 "当天往返安排:"
-                f"办事{windows.get('business_start')}-{windows.get('business_end')},"
-                f"{reserve_text}"
+                f"{html.escape(_same_day_reserve_text(windows))}"
             )
     status_text = _plan_status_change_text(payload)
     if status_text:
@@ -6490,26 +6560,10 @@ def _render_payload_plan_card(plan: dict, compact: bool = False, primary_plan: d
             rows.append(("停留", html.escape(stay_text)))
             windows = plan.get("same_day_windows") or {}
             if windows:
-                if windows.get("buffer_model") == "airport_split":
-                    reserve_text = (
-                        f"办事{windows.get('business_start')}-{windows.get('business_end')}，"
-                        f"去程预留{windows.get('outbound_reserve_minutes')}分钟="
-                        f"机场缓冲{windows.get('arrival_buffer_min')}+车程{windows.get('transport_min')}"
-                        f"+路途冗余{windows.get('outbound_transport_margin_min')}"
-                        f"+安全余量{windows.get('redundancy_min')}；"
-                        f"返程预留{windows.get('return_reserve_minutes')}分钟="
-                        f"车程{windows.get('transport_min')}+路途冗余{windows.get('return_transport_margin_min')}"
-                        f"+值机安检{windows.get('checkin_buffer_min')}+安全余量{windows.get('redundancy_min')}"
-                    )
-                else:
-                    reserve_text = (
-                        f"办事{windows.get('business_start')}-{windows.get('business_end')}，"
-                        f"预留车程约{windows.get('transport_min')}分钟+缓冲{windows.get('buffer_h')}小时"
-                    )
                 rows.append(
                     (
                         "时间反推",
-                        html.escape(reserve_text),
+                        html.escape(_same_day_reserve_text(windows)),
                     )
                 )
             if plan.get("schedule_note"):

@@ -364,6 +364,88 @@ class PushPlusRenderingTest(unittest.TestCase):
         self.assertLess(email_html.index("可选备选方案"), email_html.index("价格口径与信号"))
         self.assertLess(detail_html.index("可选备选方案"), detail_html.index("为什么提醒你"))
 
+    def test_same_day_reserve_rendering_uses_breakdown_single_source(self):
+        windows = {
+            "buffer_model": "airport_split",
+            "business_start": "10:00",
+            "business_end": "16:00",
+            "arrival_buffer_min": 999,
+            "checkin_buffer_min": 999,
+            "transport_min": 999,
+            "outbound_reserve_minutes": 999,
+            "return_reserve_minutes": 999,
+            "outbound_arrive_by": "00:00",
+            "return_depart_after": "23:59",
+            "reserve_breakdown": {
+                "legacy": False,
+                "outbound": {
+                    "airport_iata": "PKX",
+                    "airport_size": "mega",
+                    "airport_buffer_min": 120,
+                    "buffer_label": "到达机场缓冲",
+                    "transport_min": 60,
+                    "transport_source": "用户填写",
+                    "margin_min": 24,
+                    "margin_ratio": 0.4,
+                    "rush_hour": True,
+                    "safety_min": 25,
+                    "total_min": 229,
+                },
+                "return": {
+                    "airport_iata": "PKX",
+                    "airport_size": "mega",
+                    "airport_buffer_min": 110,
+                    "buffer_label": "值机安检缓冲",
+                    "transport_min": 60,
+                    "transport_source": "用户填写",
+                    "margin_min": 18,
+                    "margin_ratio": 0.3,
+                    "rush_hour": False,
+                    "safety_min": 25,
+                    "total_min": 213,
+                },
+                "windows": {"arrive_by": "06:11", "depart_after": "19:33"},
+            },
+        }
+        payload = {
+            "push_type": "time check",
+            "route": "SHA -> PEK",
+            "display_price": 1400,
+            "transaction_price": 1400,
+            "verify_price": 1500,
+            "recommendation": "check",
+            "buy_condition": "pay page <= 1500",
+            "recommended_plans": [
+                {
+                    "label": "Plan A",
+                    "is_roundtrip": True,
+                    "same_day_round_trip": True,
+                    "same_day_windows": windows,
+                    "stay_hours": 6,
+                    "price": 1400,
+                    "estimated_price": 1400,
+                    "outbound_price": 680,
+                    "return_price": 720,
+                    "outbound_flight": {"flight_no": "MU1", "departure_time": "05:00", "arrival_time": "07:00"},
+                    "return_flight": {"flight_no": "MU2", "departure_time": "19:40", "arrival_time": "21:30"},
+                }
+            ],
+        }
+
+        msg = render_pushplus(payload)
+        _, email_html = render_email(payload)
+
+        self.assertIn("去程总预留≈229分钟", msg)
+        self.assertIn("返程总预留≈213分钟", msg)
+        self.assertIn("06:11", msg)
+        self.assertNotIn("预留999", msg)
+        self.assertNotIn("缓冲999", msg)
+        self.assertNotIn("车程999", msg)
+        self.assertIn("去程总预留≈229分钟", email_html)
+        self.assertNotIn("预留999", email_html)
+        self.assertNotIn("缓冲999", email_html)
+        self.assertNotIn("车程999", email_html)
+
     def test_round_trip_combinations_do_not_fallback_when_same_day_time_conflicts(self):
         combos = _round_trip_combinations(
             {

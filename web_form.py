@@ -2217,6 +2217,10 @@ FORM_TEMPLATE = """
           `- 安全余量:${reserve.redundancy}分钟<br>` +
           `• 返程总预留 ≈ ${formatReserveMinutes(reserve.returnReserve)},其中路途冗余${reserve.returnMargin.minutes}分钟(${marginModeText(reserve.marginMode)}${returnRushText})<br>` +
           `→ 去程需 ${outboundBy} 前到达; 返程需 ${returnAfter} 后出发`;
+        meetingTimeHandoffText.insertAdjacentHTML(
+          'beforeend',
+          '<br><span class="hint">≈ 估算值，提交后按目的地机场精确计算</span>'
+        );
       }
       const marginHint = document.getElementById('transport-margin-hint');
       if (marginHint) {
@@ -4343,6 +4347,7 @@ def build_subscription(form) -> dict:
             "passenger_count": passenger_count,
         },
         "constraints": {
+            "route_type": route_type,
             "budget_strategy": budget_strategy,
             "max_price": max_budget,
             "ideal_price": target_price,
@@ -4454,6 +4459,7 @@ def build_subscription(form) -> dict:
             "target_price": target_price,
             "target_price_mode": target_price_mode,
             "transfer_policy": form.get("transfer_policy", "reasonable"),
+            "route_type": route_type,
             "same_day_round_trip": same_day_round_trip,
             "business_start": business_start if same_day_round_trip else "",
             "business_end": business_end if same_day_round_trip else "",

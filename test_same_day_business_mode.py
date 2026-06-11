@@ -97,6 +97,30 @@ class SameDayBusinessModeTest(unittest.TestCase):
         self.assertEqual(windows["return_reserve_minutes"], 213)
         self.assertEqual(windows["outbound_arrive_by"], "06:11")
         self.assertEqual(windows["return_depart_after"], "19:33")
+        self.assertEqual(windows["reserve_breakdown"]["outbound"]["total_min"], windows["outbound_reserve_minutes"])
+        self.assertEqual(windows["reserve_breakdown"]["return"]["total_min"], windows["return_reserve_minutes"])
+        self.assertEqual(windows["reserve_breakdown"]["outbound"]["transport_source"], "用户填写")
+        self.assertEqual(windows["reserve_breakdown"]["windows"]["arrive_by"], windows["outbound_arrive_by"])
+
+    def test_same_day_windows_legacy_buffer_has_single_breakdown_source(self):
+        from analyzer import compute_same_day_windows
+
+        windows = compute_same_day_windows(
+            {
+                "constraints": {
+                    "business_start": "10:00",
+                    "business_end": "18:00",
+                    "buffer_hours": 2.5,
+                    "transport_mode": "taxi",
+                }
+            },
+            "PVG",
+            "PKX",
+        )
+
+        self.assertTrue(windows["reserve_breakdown"]["legacy"])
+        self.assertEqual(windows["reserve_breakdown"]["outbound"]["total_min"], windows["reserve_minutes"])
+        self.assertEqual(windows["reserve_breakdown"]["return"]["total_min"], windows["reserve_minutes"])
 
     def test_transport_margin_uses_ratio_rush_hour_and_minimum(self):
         from analyzer import calc_transport_margin
