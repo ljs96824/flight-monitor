@@ -750,26 +750,34 @@ FORM_TEMPLATE = """
           <label>会议/办事结束时间 <input name="business_end" type="time" value="16:00"></label>
         </div>
         <p class="hint">快速模式会按机场等级、车程估算和25分钟冗余自动预留。</p>
-        <div class="precise-only">
-          <label>时间预留设置</label>
-          <p id="airport-buffer-preview" class="hint">到达机场标准缓冲:系统按机场等级自动设定</p>
-          <label>机场⇄会议地点车程(分钟,选填)
-            <input name="user_transport_min" type="number" min="0" step="5" placeholder="不填则按机场到市区估算">
-          </label>
-          <label>路途冗余(在车程之上额外预留)</label>
-          <div class="choice">
-            <label><input type="radio" name="transport_margin_mode" value="tight"> 紧凑 +15%</label>
-            <label><input type="radio" name="transport_margin_mode" value="standard" checked> 标准 +30%(推荐)</label>
-            <label><input type="radio" name="transport_margin_mode" value="loose"> 宽松 +50%</label>
-          </div>
-          <p id="transport-margin-hint" class="hint"></p>
-          <label>冗余余量</label>
-          <div class="choice">
-            <label><input type="radio" name="redundancy_min" value="15"> 15分钟</label>
-            <label><input type="radio" name="redundancy_min" value="25" checked> 25分钟(默认)</label>
-            <label><input type="radio" name="redundancy_min" value="40"> 40分钟</label>
-          </div>
+      </div>
+
+      <div id="trip-feasibility-fields" class="precise-only">
+        <label>行程可行性分析(选填,填了才分析)</label>
+        <div class="inline-grid">
+          <label>去程:计划动身前往机场的时间 <input name="outbound_set_off" type="time"></label>
+          <label data-show-if="round_trip=true">返程:计划动身前往机场的时间 <input name="return_set_off" type="time"></label>
         </div>
+        <p id="airport-buffer-preview" class="hint">机场标准缓冲:系统按航线类型和机场等级自动设定</p>
+        <label>机场车程(分钟,选填)
+          <input name="user_transport_min" type="number" min="0" step="5" placeholder="不填则按机场到市区估算">
+        </label>
+        <label>路途冗余(在车程之上额外预留)</label>
+        <div class="choice">
+          <label><input type="radio" name="transport_margin_mode" value="tight"> 紧凑 +15%</label>
+          <label><input type="radio" name="transport_margin_mode" value="standard" checked> 标准 +30%(推荐)</label>
+          <label><input type="radio" name="transport_margin_mode" value="loose"> 宽松 +50%</label>
+        </div>
+        <p id="transport-margin-hint" class="hint"></p>
+        <label>安全余量</label>
+        <div class="choice">
+          <label><input type="radio" name="redundancy_min" value="15"> 15分钟</label>
+          <label><input type="radio" name="redundancy_min" value="25" checked> 25分钟(默认)</label>
+          <label><input type="radio" name="redundancy_min" value="40"> 40分钟</label>
+        </div>
+        <p class="hint" data-show-if="route_type=domestic">国内:系统将叠加值机安检缓冲(按机场75-110分钟)。</p>
+        <p class="hint" data-show-if="route_type=international">国际:系统将叠加值机+出境边检海关缓冲(150-180分钟),到达后另提示入境+提行李时间。</p>
+        <p class="hint" data-show-if="route_type=greater_china">港澳台:系统将叠加值机+出入境查验缓冲(120-150分钟)。</p>
       </div>
 
       <div id="return-date-wrap" data-show-if="round_trip=true">
@@ -2075,11 +2083,22 @@ FORM_TEMPLATE = """
 
     function airportBufferFor(code) {
       const upper = String(code || '').toUpperCase();
+      const routeType = checkedValue('route_type') || 'domestic';
       const mega = new Set(['PVG','PEK','PKX','CAN','CTU','TFU','SZX']);
       const city = new Set(['SHA']);
-      if (mega.has(upper)) return { size: 'mega', arrival: 120, checkin: 110 };
-      if (city.has(upper)) return { size: 'city', arrival: 75, checkin: 75 };
-      return { size: 'medium', arrival: 90, checkin: 90 };
+      const size = mega.has(upper) ? 'mega' : (city.has(upper) ? 'city' : 'medium');
+      const departure = {
+        domestic: { mega: 110, medium: 90, city: 75 },
+        international: { mega: 180, medium: 150, city: 150 },
+        greater_china: { mega: 150, medium: 120, city: 120 }
+      };
+      const arrival = {
+        domestic: { mega: 120, medium: 90, city: 60 },
+        international: { mega: 170, medium: 130, city: 120 },
+        greater_china: { mega: 130, medium: 100, city: 90 }
+      };
+      const route = departure[routeType] ? routeType : 'domestic';
+      return { size, arrival: arrival[route][size], checkin: departure[route][size] };
     }
 
     function estimatedTransportFor(code) {
@@ -2178,7 +2197,11 @@ FORM_TEMPLATE = """
       const bufferPreview = document.getElementById('airport-buffer-preview');
       if (bufferPreview) {
         const airportText = reserve.destAirport || '目的地机场';
-        bufferPreview.textContent = `到达机场标准缓冲:${airportText} ${reserve.arrivalBuffer}分钟; 返程值机安检缓冲:${reserve.checkinBuffer}分钟`;
+        const routeType = checkedValue('route_type') || 'domestic';
+        const departureLabel = routeType === 'international'
+          ? '值机+出境边检海关'
+          : (routeType === 'greater_china' ? '值机+出入境查验' : '值机安检');
+        bufferPreview.textContent = `机场标准缓冲:${airportText} 到达侧${reserve.arrivalBuffer}分钟; 出发侧${departureLabel}${reserve.checkinBuffer}分钟`;
       }
       if (meetingTimeHandoffText && active) {
         const outboundBy = addMinutesToTime(start, -reserve.outboundReserve) || '提交后计算';
@@ -3026,6 +3049,15 @@ FORM_TEMPLATE = """
         } else {
           summaryLine('时间偏好', timePreferenceText());
         }
+        const outboundSetOff = document.querySelector('input[name="outbound_set_off"]')?.value || '';
+        const returnSetOff = document.querySelector('input[name="return_set_off"]')?.value || '';
+        if (outboundSetOff || returnSetOff) {
+          const reserve = meetingReserveParts();
+          summaryLine(
+            '行程可行性',
+            `去程动身${outboundSetOff || '未填'}${isRoundTrip ? ` | 返程动身${returnSetOff || '未填'}` : ''} | 车程${reserve.transport}分钟 | 路途冗余${marginModeText(reserve.marginMode)}`
+          );
+        }
         if (!meetingHandoffActive() && checkedValue('time_preference') === 'custom') {
           if (isRoundTrip) {
             summaryLine('去程起飞时段', slotSummary('outbound_departure_slots', labels.departureSlots));
@@ -3071,6 +3103,8 @@ FORM_TEMPLATE = """
         same_day_round_trip: Boolean(document.querySelector('input[name="same_day_round_trip"]')?.checked),
         business_start: document.querySelector('input[name="business_start"]')?.value || '',
         business_end: document.querySelector('input[name="business_end"]')?.value || '',
+        outbound_set_off: document.querySelector('input[name="outbound_set_off"]')?.value || '',
+        return_set_off: document.querySelector('input[name="return_set_off"]')?.value || '',
         user_transport_min: document.querySelector('input[name="user_transport_min"]')?.value || '',
         transport_margin_mode: checkedValue('transport_margin_mode'),
         redundancy_min: checkedValue('redundancy_min'),
@@ -3180,6 +3214,10 @@ FORM_TEMPLATE = """
       if (businessEnd && data.business_end) businessEnd.value = data.business_end;
       const userTransportInput = document.querySelector('input[name="user_transport_min"]');
       if (userTransportInput && data.user_transport_min !== undefined) userTransportInput.value = data.user_transport_min || '';
+      const outboundSetOffInput = document.querySelector('input[name="outbound_set_off"]');
+      const returnSetOffInput = document.querySelector('input[name="return_set_off"]');
+      if (outboundSetOffInput && data.outbound_set_off !== undefined) outboundSetOffInput.value = data.outbound_set_off || '';
+      if (returnSetOffInput && data.return_set_off !== undefined) returnSetOffInput.value = data.return_set_off || '';
       if (data.transport_margin_mode) setRadio('transport_margin_mode', String(data.transport_margin_mode));
       if (data.redundancy_min) setRadio('redundancy_min', String(data.redundancy_min));
       if (form.trip_type && data.trip_type) {
@@ -3390,7 +3428,7 @@ FORM_TEMPLATE = """
       updateConditionalFields();
       refreshSummaryIfFinalStep();
     }));
-    ['companions', 'travel_purpose', 'adult_count', 'child_count', 'elderly_count', 'infant_count', 'passenger_count', 'trip_natures', 'team_passenger_count', 'cabin_arrangement', 'business_start', 'business_end', 'user_transport_min', 'transport_margin_mode', 'redundancy_min', 'meeting_start', 'meeting_end', 'team_date_flexibility', 'same_flight_required', 'cabin_policy', 'user_level', 'business_seats', 'economy_seats', 'reimburse_per_person', 'invoice_needed', 'invoice_special_vat', 'invoice_cabin_limit', 'time_preference', 'refund_flexibility', 'airline_policy', 'accept_self_transfer', 'companion_constraints', 'solo_travel', 'no_late_arrival', 'prefer_daytime_arrival'].forEach(name => {
+    ['companions', 'travel_purpose', 'adult_count', 'child_count', 'elderly_count', 'infant_count', 'passenger_count', 'trip_natures', 'team_passenger_count', 'cabin_arrangement', 'business_start', 'business_end', 'outbound_set_off', 'return_set_off', 'user_transport_min', 'transport_margin_mode', 'redundancy_min', 'meeting_start', 'meeting_end', 'team_date_flexibility', 'same_flight_required', 'cabin_policy', 'user_level', 'business_seats', 'economy_seats', 'reimburse_per_person', 'invoice_needed', 'invoice_special_vat', 'invoice_cabin_limit', 'time_preference', 'refund_flexibility', 'airline_policy', 'accept_self_transfer', 'companion_constraints', 'solo_travel', 'no_late_arrival', 'prefer_daytime_arrival'].forEach(name => {
       document.querySelectorAll(`input[name="${name}"]`).forEach(input => {
         input.addEventListener('change', () => {
           syncPrefCards();
@@ -4095,6 +4133,8 @@ def build_subscription(form) -> dict:
         max_budget = infer_max_budget(parse_int(form.get("max_budget"), 0), target_price)
     business_start = form.get("business_start", "").strip()
     business_end = form.get("business_end", "").strip()
+    outbound_set_off = form.get("outbound_set_off", "").strip()
+    return_set_off = form.get("return_set_off", "").strip()
     user_transport_min = parse_int(form.get("user_transport_min"), 0)
     transport_margin_mode = form.get("transport_margin_mode", "standard").strip() or "standard"
     if transport_margin_mode not in {"tight", "standard", "loose"}:
@@ -4312,9 +4352,11 @@ def build_subscription(form) -> dict:
             "same_day_round_trip": same_day_round_trip,
             "business_start": business_start if same_day_round_trip else "",
             "business_end": business_end if same_day_round_trip else "",
-            "user_transport_min": user_transport_min if same_day_round_trip and user_transport_min > 0 else None,
-            "transport_margin_mode": transport_margin_mode if same_day_round_trip else "standard",
-            "redundancy_min": redundancy_min if same_day_round_trip else 25,
+            "outbound_set_off": outbound_set_off,
+            "return_set_off": return_set_off if round_trip else "",
+            "user_transport_min": user_transport_min if user_transport_min > 0 else None,
+            "transport_margin_mode": transport_margin_mode,
+            "redundancy_min": redundancy_min,
             "time_source": "meeting_derived" if same_day_round_trip and business_start and business_end else "user_defined",
             "trip_nature": trip_nature,
             "trip_natures": trip_natures,
@@ -4415,9 +4457,11 @@ def build_subscription(form) -> dict:
             "same_day_round_trip": same_day_round_trip,
             "business_start": business_start if same_day_round_trip else "",
             "business_end": business_end if same_day_round_trip else "",
-            "user_transport_min": user_transport_min if same_day_round_trip and user_transport_min > 0 else None,
-            "transport_margin_mode": transport_margin_mode if same_day_round_trip else "standard",
-            "redundancy_min": redundancy_min if same_day_round_trip else 25,
+            "outbound_set_off": outbound_set_off,
+            "return_set_off": return_set_off if round_trip else "",
+            "user_transport_min": user_transport_min if user_transport_min > 0 else None,
+            "transport_margin_mode": transport_margin_mode,
+            "redundancy_min": redundancy_min,
             "time_source": "meeting_derived" if same_day_round_trip and business_start and business_end else "user_defined",
             "trip_nature": trip_nature,
             "trip_natures": trip_natures,

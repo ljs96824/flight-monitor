@@ -114,6 +114,40 @@ class SameDayBusinessModeTest(unittest.TestCase):
         small_margin, _, _ = calc_transport_margin(20, "standard")
         self.assertEqual(small_margin, 15)
 
+    def test_route_type_airport_buffers_include_border_processing(self):
+        from airport_logistics import get_arrival_buffer, get_departure_buffer
+
+        self.assertEqual(get_departure_buffer("PVG", "domestic"), 110)
+        self.assertEqual(get_departure_buffer("PVG", "international"), 180)
+        self.assertEqual(get_departure_buffer("HKG", "greater_china"), 120)
+        self.assertEqual(get_arrival_buffer("PVG", "domestic"), 120)
+        self.assertEqual(get_arrival_buffer("PVG", "international"), 170)
+        self.assertEqual(get_arrival_buffer("HKG", "greater_china"), 100)
+
+    def test_analyze_departure_feasibility_labels_feasible_tight_and_impossible(self):
+        from analyzer import analyze_departure_feasibility
+
+        flight = {
+            "flight_no": "CA987",
+            "departure_airport": "PVG",
+            "departure_time": "2026-06-10 19:30",
+        }
+
+        feasible = analyze_departure_feasibility("14:00", flight, "international", 60, "standard", "2026-06-10")
+        self.assertEqual(feasible["level"], "可行")
+        self.assertEqual(feasible["margin_min"], 47)
+        self.assertEqual(feasible["total_reserve"], 283)
+        self.assertIn("出境边检海关", feasible["buffer_label"])
+
+        tight = analyze_departure_feasibility("14:00", flight, "international", 90, "standard", "2026-06-10")
+        self.assertEqual(tight["level"], "紧张")
+        self.assertEqual(tight["margin_min"], 8)
+
+        impossible = analyze_departure_feasibility("15:00", flight, "international", 90, "standard", "2026-06-10")
+        self.assertEqual(impossible["level"], "不可行")
+        self.assertEqual(impossible["short_min"], 52)
+        self.assertEqual(impossible["need_set_off"], "14:08")
+
     def test_compute_same_day_windows_adds_transport_margin(self):
         from analyzer import compute_same_day_windows
 

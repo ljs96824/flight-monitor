@@ -6,7 +6,12 @@ import statistics
 import re
 from datetime import date, datetime, time, timedelta
 
-from airport_logistics import get_airport_logistics
+from airport_logistics import (
+    get_airport_logistics,
+    get_arrival_buffer,
+    get_departure_buffer,
+    route_type_buffer_label,
+)
 from on_time_data import estimate_punctuality
 from price_estimator import calc_transaction_price
 from price_calendar import (
@@ -692,6 +697,70 @@ def calc_transport_margin(
     return margin, ratio, rush
 
 
+def _time_text(dt: datetime | None) -> str:
+    if not dt:
+        return ""
+    return dt.strftime("%H:%M")
+
+
+def _parse_set_off_datetime(value: str | None, date_str: str | None) -> datetime | None:
+    return parse_flight_time(value, date_str)
+
+
+def analyze_departure_feasibility(
+    set_off_time,
+    flight: dict,
+    route_type: str,
+    transport_min: int | float | None = None,
+    margin_mode: str | None = "standard",
+    date_str: str | None = None,
+    safety_min: int = 25,
+) -> dict:
+    """Analyze whether a user set-off time can catch a flight."""
+    flight = flight or {}
+    dep_airport = _flight_airport(flight, "departure_airport", "dep_airport", "origin")
+    set_off_dt = _parse_set_off_datetime(str(set_off_time or "").strip(), date_str)
+    dep_dt = _flight_departure_datetime(flight, date_str)
+    if not set_off_dt or not dep_dt:
+        return {}
+    if dep_dt < set_off_dt:
+        dep_dt += timedelta(days=1)
+    estimated_transport = _optional_int(get_airport_logistics(dep_airport).get("to_center_min"), 45) or 45
+    transport = _optional_int(transport_min, estimated_transport) or estimated_transport
+    margin, ratio, rush = calc_transport_margin(
+        transport,
+        margin_mode,
+        set_off_dt.hour + set_off_dt.minute / 60,
+    )
+    dep_buffer = get_departure_buffer(dep_airport, route_type)
+    total = transport + margin + dep_buffer + safety_min
+    earliest_catchable = set_off_dt + timedelta(minutes=total)
+    gap = int(round((dep_dt - earliest_catchable).total_seconds() / 60))
+    base = {
+        "set_off_time": _time_text(set_off_dt),
+        "flight_departure_time": _time_text(dep_dt),
+        "departure_airport": dep_airport,
+        "route_type": route_type or "domestic",
+        "transport_min": transport,
+        "transport_margin_min": margin,
+        "transport_margin_ratio": round(ratio, 2),
+        "transport_rush": rush,
+        "departure_buffer_min": dep_buffer,
+        "buffer_label": route_type_buffer_label(route_type, "departure"),
+        "safety_min": safety_min,
+        "total_reserve": total,
+        "earliest_catchable": _time_text(earliest_catchable),
+    }
+    if gap >= 30:
+        base.update({"level": "可行", "margin_min": gap})
+    elif gap >= 0:
+        base.update({"level": "紧张", "margin_min": gap})
+    else:
+        need_set_off = dep_dt - timedelta(minutes=total)
+        base.update({"level": "不可行", "short_min": -gap, "need_set_off": _time_text(need_set_off)})
+    return base
+
+
 def compute_same_day_windows(
     subscription: dict | None,
     origin_airport: str | None = None,
@@ -720,8 +789,9 @@ def compute_same_day_windows(
         if redundancy_min is None:
             redundancy_min = 25
         margin_mode = str(constraints.get("transport_margin_mode") or "standard").strip().lower()
-        arrival_buffer_min = _optional_int(logistics.get("arrival_buffer_min"), 90) or 90
-        checkin_buffer_min = _optional_int(logistics.get("checkin_buffer_min"), 90) or 90
+        route_type = str(constraints.get("route_type") or "domestic").strip() or "domestic"
+        arrival_buffer_min = get_arrival_buffer(dest_airport or "", route_type)
+        checkin_buffer_min = get_departure_buffer(dest_airport or "", route_type)
         outbound_travel_hour = (business_start - transport_min) / 60
         return_travel_hour = business_end / 60
         outbound_margin, outbound_ratio, outbound_rush = calc_transport_margin(
@@ -751,6 +821,9 @@ def compute_same_day_windows(
             "user_transport_min": _optional_int(constraints.get("user_transport_min")),
             "redundancy_min": redundancy_min,
             "transport_margin_mode": margin_mode,
+            "route_type": route_type,
+            "arrival_buffer_label": route_type_buffer_label(route_type, "arrival"),
+            "departure_buffer_label": route_type_buffer_label(route_type, "departure"),
             "outbound_transport_margin_min": outbound_margin,
             "return_transport_margin_min": return_margin,
             "outbound_transport_margin_ratio": round(outbound_ratio, 2),

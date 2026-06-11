@@ -114,6 +114,12 @@ MEGA_AIRPORTS = {"PVG", "PEK", "PKX", "CAN", "CTU", "TFU", "SZX"}
 CITY_AIRPORTS = {"SHA"}
 MEDIUM_AIRPORTS = set(AIRPORT_LOGISTICS) - MEGA_AIRPORTS - CITY_AIRPORTS
 
+ROUTE_TYPE_BUFFER_LABELS = {
+    "domestic": "值机安检",
+    "international": "值机+出境边检海关",
+    "greater_china": "值机+出入境查验",
+}
+
 
 def _airport_buffer_defaults(code: str) -> dict:
     if code in MEGA_AIRPORTS:
@@ -137,3 +143,49 @@ def get_airport_logistics(iata: str) -> dict:
     for key, value in _airport_buffer_defaults(code).items():
         result.setdefault(key, value)
     return result
+
+
+def _airport_size(iata: str) -> str:
+    return str(get_airport_logistics(iata).get("size") or "medium")
+
+
+def _normalize_route_type(route_type: str | None) -> str:
+    route = str(route_type or "domestic").strip().lower()
+    if route not in {"domestic", "international", "greater_china"}:
+        return "domestic"
+    return route
+
+
+def get_departure_buffer(iata: str, route_type: str | None) -> int:
+    """Departure-side buffer: check-in + security (+ border/customs when needed)."""
+    size = _airport_size(iata)
+    route = _normalize_route_type(route_type)
+    table = {
+        "domestic": {"mega": 110, "medium": 90, "city": 75},
+        "international": {"mega": 180, "medium": 150, "city": 150},
+        "greater_china": {"mega": 150, "medium": 120, "city": 120},
+    }
+    return table[route].get(size, table[route]["medium"])
+
+
+def get_arrival_buffer(iata: str, route_type: str | None) -> int:
+    """Arrival-side buffer: deplaning + exit (+ immigration/baggage/customs when needed)."""
+    size = _airport_size(iata)
+    route = _normalize_route_type(route_type)
+    table = {
+        "domestic": {"mega": 120, "medium": 90, "city": 60},
+        "international": {"mega": 170, "medium": 130, "city": 120},
+        "greater_china": {"mega": 130, "medium": 100, "city": 90},
+    }
+    return table[route].get(size, table[route]["medium"])
+
+
+def route_type_buffer_label(route_type: str | None, side: str = "departure") -> str:
+    route = _normalize_route_type(route_type)
+    if side == "arrival":
+        if route == "international":
+            return "入境边检+提行李+海关"
+        if route == "greater_china":
+            return "入境/入境查验+提行李"
+        return "下机出站"
+    return ROUTE_TYPE_BUFFER_LABELS[route]

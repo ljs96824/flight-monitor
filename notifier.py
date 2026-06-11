@@ -30,6 +30,7 @@ from analyzer import (
     build_travel_profile,
     calculate_price_references,
     calc_confidence,
+    analyze_departure_feasibility,
     classify_plan_tier,
     determine_push_type,
     generate_decision_summary,
@@ -4712,6 +4713,71 @@ def _payload_single_plan(flight: dict, route_info: dict, analysis_result: dict, 
     }
 
 
+def _plan_feasibility_rank(plan: dict) -> int:
+    levels = []
+    feasibility = plan.get("feasibility") or {}
+    if isinstance(feasibility, dict):
+        for item in feasibility.values():
+            if isinstance(item, dict) and item.get("level"):
+                levels.append(str(item.get("level")))
+    if not levels:
+        return 0
+    if "不可行" in levels:
+        return 2
+    if "紧张" in levels:
+        return 1
+    return 0
+
+
+def _apply_departure_feasibility_to_plans(
+    plans: list[dict],
+    constraints: dict,
+    route_type: str,
+    route_info: dict,
+) -> list[dict]:
+    outbound_set_off = str(constraints.get("outbound_set_off") or "").strip()
+    return_set_off = str(constraints.get("return_set_off") or "").strip()
+    if not outbound_set_off and not return_set_off:
+        return plans
+    transport_min = constraints.get("user_transport_min")
+    margin_mode = str(constraints.get("transport_margin_mode") or "standard")
+    result = []
+    for plan in plans:
+        item = dict(plan)
+        feasibility = {}
+        if outbound_set_off:
+            outbound_flight = item.get("outbound_flight") or item.get("main_flight") or item.get("flight")
+            if isinstance(outbound_flight, dict) and outbound_flight:
+                outbound = analyze_departure_feasibility(
+                    outbound_set_off,
+                    outbound_flight,
+                    route_type,
+                    transport_min,
+                    margin_mode,
+                    route_info.get("depart_date"),
+                )
+                if outbound:
+                    feasibility["outbound"] = outbound
+        if item.get("is_roundtrip") and return_set_off:
+            return_flight = item.get("return_flight")
+            if isinstance(return_flight, dict) and return_flight:
+                ret = analyze_departure_feasibility(
+                    return_set_off,
+                    return_flight,
+                    route_type,
+                    transport_min,
+                    margin_mode,
+                    route_info.get("return_date"),
+                )
+                if ret:
+                    feasibility["return"] = ret
+        if feasibility:
+            item["feasibility"] = feasibility
+            item["feasibility_rank"] = _plan_feasibility_rank(item)
+        result.append(item)
+    return sorted(result, key=lambda plan: (int(plan.get("feasibility_rank") or 0), str(plan.get("label") or "")))
+
+
 def _plan_flights(plan: dict) -> list[dict]:
     flights = []
     for key in ("outbound_flight", "return_flight", "main_flight"):
@@ -5348,12 +5414,24 @@ def build_notification_payload(
             for index, flight in enumerate(flights[:5])
         ]
     all_items = _apply_plan_tiers(all_items)
+    payload_route_type = (
+        ((subscription.get("basic") or {}).get("route_type"))
+        or subscription.get("route_type")
+        or route_info.get("route_type")
+        or _source_stats_route_type(source_stats)
+    )
     constraints_for_cabin = {
         **(subscription.get("hard_constraints") or {}),
         **(subscription.get("constraints") or {}),
         "passenger_count": (subscription.get("basic") or {}).get("passenger_count")
         or subscription.get("passenger_count"),
     }
+    all_items = _apply_departure_feasibility_to_plans(
+        all_items,
+        constraints_for_cabin,
+        payload_route_type,
+        route_info,
+    )
     cabin_policy_summary = (
         analysis_result.get("cabin_policy_summary")
         or outbound_analysis.get("cabin_policy_summary")
@@ -5485,12 +5563,7 @@ def build_notification_payload(
         "route": _payload_route_text(route_info),
         "subscription_id": route_info.get("subscription_id") or subscription.get("id"),
         "route_airports": _payload_route_airports(route_info),
-        "route_type": (
-            ((subscription.get("basic") or {}).get("route_type"))
-            or subscription.get("route_type")
-            or route_info.get("route_type")
-            or _source_stats_route_type(source_stats)
-        ),
+        "route_type": payload_route_type,
         "invoice_preferences": {
             "invoice_needed": bool((subscription.get("preferences") or {}).get("invoice_needed")),
             "invoice_special_vat": bool((subscription.get("preferences") or {}).get("invoice_special_vat")),
@@ -5548,6 +5621,7 @@ def build_notification_payload(
         "trigger_reason": (push_meta or {}).get("reasons") or (decision.get("reasons") or [])[:3],
         "recommended_plans": all_items[:2],
         "alternative_plans": all_items[2:5],
+        "adjustment_required_plans": [plan for plan in all_items if _plan_feasibility_rank(plan) == 2],
         "excluded_plans": (
             ((analysis_result.get("round_trip_analysis") or {}).get("excluded_roundtrip_combos") or [])
             if is_roundtrip
@@ -5801,6 +5875,9 @@ def _pushplus_plan_lines(payload: dict) -> list[str]:
             ]
         else:
             current = [str(plan.get("main_push_line") or "")]
+        feasibility = _pushplus_feasibility_summary(plan)
+        if feasibility:
+            current.append(feasibility)
         current = [line for line in current if line.strip()]
         if current:
             if detail_lines:
@@ -5810,6 +5887,23 @@ def _pushplus_plan_lines(payload: dict) -> list[str]:
     if not detail_lines:
         return []
     return ["", "推荐方案:"] + detail_lines
+
+
+def _pushplus_feasibility_summary(plan: dict) -> str:
+    feasibility = plan.get("feasibility") or {}
+    if not isinstance(feasibility, dict) or not feasibility:
+        return ""
+    parts = []
+    for label, key in (("去程", "outbound"), ("返程", "return")):
+        item = feasibility.get(key)
+        if not isinstance(item, dict):
+            continue
+        level = item.get("level")
+        if level == "不可行":
+            parts.append(f"{label}不可行(差{item.get('short_min')}分钟,需{item.get('need_set_off')}前动身)")
+        elif level:
+            parts.append(f"{label}{level}(富余{item.get('margin_min')}分钟)")
+    return "可行性:" + "；".join(parts) if parts else ""
 
 
 def _plan_status_change_text(payload: dict) -> str:
@@ -6211,6 +6305,9 @@ def _render_payload_plan_card(plan: dict, compact: bool = False, primary_plan: d
             rows.append(("验证渠道", _layered_channel_links(links) or links))
     if plan.get("tags"):
         rows.append(("状态", html.escape(str(plan.get("tags") or ""))))
+    feasibility_line = _plan_feasibility_line(plan)
+    if feasibility_line:
+        rows.append(("可行性分析", feasibility_line))
     refund_line = _plan_refund_line(plan)
     if refund_line:
         rows.append(("退改", refund_line))
@@ -6260,6 +6357,36 @@ def _plan_feedback_link(plan: dict) -> str:
         f'<a href="{html.escape(url + sep + "plan=" + quote_plus(plan_code))}" target="_blank">'
         "价格不一致?反馈</a>"
     )
+
+
+def _feasibility_item_text(label: str, item: dict) -> str:
+    level = str(item.get("level") or "").strip()
+    if not level:
+        return ""
+    prefix = {"可行": "✓", "紧张": "⚠", "不可行": "✗"}.get(level, "")
+    if level == "不可行":
+        status = f"{prefix} {label}{level}(差{item.get('short_min')}分钟,需{item.get('need_set_off')}前动身)"
+    else:
+        status = f"{prefix} {label}{level}(富余{item.get('margin_min')}分钟)"
+    parts = [
+        f"车程{item.get('transport_min')}",
+        f"路途冗余{item.get('transport_margin_min')}",
+        f"{item.get('buffer_label')}{item.get('departure_buffer_min')}",
+        f"安全余量{item.get('safety_min')}",
+    ]
+    return f"{status}; " + "+".join(str(part) + "分钟" for part in parts if part and not str(part).endswith("None"))
+
+
+def _plan_feasibility_line(plan: dict) -> str:
+    feasibility = plan.get("feasibility") or {}
+    if not isinstance(feasibility, dict) or not feasibility:
+        return ""
+    lines = []
+    if feasibility.get("outbound"):
+        lines.append(_feasibility_item_text("去程", feasibility["outbound"]))
+    if feasibility.get("return"):
+        lines.append(_feasibility_item_text("返程", feasibility["return"]))
+    return "<br>".join(html.escape(line) for line in lines if line)
 
 
 def _cabin_policy_summary_body(payload: dict) -> str:
@@ -7074,6 +7201,9 @@ def _render_domestic_payload_plan_card(plan: dict, compact: bool = False, primar
         rows.append(("渠道", _layered_channel_links(str(link_value)) or str(link_value)))
     if plan.get("tags"):
         rows.append(("标签", html.escape(str(plan.get("tags")))))
+    feasibility_line = _plan_feasibility_line(plan)
+    if feasibility_line:
+        rows.append(("可行性分析", feasibility_line))
     source_label = _plan_source_label(plan)
     if source_label:
         rows.append(("数据来源", html.escape(source_label)))
@@ -7602,6 +7732,15 @@ def render_email(payload: dict) -> tuple[str, str]:
         ),
     ]
     cards.append(_render_payload_plan_cards(payload, payload.get("recommended_plans") or [], primary_plan))
+    adjustment_plans = payload.get("adjustment_required_plans") or []
+    if adjustment_plans:
+        cards.append(
+            _email_card(
+                "需调整动身时间的方案",
+                _render_payload_plan_cards(payload, adjustment_plans[:3], primary_plan, compact=True)
+                + "<div style='margin-top:8px;color:#666;font-size:12px;'>这些方案航班本身可能合适，但按你填写的动身时间赶不上；可改动身时间或换更晚航班。</div>",
+            )
+        )
     cabin_policy_body = _cabin_policy_summary_body(payload)
     if cabin_policy_body:
         cards.append(_email_card("经济舱 / 商务舱并列参考", cabin_policy_body))
