@@ -60,8 +60,9 @@ class WebFormTemplateStep2Test(unittest.TestCase):
         self.assertIn('name="same_day_round_trip"', FORM_TEMPLATE)
         self.assertIn('name="business_start"', FORM_TEMPLATE)
         self.assertIn('name="business_end"', FORM_TEMPLATE)
-        self.assertIn('name="buffer_hours"', FORM_TEMPLATE)
-        self.assertIn('name="transport_mode"', FORM_TEMPLATE)
+        self.assertIn('name="user_transport_min"', FORM_TEMPLATE)
+        self.assertIn('name="redundancy_min"', FORM_TEMPLATE)
+        self.assertIn('id="airport-buffer-preview"', FORM_TEMPLATE)
         self.assertIn('data-show-if="same_day_round_trip=true"', FORM_TEMPLATE)
         self.assertIn("syncSameDayRoundTrip", FORM_TEMPLATE)
 
@@ -121,8 +122,8 @@ class WebFormTemplateStep2Test(unittest.TestCase):
                 "same_day_round_trip": "true",
                 "business_start": "10:00",
                 "business_end": "16:00",
-                "buffer_hours": "2.5",
-                "transport_mode": "taxi",
+                "user_transport_min": "60",
+                "redundancy_min": "25",
                 "origin_select": "PVG",
                 "destination": "PEK",
                 "depart_date": "2026-06-10",
@@ -142,8 +143,8 @@ class WebFormTemplateStep2Test(unittest.TestCase):
         self.assertTrue(subscription["constraints"]["same_day_round_trip"])
         self.assertEqual(subscription["constraints"]["business_start"], "10:00")
         self.assertEqual(subscription["constraints"]["business_end"], "16:00")
-        self.assertEqual(subscription["constraints"]["buffer_hours"], 2.5)
-        self.assertEqual(subscription["constraints"]["transport_mode"], "taxi")
+        self.assertEqual(subscription["constraints"]["user_transport_min"], 60)
+        self.assertEqual(subscription["constraints"]["redundancy_min"], 25)
         self.assertEqual(subscription["constraints"]["time_source"], "meeting_derived")
         self.assertEqual(subscription["hard_constraints"]["time_source"], "meeting_derived")
         self.assertEqual(subscription["basic"]["return_date"], "2026-06-10")
@@ -152,7 +153,7 @@ class WebFormTemplateStep2Test(unittest.TestCase):
         self.assertIn('id="same-day-business-fields" data-show-if="same_day_round_trip=true"', FORM_TEMPLATE)
         self.assertNotIn('id="same-day-business-fields" class="precise-only"', FORM_TEMPLATE)
         self.assertIn("会议/办事开始时间", FORM_TEMPLATE)
-        self.assertIn("缓冲默认2.5小时，可在精准模式调整。", FORM_TEMPLATE)
+        self.assertIn("快速模式会按机场等级、车程估算和25分钟冗余自动预留。", FORM_TEMPLATE)
 
     def test_precise_meeting_mode_takes_over_time_preferences(self):
         self.assertIn('id="meeting-time-handoff-card"', FORM_TEMPLATE)

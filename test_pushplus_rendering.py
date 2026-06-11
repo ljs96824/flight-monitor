@@ -195,6 +195,50 @@ class PushPlusRenderingTest(unittest.TestCase):
         self.assertLess(msg.index("当天往返提示"), msg.index("结论:"))
 
 
+    def test_pushplus_surfaces_same_day_alternatives(self):
+        msg = render_pushplus(
+            {
+                "push_type": "business time conflict",
+                "route": "SHA -> PEK",
+                "current_price": None,
+                "transaction_price": None,
+                "verify_price": None,
+                "recommendation": "time window too tight",
+                "buy_condition": "consider alternatives",
+                "same_day_no_feasible_note": "need arrive before 06:35",
+                "same_day_alternatives": [
+                    {
+                        "category": "previous_evening",
+                        "title": "A previous evening",
+                        "flight": {"flight_no": "MU5137", "departure_time": "19:00", "arrival_time": "21:15"},
+                        "price": 620,
+                        "tradeoff": "hotel cost, highest schedule stability",
+                    },
+                    {
+                        "category": "previous_redeye",
+                        "title": "B previous late night",
+                        "flight": {"flight_no": "HU7610", "departure_time": "22:30", "arrival_time": "00:40"},
+                        "price": 520,
+                        "tradeoff": "fatigue risk",
+                    },
+                    {
+                        "category": "same_day_earliest",
+                        "title": "C same day earliest",
+                        "flight": {"flight_no": "MU5099", "departure_time": "07:00", "arrival_time": "09:15"},
+                        "price": 894,
+                        "tradeoff": "late arrival risk",
+                    },
+                ],
+                "recommended_plans": [],
+                "detail_url": "https://example.com/detail",
+            }
+        )
+
+        self.assertIn("MU5137", msg)
+        self.assertIn("HU7610", msg)
+        self.assertIn("MU5099", msg)
+        self.assertIn("620", msg)
+
     def test_round_trip_combinations_do_not_fallback_when_same_day_time_conflicts(self):
         combos = _round_trip_combinations(
             {

@@ -644,12 +644,29 @@ def _same_day_constraints(source: dict | None) -> dict:
     source = source or {}
     constraints = dict(source.get("constraints") or {})
     hard = source.get("hard_constraints") or {}
-    for key in ("business_start", "business_end", "buffer_hours", "transport_mode"):
+    for key in (
+        "business_start",
+        "business_end",
+        "buffer_hours",
+        "transport_mode",
+        "user_transport_min",
+        "redundancy_min",
+        "time_source",
+    ):
         if key not in constraints and hard.get(key) is not None:
             constraints[key] = hard.get(key)
         if key not in constraints and source.get(key) is not None:
             constraints[key] = source.get(key)
     return constraints
+
+
+def _optional_int(value, default: int | None = None) -> int | None:
+    if value in (None, ""):
+        return default
+    try:
+        return int(round(float(value)))
+    except (TypeError, ValueError):
+        return default
 
 
 def compute_same_day_windows(
@@ -663,16 +680,53 @@ def compute_same_day_windows(
     business_end = _parse_time_minutes(constraints.get("business_end"))
     if business_start is None or business_end is None:
         return {}
+    mode = str(constraints.get("transport_mode") or "taxi").strip().lower()
+    logistics = get_airport_logistics(dest_airport or "")
+    estimated_transport = logistics.get("transit_min") if mode == "transit" else logistics.get("to_center_min")
+    transport_min = _optional_int(constraints.get("user_transport_min"), _optional_int(estimated_transport, 45))
+    if transport_min is None:
+        transport_min = 45
+
+    has_new_buffer_fields = (
+        constraints.get("user_transport_min") not in (None, "")
+        or constraints.get("redundancy_min") not in (None, "")
+        or constraints.get("buffer_hours") in (None, "")
+    )
+    if has_new_buffer_fields:
+        redundancy_min = _optional_int(constraints.get("redundancy_min"), 25)
+        if redundancy_min is None:
+            redundancy_min = 25
+        arrival_buffer_min = _optional_int(logistics.get("arrival_buffer_min"), 90) or 90
+        checkin_buffer_min = _optional_int(logistics.get("checkin_buffer_min"), 90) or 90
+        outbound_reserve = arrival_buffer_min + transport_min + redundancy_min
+        return_reserve = transport_min + checkin_buffer_min + redundancy_min
+        outbound_arrive_by = business_start - outbound_reserve
+        return_depart_after = business_end + return_reserve
+        return {
+            "buffer_model": "airport_split",
+            "outbound_arrive_by_minutes": outbound_arrive_by,
+            "return_depart_after_minutes": return_depart_after,
+            "outbound_arrive_by": _minutes_to_text(outbound_arrive_by),
+            "return_depart_after": _minutes_to_text(return_depart_after),
+            "business_start": _minutes_to_text(business_start),
+            "business_end": _minutes_to_text(business_end),
+            "transport_min": transport_min,
+            "estimated_transport_min": _optional_int(estimated_transport, 45) or 45,
+            "user_transport_min": _optional_int(constraints.get("user_transport_min")),
+            "redundancy_min": redundancy_min,
+            "arrival_buffer_min": arrival_buffer_min,
+            "checkin_buffer_min": checkin_buffer_min,
+            "outbound_reserve_minutes": outbound_reserve,
+            "return_reserve_minutes": return_reserve,
+            "reserve_minutes": outbound_reserve,
+            "reserve_h": round(outbound_reserve / 60, 2),
+            "buffer_h": round(outbound_reserve / 60, 2),
+            "transport_mode": "transit" if mode == "transit" else "taxi",
+            "airport_size": logistics.get("size") or "medium",
+        }
     buffer_h = _to_float(constraints.get("buffer_hours"))
     if buffer_h is None:
         buffer_h = 2.5
-    mode = str(constraints.get("transport_mode") or "taxi").strip().lower()
-    logistics = get_airport_logistics(dest_airport or "")
-    transport_min = logistics.get("transit_min") if mode == "transit" else logistics.get("to_center_min")
-    try:
-        transport_min = int(transport_min)
-    except (TypeError, ValueError):
-        transport_min = 45
     buffer_minutes = int(round(buffer_h * 60))
     reserve_minutes = max(buffer_minutes, transport_min + 60)
     outbound_arrive_by = business_start - reserve_minutes
@@ -843,15 +897,23 @@ def _same_day_no_feasible_note(
     windows = compute_same_day_windows(constraints or {}, None, dest_airport)
     if not windows:
         return "按默认早去晚回规则暂未找到当天往返可行组合，建议考虑放宽时间或前一天到达。"
+    reserve_text = (
+        f"去程预留约{windows.get('outbound_reserve_minutes')}分钟"
+        if windows.get("buffer_model") == "airport_split"
+        else f"{windows.get('buffer_h')}h预留"
+    )
     parts = [
-        f"按你的会议安排({windows.get('business_start')}开始，{windows.get('buffer_h')}h预留)，当天往返时间较紧"
+        f"按你的会议安排({windows.get('business_start')}开始，{reserve_text})，当天往返时间较紧"
     ]
     if earliest_arrival is not None:
         parts.append(f"最早去程约{_minutes_to_text(earliest_arrival)}到，要求不晚于{windows.get('outbound_arrive_by')}")
     if latest_departure is not None:
         parts.append(f"最晚返程约{_minutes_to_text(latest_departure)}走，要求不早于{windows.get('return_depart_after')}")
     relaxed_constraints = dict(_same_day_constraints(constraints or {}))
-    relaxed_constraints["buffer_hours"] = 2
+    if windows.get("buffer_model") == "airport_split":
+        relaxed_constraints["redundancy_min"] = 15
+    else:
+        relaxed_constraints["buffer_hours"] = 2
     relaxed_windows = compute_same_day_windows({"constraints": relaxed_constraints}, None, dest_airport)
     relaxed_arrive_by = relaxed_windows.get("outbound_arrive_by_minutes")
     relaxed_count = 0
@@ -862,8 +924,9 @@ def _same_day_no_feasible_note(
             if (_flight_arrival_minutes(flight) is not None and _flight_arrival_minutes(flight) <= relaxed_arrive_by)
         )
     if relaxed_windows:
+        relaxed_label = "冗余缩短到15分钟" if windows.get("buffer_model") == "airport_split" else "缩短预留至2小时"
         parts.append(
-            f"建议缩短预留至2小时(到达上限{relaxed_windows.get('outbound_arrive_by')}，有{relaxed_count}个航班可选)"
+            f"建议{relaxed_label}(到达上限{relaxed_windows.get('outbound_arrive_by')}，有{relaxed_count}个航班可选)"
         )
     closest_late = None
     required = windows.get("outbound_arrive_by_minutes")
@@ -916,6 +979,152 @@ def _closest_same_day_outbound_options(
         options.append((sort_key, item))
     options.sort(key=lambda pair: pair[0])
     return [item for _, item in options[:limit]]
+
+
+def _date_minus_one(date_str: str | None) -> str:
+    try:
+        return (datetime.strptime(str(date_str), "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+    except (TypeError, ValueError):
+        return ""
+
+
+def _date_plus_one(date_str: str | None) -> str:
+    try:
+        return (datetime.strptime(str(date_str), "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+    except (TypeError, ValueError):
+        return ""
+
+
+def _flight_sort_price(flight: dict) -> float:
+    price = _to_float((flight or {}).get("price"))
+    return price if price is not None else 999999
+
+
+def _flight_time_range_text(flight: dict) -> str:
+    dep = _first_time_text(flight or {}, "departure_time", "dep_time") or "--:--"
+    arr = _first_time_text(flight or {}, "arrival_time", "arr_time") or "--:--"
+    return f"{dep}->{arr}"
+
+
+def build_same_day_alternatives(
+    outbound_flights: list[dict] | None,
+    return_flights: list[dict] | None,
+    windows: dict | None,
+    date_str: str | None,
+    previous_day_outbound: list[dict] | None = None,
+    next_day_return: list[dict] | None = None,
+    limit_per_type: int = 2,
+) -> list[dict]:
+    """Build transparent fallback choices when meeting-window same-day trips are impossible."""
+    alternatives: list[dict] = []
+    windows = windows or {}
+    previous_date = _date_minus_one(date_str)
+    next_date = _date_plus_one(date_str)
+    prev_candidates = list(previous_day_outbound or [])
+    if not prev_candidates and previous_date:
+        prev_candidates = [
+            flight
+            for flight in outbound_flights or []
+            if _flight_date_text(flight or {}, "departure") == previous_date
+        ]
+
+    evening = []
+    redeye = []
+    for flight in prev_candidates:
+        dep_min = _flight_departure_minutes(flight or {})
+        arr_min = _flight_arrival_minutes(flight or {})
+        if dep_min is None or arr_min is None:
+            continue
+        dep_date = _flight_date_text(flight or {}, "departure")
+        arr_date = _flight_date_text(flight or {}, "arrival")
+        arrives_next_day = bool(dep_date and arr_date and dep_date != arr_date)
+        if dep_min >= 21 * 60 and (arrives_next_day or arr_min < 5 * 60):
+            redeye.append(flight)
+        elif dep_min >= 17 * 60 and not arrives_next_day:
+            evening.append(flight)
+
+    for flight in sorted(evening, key=_flight_sort_price)[:limit_per_type]:
+        alternatives.append(
+            {
+                "category": "previous_evening",
+                "title": "备选A·前一晚到达",
+                "flight": flight,
+                "price": _flight_sort_price(flight),
+                "time": _flight_time_range_text(flight),
+                "tradeoff": "多一晚酒店成本,但会议时间最稳",
+                "note": "到达后入住酒店,次日从容赴会",
+            }
+        )
+
+    for flight in sorted(redeye, key=_flight_sort_price)[:limit_per_type]:
+        alternatives.append(
+            {
+                "category": "previous_redeye",
+                "title": "备选B·前夜深夜班",
+                "flight": flight,
+                "price": _flight_sort_price(flight),
+                "time": _flight_time_range_text(flight),
+                "tradeoff": "省酒店时间,但凌晨到达有疲劳风险",
+                "note": "该备选为主动兜底场景,不受通用红眼规则限制",
+            }
+        )
+
+    closest = _closest_same_day_outbound_options(outbound_flights, windows, date_str, limit=1)
+    if closest:
+        flight = closest[0]
+        arrival_minutes = _flight_arrival_minutes(flight or {})
+        business_start = _parse_time_minutes(windows.get("business_start"))
+        meeting_arrival = None
+        late_minutes = None
+        if arrival_minutes is not None:
+            meeting_arrival = arrival_minutes + int(windows.get("transport_min") or 0)
+            if business_start is not None:
+                late_minutes = max(0, meeting_arrival - business_start)
+        if late_minutes and late_minutes >= 60:
+            late_text = f"预计到会晚{late_minutes // 60}小时{late_minutes % 60}分钟"
+        elif late_minutes:
+            late_text = f"预计到会晚{late_minutes}分钟"
+        else:
+            late_text = "时间仍较紧,需自行确认会议弹性"
+        alternatives.append(
+            {
+                "category": "same_day_earliest",
+                "title": "备选C·当天最早班",
+                "flight": flight,
+                "price": _flight_sort_price(flight),
+                "time": _flight_time_range_text(flight),
+                "tradeoff": "有迟到风险,仅在会议可弹性时考虑",
+                "note": late_text,
+                "meeting_arrival_time": _minutes_to_text(meeting_arrival) if meeting_arrival is not None else "",
+                "late_minutes": late_minutes,
+            }
+        )
+
+    next_return_candidates = list(next_day_return or [])
+    if not next_return_candidates and next_date:
+        next_return_candidates = [
+            flight
+            for flight in return_flights or []
+            if _flight_date_text(flight or {}, "departure") == next_date
+        ]
+    morning_returns = [
+        flight
+        for flight in next_return_candidates
+        if (_flight_departure_minutes(flight or {}) is not None and _flight_departure_minutes(flight or {}) <= 10 * 60)
+    ]
+    for flight in sorted(morning_returns, key=_flight_sort_price)[:1]:
+        alternatives.append(
+            {
+                "category": "next_morning_return",
+                "title": "备选D·次日早班返程",
+                "flight": flight,
+                "price": _flight_sort_price(flight),
+                "time": _flight_time_range_text(flight),
+                "tradeoff": "需在目的地多留一晚,但返程时间更从容",
+                "note": "返程窗口过紧时的镜像备选",
+            }
+        )
+    return alternatives
 
 
 def _same_day_candidate_debug_rows(
@@ -1609,6 +1818,8 @@ def migrate_old_subscription(subscription: dict) -> dict:
     _set_if_missing(hard, "business_end", constraints.get("business_end"))
     _set_if_missing(hard, "buffer_hours", constraints.get("buffer_hours"))
     _set_if_missing(hard, "transport_mode", constraints.get("transport_mode"))
+    _set_if_missing(hard, "user_transport_min", constraints.get("user_transport_min"))
+    _set_if_missing(hard, "redundancy_min", constraints.get("redundancy_min"))
     _set_if_missing(hard, "trip_nature", constraints.get("trip_nature"))
     _set_if_missing(hard, "trip_natures", constraints.get("trip_natures"))
     _set_if_missing(hard, "cabin_policy", constraints.get("cabin_policy"))
@@ -6919,6 +7130,7 @@ def analyze_round_trip(
     same_day_no_feasible_note = ""
     same_day_time_conflict = False
     closest_same_day_outbound_options = []
+    same_day_alternatives = []
     if same_day_round_trip:
         outbound_candidates = _all_roundtrip_flights_for_same_day(outbound_analysis)
         return_candidates = _all_roundtrip_flights_for_same_day(return_analysis)
@@ -6981,6 +7193,22 @@ def analyze_round_trip(
                 outbound_candidates,
                 windows,
                 outbound_analysis.get("depart_date") or outbound_analysis.get("departure_date"),
+            )
+            same_day_alternatives = build_same_day_alternatives(
+                outbound_candidates,
+                return_candidates,
+                windows,
+                outbound_analysis.get("depart_date") or outbound_analysis.get("departure_date"),
+                previous_day_outbound=(
+                    outbound_analysis.get("previous_day_flights")
+                    or outbound_analysis.get("previous_day_outbound")
+                    or outbound_analysis.get("previous_day_outbound_flights")
+                ),
+                next_day_return=(
+                    return_analysis.get("next_day_flights")
+                    or return_analysis.get("next_day_return")
+                    or return_analysis.get("next_day_return_flights")
+                ),
             )
             same_day_no_feasible_note = _same_day_no_feasible_note(
                 outbound_candidates,
@@ -7105,6 +7333,7 @@ def analyze_round_trip(
         "same_day_no_feasible_note": same_day_no_feasible_note,
         "same_day_time_conflict": same_day_time_conflict,
         "closest_same_day_outbound_options": closest_same_day_outbound_options,
+        "same_day_alternatives": same_day_alternatives,
         "outbound_top3": [] if same_day_time_conflict else outbound_top,
         "return_top3": return_top,
         "insight": insight,

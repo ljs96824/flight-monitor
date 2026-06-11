@@ -68,6 +68,130 @@ class SameDayBusinessModeTest(unittest.TestCase):
         self.assertEqual(windows["buffer_h"], 2.5)
         self.assertEqual(windows["reserve_minutes"], 150)
 
+    def test_compute_same_day_windows_uses_airport_buffer_transport_and_redundancy(self):
+        from analyzer import compute_same_day_windows
+
+        windows = compute_same_day_windows(
+            {
+                "constraints": {
+                    "business_start": "10:00",
+                    "business_end": "16:00",
+                    "user_transport_min": 60,
+                    "redundancy_min": 25,
+                }
+            },
+            "SHA",
+            "PKX",
+        )
+
+        self.assertEqual(windows["buffer_model"], "airport_split")
+        self.assertEqual(windows["arrival_buffer_min"], 120)
+        self.assertEqual(windows["checkin_buffer_min"], 110)
+        self.assertEqual(windows["transport_min"], 60)
+        self.assertEqual(windows["redundancy_min"], 25)
+        self.assertEqual(windows["outbound_reserve_minutes"], 205)
+        self.assertEqual(windows["return_reserve_minutes"], 195)
+        self.assertEqual(windows["outbound_arrive_by"], "06:35")
+        self.assertEqual(windows["return_depart_after"], "19:15")
+
+    def test_city_airport_uses_shorter_standard_buffer(self):
+        from analyzer import compute_same_day_windows
+
+        sha = compute_same_day_windows(
+            {
+                "constraints": {
+                    "business_start": "10:00",
+                    "business_end": "16:00",
+                    "user_transport_min": 60,
+                    "redundancy_min": 25,
+                }
+            },
+            "PVG",
+            "SHA",
+        )
+        pvg = compute_same_day_windows(
+            {
+                "constraints": {
+                    "business_start": "10:00",
+                    "business_end": "16:00",
+                    "user_transport_min": 60,
+                    "redundancy_min": 25,
+                }
+            },
+            "SHA",
+            "PVG",
+        )
+
+        self.assertLess(sha["arrival_buffer_min"], pvg["arrival_buffer_min"])
+        self.assertGreater(sha["outbound_arrive_by_minutes"], pvg["outbound_arrive_by_minutes"])
+
+    def test_build_same_day_alternatives_for_time_conflict(self):
+        from analyzer import build_same_day_alternatives, compute_same_day_windows
+
+        windows = compute_same_day_windows(
+            {
+                "constraints": {
+                    "business_start": "10:00",
+                    "business_end": "16:00",
+                    "user_transport_min": 60,
+                    "redundancy_min": 25,
+                }
+            },
+            "SHA",
+            "PEK",
+        )
+        current_day = [
+            {
+                "flight_no": "MU5099",
+                "price": 894,
+                "departure_airport": "SHA",
+                "arrival_airport": "PEK",
+                "departure_date": "2026-06-19",
+                "arrival_date": "2026-06-19",
+                "departure_time": "07:00",
+                "arrival_time": "09:15",
+            }
+        ]
+        previous_day = [
+            {
+                "flight_no": "MU5137",
+                "price": 620,
+                "departure_airport": "SHA",
+                "arrival_airport": "PEK",
+                "departure_date": "2026-06-18",
+                "arrival_date": "2026-06-18",
+                "departure_time": "19:00",
+                "arrival_time": "21:15",
+            },
+            {
+                "flight_no": "HU7610",
+                "price": 520,
+                "departure_airport": "SHA",
+                "arrival_airport": "PEK",
+                "departure_date": "2026-06-18",
+                "arrival_date": "2026-06-19",
+                "departure_time": "22:30",
+                "arrival_time": "00:40",
+            },
+        ]
+
+        alternatives = build_same_day_alternatives(
+            current_day,
+            [],
+            windows,
+            "2026-06-19",
+            previous_day_outbound=previous_day,
+        )
+
+        categories = [item["category"] for item in alternatives]
+        self.assertIn("previous_evening", categories)
+        self.assertIn("previous_redeye", categories)
+        self.assertIn("same_day_earliest", categories)
+        self.assertEqual(
+            next(item for item in alternatives if item["category"] == "same_day_earliest")["flight"]["flight_no"],
+            "MU5099",
+        )
+
     def test_build_same_day_combos_uses_computed_business_window(self):
         from analyzer import build_same_day_combos, compute_same_day_windows
 

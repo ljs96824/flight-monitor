@@ -495,6 +495,69 @@ def _save_result_for_page(subscription_id: str, html_content: str, payload: dict
     path.write_text(json.dumps(records[-100:], ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _fallback_cache_path(origins: list[str], dests: list[str], date_str: str, cabin_classes=None) -> Path:
+    cache_dir = DATA_DIR / "cache"
+    cache_dir.mkdir(exist_ok=True)
+    cabin_key = "_".join(cabin_classes or []) if isinstance(cabin_classes, list) else str(cabin_classes or "economy")
+    raw = f"same_day_fallback_{'-'.join(origins)}_{'-'.join(dests)}_{date_str}_{cabin_key}"
+    return cache_dir / f"{sanitize_filename(raw)}.json"
+
+
+def _fresh_cached_flights(path: Path, max_age_hours: int = 6) -> list[dict] | None:
+    if not path.exists():
+        return None
+    try:
+        cached = json.loads(path.read_text(encoding="utf-8"))
+        updated_at = datetime.fromisoformat(str(cached.get("updated_at")))
+        if datetime.now() - updated_at <= timedelta(hours=max_age_hours):
+            print(f"[当天往返备选] 使用缓存 {path}")
+            return cached.get("flights") or []
+    except Exception as exc:
+        print(f"[当天往返备选] 缓存读取失败: {exc}")
+    return None
+
+
+def _collect_same_day_fallback_flights(
+    agg,
+    origins: list[str],
+    dests: list[str],
+    date_str: str,
+    cabin_classes=None,
+) -> list[dict]:
+    cache_path = _fallback_cache_path(origins, dests, date_str, cabin_classes)
+    cached = _fresh_cached_flights(cache_path)
+    if cached is not None:
+        return cached
+    data = collect_for_airport_matrix(
+        agg,
+        origins,
+        dests,
+        date_str,
+        cabin_classes=cabin_classes,
+    )
+    flights = [
+        _normalize_detail_flight(flight, flight.get("data_source") or flight.get("source"))
+        for flight in (data or {}).get("flights", [])
+    ]
+    flights = _filter_data_to_airports({"flights": flights}, origins, dests).get("flights", [])
+    flights = [flight for flight in flights if _valid_price(flight.get("price"))]
+    cache_path.write_text(
+        json.dumps(
+            {
+                "updated_at": datetime.now().isoformat(timespec="seconds"),
+                "date": date_str,
+                "flights": flights,
+            },
+            ensure_ascii=False,
+            indent=2,
+            default=str,
+        ),
+        encoding="utf-8",
+    )
+    print(f"[当天往返备选] 已缓存 {len(flights)} 个航班到 {cache_path}")
+    return flights
+
+
 def _subscription_identifier(sub: dict, route: str) -> str:
     return str(
         sub.get("subscription_id")
@@ -692,6 +755,17 @@ def subscription_preferences(sub: dict) -> dict:
         "business_end": hard.get("business_end") or constraints.get("business_end") or sub.get("business_end"),
         "buffer_hours": hard.get("buffer_hours") or constraints.get("buffer_hours") or sub.get("buffer_hours"),
         "transport_mode": hard.get("transport_mode") or constraints.get("transport_mode") or sub.get("transport_mode"),
+        "user_transport_min": (
+            hard.get("user_transport_min")
+            or constraints.get("user_transport_min")
+            or sub.get("user_transport_min")
+        ),
+        "redundancy_min": (
+            hard.get("redundancy_min")
+            or constraints.get("redundancy_min")
+            or sub.get("redundancy_min")
+        ),
+        "time_source": hard.get("time_source") or constraints.get("time_source") or sub.get("time_source"),
         "airline_policy": sub.get("airline_policy", "any"),
         "exclude_airlines": sub.get("exclude_airlines", []),
         "max_extra_duration_hours": sub.get("max_extra_duration_hours"),
@@ -1157,6 +1231,41 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
                     target_price=sub.get("target_price"),
                     max_budget=sub.get("max_budget"),
                 )
+                if (
+                    round_trip_analysis.get("same_day_time_conflict")
+                    and (
+                        sub.get("same_day_round_trip")
+                        or (sub.get("hard_constraints") or {}).get("same_day_round_trip")
+                    )
+                ):
+                    try:
+                        previous_depart_date = (
+                            date.fromisoformat(sub["depart_date"]) - timedelta(days=1)
+                        ).isoformat()
+                        print(f"[当天往返备选] 补采前一晚去程 {previous_depart_date}")
+                        analysis["previous_day_flights"] = _collect_same_day_fallback_flights(
+                            agg,
+                            active_origins,
+                            active_dests,
+                            previous_depart_date,
+                            cabin_classes=sub.get("cabin_classes"),
+                        )
+                    except Exception as exc:
+                        print(f"[当天往返备选] 前一晚去程补采失败: {exc}")
+                    try:
+                        next_return_date = (
+                            date.fromisoformat(return_date) + timedelta(days=1)
+                        ).isoformat()
+                        print(f"[当天往返备选] 补采次日返程 {next_return_date}")
+                        return_analysis["next_day_flights"] = _collect_same_day_fallback_flights(
+                            agg,
+                            active_dests,
+                            active_origins,
+                            next_return_date,
+                            cabin_classes=sub.get("cabin_classes"),
+                        )
+                    except Exception as exc:
+                        print(f"[当天往返备选] 次日返程补采失败: {exc}")
                 save_roundtrip_snapshot(
                     route,
                     sub["depart_date"],

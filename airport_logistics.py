@@ -110,6 +110,18 @@ AIRPORT_LOGISTICS = {
     },
 }
 
+MEGA_AIRPORTS = {"PVG", "PEK", "PKX", "CAN", "CTU", "TFU", "SZX"}
+CITY_AIRPORTS = {"SHA"}
+MEDIUM_AIRPORTS = set(AIRPORT_LOGISTICS) - MEGA_AIRPORTS - CITY_AIRPORTS
+
+
+def _airport_buffer_defaults(code: str) -> dict:
+    if code in MEGA_AIRPORTS:
+        return {"size": "mega", "arrival_buffer_min": 120, "checkin_buffer_min": 110}
+    if code in CITY_AIRPORTS:
+        return {"size": "city", "arrival_buffer_min": 75, "checkin_buffer_min": 75}
+    return {"size": "medium", "arrival_buffer_min": 90, "checkin_buffer_min": 90}
+
 
 def get_airport_logistics(iata: str) -> dict:
     code = str(iata or "").strip().upper()
@@ -121,4 +133,7 @@ def get_airport_logistics(iata: str) -> dict:
         "transit_min": 60,
         "note": "机场交通待估",
     }
-    return {**default, **AIRPORT_LOGISTICS.get(code, {})}
+    result = {**default, **AIRPORT_LOGISTICS.get(code, {})}
+    for key, value in _airport_buffer_defaults(code).items():
+        result.setdefault(key, value)
+    return result

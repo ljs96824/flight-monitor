@@ -5471,9 +5471,14 @@ def build_notification_payload(
         and merged_constraints.get("business_start")
         and merged_constraints.get("business_end")
     ):
+        reserve_note = (
+            "机场标准缓冲+车程估算+冗余"
+            if not merged_constraints.get("buffer_hours")
+            else f"{merged_constraints.get('buffer_hours') or 2.5}h预留"
+        )
         time_filter_note = (
             f"时间筛选:按会议安排({merged_constraints.get('business_start')}-{merged_constraints.get('business_end')})"
-            f"+{merged_constraints.get('buffer_hours') or 2.5}h预留推算,你的通用时间偏好本次未参与筛选。"
+            f"+{reserve_note}推算,你的通用时间偏好本次未参与筛选。"
         )
     payload = {
         "push_type": (push_meta or {}).get("type") or "价格提醒",
@@ -5573,6 +5578,11 @@ def build_notification_payload(
             (analysis_result.get("round_trip_analysis") or {}).get("same_day_no_feasible_note")
             or analysis_result.get("same_day_no_feasible_note")
             or ""
+        ),
+        "same_day_alternatives": (
+            (analysis_result.get("round_trip_analysis") or {}).get("same_day_alternatives")
+            or analysis_result.get("same_day_alternatives")
+            or []
         ),
         "plan_status_change": plan_status_change,
         "plan_price_rows": _payload_plan_price_rows(all_items[:5]),
@@ -5807,6 +5817,49 @@ def _plan_status_change_text(payload: dict) -> str:
     return str(status.get("msg") or "").strip() if isinstance(status, dict) else ""
 
 
+def _alternative_flight_text(item: dict) -> str:
+    item = item or {}
+    flight = item.get("flight") or {}
+    flight_no = html.escape(str(flight.get("flight_no") or flight.get("flight_combo") or "航班待确认"))
+    dep = html.escape(str(flight.get("departure_time") or "--:--"))
+    arr = html.escape(str(flight.get("arrival_time") or "--:--"))
+    price = _price_text(item.get("price") or flight.get("price"))
+    tradeoff = html.escape(str(item.get("tradeoff") or item.get("note") or ""))
+    return f"{flight_no} {dep}-{arr} {price} {tradeoff}".strip()
+
+
+def _pushplus_same_day_alternative_lines(payload: dict) -> list[str]:
+    alternatives = payload.get("same_day_alternatives") or []
+    if not alternatives:
+        return []
+    lines = ["", "可选备选(由你决定):"]
+    for item in alternatives[:4]:
+        title = html.escape(str(item.get("title") or "备选方案"))
+        lines.append(f"{title}:{_alternative_flight_text(item)}")
+    return lines
+
+
+def _same_day_alternatives_body(payload: dict) -> str:
+    alternatives = payload.get("same_day_alternatives") or []
+    if not alternatives:
+        return ""
+    rows = []
+    for item in alternatives[:4]:
+        title = html.escape(str(item.get("title") or "备选方案"))
+        rows.append(
+            "<tr>"
+            f"<td style='color:#666;width:120px;'>{title}</td>"
+            f"<td>{_alternative_flight_text(item)}</td>"
+            "</tr>"
+        )
+    return (
+        "<div style='margin-bottom:8px;color:#444;'>可选备选(三种取舍,由你决定):</div>"
+        "<table style='width:100%;font-size:14px;line-height:1.7;border-collapse:collapse;'>"
+        + "".join(rows)
+        + "</table>"
+    )
+
+
 def render_pushplus(payload: dict) -> str:
     """Render the strictly short PushPlus message from the unified payload."""
     payload = payload or {}
@@ -5841,6 +5894,7 @@ def render_pushplus(payload: dict) -> str:
     same_day_note = str(payload.get("same_day_no_feasible_note") or "").strip()
     if same_day_note:
         lines.append("当天往返提示:" + html.escape(same_day_note))
+        lines.extend(_pushplus_same_day_alternative_lines(payload))
     lines.extend([
         f"结论:{recommendation}",
         f"购买条件:{buy_condition}",
@@ -5852,10 +5906,17 @@ def render_pushplus(payload: dict) -> str:
         lines.append(stay_line)
         windows = primary_plan.get("same_day_windows") or {}
         if windows:
+            if windows.get("buffer_model") == "airport_split":
+                reserve_text = (
+                    f"去程预留约{windows.get('outbound_reserve_minutes')}分钟,"
+                    f"返程预留约{windows.get('return_reserve_minutes')}分钟"
+                )
+            else:
+                reserve_text = f"车程约{windows.get('transport_min')}分钟+缓冲{windows.get('buffer_h')}小时"
             lines.append(
                 "当天往返安排:"
                 f"办事{windows.get('business_start')}-{windows.get('business_end')},"
-                f"车程约{windows.get('transport_min')}分钟+缓冲{windows.get('buffer_h')}小时"
+                f"{reserve_text}"
             )
     status_text = _plan_status_change_text(payload)
     if status_text:
@@ -7613,6 +7674,9 @@ def render_email(payload: dict) -> tuple[str, str]:
                 html.escape(str(payload.get("same_day_no_feasible_note"))),
             )
         )
+    same_day_alternatives_body = _same_day_alternatives_body(payload)
+    if same_day_alternatives_body:
+        cards.append(_email_card("可选备选方案", same_day_alternatives_body))
 
     cards.append(_email_card("为什么不推荐更便宜方案", _email_excluded_compact_body(payload)))
 
@@ -7715,6 +7779,9 @@ def render_detail_html(payload: dict) -> str:
                 html.escape(str(payload.get("same_day_no_feasible_note"))),
             )
         )
+    same_day_alternatives_body = _same_day_alternatives_body(payload)
+    if same_day_alternatives_body:
+        cards.append(_detail_section("可选备选方案", same_day_alternatives_body))
 
     excluded_body = _email_excluded_compact_body(payload)
     excluded_full = []

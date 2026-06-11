@@ -749,18 +749,18 @@ FORM_TEMPLATE = """
           <label>会议/办事开始时间 <input name="business_start" type="time" value="10:00"></label>
           <label>会议/办事结束时间 <input name="business_end" type="time" value="16:00"></label>
         </div>
-        <p class="hint">缓冲默认2.5小时，可在精准模式调整。</p>
+        <p class="hint">快速模式会按机场等级、车程估算和25分钟冗余自动预留。</p>
         <div class="precise-only">
-          <label>预留缓冲（应对延误/值机/安检）</label>
+          <label>时间预留设置</label>
+          <p id="airport-buffer-preview" class="hint">到达机场标准缓冲:系统按机场等级自动设定</p>
+          <label>机场⇄会议地点车程(分钟,选填)
+            <input name="user_transport_min" type="number" min="0" step="5" placeholder="不填则按机场到市区估算">
+          </label>
+          <label>冗余余量</label>
           <div class="choice">
-            <label><input type="radio" name="buffer_hours" value="2"> 2小时</label>
-            <label><input type="radio" name="buffer_hours" value="2.5" checked> 2.5小时（推荐）</label>
-            <label><input type="radio" name="buffer_hours" value="3"> 3小时</label>
-          </div>
-          <label>出行方式（影响机场往返时间）</label>
-          <div class="choice">
-            <label><input type="radio" name="transport_mode" value="taxi" checked> 打车</label>
-            <label><input type="radio" name="transport_mode" value="transit"> 地铁/公共交通</label>
+            <label><input type="radio" name="redundancy_min" value="15"> 15分钟</label>
+            <label><input type="radio" name="redundancy_min" value="25" checked> 25分钟(默认)</label>
+            <label><input type="radio" name="redundancy_min" value="40"> 40分钟</label>
           </div>
         </div>
       </div>
@@ -2066,12 +2066,57 @@ FORM_TEMPLATE = """
         .some(input => Boolean(input.value));
     }
 
+    function airportBufferFor(code) {
+      const upper = String(code || '').toUpperCase();
+      const mega = new Set(['PVG','PEK','PKX','CAN','CTU','TFU','SZX']);
+      const city = new Set(['SHA']);
+      if (mega.has(upper)) return { size: 'mega', arrival: 120, checkin: 110 };
+      if (city.has(upper)) return { size: 'city', arrival: 75, checkin: 75 };
+      return { size: 'medium', arrival: 90, checkin: 90 };
+    }
+
+    function estimatedTransportFor(code) {
+      const upper = String(code || '').toUpperCase();
+      const table = { PVG: 60, SHA: 30, PEK: 50, PKX: 70, CAN: 45, SZX: 45, CTU: 35, TFU: 70 };
+      return table[upper] || 45;
+    }
+
+    function firstActiveDestinationAirport() {
+      return (airportState.destination.active && airportState.destination.active[0]) || '';
+    }
+
+    function meetingReserveParts() {
+      const destAirport = firstActiveDestinationAirport();
+      const buffers = airportBufferFor(destAirport);
+      const transportInput = document.querySelector('input[name="user_transport_min"]');
+      const userTransport = Number(transportInput?.value || 0);
+      const transport = userTransport > 0 ? userTransport : estimatedTransportFor(destAirport);
+      const redundancy = Number(checkedValue('redundancy_min') || 25);
+      return {
+        destAirport,
+        arrivalBuffer: buffers.arrival,
+        checkinBuffer: buffers.checkin,
+        transport,
+        redundancy,
+        outboundReserve: buffers.arrival + transport + redundancy,
+        returnReserve: transport + buffers.checkin + redundancy,
+      };
+    }
+
+    function formatReserveMinutes(minutes) {
+      const total = Math.max(0, Number(minutes) || 0);
+      const hours = Math.floor(total / 60);
+      const mins = total % 60;
+      if (hours && mins) return `${hours}小时${mins}分`;
+      if (hours) return `${hours}小时`;
+      return `${mins}分钟`;
+    }
+
     function updateMeetingTimeHandoff() {
       const active = meetingHandoffActive();
       const start = document.querySelector('input[name="business_start"]')?.value || '';
       const end = document.querySelector('input[name="business_end"]')?.value || '';
-      const buffer = Number(checkedValue('buffer_hours') || 2.5);
-      const bufferMinutes = Math.round(buffer * 60);
+      const reserve = meetingReserveParts();
       if (meetingTimeHandoffCard) {
         meetingTimeHandoffCard.style.display = active ? 'block' : 'none';
       }
@@ -2081,13 +2126,18 @@ FORM_TEMPLATE = """
           input.disabled = active;
         });
       }
+      const bufferPreview = document.getElementById('airport-buffer-preview');
+      if (bufferPreview) {
+        const airportText = reserve.destAirport || '目的地机场';
+        bufferPreview.textContent = `到达机场标准缓冲:${airportText} ${reserve.arrivalBuffer}分钟; 返程值机安检缓冲:${reserve.checkinBuffer}分钟`;
+      }
       if (meetingTimeHandoffText && active) {
-        const outboundBy = addMinutesToTime(start, -bufferMinutes) || '提交后计算';
-        const returnAfter = addMinutesToTime(end, bufferMinutes) || '提交后计算';
+        const outboundBy = addMinutesToTime(start, -reserve.outboundReserve) || '提交后计算';
+        const returnAfter = addMinutesToTime(end, reserve.returnReserve) || '提交后计算';
         meetingTimeHandoffText.innerHTML =
-          `系统将按你的会议时间(${start}-${end}) + 预留${buffer}小时自动推算:<br>` +
-          `• 去程:约${outboundBy}前到达即可,不限起飞时段(清晨早班可选)<br>` +
-          `• 返程:约${returnAfter}后出发即可(晚班正常)`;
+          `系统将按你的会议时间(${start}-${end})自动推算,通用时间偏好本次不生效:<br>` +
+          `• 去程总预留 = 机场缓冲${reserve.arrivalBuffer}min + 车程${reserve.transport}min + 冗余${reserve.redundancy}min ≈ ${formatReserveMinutes(reserve.outboundReserve)}<br>` +
+          `→ 去程需 ${outboundBy} 前到达; 返程需 ${returnAfter} 后出发`;
       }
     }
 
@@ -2901,10 +2951,10 @@ FORM_TEMPLATE = """
         if (meetingHandoffActive()) {
           const start = document.querySelector('input[name="business_start"]')?.value || '';
           const end = document.querySelector('input[name="business_end"]')?.value || '';
-          const buffer = Number(checkedValue('buffer_hours') || 2.5);
+          const reserve = meetingReserveParts();
           summaryLine(
             '时间安排',
-            `由会议时间推算：会议${start || '未填'}-${end || '未填'} | 预留${buffer}小时 → 去程约${addMinutesToTime(start, -Math.round(buffer * 60)) || '提交后计算'}前到达 | 返程约${addMinutesToTime(end, Math.round(buffer * 60)) || '提交后计算'}后出发`
+            `由会议时间推算:会议${start || '未填'}-${end || '未填'} | 去程预留${formatReserveMinutes(reserve.outboundReserve)} → ${addMinutesToTime(start, -reserve.outboundReserve) || '提交后计算'}前到达 | 返程预留${formatReserveMinutes(reserve.returnReserve)} → ${addMinutesToTime(end, reserve.returnReserve) || '提交后计算'}后出发`
           );
         } else {
           summaryLine('时间偏好', timePreferenceText());
@@ -2954,8 +3004,8 @@ FORM_TEMPLATE = """
         same_day_round_trip: Boolean(document.querySelector('input[name="same_day_round_trip"]')?.checked),
         business_start: document.querySelector('input[name="business_start"]')?.value || '',
         business_end: document.querySelector('input[name="business_end"]')?.value || '',
-        buffer_hours: checkedValue('buffer_hours'),
-        transport_mode: checkedValue('transport_mode'),
+        user_transport_min: document.querySelector('input[name="user_transport_min"]')?.value || '',
+        redundancy_min: checkedValue('redundancy_min'),
         budget_strategy: checkedValue('price_strategy'),
         transfer_policy: checkedValue('transfer_policy'),
         baggage: checkedValue('baggage'),
@@ -3060,8 +3110,9 @@ FORM_TEMPLATE = """
       const businessEnd = document.querySelector('input[name="business_end"]');
       if (businessStart && data.business_start) businessStart.value = data.business_start;
       if (businessEnd && data.business_end) businessEnd.value = data.business_end;
-      if (data.buffer_hours) setRadio('buffer_hours', String(data.buffer_hours));
-      if (data.transport_mode) setRadio('transport_mode', data.transport_mode);
+      const userTransportInput = document.querySelector('input[name="user_transport_min"]');
+      if (userTransportInput && data.user_transport_min !== undefined) userTransportInput.value = data.user_transport_min || '';
+      if (data.redundancy_min) setRadio('redundancy_min', String(data.redundancy_min));
       if (form.trip_type && data.trip_type) {
         form.trip_type.value = data.trip_type;
       }
@@ -3270,7 +3321,7 @@ FORM_TEMPLATE = """
       updateConditionalFields();
       refreshSummaryIfFinalStep();
     }));
-    ['companions', 'travel_purpose', 'adult_count', 'child_count', 'elderly_count', 'infant_count', 'passenger_count', 'trip_natures', 'team_passenger_count', 'cabin_arrangement', 'business_start', 'business_end', 'buffer_hours', 'meeting_start', 'meeting_end', 'team_date_flexibility', 'same_flight_required', 'cabin_policy', 'user_level', 'business_seats', 'economy_seats', 'reimburse_per_person', 'invoice_needed', 'invoice_special_vat', 'invoice_cabin_limit', 'time_preference', 'refund_flexibility', 'airline_policy', 'accept_self_transfer', 'companion_constraints', 'solo_travel', 'no_late_arrival', 'prefer_daytime_arrival'].forEach(name => {
+    ['companions', 'travel_purpose', 'adult_count', 'child_count', 'elderly_count', 'infant_count', 'passenger_count', 'trip_natures', 'team_passenger_count', 'cabin_arrangement', 'business_start', 'business_end', 'user_transport_min', 'redundancy_min', 'meeting_start', 'meeting_end', 'team_date_flexibility', 'same_flight_required', 'cabin_policy', 'user_level', 'business_seats', 'economy_seats', 'reimburse_per_person', 'invoice_needed', 'invoice_special_vat', 'invoice_cabin_limit', 'time_preference', 'refund_flexibility', 'airline_policy', 'accept_self_transfer', 'companion_constraints', 'solo_travel', 'no_late_arrival', 'prefer_daytime_arrival'].forEach(name => {
       document.querySelectorAll(`input[name="${name}"]`).forEach(input => {
         input.addEventListener('change', () => {
           syncPrefCards();
@@ -3975,8 +4026,8 @@ def build_subscription(form) -> dict:
         max_budget = infer_max_budget(parse_int(form.get("max_budget"), 0), target_price)
     business_start = form.get("business_start", "").strip()
     business_end = form.get("business_end", "").strip()
-    buffer_hours = parse_float(form.get("buffer_hours"), 2.5)
-    transport_mode = form.get("transport_mode", "taxi")
+    user_transport_min = parse_int(form.get("user_transport_min"), 0)
+    redundancy_min = parse_int(form.get("redundancy_min"), 25)
     max_extra_duration_hours = None
     max_total_duration_hours = None
     if form.get("transfer_policy", "reasonable") in {"reasonable", "short_ok", "price_first"}:
@@ -4189,8 +4240,8 @@ def build_subscription(form) -> dict:
             "same_day_round_trip": same_day_round_trip,
             "business_start": business_start if same_day_round_trip else "",
             "business_end": business_end if same_day_round_trip else "",
-            "buffer_hours": buffer_hours if same_day_round_trip else None,
-            "transport_mode": transport_mode if same_day_round_trip else "taxi",
+            "user_transport_min": user_transport_min if same_day_round_trip and user_transport_min > 0 else None,
+            "redundancy_min": redundancy_min if same_day_round_trip else 25,
             "time_source": "meeting_derived" if same_day_round_trip and business_start and business_end else "user_defined",
             "trip_nature": trip_nature,
             "trip_natures": trip_natures,
@@ -4291,8 +4342,8 @@ def build_subscription(form) -> dict:
             "same_day_round_trip": same_day_round_trip,
             "business_start": business_start if same_day_round_trip else "",
             "business_end": business_end if same_day_round_trip else "",
-            "buffer_hours": buffer_hours if same_day_round_trip else None,
-            "transport_mode": transport_mode if same_day_round_trip else "taxi",
+            "user_transport_min": user_transport_min if same_day_round_trip and user_transport_min > 0 else None,
+            "redundancy_min": redundancy_min if same_day_round_trip else 25,
             "time_source": "meeting_derived" if same_day_round_trip and business_start and business_end else "user_defined",
             "trip_nature": trip_nature,
             "trip_natures": trip_natures,
