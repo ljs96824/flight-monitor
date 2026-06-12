@@ -123,6 +123,7 @@ class WebFormTemplateStep2Test(unittest.TestCase):
         form = Form(
             {
                 "round_trip": "false",
+                "monitor_mode": "precise",
                 "same_day_round_trip": "true",
                 "business_start": "10:00",
                 "business_end": "16:00",
@@ -230,6 +231,13 @@ class WebFormTemplateStep2Test(unittest.TestCase):
         self.assertEqual(subscription["basic"]["passenger_count"], 8)
         self.assertEqual(subscription["constraints"]["reimburse_per_person"], 5000)
         self.assertEqual(subscription["hard_constraints"]["cabin_policy"], "level_based")
+
+    def test_duplicate_travel_scene_fields_are_removed_from_ui(self):
+        self.assertIn('name="travel_scenario"', FORM_TEMPLATE)
+        self.assertNotIn('name="travel_purpose"', FORM_TEMPLATE)
+        self.assertNotIn('name="trip_type"', FORM_TEMPLATE)
+        self.assertIn('class="smart-panel precise-only"', FORM_TEMPLATE)
+        self.assertIn('disablePreciseOnlyFields', FORM_TEMPLATE)
 
     def test_route_type_and_domestic_invoice_are_saved(self):
         class Form(dict):

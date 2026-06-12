@@ -880,6 +880,7 @@ FORM_TEMPLATE = """
       <div class="quick-only">
       <label>购票人数</label>
       <input type="number" name="passenger_count" min="1" value="1">
+      </div>
 
       <label>本次出行场景（可多选）</label>
       <div class="choice">
@@ -893,7 +894,6 @@ FORM_TEMPLATE = """
         <label><input type="checkbox" name="travel_scenario" value="price_first"> 价格优先</label>
       </div>
       <div id="travel-scenario-notice" class="auto-notice"></div>
-      </div>
 
       <button id="advanced-toggle" class="secondary-button precise-only" type="button">＋ 补充偏好，让推荐更准确</button>
       <div id="advanced-preferences" class="smart-panel precise-only">
@@ -930,15 +930,6 @@ FORM_TEMPLATE = """
         </div>
 
         <div id="pref-detail-companions" class="pref-card-detail">
-        <label>出行目的/类型（可多选）</label>
-        <div class="choice">
-          <label><input type="checkbox" name="travel_purpose" value="business"> 商务/会议</label>
-          <label><input type="checkbox" name="travel_purpose" value="tourism"> 旅游</label>
-          <label><input type="checkbox" name="travel_purpose" value="family_visit"> 探亲/回家</label>
-          <label><input type="checkbox" name="travel_purpose" value="family"> 家庭/亲子</label>
-          <label><input type="checkbox" name="travel_purpose" value="important"> 重要事项</label>
-          <label><input type="checkbox" name="travel_purpose" value="price_first"> 价格优先</label>
-        </div>
         <label>购票人数</label>
         <div class="inline-grid">
           <label>成人 <input type="number" name="adult_count" min="0" value="1"></label>
@@ -1102,16 +1093,6 @@ FORM_TEMPLATE = """
           <label><input type="radio" name="price_sensitivity" value="high"> 便宜500元以上，可以接受中转或更长耗时</label>
           <label><input type="radio" name="price_sensitivity" value="max"> 价格优先，只要显著便宜都可以看</label>
         </div>
-
-        <label>出行类型</label>
-        <select name="trip_type">
-          <option value="business_meeting">商务会议</option>
-          <option value="tourism" selected>旅游</option>
-          <option value="family_visit">探亲</option>
-          <option value="student_return">学生返校</option>
-          <option value="family_elder">家庭老人同行</option>
-          <option value="other">其他</option>
-        </select>
 
         <label>出行性质（可多选）</label>
         <div class="choice">
@@ -1784,12 +1765,19 @@ FORM_TEMPLATE = """
     }
 
     function selectedTravelScenarios() {
-      if (checkedValue('monitor_mode') === 'precise') {
-        const purposes = checkedValues('travel_purpose');
-        if (purposes.length) return purposes;
-      }
       const values = checkedValues('travel_scenario');
       return values.length ? values : ['personal'];
+    }
+
+    function deriveTripTypeFromScenarios(scenarios) {
+      const values = scenarios || [];
+      if (values.includes('business')) return 'business';
+      if (values.includes('tourism')) return 'tourism';
+      if (values.includes('family_visit') || values.includes('visit_family')) return 'visit_family';
+      if (values.includes('family') || values.includes('elderly')) return 'family';
+      if (values.includes('important')) return 'important';
+      if (values.includes('price_first')) return 'price_first';
+      return 'other';
     }
 
     function selectedLabels(name) {
@@ -1799,10 +1787,6 @@ FORM_TEMPLATE = """
     }
 
     function selectedScenarioLabels() {
-      if (checkedValue('monitor_mode') === 'precise') {
-        const purposeLabels = selectedLabels('travel_purpose');
-        if (purposeLabels.length) return purposeLabels;
-      }
       return selectedLabels('travel_scenario');
     }
 
@@ -1979,16 +1963,28 @@ FORM_TEMPLATE = """
       }, 260);
     }
 
+    function disablePreciseOnlyFields(disabled) {
+      document.querySelectorAll('.precise-only').forEach(el => {
+        el.querySelectorAll('input, select, textarea, button').forEach(control => {
+          control.disabled = disabled;
+        });
+      });
+    }
+
     function applyMonitorMode() {
       const precise = checkedValue('monitor_mode') === 'precise';
       document.querySelectorAll('.precise-only').forEach(el => {
         el.style.display = precise ? 'block' : 'none';
       });
+      disablePreciseOnlyFields(!precise);
       document.querySelectorAll('.quick-only').forEach(el => {
         el.style.display = precise ? 'none' : 'block';
+        el.querySelectorAll('input, select, textarea, button').forEach(control => {
+          control.disabled = precise;
+        });
       });
       if (precise) {
-        syncTravelPurposesFromQuickScenarios();
+        syncPreciseDefaultsFromQuickScenarios();
       }
       if (quickDefaultsNote) {
         quickDefaultsNote.style.display = precise ? 'none' : 'block';
@@ -2013,17 +2009,8 @@ FORM_TEMPLATE = """
       refreshSummaryIfFinalStep();
     }
 
-    function syncTravelPurposesFromQuickScenarios() {
-      const purposeInputs = Array.from(document.querySelectorAll('input[name="travel_purpose"]'));
-      if (!purposeInputs.length || checkedValues('travel_purpose').length) {
-        return;
-      }
+    function syncPreciseDefaultsFromQuickScenarios() {
       const scenarios = selectedTravelScenarios();
-      scenarios.forEach(value => {
-        const mapped = value === 'elderly' ? 'family' : value;
-        const input = document.querySelector(`input[name="travel_purpose"][value="${mapped}"]`);
-        if (input) input.checked = true;
-      });
       const adultInput = document.querySelector('input[name="adult_count"]');
       const childInput = document.querySelector('input[name="child_count"]');
       const elderlyInput = document.querySelector('input[name="elderly_count"]');
@@ -2712,7 +2699,6 @@ FORM_TEMPLATE = """
       if (savedTimeMode) setRadio('time_preference', savedTimeMode === 'any' ? 'unlimited' : savedTimeMode);
       if (soft.refund_flexibility) setRadio('refund_flexibility', soft.refund_flexibility);
       if (soft.price_sensitivity) setRadio('price_sensitivity', soft.price_sensitivity);
-      if (soft.trip_type && form.trip_type) form.trip_type.value = soft.trip_type;
       if (soft.airline_policy) setRadio('airline_policy', soft.airline_policy);
       if (soft.exclude_airlines) form.exclude_airlines.value = (soft.exclude_airlines || []).join(', ');
       if (hard.accept_self_transfer !== undefined) setRadio('accept_self_transfer', String(Boolean(hard.accept_self_transfer)));
@@ -3118,7 +3104,7 @@ FORM_TEMPLATE = """
         time_preference: checkedValue('time_preference'),
         refund_flexibility: checkedValue('refund_flexibility'),
         price_sensitivity: checkedValue('price_sensitivity'),
-        trip_type: form.trip_type ? form.trip_type.value : '',
+        trip_type: deriveTripTypeFromScenarios(selectedTravelScenarios()),
         trip_nature: checkedValues('trip_natures')[0] || checkedValue('trip_nature'),
         trip_natures: checkedValues('trip_natures'),
         meeting_start: document.querySelector('input[name="meeting_start"]')?.value || '',
@@ -3137,7 +3123,7 @@ FORM_TEMPLATE = """
         invoice_cabin_limit: Boolean(document.querySelector('input[name="invoice_cabin_limit"]')?.checked),
         travel_scenario: selectedTravelScenarios()[0],
         travel_scenarios: selectedTravelScenarios(),
-        travel_purposes: checkedValues('travel_purpose'),
+        travel_purposes: selectedTravelScenarios(),
         passenger_count: Number(document.querySelector('input[name="passenger_count"]')?.value || 1),
         passengers: {
           adult: Number(document.querySelector('input[name="adult_count"]')?.value || 0),
@@ -3224,9 +3210,6 @@ FORM_TEMPLATE = """
       if (returnSetOffInput && data.return_set_off !== undefined) returnSetOffInput.value = data.return_set_off || '';
       if (data.transport_margin_mode) setRadio('transport_margin_mode', String(data.transport_margin_mode));
       if (data.redundancy_min) setRadio('redundancy_min', String(data.redundancy_min));
-      if (form.trip_type && data.trip_type) {
-        form.trip_type.value = data.trip_type;
-      }
       const templateTripNatures = data.trip_natures || (data.trip_nature ? [data.trip_nature] : []);
       document.querySelectorAll('input[name="trip_natures"]').forEach(input => {
         input.checked = templateTripNatures.includes(input.value);
@@ -3432,7 +3415,7 @@ FORM_TEMPLATE = """
       updateConditionalFields();
       refreshSummaryIfFinalStep();
     }));
-    ['companions', 'travel_purpose', 'adult_count', 'child_count', 'elderly_count', 'infant_count', 'passenger_count', 'trip_natures', 'team_passenger_count', 'cabin_arrangement', 'business_start', 'business_end', 'outbound_set_off', 'return_set_off', 'user_transport_min', 'transport_margin_mode', 'redundancy_min', 'meeting_start', 'meeting_end', 'team_date_flexibility', 'same_flight_required', 'cabin_policy', 'user_level', 'business_seats', 'economy_seats', 'reimburse_per_person', 'invoice_needed', 'invoice_special_vat', 'invoice_cabin_limit', 'time_preference', 'refund_flexibility', 'airline_policy', 'accept_self_transfer', 'companion_constraints', 'solo_travel', 'no_late_arrival', 'prefer_daytime_arrival'].forEach(name => {
+    ['companions', 'adult_count', 'child_count', 'elderly_count', 'infant_count', 'passenger_count', 'trip_natures', 'team_passenger_count', 'cabin_arrangement', 'business_start', 'business_end', 'outbound_set_off', 'return_set_off', 'user_transport_min', 'transport_margin_mode', 'redundancy_min', 'meeting_start', 'meeting_end', 'team_date_flexibility', 'same_flight_required', 'cabin_policy', 'user_level', 'business_seats', 'economy_seats', 'reimburse_per_person', 'invoice_needed', 'invoice_special_vat', 'invoice_cabin_limit', 'time_preference', 'refund_flexibility', 'airline_policy', 'accept_self_transfer', 'companion_constraints', 'solo_travel', 'no_late_arrival', 'prefer_daytime_arrival'].forEach(name => {
       document.querySelectorAll(`input[name="${name}"]`).forEach(input => {
         input.addEventListener('change', () => {
           syncPrefCards();
@@ -3951,6 +3934,23 @@ def parse_count_alias(form, *names: str) -> int:
     return 0
 
 
+def derive_trip_type_from_scenarios(scenarios: list[str]) -> str:
+    values = [str(item).strip() for item in scenarios if str(item).strip()]
+    if "business" in values:
+        return "business"
+    if "tourism" in values:
+        return "tourism"
+    if "family_visit" in values or "visit_family" in values:
+        return "visit_family"
+    if "family" in values or "elderly" in values:
+        return "family"
+    if "important" in values:
+        return "important"
+    if "price_first" in values:
+        return "price_first"
+    return "other"
+
+
 def parse_optional_budget(value: str | None, budget_mode: str) -> int | None:
     if budget_mode != "fixed":
         return parse_int(value, 0) or None
@@ -4250,7 +4250,7 @@ def build_subscription(form) -> dict:
         if not any(precise_passengers.values()):
             precise_passengers["adult"] = quick_passenger_count
         passenger_count = sum(precise_passengers.values())
-        travel_scenarios = form.getlist("travel_purpose") or form.getlist("travel_scenario")
+        travel_scenarios = form.getlist("travel_scenario")
     else:
         passenger_count = quick_passenger_count
         precise_passengers = {"adult": passenger_count, "child": 0, "elderly": 0, "infant": 0}
@@ -4265,6 +4265,13 @@ def build_subscription(form) -> dict:
     if not travel_scenarios:
         travel_scenarios = ["personal"]
     travel_scenario = travel_scenarios[0]
+    derived_trip_type = derive_trip_type_from_scenarios(travel_scenarios)
+    if monitor_mode != "precise":
+        outbound_set_off = ""
+        return_set_off = ""
+        user_transport_min = 0
+        transport_margin_mode = "standard"
+        redundancy_min = 25
     if precise_passengers.get("child") and precise_passengers.get("elderly"):
         companions = "with_elderly_child"
     elif precise_passengers.get("child"):
@@ -4283,6 +4290,15 @@ def build_subscription(form) -> dict:
     invoice_special_vat = parse_bool(form.get("invoice_special_vat", "false"))
     invoice_cabin_limit = parse_bool(form.get("invoice_cabin_limit", "false"))
     raw_trip_natures = form.getlist("trip_natures") if hasattr(form, "getlist") else []
+    if monitor_mode != "precise":
+        companion_constraints = []
+        solo_travel = False
+        no_late_arrival = False
+        prefer_daytime_arrival = False
+        invoice_needed = False
+        invoice_special_vat = False
+        invoice_cabin_limit = False
+        raw_trip_natures = []
     if not raw_trip_natures:
         legacy_trip_nature = form.get("trip_nature", "").strip()
         raw_trip_natures = [legacy_trip_nature] if legacy_trip_nature else []
@@ -4326,6 +4342,18 @@ def build_subscription(form) -> dict:
     team_date_flexibility = form.get("team_date_flexibility", "fixed").strip() or "fixed"
     same_flight_required = parse_bool(form.get("same_flight_required", "false"))
     reimburse_per_person = parse_int(form.get("reimburse_per_person"), 0)
+    if monitor_mode != "precise":
+        meeting_start = ""
+        meeting_end = ""
+        team_passenger_count = 0
+        cabin_arrangement = "economy_all"
+        cabin_policy = "economy_only"
+        user_level = "staff"
+        business_seats = 0
+        economy_seats = passenger_count
+        team_date_flexibility = "fixed"
+        same_flight_required = False
+        reimburse_per_person = 0
 
     return {
         "basic": {
@@ -4381,7 +4409,7 @@ def build_subscription(form) -> dict:
             "travelers": companions,
             "passengers": precise_passengers,
             "passenger_count": passenger_count,
-            "travel_purposes": travel_scenarios if monitor_mode == "precise" else [],
+            "travel_purposes": travel_scenarios,
             "travel_scenario": travel_scenario,
             "travel_scenarios": travel_scenarios,
             "companion_constraints": companion_constraints,
@@ -4394,7 +4422,7 @@ def build_subscription(form) -> dict:
             "time_pref": time_mode,
             "refund_policy": form.get("refund_flexibility", "preferred"),
             "price_sensitivity": form.get("price_sensitivity", "low"),
-            "travel_type": form.get("trip_type", "tourism"),
+            "travel_type": derived_trip_type,
         },
         "advanced_rules": {
             "time_windows": {
@@ -4496,7 +4524,7 @@ def build_subscription(form) -> dict:
             "accept_self_transfer": parse_bool(form.get("accept_self_transfer", "false")),
         },
         "soft_preferences": {
-            "trip_type": form.get("trip_type", "tourism"),
+            "trip_type": derived_trip_type,
             "time_preference": time_mode,
             "time_preference_mode": time_mode,
             "departure_time_windows": departure_time_windows,
@@ -4509,7 +4537,7 @@ def build_subscription(form) -> dict:
             "early_morning_allowed": early_morning_allowed_from_windows(time_mode, all_time_windows),
             "travel_scenario": travel_scenario,
             "travel_scenarios": travel_scenarios,
-            "travel_purposes": travel_scenarios if monitor_mode == "precise" else [],
+            "travel_purposes": travel_scenarios,
             "passengers": precise_passengers,
             "passenger_count": passenger_count,
             "travelers": companions,
