@@ -56,6 +56,15 @@ class WebFormTemplateStep2Test(unittest.TestCase):
         self.assertIn('data-show-if="transfer_policy=reasonable|price_first"', FORM_TEMPLATE)
         self.assertIn('data-show-if="transfer_policy=price_first"', FORM_TEMPLATE)
 
+    def test_time_business_and_reminder_reduction_markers_exist(self):
+        self.assertIn('id="custom-time-options" data-show-if="time_preference=custom"', FORM_TEMPLATE)
+        self.assertIn('id="precise-time-toggle"', FORM_TEMPLATE)
+        self.assertIn('data-show-if="time_preference=custom"', FORM_TEMPLATE)
+        self.assertIn('id="business-rules-module" data-show-if="business_context=true"', FORM_TEMPLATE)
+        self.assertIn('id="notification_frequency_rule_shadow"', FORM_TEMPLATE)
+        self.assertIn("syncNotificationFrequencyShadow", FORM_TEMPLATE)
+        self.assertNotIn('id="advanced-frequency-copy"', FORM_TEMPLATE)
+
     def test_same_day_round_trip_field_exists(self):
         self.assertIn('name="same_day_round_trip"', FORM_TEMPLATE)
         self.assertIn('name="business_start"', FORM_TEMPLATE)
@@ -136,6 +145,7 @@ class WebFormTemplateStep2Test(unittest.TestCase):
                 "destination": "PEK",
                 "depart_date": "2026-06-10",
                 "price_strategy": "auto_judge",
+                "travel_scenario": ["business"],
                 "transfer_policy": "reasonable",
                 "baggage": "required",
                 "primary_goal": "buy_timing",
@@ -189,6 +199,7 @@ class WebFormTemplateStep2Test(unittest.TestCase):
                 "destination": "PEK",
                 "depart_date": "2026-06-10",
                 "price_strategy": "auto_judge",
+                "travel_scenario": ["business"],
                 "transfer_policy": "reasonable",
                 "baggage": "required",
                 "primary_goal": "buy_timing",
@@ -256,6 +267,7 @@ class WebFormTemplateStep2Test(unittest.TestCase):
                 "destination": "PEK",
                 "depart_date": "2026-06-10",
                 "price_strategy": "auto_judge",
+                "travel_scenario": ["business"],
                 "transfer_policy": "reasonable",
                 "baggage": "required",
                 "primary_goal": "buy_timing",

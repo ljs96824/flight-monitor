@@ -876,6 +876,24 @@ FORM_TEMPLATE = """
         <label><input type="radio" name="notification_frequency" value="daily_digest"> 每天汇总一次</label>
         <label><input type="radio" name="notification_frequency" value="price_change"> 价格变化就提醒</label>
       </div>
+      <input id="notification_frequency_rule_shadow" type="hidden" name="notification_frequency_rule" value="important_only">
+      <div class="sub-options" data-show-if="notification_frequency=price_change">
+        <label>什么算价格变化？</label>
+        <div class="choice">
+          <label><input type="radio" name="price_change_threshold" value="any"> 每次变化</label>
+          <label><input type="radio" name="price_change_threshold" value="down_100" checked> 降超100元</label>
+          <label><input type="radio" name="price_change_threshold" value="down_300"> 降超300元</label>
+          <label><input type="radio" name="price_change_threshold" value="low_zone"> 进入低价区间</label>
+        </div>
+      </div>
+      <div class="sub-options" data-show-if="notification_frequency=daily_digest">
+        <label>汇总时间</label>
+        <div class="choice">
+          <label><input type="radio" name="digest_time" value="09:00" checked> 早9点</label>
+          <label><input type="radio" name="digest_time" value="12:00"> 中午12点</label>
+          <label><input type="radio" name="digest_time" value="20:00"> 晚8点</label>
+        </div>
+      </div>
 
       <div class="quick-only">
       <label>购票人数</label>
@@ -1061,18 +1079,6 @@ FORM_TEMPLATE = """
             </div>
           </fieldset>
         </div>
-        <button id="precise-time-toggle" class="secondary-button" type="button" style="font-size:13px;padding:8px;margin-top:10px;">需要更精确？按小时设置</button>
-        <div id="precise-time-options" class="sub-options">
-          <label>最早起飞</label>
-          <input type="time" name="departure_time_start">
-          <label>最晚起飞</label>
-          <input type="time" name="departure_time_end">
-          <label>最早到达</label>
-          <input type="time" name="arrival_time_start">
-          <label>最晚到达</label>
-          <input type="time" name="arrival_time_end">
-          <p class="hint">填写后会覆盖上面的自然语言时段。</p>
-        </div>
         </div>
         </div>
         </div>
@@ -1094,6 +1100,7 @@ FORM_TEMPLATE = """
           <label><input type="radio" name="price_sensitivity" value="max"> 价格优先，只要显著便宜都可以看</label>
         </div>
 
+        <div id="business-rules-module" data-show-if="business_context=true">
         <label>出行性质（可多选）</label>
         <div class="choice">
           <label><input type="checkbox" name="trip_natures" value="business"> 商务出差</label>
@@ -1175,6 +1182,7 @@ FORM_TEMPLATE = """
           <p class="hint">国内航线会优先提示航司官网、携程、飞猪、去哪儿等渠道的报销友好度，具体开票能力以平台支付页为准。</p>
         </div>
         </div>
+        </div>
         <p class="hint">这些偏好会影响推荐排序，不会影响是否创建监控</p>
       </fieldset>
     </div>
@@ -1222,6 +1230,24 @@ FORM_TEMPLATE = """
           </div>
           </div>
 
+          <div id="precise-time-module">
+          <div class="module-heading">
+            <label>小时级精确设置</label>
+          </div>
+          <button id="precise-time-toggle" class="secondary-button" type="button" data-show-if="time_preference=custom" style="font-size:13px;padding:8px;margin-top:10px;">需要更精确？按小时设置</button>
+          <div id="precise-time-options" class="sub-options">
+            <label>最早起飞</label>
+            <input type="time" name="departure_time_start">
+            <label>最晚起飞</label>
+            <input type="time" name="departure_time_end">
+            <label>最早到达</label>
+            <input type="time" name="arrival_time_start">
+            <label>最晚到达</label>
+            <input type="time" name="arrival_time_end">
+            <p class="hint">填写后会覆盖上面的自然语言时段。</p>
+          </div>
+          </div>
+
           <div id="pref-detail-airline" class="pref-card-detail">
           <div class="module-heading">
             <label>航司偏好</label>
@@ -1261,31 +1287,6 @@ FORM_TEMPLATE = """
           </div>
           <p id="date-flex-warning" class="inline-warning">你选了不可调整，但仍可接收前后日期差价参考</p>
 
-          <div id="advanced-frequency-copy" style="display:none">
-          <label>提醒频率</label>
-          <div class="choice">
-            <label><input type="radio" name="notification_frequency_rule" value="important_only" checked> 仅重要变化时提醒（价格显著下降、即将涨价）</label>
-            <label><input type="radio" name="notification_frequency_rule" value="daily_digest"> 每天汇总推送一次</label>
-            <label><input type="radio" name="notification_frequency_rule" value="price_change"> 每次价格变化都提醒</label>
-          </div>
-          <div class="sub-options" data-show-if="notification_frequency_rule=price_change">
-            <label>什么算价格变化？</label>
-            <div class="choice">
-              <label><input type="radio" name="price_change_threshold" value="any"> 每次变化</label>
-              <label><input type="radio" name="price_change_threshold" value="down_100" checked> 降超100元</label>
-              <label><input type="radio" name="price_change_threshold" value="down_300"> 降超300元</label>
-              <label><input type="radio" name="price_change_threshold" value="low_zone"> 进入低价区间</label>
-            </div>
-          </div>
-          <div class="sub-options" data-show-if="notification_frequency_rule=daily_digest">
-            <label>汇总时间</label>
-            <div class="choice">
-              <label><input type="radio" name="digest_time" value="09:00" checked> 早9点</label>
-              <label><input type="radio" name="digest_time" value="12:00"> 中午12点</label>
-              <label><input type="radio" name="digest_time" value="20:00"> 晚8点</label>
-            </div>
-          </div>
-          </div>
           <p class="hint">规则越严格，可能匹配的方案越少。如果没有结果，系统会提示你放宽哪些条件</p>
         </fieldset>
       </div>
@@ -1434,6 +1435,7 @@ FORM_TEMPLATE = """
     const notificationMethodRadios = document.querySelectorAll('input[name="notification_method"]');
     const notificationFrequencyRadios = document.querySelectorAll('input[name="notification_frequency"]');
     const notificationFrequencyRuleRadios = document.querySelectorAll('input[name="notification_frequency_rule"]');
+    const notificationFrequencyRuleShadow = document.getElementById('notification_frequency_rule_shadow');
     const notificationEmailInput = document.getElementById('notification_email');
     const emailReminderWrap = document.getElementById('email-reminder-wrap');
     const emailError = document.getElementById('email-error');
@@ -1492,11 +1494,47 @@ FORM_TEMPLATE = """
     }
 
     function currentValues(name) {
+      if (name === 'business_context') {
+        const precise = checkedValue('monitor_mode') === 'precise';
+        const scenarios = selectedTravelScenarios();
+        const natures = checkedValues('trip_natures');
+        const active = precise && (
+          scenarios.includes('business')
+          || natures.some(value => ['business', 'meeting', 'team_building'].includes(value))
+          || Boolean(sameDayRoundTrip?.checked)
+        );
+        return active ? ['true'] : [];
+      }
       const checked = Array.from(document.querySelectorAll(`input[name="${name}"]:checked`))
         .map(input => input.value);
       if (checked.length) return checked;
       const value = checkedValue(name);
       return value ? [value] : [];
+    }
+
+    function conditionalVisible(el) {
+      let node = el;
+      while (node && node !== document.body) {
+        if (node.dataset && node.dataset.showIf && node.style.display === 'none') {
+          return false;
+        }
+        node = node.parentElement;
+      }
+      return true;
+    }
+
+    function syncConditionalDisabled() {
+      document.querySelectorAll('[data-show-if]').forEach(el => {
+        const disabled = !conditionalVisible(el);
+        el.querySelectorAll('input, select, textarea').forEach(control => {
+          control.disabled = disabled;
+        });
+      });
+      if (checkedValue('monitor_mode') !== 'precise') {
+        disablePreciseOnlyFields(true);
+      }
+      toggleShortTransferOptions();
+      syncPreciseTimeDisabled();
     }
 
     function updateConditionalFields() {
@@ -1511,9 +1549,10 @@ FORM_TEMPLATE = """
             const values = String(rawValue || '').split('|');
             const current = currentValues(field);
             return Boolean(field && current.some(value => values.includes(value)));
-          });
+        });
         el.style.display = shouldShow ? 'block' : 'none';
       });
+      syncConditionalDisabled();
     }
 
     document.querySelectorAll('input, select').forEach(input => {
@@ -1524,7 +1563,7 @@ FORM_TEMPLATE = """
       time: ['pref-detail-time'],
       transfer: ['transfer-rules-module'],
       airline: ['pref-detail-airline'],
-      alerts: ['alerts-secondary-options', 'advanced-frequency-copy']
+      alerts: ['alerts-secondary-options']
     };
 
     function moduleInputs(moduleName) {
@@ -2020,9 +2059,24 @@ FORM_TEMPLATE = """
       syncPrefCards();
     }
 
+    function syncPreciseTimeDisabled() {
+      const custom = checkedValue('time_preference') === 'custom'
+        && checkedValue('monitor_mode') === 'precise'
+        && !meetingHandoffActive();
+      const preciseOpen = custom && preciseTimeOptions && preciseTimeOptions.style.display === 'block';
+      if (preciseTimeToggle) {
+        preciseTimeToggle.disabled = !custom;
+      }
+      preciseTimeOptions?.querySelectorAll('input, select, textarea').forEach(control => {
+        control.disabled = !preciseOpen;
+      });
+    }
+
     function toggleTimePreference() {
       const preference = checkedValue('time_preference') || 'unlimited';
-      const custom = preference === 'custom' && checkedValue('monitor_mode') === 'precise';
+      const custom = preference === 'custom'
+        && checkedValue('monitor_mode') === 'precise'
+        && !meetingHandoffActive();
       if (customTimeOptions) {
         customTimeOptions.style.display = custom ? 'block' : 'none';
       }
@@ -2039,6 +2093,10 @@ FORM_TEMPLATE = """
       if (roundTripTimePreferences) {
         roundTripTimePreferences.style.display = custom && isRoundTrip ? 'block' : 'none';
       }
+      if (preciseTimeToggle) {
+        preciseTimeToggle.style.display = custom ? 'block' : 'none';
+      }
+      syncPreciseTimeDisabled();
     }
 
     function timePreferenceText() {
@@ -2469,17 +2527,18 @@ FORM_TEMPLATE = """
     }
 
     function syncNotificationFrequencyFromRule() {
-      const value = checkedValue('notification_frequency_rule');
-      if (value) {
-        setRadio('notification_frequency', value);
-      }
+      syncNotificationFrequencyShadow();
     }
 
     function syncNotificationFrequencyToRule() {
       const value = checkedValue('notification_frequency');
-      if (value) {
-        setRadio('notification_frequency_rule', value);
+      if (notificationFrequencyRuleShadow) {
+        notificationFrequencyRuleShadow.value = value || 'important_only';
       }
+    }
+
+    function syncNotificationFrequencyShadow() {
+      syncNotificationFrequencyToRule();
     }
 
     function toggleShortTransferOptions() {
@@ -2711,7 +2770,7 @@ FORM_TEMPLATE = """
       if (goals.email) notificationEmailInput.value = goals.email;
       if (goals.frequency) {
         setRadio('notification_frequency', goals.frequency);
-        setRadio('notification_frequency_rule', goals.frequency);
+        syncNotificationFrequencyShadow();
       }
     }
 
@@ -2924,12 +2983,8 @@ FORM_TEMPLATE = """
         lines.push(['航司', blockedText ? `不接受 ${blockedText}` : selectedLabel('airline_policy')]);
       }
       if (moduleIsDirty('alerts')) {
-        let text = selectedLabel('notification_frequency_rule') || selectedLabel('notification_frequency');
-        if (checkedValue('notification_frequency_rule') === 'price_change') {
-          text += `，${selectedLabel('price_change_threshold')}`;
-        } else if (checkedValue('notification_frequency_rule') === 'daily_digest') {
-          text += `，${selectedLabel('digest_time')}`;
-        }
+        const secondary = selectedCheckboxLabels('secondary_goals');
+        const text = secondary.length ? secondary.join('、') : selectedLabel('primary_goal');
         lines.push(['提醒', text]);
       }
       if (!lines.length) {
@@ -3193,7 +3248,8 @@ FORM_TEMPLATE = """
         setRadio('price_strategy', data.budget_strategy);
       }
       if (data.notification_frequency) {
-        setRadio('notification_frequency_rule', data.notification_frequency);
+        setRadio('notification_frequency', data.notification_frequency);
+        syncNotificationFrequencyShadow();
       }
       if (sameDayRoundTrip) {
         sameDayRoundTrip.checked = Boolean(data.same_day_round_trip);
@@ -3383,6 +3439,8 @@ FORM_TEMPLATE = """
     preciseTimeToggle?.addEventListener('click', () => {
       if (!preciseTimeOptions) return;
       preciseTimeOptions.style.display = preciseTimeOptions.style.display === 'block' ? 'none' : 'block';
+      syncPreciseTimeDisabled();
+      refreshSummaryIfFinalStep();
     });
     notificationMethodRadios.forEach(radio => radio.addEventListener('change', () => {
       toggleNotificationMethod();
@@ -3463,6 +3521,7 @@ FORM_TEMPLATE = """
     toggleReturnDate();
     toggleBudgetRequired();
     toggleNotificationMethod();
+    syncNotificationFrequencyShadow();
     toggleShortTransferOptions();
     updateConditionalFields();
     updateDateFlexHint();
@@ -4144,12 +4203,21 @@ def build_subscription(form) -> dict:
     if transport_margin_mode not in {"tight", "standard", "loose"}:
         transport_margin_mode = "standard"
     redundancy_min = parse_int(form.get("redundancy_min"), 25)
+    transfer_policy = form.get("transfer_policy", "reasonable")
     max_extra_duration_hours = None
     max_total_duration_hours = None
-    if form.get("transfer_policy", "reasonable") in {"reasonable", "short_ok", "price_first"}:
+    if transfer_policy in {"reasonable", "short_ok", "price_first"}:
         max_extra_duration_hours, max_total_duration_hours = parse_short_transfer_limit(
             form.get("short_transfer_limit") or "extra_6"
         )
+    accept_overnight_transfer = (
+        transfer_policy == "price_first"
+        and parse_bool(form.get("accept_overnight_transfer", "false"))
+    )
+    accept_self_transfer = (
+        transfer_policy == "price_first"
+        and parse_bool(form.get("accept_self_transfer", "false"))
+    )
     time_mode = normalize_time_preference_mode(form.get("time_preference"))
     departure_slots = time_slots_from_preference(
         form, "departure_slots", DEFAULT_DEPARTURE_SLOTS
@@ -4223,14 +4291,22 @@ def build_subscription(form) -> dict:
         "daily_summary": "daily_digest",
         "every_change": "price_change",
     }
+    notification_frequency_raw = (
+        form.get("notification_frequency")
+        or form.get("notification_frequency_rule")
+        or "important_only"
+    )
     notification_frequency = frequency_aliases.get(
-        form.get("notification_frequency", "important_only"),
-        form.get("notification_frequency", "important_only"),
+        notification_frequency_raw,
+        notification_frequency_raw,
     )
     primary_goal = form.get("primary_goal", "buy_timing")
-    secondary_goals = form.getlist("secondary_goals") or list(
-        GOAL_TO_ALERTS.get(primary_goal, [])
-    )
+    if monitor_mode == "precise":
+        secondary_goals = form.getlist("secondary_goals") or list(
+            GOAL_TO_ALERTS.get(primary_goal, [])
+        )
+    else:
+        secondary_goals = list(GOAL_TO_ALERTS.get(primary_goal, []))
     blocked_airlines = [
         item.strip()
         for item in form.get("exclude_airlines", "").replace("，", ",").split(",")
@@ -4314,6 +4390,16 @@ def build_subscription(form) -> dict:
         value = trip_nature_map.get(str(item or "").strip(), str(item or "").strip())
         if value and value not in trip_natures:
             trip_natures.append(value)
+    business_context = monitor_mode == "precise" and (
+        "business" in travel_scenarios
+        or same_day_round_trip
+        or any(item in {"business", "meeting", "team_building"} for item in trip_natures)
+    )
+    if not business_context:
+        trip_natures = []
+        invoice_needed = False
+        invoice_special_vat = False
+        invoice_cabin_limit = False
     trip_nature = "meeting" if "meeting" in trip_natures else trip_natures[0] if trip_natures else ""
     meeting_start = form.get("meeting_start", "").strip()
     meeting_end = form.get("meeting_end", "").strip()
@@ -4342,7 +4428,7 @@ def build_subscription(form) -> dict:
     team_date_flexibility = form.get("team_date_flexibility", "fixed").strip() or "fixed"
     same_flight_required = parse_bool(form.get("same_flight_required", "false"))
     reimburse_per_person = parse_int(form.get("reimburse_per_person"), 0)
-    if monitor_mode != "precise":
+    if monitor_mode != "precise" or not business_context:
         meeting_start = ""
         meeting_end = ""
         team_passenger_count = 0
@@ -4380,7 +4466,7 @@ def build_subscription(form) -> dict:
             "max_price": max_budget,
             "ideal_price": target_price,
             "date_flexibility_days": parse_int(form.get("date_flexibility"), 0),
-            "transfer_policy": form.get("transfer_policy", "reasonable"),
+            "transfer_policy": transfer_policy,
             "checked_baggage_required": form.get("baggage", "required") == "required",
             "same_day_round_trip": same_day_round_trip,
             "business_start": business_start if same_day_round_trip else "",
@@ -4442,8 +4528,8 @@ def build_subscription(form) -> dict:
             "transfer": {
                 "max_total_duration": max_total_duration_hours,
                 "max_extra_duration_hours": max_extra_duration_hours,
-                "overnight_transfer": parse_bool(form.get("accept_overnight_transfer", "false")),
-                "self_transfer": parse_bool(form.get("accept_self_transfer", "false")),
+                "overnight_transfer": accept_overnight_transfer,
+                "self_transfer": accept_self_transfer,
             },
             "airlines": {
                 "preference": form.get("airline_policy", "any"),
@@ -4486,7 +4572,7 @@ def build_subscription(form) -> dict:
             "max_budget_mode": max_budget_mode,
             "target_price": target_price,
             "target_price_mode": target_price_mode,
-            "transfer_policy": form.get("transfer_policy", "reasonable"),
+            "transfer_policy": transfer_policy,
             "route_type": route_type,
             "same_day_round_trip": same_day_round_trip,
             "business_start": business_start if same_day_round_trip else "",
@@ -4518,10 +4604,8 @@ def build_subscription(form) -> dict:
             **time_constraints,
             "baggage": form.get("baggage", "required"),
             "origin_airport_preference": form.get("origin_airport_preference", "all"),
-            "accept_overnight_transfer": parse_bool(
-                form.get("accept_overnight_transfer", "false")
-            ),
-            "accept_self_transfer": parse_bool(form.get("accept_self_transfer", "false")),
+            "accept_overnight_transfer": accept_overnight_transfer,
+            "accept_self_transfer": accept_self_transfer,
         },
         "soft_preferences": {
             "trip_type": derived_trip_type,
