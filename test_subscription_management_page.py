@@ -43,13 +43,16 @@ class SubscriptionManagementPageTest(unittest.TestCase):
         self.tmp_path = Path(self.tmpdir.name)
         self.old_subscriptions_path = web_form.SUBSCRIPTIONS_PATH
         self.old_payloads_dir = web_form.PAGE_PAYLOADS_DIR
+        self.old_feedback_path = web_form.FEEDBACK_PATH
         web_form.SUBSCRIPTIONS_PATH = self.tmp_path / "subscriptions.json"
         web_form.PAGE_PAYLOADS_DIR = self.tmp_path / "payloads"
+        web_form.FEEDBACK_PATH = self.tmp_path / "feedback.json"
         web_form.PAGE_PAYLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
     def tearDown(self):
         web_form.SUBSCRIPTIONS_PATH = self.old_subscriptions_path
         web_form.PAGE_PAYLOADS_DIR = self.old_payloads_dir
+        web_form.FEEDBACK_PATH = self.old_feedback_path
         self.tmpdir.cleanup()
 
     def _write_subscriptions(self):
@@ -125,6 +128,44 @@ class SubscriptionManagementPageTest(unittest.TestCase):
         subscriptions = json.loads(web_form.SUBSCRIPTIONS_PATH.read_text(encoding="utf-8"))
         self.assertEqual(len(subscriptions), 1)
         self.assertEqual(subscriptions[0]["id"], "sub-active")
+
+    def test_success_page_sets_next_step_expectations(self):
+        self._write_subscriptions()
+        client = getattr(web_form.app, "test_client", None)
+        if client is None:
+            self.skipTest("Flask test client is unavailable")
+
+        response = web_form.app.test_client().get("/success?index=0")
+        body = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("监控已创建", body)
+        self.assertIn("立即进行第一次采集和购买判断", body)
+        self.assertIn("约30秒-1分钟", body)
+        self.assertIn("查看我的所有监控", body)
+        self.assertIn("第一次判断稍后到达", body)
+
+    def test_success_and_feedback_templates_include_next_step_copy(self):
+        self.assertIn("立即进行第一次采集和购买判断", web_form.SUCCESS_TEMPLATE)
+        self.assertIn("约30秒-1分钟", web_form.SUCCESS_TEMPLATE)
+        self.assertIn("查看我的所有监控", web_form.SUCCESS_TEMPLATE)
+        self.assertIn("下次采集时重新核实", web_form.FEEDBACK_TEMPLATE)
+        self.assertIn("返回我的监控", web_form.FEEDBACK_TEMPLATE)
+
+    def test_feedback_success_page_promises_next_collection_response(self):
+        client = getattr(web_form.app, "test_client", None)
+        if client is None:
+            self.skipTest("Flask test client is unavailable")
+
+        response = web_form.app.test_client().post(
+            "/feedback",
+            data={"subscription_id": "sub-active", "feedback_type": "unavailable"},
+        )
+        body = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("下次采集时重新核实", body)
+        self.assertIn("返回我的监控", body)
 
 
 if __name__ == "__main__":

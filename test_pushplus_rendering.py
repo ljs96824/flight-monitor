@@ -446,6 +446,54 @@ class PushPlusRenderingTest(unittest.TestCase):
         self.assertNotIn("缓冲999", email_html)
         self.assertNotIn("车程999", email_html)
 
+    def test_pushplus_and_email_acknowledge_previous_feedback(self):
+        payload = {
+            "push_type": "值得验证",
+            "route": "上海 → 北京",
+            "display_price": 680,
+            "transaction_price": 680,
+            "verify_price": 720,
+            "recommendation": "值得验证",
+            "buy_condition": "支付页≤¥720",
+            "feedback_ack": "📌 你反馈过这条买不到,本次已重新核实可购买性,以下为最新采集结果。",
+            "recommended_plans": [
+                {
+                    "label": "方案A",
+                    "price": 680,
+                    "estimated_price": 680,
+                    "summary": "MU5101",
+                    "main_flight": {"flight_no": "MU5101", "price": 680},
+                }
+            ],
+            "detail_url": "https://example.com/detail",
+            "form_url": "https://example.com/",
+        }
+
+        push_msg = render_pushplus(payload)
+        _, email_html = render_email(payload)
+
+        self.assertIn("你反馈过这条买不到", push_msg)
+        self.assertIn("重新核实可购买性", email_html)
+
+    def test_detail_link_copy_marks_web_page_as_supplemental(self):
+        _, email_html = render_email(
+            {
+                "push_type": "值得验证",
+                "route": "上海 → 北京",
+                "display_price": 680,
+                "transaction_price": 680,
+                "verify_price": 720,
+                "recommendation": "值得验证",
+                "buy_condition": "支付页≤¥720",
+                "recommended_plans": [],
+                "detail_url": "https://example.com/detail",
+                "form_url": "https://example.com/",
+            }
+        )
+
+        self.assertIn("查看网页版完整分析(如未显示请稍后刷新)", email_html)
+        self.assertNotIn(">查看网页详情<", email_html)
+
     def test_round_trip_combinations_do_not_fallback_when_same_day_time_conflicts(self):
         combos = _round_trip_combinations(
             {

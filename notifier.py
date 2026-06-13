@@ -4621,11 +4621,11 @@ def _pushplus_channel_section(payload: dict, plan: dict | None) -> list[str]:
     if len(lines) == 1:
         return [
             "当前价格接近低价区间,但暂未发现已验证购买渠道。",
-            f"查看详情继续监控:{detail_link}",
+            f"查看网页版完整分析(如未显示请稍后刷新):{detail_link}",
         ]
 
     lines.append("价格以各平台支付页为准")
-    lines.append(f"完整分析:{detail_link}")
+    lines.append(f"查看网页版完整分析(如未显示请稍后刷新):{detail_link}")
     return lines
 
 
@@ -5719,7 +5719,7 @@ def _render_pushplus_legacy(payload: dict) -> str:
             trend_text += f"（{'下降' if diff < 0 else '上涨' if diff > 0 else '持平'}{_price_text(abs(diff)) if diff else ''}）"
         lines.extend(["", trend_text])
     links = [
-        f'<a href="{payload.get("detail_url", "")}" target="_blank">查看详情</a>',
+        f'<a href="{payload.get("detail_url", "")}" target="_blank">查看网页版完整分析(如未显示请稍后刷新)</a>',
         f'<a href="{payload.get("form_url", "")}" target="_blank">修改偏好</a>',
         f'<a href="{payload.get("feedback_url", "")}" target="_blank">反馈</a>',
     ]
@@ -6245,6 +6245,7 @@ def _same_day_alternatives_body(payload: dict) -> str:
 def render_pushplus(payload: dict) -> str:
     """Render the strictly short PushPlus message from the unified payload."""
     payload = payload or {}
+    feedback_ack = str(payload.get("feedback_ack") or "").strip()
     no_primary = _no_primary_plan_state(payload)
     alternatives = payload.get("same_day_alternatives") or []
     if no_primary:
@@ -6264,6 +6265,8 @@ def render_pushplus(payload: dict) -> str:
             f"可用备选:{alt_text}",
             "下一步:查看备选方案 ↓ | 放宽条件重新订阅 | 继续监控等待新航班",
         ]
+        if feedback_ack:
+            lines.insert(2, html.escape(feedback_ack))
         same_day_note = str(payload.get("same_day_no_feasible_note") or "").strip()
         if same_day_note:
             lines.append("当天往返提示:" + html.escape(same_day_note))
@@ -6274,7 +6277,7 @@ def render_pushplus(payload: dict) -> str:
         detail_url = str(payload.get("detail_url") or "").strip()
         form_url = str(payload.get("form_url") or "").strip()
         if detail_url:
-            lines.extend(["", f'完整分析:<a href="{html.escape(detail_url)}" target="_blank">{html.escape(detail_url)}</a>'])
+            lines.extend(["", f'查看网页版完整分析(如未显示请稍后刷新):<a href="{html.escape(detail_url)}" target="_blank">{html.escape(detail_url)}</a>'])
         if form_url:
             lines.append(f'修改偏好:<a href="{html.escape(form_url)}" target="_blank">{html.escape(form_url)}</a>')
         lines.append("")
@@ -6309,6 +6312,8 @@ def render_pushplus(payload: dict) -> str:
         f"本次验证价:支付页≤{verify_text}",
         baggage_line,
     ]
+    if feedback_ack:
+        lines[2:2] = [html.escape(feedback_ack), ""]
     same_day_note = str(payload.get("same_day_no_feasible_note") or "").strip()
     if same_day_note:
         lines.append("当天往返提示:" + html.escape(same_day_note))
@@ -7170,7 +7175,7 @@ def _email_action_panel_body(
         f"<div>当前判断:{html.escape(conclusion)}</div>",
         f"<div>首选方案:{html.escape(primary_line)}</div>",
         f"<div>购买条件:{html.escape(buy_condition)}</div>",
-        "<div>下一步:去验证价格 | 查看详情 | 继续监控</div>",
+        "<div>下一步:去验证价格 | 查看网页版完整分析(如未显示请稍后刷新) | 继续监控</div>",
         f"<div style='margin-top:8px;color:#666;font-size:12px;'>触发类型:{html.escape(trigger_type)}</div>",
         f"<div style='color:#666;font-size:12px;'>触发原因:{html.escape(trigger_reason)}</div>",
         (
@@ -7221,7 +7226,7 @@ def _email_action_links(
     feedback_url = str(payload.get("feedback_url") or "")
     links = []
     if detail_url:
-        links.append(("查看网页详情", detail_url))
+        links.append(("查看网页版完整分析(如未显示请稍后刷新)", detail_url))
     if form_url:
         links.append(("继续监控", form_url))
     if feedback_url:
@@ -8042,6 +8047,8 @@ def render_email(payload: dict) -> tuple[str, str]:
             "</div>"
         ),
     ]
+    if payload.get("feedback_ack"):
+        cards.insert(1, _email_card("反馈已响应", html.escape(str(payload.get("feedback_ack")))))
     if no_primary:
         insert_at = 2
         same_day_alternatives_body = _same_day_alternatives_body(payload)
@@ -8199,7 +8206,7 @@ def render_email(payload: dict) -> tuple[str, str]:
         _email_card(
             "更多分析",
             f'排除方案详情、置信度拆解、购买前检查清单和详细数据来源见网页详情页：'
-            f'<a href="{html.escape(str(payload.get("detail_url") or ""))}" target="_blank">查看完整分析</a>',
+            f'<a href="{html.escape(str(payload.get("detail_url") or ""))}" target="_blank">查看网页版完整分析(如未显示请稍后刷新)</a>',
         )
     )
 
@@ -8237,6 +8244,8 @@ def render_detail_html(payload: dict) -> str:
         _email_card("为什么提醒你", _email_list(payload.get("trigger_reason") or [], 3)),
         _email_card("价格走势", _email_trend_card_body(payload)),
     ]
+    if payload.get("feedback_ack"):
+        cards.insert(2, _email_card("反馈已响应", html.escape(str(payload.get("feedback_ack")))))
     if no_primary:
         insert_at = 2
         same_day_alternatives_body = _same_day_alternatives_body(payload)

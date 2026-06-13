@@ -83,6 +83,31 @@ class PlanTrackerTest(unittest.TestCase):
         self.assertTrue(saved)
         self.assertEqual(loaded["last_pushed"]["plan_a"]["flight_no"], "CA1510")
 
+    def test_get_subscription_feedback_filters_unresolved_records(self):
+        from plan_tracker import feedback_acknowledgement, get_subscription_feedback
+
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            (data_dir / "feedback.json").write_text(
+                json.dumps(
+                    [
+                        {"subscription_id": "sub-1", "feedback_type": "unavailable"},
+                        {"subscription_id": "sub-1", "feedback_type": "price_changed", "resolved_at": "2026-06-13T10:00:00"},
+                        {"subscription_id": "sub-2", "feedback_type": "no_baggage"},
+                    ],
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            records = get_subscription_feedback("sub-1", data_dir=data_dir)
+            ack = feedback_acknowledgement("sub-1", data_dir=data_dir)
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["feedback_type"], "unavailable")
+        self.assertIn("买不到", ack)
+        self.assertIn("重新核实可购买性", ack)
+
 
 if __name__ == "__main__":
     unittest.main()

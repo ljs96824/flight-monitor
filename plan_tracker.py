@@ -11,6 +11,7 @@ from filename_utils import sanitize_filename
 
 BASE_DIR = Path(__file__).parent
 DEFAULT_DATA_DIR = BASE_DIR / "data" / "pushed_plans"
+DEFAULT_FEEDBACK_PATH = BASE_DIR / "data" / "feedback.json"
 
 
 def _storage_dir(data_dir=None) -> Path:
@@ -19,6 +20,12 @@ def _storage_dir(data_dir=None) -> Path:
 
 def _storage_path(sub_id, data_dir=None) -> Path:
     return _storage_dir(data_dir) / f"{sanitize_filename(sub_id)}.json"
+
+
+def _feedback_path(data_dir=None) -> Path:
+    if data_dir is None:
+        return DEFAULT_FEEDBACK_PATH
+    return Path(data_dir) / "feedback.json"
 
 
 def _to_float(value) -> float | None:
@@ -102,6 +109,47 @@ def load_pushed_plans(sub_id, data_dir=None) -> dict:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
+
+
+def get_subscription_feedback(subscription_id, data_dir=None, unresolved_only: bool = True) -> list[dict]:
+    """Return feedback records for one subscription, newest first."""
+    path = _feedback_path(data_dir)
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    records = data if isinstance(data, list) else []
+    target = str(subscription_id or "")
+    matched = []
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        if str(record.get("subscription_id") or "") != target:
+            continue
+        if unresolved_only and (
+            record.get("resolved_at")
+            or str(record.get("status") or "").lower() in {"resolved", "closed", "done"}
+        ):
+            continue
+        matched.append(record)
+    return list(reversed(matched))
+
+
+def feedback_acknowledgement(subscription_id, data_dir=None) -> str:
+    records = get_subscription_feedback(subscription_id, data_dir=data_dir)
+    if not records:
+        return ""
+    feedback_type = str(records[0].get("feedback_type") or "").strip()
+    unavailable_reason = str(records[0].get("unavailable_reason") or "").strip()
+    if feedback_type in {"unavailable", "sold_out"} or unavailable_reason in {"sold_out", "unavailable"}:
+        return "📌 你反馈过这条买不到,本次已重新核实可购买性,以下为最新采集结果。"
+    if feedback_type in {"price_changed", "price_mismatch"} or unavailable_reason == "price_changed":
+        return "📌 你反馈过价格不符,本次价格已重新采集,请以支付页最终价为准。"
+    if feedback_type in {"no_baggage", "baggage"} or unavailable_reason == "no_baggage":
+        return "📌 你反馈过行李问题,本次已标注各方案行李状态。"
+    return "📌 你之前提交过反馈,本次已按最新采集结果重新核实。"
 
 
 def find_flight(current_flights: list[dict] | None, flight_no: str) -> dict | None:

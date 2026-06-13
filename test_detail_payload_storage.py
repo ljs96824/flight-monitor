@@ -77,6 +77,29 @@ class DetailPayloadStorageTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("detail ok", response.get_data(as_text=True))
 
+    @unittest.skipIf(web_form is None, "Flask is not installed in this test runtime")
+    def test_detail_route_empty_state_is_not_a_dead_end(self):
+        old_web_results_path = web_form.PAGE_RESULTS_PATH
+        old_web_payloads_dir = web_form.PAGE_PAYLOADS_DIR
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            web_form.PAGE_RESULTS_PATH = tmp_path / "page_results.json"
+            web_form.PAGE_PAYLOADS_DIR = tmp_path / "payloads"
+            web_form.PAGE_PAYLOADS_DIR.mkdir(parents=True, exist_ok=True)
+
+            try:
+                response = web_form.app.test_client().get("/detail?sub=missing-sub")
+            finally:
+                web_form.PAGE_RESULTS_PATH = old_web_results_path
+                web_form.PAGE_PAYLOADS_DIR = old_web_payloads_dir
+
+        body = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("该详情可能还在同步中", body)
+        self.assertIn("返回我的监控", body)
+        self.assertIn("刷新重试", body)
+
 
 if __name__ == "__main__":
     unittest.main()

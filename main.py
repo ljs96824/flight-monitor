@@ -6,6 +6,7 @@ import traceback
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+import httpx
 from dotenv import load_dotenv
 from airports import resolve_location
 
@@ -40,6 +41,7 @@ from notifier import (
     send,
 )
 from price_calendar import update_calendar
+from plan_tracker import feedback_acknowledgement
 from sources.aggregator import FlightAggregator, build_default_sources, is_domestic_route
 from storage import (
     get_roundtrip_price_history,
@@ -65,6 +67,7 @@ logging.basicConfig(
 ANALYSIS_LOG = DATA_DIR / "analysis_log.jsonl"
 SUBSCRIPTIONS_PATH = DATA_DIR / "subscriptions.json"
 PAGE_PAYLOADS_DIR = DATA_DIR / "payloads"
+PYTHONANYWHERE_PAYLOAD_PATH = "/home/{user}/flight-monitor/data/payloads/{filename}"
 
 
 def _first_airport(codes, fallback):
@@ -493,6 +496,31 @@ def _save_result_for_page(subscription_id: str, html_content: str, payload: dict
         records = []
     records.append(record)
     path.write_text(json.dumps(records[-100:], ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        _upload_payload_to_pythonanywhere(payload_path)
+    except Exception as exc:
+        print(f"[详情同步失败] {type(exc).__name__}: {exc}")
+        logging.warning(f"详情payload已本地保存但同步PythonAnywhere失败: {exc}", exc_info=True)
+
+
+def _upload_payload_to_pythonanywhere(payload_path: Path) -> bool:
+    token = os.environ.get("PYTHONANYWHERE_TOKEN", "").strip()
+    user = os.environ.get("PYTHONANYWHERE_USER", "").strip() or "ljs96824"
+    if not token or token.lower() in {"token", "your_token"} or "your" in token.lower():
+        print("[详情同步] 未配置PYTHONANYWHERE_TOKEN,跳过远程payload同步")
+        return False
+    remote_path = PYTHONANYWHERE_PAYLOAD_PATH.format(user=user, filename=payload_path.name)
+    url = f"https://www.pythonanywhere.com/api/v0/user/{user}/files/path{remote_path}"
+    with payload_path.open("rb") as file_obj:
+        response = httpx.post(
+            url,
+            headers={"Authorization": f"Token {token}"},
+            files={"content": (payload_path.name, file_obj, "application/json")},
+            timeout=30,
+        )
+    response.raise_for_status()
+    print(f"[详情同步] 已上传payload到PythonAnywhere: {remote_path}")
+    return True
 
 
 def _fallback_cache_path(origins: list[str], dests: list[str], date_str: str, cabin_classes=None) -> Path:
@@ -588,6 +616,9 @@ def _deliver_notification(sub: dict, route: str, message_kwargs: dict) -> bool:
             source_stats=message_kwargs.get("source_stats"),
             price_insights=message_kwargs.get("price_insights"),
         )
+        feedback_ack = feedback_acknowledgement(subscription_id)
+        if feedback_ack:
+            payload["feedback_ack"] = feedback_ack
         print("[推送] payload构建完成")
 
         print("[推送] 开始渲染邮件/详情HTML")

@@ -3760,7 +3760,16 @@ SUCCESS_TEMPLATE = """
 </head>
 <body>
   <div class="card">
-    <h1>✅ 已创建监控</h1>
+    <h1>✅ 监控已创建: {{ summary.route }}</h1>
+    <p><b>接下来系统会:</b></p>
+    <ol>
+      <li>立即进行第一次采集和购买判断(约30秒-1分钟)</li>
+      <li>结果将推送到: {{ summary.notification_text or "你的邮箱 / PushPlus微信" }}</li>
+      <li>之后发现低价、涨价风险或更优方案时自动提醒</li>
+      <li>可随时在「我的监控」暂停或修改</li>
+    </ol>
+    <p>💡 第一次判断稍后到达,你可以关掉此页,留意邮箱/微信推送。</p>
+    <p><a href="{{ url_for('subscription_list') }}">查看我的所有监控</a> <a class="secondary-link" href="{{ url_for('index') }}">再创建一个</a></p>
     <p><b>{{ summary.route }}</b></p>
     {% if summary.airport_coverage %}
     <p>{{ summary.airport_coverage }}</p>
@@ -3919,8 +3928,8 @@ FEEDBACK_TEMPLATE = """
   <div class="card">
     <h1>{{ "✅ 已收到反馈" if saved else "这条提醒有用吗？" }}</h1>
     {% if saved %}
-      <p>感谢反馈。系统会先记录这些信息，后续用于优化可购买性校验和推荐排序。</p>
-      <a href="{{ url_for('index') }}">返回订阅表单</a>
+      <p>感谢反馈。系统会在下次采集时重新核实这条，并在推送中告知你核实结果。</p>
+      <a href="{{ url_for('subscription_list') }}">返回我的监控</a>
     {% else %}
       <form method="post">
         <input type="hidden" name="subscription_id" value="{{ subscription_id }}">
@@ -4174,9 +4183,13 @@ DETAIL_TEMPLATE = """
     <div class="panel">{{ result.html|safe }}</div>
   {% else %}
     <div class="panel">
-      <p>暂未找到这条订阅的详情。</p>
-      <p class="muted">如果刚收到 PushPlus 提醒，请稍等下一次本地采集同步后再打开。</p>
-      <p><a href="/">返回订阅表单</a></p>
+      <p><b>该详情可能还在同步中。</b></p>
+      <p class="muted">本地采集后通常约1-2分钟同步到网页详情。你收到的邮件/微信推送已包含完整方案信息。</p>
+      <p>
+        <a href="{{ url_for('subscription_list') }}">返回我的监控</a>
+        ·
+        <a href="{{ request.url }}">刷新重试</a>
+      </p>
     </div>
   {% endif %}
 </main>
@@ -5014,6 +5027,14 @@ def build_subscription(form) -> dict:
 def build_success_summary(subscription: dict) -> dict:
     subscription_with_defaults = apply_default_rules(subscription)
     hard = subscription.get("hard_constraints", {})
+    notification_goals = subscription.get("notification_goals", {}) or {}
+    method = notification_goals.get("method", "pushplus")
+    notification_labels = {
+        "pushplus": "PushPlus微信",
+        "email": "你的邮箱",
+        "both": "你的邮箱 / PushPlus微信",
+        "page_only": "我的监控详情页",
+    }
     reminders = [
         "当前价格进入历史低价区间",
         "判断继续等待的涨价风险变高时",
@@ -5076,6 +5097,7 @@ def build_success_summary(subscription: dict) -> dict:
         "defaults_applied": subscription_with_defaults.get("defaults_applied", []),
         "reminders": reminders,
         "exclusions": exclusions,
+        "notification_text": notification_labels.get(method, "你的邮箱 / PushPlus微信"),
     }
 
 
