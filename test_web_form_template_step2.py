@@ -250,6 +250,24 @@ class WebFormTemplateStep2Test(unittest.TestCase):
         self.assertIn('class="smart-panel precise-only"', FORM_TEMPLATE)
         self.assertIn('disablePreciseOnlyFields', FORM_TEMPLATE)
 
+    def test_quick_mode_defaults_note_is_top_level_and_precise_fields_are_gated(self):
+        self.assertLess(
+            FORM_TEMPLATE.index('id="quick-defaults-note"'),
+            FORM_TEMPLATE.index('id="required-progress"'),
+        )
+        self.assertIn('class="quick-defaults-note quick-mode-top"', FORM_TEMPLATE)
+        self.assertIn('id="advanced-preferences" class="smart-panel precise-only"', FORM_TEMPLATE)
+        self.assertIn('id="advanced-rules" class="smart-panel precise-only"', FORM_TEMPLATE)
+        self.assertIn('id="trip-feasibility-fields" class="precise-only"', FORM_TEMPLATE)
+        self.assertIn('disablePreciseOnlyFields(!precise)', FORM_TEMPLATE)
+
+    def test_completion_summary_has_per_row_edit_actions(self):
+        self.assertIn("button.className = 'summary-row-edit'", FORM_TEMPLATE)
+        self.assertIn('data-summary-target', FORM_TEMPLATE)
+        self.assertIn('function editSummaryTarget', FORM_TEMPLATE)
+        self.assertIn('function highlightField', FORM_TEMPLATE)
+        self.assertIn("summaryLine('", FORM_TEMPLATE)
+
     def test_route_type_and_domestic_invoice_are_saved(self):
         class Form(dict):
             def getlist(self, key):

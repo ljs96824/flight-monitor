@@ -375,6 +375,44 @@ FORM_TEMPLATE = """
     .default-rules-note button {
       margin-top: 8px;
     }
+    .quick-mode-top {
+      border: 1px solid #dbe5f6;
+      background: #f7fbff;
+      border-radius: 8px;
+      color: #333;
+      font-size: 14px;
+      margin: 10px 0 12px;
+      padding: 10px 12px;
+    }
+    .quick-mode-top button {
+      margin-top: 8px;
+    }
+    .summary-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: start;
+      margin: 6px 0;
+    }
+    .summary-row-edit {
+      border: 1px solid #c8d6f0;
+      border-radius: 6px;
+      background: #fff;
+      color: #1a73e8;
+      cursor: pointer;
+      font-size: 13px;
+      line-height: 1.2;
+      margin: 0;
+      padding: 6px 9px;
+      width: auto;
+      white-space: nowrap;
+    }
+    .summary-highlight {
+      outline: 3px solid #fbbc04;
+      outline-offset: 4px;
+      border-radius: 6px;
+      transition: outline-color 0.2s ease;
+    }
     .summary-section-title {
       list-style: none;
       margin: 10px 0 4px -18px;
@@ -690,6 +728,10 @@ FORM_TEMPLATE = """
         <label><input type="radio" name="monitor_mode" value="precise"> 精准监控</label>
       </div>
       <p class="hint">快速监控只填写基础信息；精准监控会展开补充偏好和筛选规则。</p>
+    </div>
+    <div id="quick-defaults-note" class="quick-defaults-note quick-mode-top">
+      快速模式已启用默认安全规则：避免红眼、优先含行李、不优先非联程、仅重要变化提醒。需要细调？
+      <button id="open-precise-mode" class="secondary-button" type="button">切换精准模式</button>
     </div>
     <div id="required-progress" class="required-progress incomplete">
       <div class="required-progress-title">还需填写：</div>
@@ -1303,12 +1345,6 @@ FORM_TEMPLATE = """
         <button id="step-prev" class="secondary-button" type="button">上一步</button>
         <button id="step-next" type="button">下一步</button>
       </div>
-    </div>
-
-    <div id="quick-defaults-note" class="default-rules-note">
-      快速模式会默认启用安全规则：不优先推荐红眼、不优先推荐非联程、优先含行李方案、仅重要变化提醒。
-      <br>
-      <button id="open-precise-mode" class="secondary-button" type="button">修改默认规则</button>
     </div>
 
     <div class="submit-preview">
@@ -2427,11 +2463,11 @@ FORM_TEMPLATE = """
       return num > 0 ? `¥${num.toLocaleString('zh-CN')}` : '';
     }
 
-    function summaryLine(label, value) {
+    function summaryLine(label, value, target = '') {
       if (!value) {
         return;
       }
-      addSummaryLine(`${label}: ${value}`);
+      addSummaryLine(`${label}: ${value}`, '', target);
     }
 
     function displayDate(value) {
@@ -2834,17 +2870,81 @@ FORM_TEMPLATE = """
       autoPreferenceNotice.style.display = 'block';
     }
 
-    function addSummaryLine(text, className = '') {
+    function addSummaryLine(text, className = '', target = '') {
       const li = document.createElement('li');
-      li.textContent = text;
       if (className) {
         li.className = className;
+      }
+      if (target) {
+        li.classList.add('summary-row');
+        const span = document.createElement('span');
+        span.textContent = text;
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'summary-row-edit';
+        button.dataset.summaryTarget = target;
+        button.textContent = '修改';
+        li.appendChild(span);
+        li.appendChild(button);
+      } else {
+        li.textContent = text;
       }
       summaryList.appendChild(li);
     }
 
     function addSummaryHeader(text) {
       addSummaryLine(text, 'summary-section-title');
+    }
+
+    const summaryEditTargets = {
+      route_type: {step: 1, selector: 'input[name="route_type"]'},
+      route: {step: 1, selector: '#destination'},
+      trip_dates: {step: 1, selector: 'input[name="round_trip"]'},
+      date_flexibility: {step: 1, selector: 'input[name="date_flexibility"]'},
+      price_strategy: {step: 2, selector: 'input[name="price_strategy"]'},
+      transfer_policy: {step: 2, selector: 'input[name="transfer_policy"]'},
+      baggage: {step: 2, selector: 'input[name="baggage"]'},
+      scenarios: {step: 3, selector: 'input[name="travel_scenario"]'},
+      passengers: {step: 3, selector: 'input[name="passenger_count"], input[name="adult_count"]'},
+      primary_goal: {step: 3, selector: 'input[name="primary_goal"]'},
+      notification: {step: 3, selector: 'input[name="notification_method"]'},
+      notification_frequency: {step: 3, selector: 'input[name="notification_frequency"]'},
+      precise_companions: {step: 3, selector: '#advanced-preferences'},
+      precise_time: {step: 3, selector: '#pref-detail-time'},
+      precise_business: {step: 3, selector: '#business-rules-module'},
+      precise_rules: {step: 3, selector: '#advanced-rules'}
+    };
+
+    function highlightField(el) {
+      if (!el) return;
+      el.classList.add('summary-highlight');
+      el.scrollIntoView({behavior: 'smooth', block: 'center'});
+      if (typeof el.focus === 'function' && !el.disabled) {
+        el.focus({preventScroll: true});
+      }
+      window.setTimeout(() => el.classList.remove('summary-highlight'), 1800);
+    }
+
+    function editSummaryTarget(target) {
+      const config = summaryEditTargets[target];
+      if (!config) return;
+      summaryCard.style.display = 'none';
+      goToStep(config.step);
+      if (target.startsWith('precise_')) {
+        setRadio('monitor_mode', 'precise');
+        applyMonitorMode();
+      }
+      if (['precise_companions', 'precise_time', 'precise_business'].includes(target)) {
+        setSmartPanel(advanced, true);
+      }
+      if (target === 'precise_rules') {
+        setSmartPanel(advancedRules, true);
+      }
+      const targetEl = document.querySelector(config.selector);
+      if (targetEl && targetEl.classList.contains('pref-card-detail')) {
+        targetEl.classList.add('open');
+      }
+      highlightField(targetEl);
     }
 
     function systemDefaultRulesForSummary() {
@@ -3005,84 +3105,88 @@ FORM_TEMPLATE = """
 
       addSummaryHeader('【你填写的条件】');
       const routeType = checkedValue('route_type');
-      summaryLine('航线类型', routeType ? `${routeTypeLabel(routeType)}（${routeTypeEnabledFeatures(routeType)}）` : '');
+      summaryLine('航线类型', routeType ? `${routeTypeLabel(routeType)}（${routeTypeEnabledFeatures(routeType)}）` : '', 'route_type');
       summaryLine(
         '路线',
         origin && destination
           ? `${origin} ${activeAirportText('origin') || ''} → ${destination} ${activeAirportText('destination') || ''}`
-          : ''
+          : '',
+        'route'
       );
-      summaryLine('行程', isRoundTrip ? '往返' : '单程');
-      summaryLine('出发日期', displayDate(form.depart_date.value));
+      summaryLine('行程', isRoundTrip ? '往返' : '单程', 'trip_dates');
+      summaryLine('出发日期', displayDate(form.depart_date.value), 'trip_dates');
       if (isRoundTrip) {
-        summaryLine('返程日期', displayDate(returnDate.value));
+        summaryLine('返程日期', displayDate(returnDate.value), 'trip_dates');
       }
-      summaryLine('日期弹性', selectedLabel('date_flexibility'));
+      summaryLine('日期弹性', selectedLabel('date_flexibility'), 'date_flexibility');
       summaryLine(
         '购票人数',
         checkedValue('monitor_mode') === 'precise'
           ? precisePassengerSummary(true)
-          : quickPassengerSummary().replace('购票人数：', '')
+          : quickPassengerSummary().replace('购票人数：', ''),
+        'passengers'
       );
-      summaryLine('价格策略', selectedLabel('price_strategy'));
+      summaryLine('价格策略', selectedLabel('price_strategy'), 'price_strategy');
       if (checkedValue('price_strategy') === 'explicit') {
         summaryLine(
           '最高可接受价',
-          maxBudgetMode === 'fixed' ? money(maxBudgetInput.value) : selectedLabel('max_budget_mode')
+          maxBudgetMode === 'fixed' ? money(maxBudgetInput.value) : selectedLabel('max_budget_mode'),
+          'price_strategy'
         );
         summaryLine(
           '理想入手价',
-          targetPriceMode === 'fixed' ? money(targetPriceInput.value) : selectedLabel('target_price_mode')
+          targetPriceMode === 'fixed' ? money(targetPriceInput.value) : selectedLabel('target_price_mode'),
+          'price_strategy'
         );
       }
-      summaryLine('中转', selectedLabel('transfer_policy'));
-      summaryLine('行李', selectedLabel('baggage'));
-      summaryLine('出行场景', selectedScenarioLabels().join(' + '));
+      summaryLine('中转', selectedLabel('transfer_policy'), 'transfer_policy');
+      summaryLine('行李', selectedLabel('baggage'), 'baggage');
+      summaryLine('出行场景', selectedScenarioLabels().join(' + '), 'scenarios');
       if (checkedValue('companions') !== 'solo') {
-        summaryLine('同行', selectedLabel('companions'));
+        summaryLine('同行', selectedLabel('companions'), 'precise_companions');
       }
       if (checkedValue('monitor_mode') === 'precise') {
         const companionDetails = selectedCheckboxLabels('companion_constraints');
         if (companionDetails.length) {
-          summaryLine('同行具体约束', companionDetails.join('、'));
+          summaryLine('同行具体约束', companionDetails.join('、'), 'precise_companions');
         }
         const realNeeds = [];
         if (document.querySelector('input[name="solo_travel"]')?.checked) realNeeds.push('独自出行');
         if (document.querySelector('input[name="no_late_arrival"]')?.checked) realNeeds.push('不接受深夜到达');
         if (document.querySelector('input[name="prefer_daytime_arrival"]')?.checked) realNeeds.push('希望优先白天到达');
         if (realNeeds.length) {
-          summaryLine('实际需求', realNeeds.join('、'));
+          summaryLine('实际需求', realNeeds.join('、'), 'precise_companions');
         }
         const tripNatureLabels = selectedLabels('trip_natures');
-        summaryLine('出行性质', tripNatureLabels.join(' + '));
+        summaryLine('出行性质', tripNatureLabels.join(' + '), 'precise_business');
         if (checkedValues('trip_natures').includes('meeting')) {
           const meetingStart = document.querySelector('input[name="meeting_start"]')?.value || '';
           const meetingEnd = document.querySelector('input[name="meeting_end"]')?.value || '';
-          if (meetingStart || meetingEnd) summaryLine('会议时间', `${meetingStart || '未填'}-${meetingEnd || '未填'}（系统将按此反推航班+预留车程缓冲）`);
+          if (meetingStart || meetingEnd) summaryLine('会议时间', `${meetingStart || '未填'}-${meetingEnd || '未填'}（系统将按此反推航班+预留车程缓冲）`, 'precise_business');
         }
         if (checkedValues('trip_natures').includes('team_building')) {
-          summaryLine('团建规则', `${selectedLabel('team_date_flexibility')}，全员同航班：${selectedLabel('same_flight_required')}`);
+          summaryLine('团建规则', `${selectedLabel('team_date_flexibility')}，全员同航班：${selectedLabel('same_flight_required')}`, 'precise_business');
         }
-        summaryLine('舱位政策', selectedLabel('cabin_policy'));
+        summaryLine('舱位政策', selectedLabel('cabin_policy'), 'precise_business');
         if (checkedValues('trip_natures').length) {
-          summaryLine('职级', selectedLabel('user_level'));
+          summaryLine('职级', selectedLabel('user_level'), 'precise_business');
           const teamCount = document.querySelector('input[name="team_passenger_count"]')?.value || '';
-          if (teamCount) summaryLine('团队人数', `${teamCount}人`);
-          summaryLine('舱位安排', selectedLabel('cabin_arrangement'));
+          if (teamCount) summaryLine('团队人数', `${teamCount}人`, 'precise_business');
+          summaryLine('舱位安排', selectedLabel('cabin_arrangement'), 'precise_business');
           const businessSeats = document.querySelector('input[name="business_seats"]')?.value || '';
           const economySeats = document.querySelector('input[name="economy_seats"]')?.value || '';
           if (businessSeats || economySeats) {
-            summaryLine('团队舱位', `商务${businessSeats || 0}人，经济${economySeats || 0}人`);
+            summaryLine('团队舱位', `商务${businessSeats || 0}人，经济${economySeats || 0}人`, 'precise_business');
           }
         }
         const reimburse = document.querySelector('input[name="reimburse_per_person"]')?.value || '';
-        if (reimburse) summaryLine('每人报销上限', money(reimburse));
+        if (reimburse) summaryLine('每人报销上限', money(reimburse), 'precise_business');
         const invoiceNeeds = [];
         if (document.querySelector('input[name="invoice_needed"]')?.checked) invoiceNeeds.push('需要行程单/发票');
         if (document.querySelector('input[name="invoice_special_vat"]')?.checked) invoiceNeeds.push('优先可开专票渠道');
         if (document.querySelector('input[name="invoice_cabin_limit"]')?.checked) invoiceNeeds.push('报销有舱位限制');
         if (invoiceNeeds.length) {
-          summaryLine('报销需求', invoiceNeeds.join('、'));
+          summaryLine('报销需求', invoiceNeeds.join('、'), 'precise_business');
         }
         if (meetingHandoffActive()) {
           const start = document.querySelector('input[name="business_start"]')?.value || '';
@@ -3090,10 +3194,11 @@ FORM_TEMPLATE = """
           const reserve = meetingReserveParts();
             summaryLine(
               '时间安排',
-              `由会议时间推算:会议${start || '未填'}-${end || '未填'} | 去程预留${formatReserveMinutes(reserve.outboundReserve)}(含路途冗余${reserve.outboundMargin.minutes}分钟) → ${addMinutesToTime(start, -reserve.outboundReserve) || '提交后计算'}前到达 | 返程预留${formatReserveMinutes(reserve.returnReserve)}(含路途冗余${reserve.returnMargin.minutes}分钟) → ${addMinutesToTime(end, reserve.returnReserve) || '提交后计算'}后出发`
+              `由会议时间推算:会议${start || '未填'}-${end || '未填'} | 去程预留${formatReserveMinutes(reserve.outboundReserve)}(含路途冗余${reserve.outboundMargin.minutes}分钟) → ${addMinutesToTime(start, -reserve.outboundReserve) || '提交后计算'}前到达 | 返程预留${formatReserveMinutes(reserve.returnReserve)}(含路途冗余${reserve.returnMargin.minutes}分钟) → ${addMinutesToTime(end, reserve.returnReserve) || '提交后计算'}后出发`,
+              'precise_time'
             );
         } else {
-          summaryLine('时间偏好', timePreferenceText());
+          summaryLine('时间偏好', timePreferenceText(), 'precise_time');
         }
         const outboundSetOff = document.querySelector('input[name="outbound_set_off"]')?.value || '';
         const returnSetOff = document.querySelector('input[name="return_set_off"]')?.value || '';
@@ -3101,33 +3206,34 @@ FORM_TEMPLATE = """
           const reserve = meetingReserveParts();
           summaryLine(
             '行程可行性',
-            `去程动身${outboundSetOff || '未填'}${isRoundTrip ? ` | 返程动身${returnSetOff || '未填'}` : ''} | 车程${reserve.transport}分钟 | 路途冗余${marginModeText(reserve.marginMode)}`
+            `去程动身${outboundSetOff || '未填'}${isRoundTrip ? ` | 返程动身${returnSetOff || '未填'}` : ''} | 车程${reserve.transport}分钟 | 路途冗余${marginModeText(reserve.marginMode)}`,
+            'precise_time'
           );
         }
         if (!meetingHandoffActive() && checkedValue('time_preference') === 'custom') {
           if (isRoundTrip) {
-            summaryLine('去程起飞时段', slotSummary('outbound_departure_slots', labels.departureSlots));
-            summaryLine('返程起飞时段', slotSummary('return_departure_slots', labels.departureSlots));
+            summaryLine('去程起飞时段', slotSummary('outbound_departure_slots', labels.departureSlots), 'precise_time');
+            summaryLine('返程起飞时段', slotSummary('return_departure_slots', labels.departureSlots), 'precise_time');
           } else {
-            summaryLine('起飞时段', slotSummary('departure_slots', labels.departureSlots));
+            summaryLine('起飞时段', slotSummary('departure_slots', labels.departureSlots), 'precise_time');
           }
         }
         if (checkedValue('transfer_policy') !== 'direct_only') {
-          summaryLine('最长总行程', selectedLabel('short_transfer_limit'));
+          summaryLine('最长总行程', selectedLabel('short_transfer_limit'), 'precise_rules');
         }
         if (checkedValue('transfer_policy') === 'price_first') {
-          summaryLine('过夜中转', selectedLabel('accept_overnight_transfer'));
-          summaryLine('非联程', selectedLabel('accept_self_transfer'));
+          summaryLine('过夜中转', selectedLabel('accept_overnight_transfer'), 'precise_rules');
+          summaryLine('非联程', selectedLabel('accept_self_transfer'), 'precise_rules');
         }
       }
       const secondary = selectedCheckboxLabels('secondary_goals');
-      summaryLine('提醒', secondary.length ? secondary.join('、') : selectedLabel('primary_goal'));
+      summaryLine('提醒', secondary.length ? secondary.join('、') : selectedLabel('primary_goal'), 'primary_goal');
       const methodText = selectedLabel('notification_method');
       const emailText = notificationEmailInput && notificationEmailInput.value.trim()
         ? ` ${notificationEmailInput.value.trim()}`
         : '';
-      summaryLine('提醒方式', methodText ? `${methodText}${emailText}` : '');
-      summaryLine('提醒频率', selectedLabel('notification_frequency'));
+      summaryLine('提醒方式', methodText ? `${methodText}${emailText}` : '', 'notification');
+      summaryLine('提醒频率', selectedLabel('notification_frequency'), 'notification_frequency');
       addPreciseRulesForSummary();
       addSummaryHeader(
         checkedValue('monitor_mode') === 'precise'
@@ -3143,62 +3249,69 @@ FORM_TEMPLATE = """
     }
 
     function collectPreferenceTemplate() {
+      const precise = checkedValue('monitor_mode') === 'precise';
+      const quickPassengerCount = Number(document.querySelector('input[name="passenger_count"]')?.value || 1);
+      const precisePassengers = {
+        adult: Number(document.querySelector('input[name="adult_count"]')?.value || 0),
+        child: Number(document.querySelector('input[name="child_count"]')?.value || 0),
+        elderly: Number(document.querySelector('input[name="elderly_count"]')?.value || 0),
+        infant: Number(document.querySelector('input[name="infant_count"]')?.value || 0)
+      };
       return {
         monitor_mode: checkedValue('monitor_mode'),
         route_type: checkedValue('route_type'),
         same_day_round_trip: Boolean(document.querySelector('input[name="same_day_round_trip"]')?.checked),
         business_start: document.querySelector('input[name="business_start"]')?.value || '',
         business_end: document.querySelector('input[name="business_end"]')?.value || '',
-        outbound_set_off: document.querySelector('input[name="outbound_set_off"]')?.value || '',
-        return_set_off: document.querySelector('input[name="return_set_off"]')?.value || '',
-        user_transport_min: document.querySelector('input[name="user_transport_min"]')?.value || '',
-        transport_margin_mode: checkedValue('transport_margin_mode'),
-        redundancy_min: checkedValue('redundancy_min'),
+        outbound_set_off: precise ? (document.querySelector('input[name="outbound_set_off"]')?.value || '') : '',
+        return_set_off: precise ? (document.querySelector('input[name="return_set_off"]')?.value || '') : '',
+        user_transport_min: precise ? (document.querySelector('input[name="user_transport_min"]')?.value || '') : '',
+        transport_margin_mode: precise ? checkedValue('transport_margin_mode') : 'standard',
+        redundancy_min: precise ? checkedValue('redundancy_min') : '25',
         budget_strategy: checkedValue('price_strategy'),
         transfer_policy: checkedValue('transfer_policy'),
         baggage: checkedValue('baggage'),
-        time_preference: checkedValue('time_preference'),
-        refund_flexibility: checkedValue('refund_flexibility'),
-        price_sensitivity: checkedValue('price_sensitivity'),
+        time_preference: precise ? checkedValue('time_preference') : 'no_redeye',
+        refund_flexibility: precise ? checkedValue('refund_flexibility') : 'preferred',
+        price_sensitivity: precise ? checkedValue('price_sensitivity') : 'low',
         trip_type: deriveTripTypeFromScenarios(selectedTravelScenarios()),
-        trip_nature: checkedValues('trip_natures')[0] || checkedValue('trip_nature'),
-        trip_natures: checkedValues('trip_natures'),
-        meeting_start: document.querySelector('input[name="meeting_start"]')?.value || '',
-        meeting_end: document.querySelector('input[name="meeting_end"]')?.value || '',
-        team_date_flexibility: checkedValue('team_date_flexibility'),
-        same_flight_required: checkedValue('same_flight_required'),
-        team_passenger_count: Number(document.querySelector('input[name="team_passenger_count"]')?.value || 0),
-        cabin_arrangement: checkedValue('cabin_arrangement'),
-        cabin_policy: checkedValue('cabin_policy'),
-        user_level: checkedValue('user_level'),
-        business_seats: Number(document.querySelector('input[name="business_seats"]')?.value || 0),
-        economy_seats: Number(document.querySelector('input[name="economy_seats"]')?.value || 0),
-        reimburse_per_person: Number(document.querySelector('input[name="reimburse_per_person"]')?.value || 0),
-        invoice_needed: Boolean(document.querySelector('input[name="invoice_needed"]')?.checked),
-        invoice_special_vat: Boolean(document.querySelector('input[name="invoice_special_vat"]')?.checked),
-        invoice_cabin_limit: Boolean(document.querySelector('input[name="invoice_cabin_limit"]')?.checked),
+        trip_nature: precise ? (checkedValues('trip_natures')[0] || checkedValue('trip_nature')) : '',
+        trip_natures: precise ? checkedValues('trip_natures') : [],
+        meeting_start: precise ? (document.querySelector('input[name="meeting_start"]')?.value || '') : '',
+        meeting_end: precise ? (document.querySelector('input[name="meeting_end"]')?.value || '') : '',
+        team_date_flexibility: precise ? checkedValue('team_date_flexibility') : 'fixed',
+        same_flight_required: precise ? checkedValue('same_flight_required') : 'false',
+        team_passenger_count: precise ? Number(document.querySelector('input[name="team_passenger_count"]')?.value || 0) : 0,
+        cabin_arrangement: precise ? checkedValue('cabin_arrangement') : 'economy_all',
+        cabin_policy: precise ? checkedValue('cabin_policy') : 'economy_only',
+        user_level: precise ? checkedValue('user_level') : 'staff',
+        business_seats: precise ? Number(document.querySelector('input[name="business_seats"]')?.value || 0) : 0,
+        economy_seats: precise ? Number(document.querySelector('input[name="economy_seats"]')?.value || 0) : quickPassengerCount,
+        reimburse_per_person: precise ? Number(document.querySelector('input[name="reimburse_per_person"]')?.value || 0) : 0,
+        invoice_needed: precise && Boolean(document.querySelector('input[name="invoice_needed"]')?.checked),
+        invoice_special_vat: precise && Boolean(document.querySelector('input[name="invoice_special_vat"]')?.checked),
+        invoice_cabin_limit: precise && Boolean(document.querySelector('input[name="invoice_cabin_limit"]')?.checked),
         travel_scenario: selectedTravelScenarios()[0],
         travel_scenarios: selectedTravelScenarios(),
         travel_purposes: selectedTravelScenarios(),
-        passenger_count: Number(document.querySelector('input[name="passenger_count"]')?.value || 1),
-        passengers: {
-          adult: Number(document.querySelector('input[name="adult_count"]')?.value || 0),
-          child: Number(document.querySelector('input[name="child_count"]')?.value || 0),
-          elderly: Number(document.querySelector('input[name="elderly_count"]')?.value || 0),
-          infant: Number(document.querySelector('input[name="infant_count"]')?.value || 0)
-        },
-        companions: checkedValue('companions'),
-        companion_constraints: checkedValues('companion_constraints'),
-        solo_travel: Boolean(document.querySelector('input[name="solo_travel"]')?.checked),
-        no_late_arrival: Boolean(document.querySelector('input[name="no_late_arrival"]')?.checked),
-        prefer_daytime_arrival: Boolean(document.querySelector('input[name="prefer_daytime_arrival"]')?.checked),
-        airline_policy: checkedValue('airline_policy'),
+        passenger_count: precise
+          ? Object.values(precisePassengers).reduce((sum, value) => sum + value, 0) || quickPassengerCount
+          : quickPassengerCount,
+        passengers: precise
+          ? precisePassengers
+          : {adult: quickPassengerCount, child: 0, elderly: 0, infant: 0},
+        companions: precise ? checkedValue('companions') : 'solo',
+        companion_constraints: precise ? checkedValues('companion_constraints') : [],
+        solo_travel: precise && Boolean(document.querySelector('input[name="solo_travel"]')?.checked),
+        no_late_arrival: precise && Boolean(document.querySelector('input[name="no_late_arrival"]')?.checked),
+        prefer_daytime_arrival: precise && Boolean(document.querySelector('input[name="prefer_daytime_arrival"]')?.checked),
+        airline_policy: precise ? checkedValue('airline_policy') : 'any',
         notification_method: checkedValue('notification_method'),
         notification_frequency: checkedValue('notification_frequency'),
-        secondary_goals: checkedValues('secondary_goals'),
-        short_transfer_limit: checkedValue('short_transfer_limit'),
-        accept_overnight_transfer: checkedValue('accept_overnight_transfer'),
-        accept_self_transfer: checkedValue('accept_self_transfer')
+        secondary_goals: precise ? checkedValues('secondary_goals') : [],
+        short_transfer_limit: precise ? checkedValue('short_transfer_limit') : 'extra_6',
+        accept_overnight_transfer: precise ? checkedValue('accept_overnight_transfer') : 'false',
+        accept_self_transfer: precise ? checkedValue('accept_self_transfer') : 'false'
       };
     }
 
@@ -3402,6 +3515,11 @@ FORM_TEMPLATE = """
         return;
       }
       window.scrollTo({top: 0, behavior: 'smooth'});
+    });
+    summaryList.addEventListener('click', event => {
+      const button = event.target.closest('[data-summary-target]');
+      if (!button) return;
+      editSummaryTarget(button.dataset.summaryTarget);
     });
 
     tripRadios.forEach(radio => radio.addEventListener('change', () => {
@@ -4450,6 +4568,28 @@ def build_subscription(form) -> dict:
         + return_departure_time_windows
         + return_arrival_time_windows
     )
+    if monitor_mode != "precise":
+        time_mode = "no_redeye"
+        departure_slots = list(DEFAULT_DEPARTURE_SLOTS)
+        arrival_slots = list(DEFAULT_ARRIVAL_SLOTS)
+        outbound_departure_slots = list(DEFAULT_DEPARTURE_SLOTS)
+        outbound_arrival_slots = list(DEFAULT_ARRIVAL_SLOTS)
+        return_departure_slots = list(DEFAULT_DEPARTURE_SLOTS)
+        return_arrival_slots = list(DEFAULT_ARRIVAL_SLOTS)
+        departure_time_windows = [["06:00", "23:00"]]
+        arrival_time_windows = [["06:00", "23:00"]]
+        outbound_departure_time_windows = [["06:00", "23:00"]]
+        outbound_arrival_time_windows = [["06:00", "23:00"]]
+        return_departure_time_windows = [["06:00", "23:00"]]
+        return_arrival_time_windows = [["06:00", "23:00"]]
+        all_time_windows = (
+            departure_time_windows
+            + arrival_time_windows
+            + outbound_departure_time_windows
+            + outbound_arrival_time_windows
+            + return_departure_time_windows
+            + return_arrival_time_windows
+        )
     time_constraints = {
         "departure_slots": departure_slots,
         "arrival_slots": arrival_slots,
@@ -4502,6 +4642,10 @@ def build_subscription(form) -> dict:
     for item in form.getlist("blocked_airlines_common"):
         if item and item not in blocked_airlines:
             blocked_airlines.append(item)
+    airline_policy = form.get("airline_policy", "any")
+    if monitor_mode != "precise":
+        airline_policy = "any"
+        blocked_airlines = []
     precise_passengers = {
         "adult": parse_count_alias(form, "adult_count", "passenger_adult"),
         "child": parse_count_alias(form, "child_count", "passenger_child"),
@@ -4553,6 +4697,8 @@ def build_subscription(form) -> dict:
     invoice_special_vat = parse_bool(form.get("invoice_special_vat", "false"))
     invoice_cabin_limit = parse_bool(form.get("invoice_cabin_limit", "false"))
     raw_trip_natures = form.getlist("trip_natures") if hasattr(form, "getlist") else []
+    refund_flexibility = form.get("refund_flexibility", "preferred")
+    price_sensitivity = form.get("price_sensitivity", "low")
     if monitor_mode != "precise":
         companion_constraints = []
         solo_travel = False
@@ -4562,6 +4708,8 @@ def build_subscription(form) -> dict:
         invoice_special_vat = False
         invoice_cabin_limit = False
         raw_trip_natures = []
+        refund_flexibility = "preferred"
+        price_sensitivity = "low"
     if not raw_trip_natures:
         legacy_trip_nature = form.get("trip_nature", "").strip()
         raw_trip_natures = [legacy_trip_nature] if legacy_trip_nature else []
@@ -4693,8 +4841,8 @@ def build_subscription(form) -> dict:
             "invoice_special_vat": invoice_special_vat,
             "invoice_cabin_limit": invoice_cabin_limit,
             "time_pref": time_mode,
-            "refund_policy": form.get("refund_flexibility", "preferred"),
-            "price_sensitivity": form.get("price_sensitivity", "low"),
+            "refund_policy": refund_flexibility,
+            "price_sensitivity": price_sensitivity,
             "travel_type": derived_trip_type,
         },
         "advanced_rules": {
@@ -4706,10 +4854,10 @@ def build_subscription(form) -> dict:
                 "return_departure": return_departure_time_windows,
                 "return_arrival": return_arrival_time_windows,
                 "hourly": {
-                    "departure_start": form.get("departure_time_start", ""),
-                    "departure_end": form.get("departure_time_end", ""),
-                    "arrival_start": form.get("arrival_time_start", ""),
-                    "arrival_end": form.get("arrival_time_end", ""),
+                    "departure_start": form.get("departure_time_start", "") if monitor_mode == "precise" else "",
+                    "departure_end": form.get("departure_time_end", "") if monitor_mode == "precise" else "",
+                    "arrival_start": form.get("arrival_time_start", "") if monitor_mode == "precise" else "",
+                    "arrival_end": form.get("arrival_time_end", "") if monitor_mode == "precise" else "",
                 },
             },
             "transfer": {
@@ -4719,7 +4867,7 @@ def build_subscription(form) -> dict:
                 "self_transfer": accept_self_transfer,
             },
             "airlines": {
-                "preference": form.get("airline_policy", "any"),
+                "preference": airline_policy,
                 "blocked": blocked_airlines,
             },
             "alerts": {
@@ -4820,10 +4968,10 @@ def build_subscription(form) -> dict:
             "invoice_needed": invoice_needed,
             "invoice_special_vat": invoice_special_vat,
             "invoice_cabin_limit": invoice_cabin_limit,
-            "price_sensitivity": form.get("price_sensitivity", "low"),
+            "price_sensitivity": price_sensitivity,
             "trip_rigidity": form.get("trip_rigidity", "confirmed"),
-            "refund_flexibility": form.get("refund_flexibility", "preferred"),
-            "airline_policy": form.get("airline_policy", "any"),
+            "refund_flexibility": refund_flexibility,
+            "airline_policy": airline_policy,
             "exclude_airlines": blocked_airlines,
             "target_price": target_price,
             "target_price_mode": target_price_mode,

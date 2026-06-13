@@ -113,6 +113,11 @@ class FormPriceStrategyAlertsTest(unittest.TestCase):
                 invoice_needed="true",
                 trip_natures=["meeting"],
                 team_passenger_count="9",
+                time_preference="custom",
+                departure_time_start="23:00",
+                departure_time_end="23:30",
+                airline_policy="no_lcc",
+                blocked_airlines_common=["Spirit"],
             )
         )
 
@@ -126,6 +131,12 @@ class FormPriceStrategyAlertsTest(unittest.TestCase):
         self.assertFalse(sub["advanced_rules"]["transfer"]["self_transfer"])
         self.assertEqual(sub["constraints"]["trip_natures"], [])
         self.assertFalse(sub["preferences"]["invoice_needed"])
+        self.assertEqual(sub["preferences"]["time_pref"], "no_redeye")
+        self.assertEqual(sub["hard_constraints"]["time_preference"], "no_redeye")
+        self.assertEqual(sub["advanced_rules"]["time_windows"]["hourly"]["departure_start"], "")
+        self.assertEqual(sub["soft_preferences"]["airline_policy"], "any")
+        self.assertEqual(sub["advanced_rules"]["airlines"]["preference"], "any")
+        self.assertEqual(sub["advanced_rules"]["airlines"]["blocked"], [])
 
     def test_precise_non_business_scene_ignores_business_rule_residuals(self):
         sub = build_subscription(
