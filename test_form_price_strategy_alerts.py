@@ -158,6 +158,40 @@ class FormPriceStrategyAlertsTest(unittest.TestCase):
         self.assertIsNone(sub["constraints"]["team_passenger_count"])
         self.assertIsNone(sub["constraints"]["reimburse_per_person"])
 
+    def test_precise_non_custom_time_ignores_hidden_time_detail_residuals(self):
+        sub = build_subscription(
+            _base_form(
+                monitor_mode="precise",
+                time_preference="daytime",
+                departure_time_start="23:00",
+                departure_time_end="23:30",
+                arrival_time_start="00:10",
+                arrival_time_end="01:30",
+            )
+        )
+
+        self.assertEqual(sub["preferences"]["time_pref"], "daytime")
+        self.assertEqual(sub["advanced_rules"]["time_windows"]["departure"], [["06:00", "20:00"]])
+        self.assertEqual(sub["advanced_rules"]["time_windows"]["hourly"]["departure_start"], "")
+        self.assertEqual(sub["advanced_rules"]["time_windows"]["hourly"]["arrival_end"], "")
+
+    def test_price_first_transfer_keeps_precise_rules_even_on_domestic_route(self):
+        sub = build_subscription(
+            _base_form(
+                monitor_mode="precise",
+                route_type="domestic",
+                transfer_policy="price_first",
+                short_transfer_limit="total_18",
+                accept_overnight_transfer="true",
+                accept_self_transfer="true",
+            )
+        )
+
+        self.assertTrue(sub["hard_constraints"]["accept_overnight_transfer"])
+        self.assertTrue(sub["hard_constraints"]["accept_self_transfer"])
+        self.assertTrue(sub["advanced_rules"]["transfer"]["overnight_transfer"])
+        self.assertTrue(sub["advanced_rules"]["transfer"]["self_transfer"])
+
 
 if __name__ == "__main__":
     unittest.main()

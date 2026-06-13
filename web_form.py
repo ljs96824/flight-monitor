@@ -1143,6 +1143,14 @@ FORM_TEMPLATE = """
           <label><input type="radio" name="price_sensitivity" value="max"> 价格优先，只要显著便宜都可以看</label>
         </div>
 
+        <div id="domestic-invoice-trigger" data-show-if="route_type=domestic">
+          <label>国内报销/开票需求</label>
+          <div class="choice">
+            <label><input type="checkbox" name="invoice_context" value="true"> 有发票、行程单或报销相关要求</label>
+          </div>
+          <p class="hint">勾选后会展开商务/报销规则；具体开票能力仍以渠道支付页为准。</p>
+        </div>
+
         <div id="business-rules-module" data-show-if="business_context=true">
         <label>出行性质（可多选）</label>
         <div class="choice">
@@ -1254,7 +1262,7 @@ FORM_TEMPLATE = """
 
           <p class="hint" data-show-if="transfer_policy=price_first">价格优先时会显示更细的中转规则；国内航线会自动弱化非联程和过境签相关项。</p>
 
-          <div id="overnight-transfer-options" class="sub-options" data-show-if="transfer_policy=price_first;route_type=international|greater_china">
+          <div id="overnight-transfer-options" class="sub-options" data-show-if="transfer_policy=price_first">
             <label>是否接受过夜中转</label>
             <div class="choice">
               <label><input type="radio" name="accept_overnight_transfer" value="false" checked> 不接受</label>
@@ -1263,7 +1271,7 @@ FORM_TEMPLATE = """
           </div>
 
           <div id="pref-detail-self_transfer" class="pref-card-detail">
-          <div id="self-transfer-options" class="sub-options" data-show-if="transfer_policy=price_first;route_type=international|greater_china">
+          <div id="self-transfer-options" class="sub-options" data-show-if="transfer_policy=price_first">
             <label>是否接受非联程</label>
             <div class="choice">
               <label><input type="radio" name="accept_self_transfer" value="false" checked> 不接受</label>
@@ -1535,10 +1543,17 @@ FORM_TEMPLATE = """
         const precise = checkedValue('monitor_mode') === 'precise';
         const scenarios = selectedTravelScenarios();
         const natures = checkedValues('trip_natures');
+        const domesticInvoiceContext = checkedValue('route_type') === 'domestic' && (
+          Boolean(document.querySelector('input[name="invoice_context"]')?.checked)
+          || ['invoice_needed', 'invoice_special_vat', 'invoice_cabin_limit'].some(fieldName =>
+            Boolean(document.querySelector(`input[name="${fieldName}"]`)?.checked)
+          )
+        );
         const active = precise && (
           scenarios.includes('business')
           || natures.some(value => ['business', 'meeting', 'team_building'].includes(value))
           || Boolean(sameDayRoundTrip?.checked)
+          || domesticInvoiceContext
         );
         return active ? ['true'] : [];
       }
@@ -3592,7 +3607,7 @@ FORM_TEMPLATE = """
       updateConditionalFields();
       refreshSummaryIfFinalStep();
     }));
-    ['companions', 'adult_count', 'child_count', 'elderly_count', 'infant_count', 'passenger_count', 'trip_natures', 'team_passenger_count', 'cabin_arrangement', 'business_start', 'business_end', 'outbound_set_off', 'return_set_off', 'user_transport_min', 'transport_margin_mode', 'redundancy_min', 'meeting_start', 'meeting_end', 'team_date_flexibility', 'same_flight_required', 'cabin_policy', 'user_level', 'business_seats', 'economy_seats', 'reimburse_per_person', 'invoice_needed', 'invoice_special_vat', 'invoice_cabin_limit', 'time_preference', 'refund_flexibility', 'airline_policy', 'accept_self_transfer', 'companion_constraints', 'solo_travel', 'no_late_arrival', 'prefer_daytime_arrival'].forEach(name => {
+    ['companions', 'adult_count', 'child_count', 'elderly_count', 'infant_count', 'passenger_count', 'trip_natures', 'team_passenger_count', 'cabin_arrangement', 'business_start', 'business_end', 'outbound_set_off', 'return_set_off', 'user_transport_min', 'transport_margin_mode', 'redundancy_min', 'meeting_start', 'meeting_end', 'team_date_flexibility', 'same_flight_required', 'cabin_policy', 'user_level', 'business_seats', 'economy_seats', 'reimburse_per_person', 'invoice_context', 'invoice_needed', 'invoice_special_vat', 'invoice_cabin_limit', 'time_preference', 'refund_flexibility', 'airline_policy', 'accept_self_transfer', 'companion_constraints', 'solo_travel', 'no_late_arrival', 'prefer_daytime_arrival'].forEach(name => {
       document.querySelectorAll(`input[name="${name}"]`).forEach(input => {
         input.addEventListener('change', () => {
           syncPrefCards();
@@ -4693,6 +4708,7 @@ def build_subscription(form) -> dict:
     solo_travel = parse_bool(form.get("solo_travel", "false"))
     no_late_arrival = parse_bool(form.get("no_late_arrival", "false"))
     prefer_daytime_arrival = parse_bool(form.get("prefer_daytime_arrival", "false"))
+    invoice_context = parse_bool(form.get("invoice_context", "false"))
     invoice_needed = parse_bool(form.get("invoice_needed", "false"))
     invoice_special_vat = parse_bool(form.get("invoice_special_vat", "false"))
     invoice_cabin_limit = parse_bool(form.get("invoice_cabin_limit", "false"))
@@ -4704,6 +4720,7 @@ def build_subscription(form) -> dict:
         solo_travel = False
         no_late_arrival = False
         prefer_daytime_arrival = False
+        invoice_context = False
         invoice_needed = False
         invoice_special_vat = False
         invoice_cabin_limit = False
@@ -4728,6 +4745,7 @@ def build_subscription(form) -> dict:
     business_context = monitor_mode == "precise" and (
         "business" in travel_scenarios
         or same_day_round_trip
+        or (route_type == "domestic" and (invoice_context or invoice_needed or invoice_special_vat or invoice_cabin_limit))
         or any(item in {"business", "meeting", "team_building"} for item in trip_natures)
     )
     if not business_context:
@@ -4735,6 +4753,8 @@ def build_subscription(form) -> dict:
         invoice_needed = False
         invoice_special_vat = False
         invoice_cabin_limit = False
+    elif route_type == "domestic" and invoice_context:
+        invoice_needed = True
     trip_nature = "meeting" if "meeting" in trip_natures else trip_natures[0] if trip_natures else ""
     meeting_start = form.get("meeting_start", "").strip()
     meeting_end = form.get("meeting_end", "").strip()
@@ -4775,6 +4795,7 @@ def build_subscription(form) -> dict:
         team_date_flexibility = "fixed"
         same_flight_required = False
         reimburse_per_person = 0
+    use_hourly_time = monitor_mode == "precise" and time_mode == "custom"
 
     return {
         "basic": {
@@ -4854,10 +4875,10 @@ def build_subscription(form) -> dict:
                 "return_departure": return_departure_time_windows,
                 "return_arrival": return_arrival_time_windows,
                 "hourly": {
-                    "departure_start": form.get("departure_time_start", "") if monitor_mode == "precise" else "",
-                    "departure_end": form.get("departure_time_end", "") if monitor_mode == "precise" else "",
-                    "arrival_start": form.get("arrival_time_start", "") if monitor_mode == "precise" else "",
-                    "arrival_end": form.get("arrival_time_end", "") if monitor_mode == "precise" else "",
+                    "departure_start": form.get("departure_time_start", "") if use_hourly_time else "",
+                    "departure_end": form.get("departure_time_end", "") if use_hourly_time else "",
+                    "arrival_start": form.get("arrival_time_start", "") if use_hourly_time else "",
+                    "arrival_end": form.get("arrival_time_end", "") if use_hourly_time else "",
                 },
             },
             "transfer": {

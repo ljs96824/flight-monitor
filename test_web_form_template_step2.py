@@ -268,6 +268,17 @@ class WebFormTemplateStep2Test(unittest.TestCase):
         self.assertIn('function highlightField', FORM_TEMPLATE)
         self.assertIn("summaryLine('", FORM_TEMPLATE)
 
+    def test_transfer_business_and_reminder_visibility_are_consolidated(self):
+        self.assertIn('id="short-transfer-options" class="sub-options" data-show-if="transfer_policy=reasonable|price_first"', FORM_TEMPLATE)
+        self.assertIn('id="overnight-transfer-options" class="sub-options" data-show-if="transfer_policy=price_first"', FORM_TEMPLATE)
+        self.assertIn('id="self-transfer-options" class="sub-options" data-show-if="transfer_policy=price_first"', FORM_TEMPLATE)
+        self.assertIn('id="domestic-invoice-trigger"', FORM_TEMPLATE)
+        self.assertIn('name="invoice_context"', FORM_TEMPLATE)
+        self.assertIn('domesticInvoiceContext', FORM_TEMPLATE)
+        self.assertEqual(FORM_TEMPLATE.count('<input type="radio" name="notification_frequency"'), 3)
+        self.assertIn('name="notification_frequency_rule"', FORM_TEMPLATE)
+        self.assertIn('name="secondary_goals"', FORM_TEMPLATE)
+
     def test_route_type_and_domestic_invoice_are_saved(self):
         class Form(dict):
             def getlist(self, key):
@@ -303,6 +314,37 @@ class WebFormTemplateStep2Test(unittest.TestCase):
         self.assertTrue(subscription["preferences"]["invoice_needed"])
         self.assertTrue(subscription["preferences"]["invoice_special_vat"])
         self.assertTrue(subscription["preferences"]["invoice_cabin_limit"])
+
+    def test_domestic_invoice_trigger_maps_to_existing_invoice_field(self):
+        class Form(dict):
+            def getlist(self, key):
+                value = self.get(key)
+                if value is None:
+                    return []
+                return value if isinstance(value, list) else [value]
+
+        form = Form(
+            {
+                "monitor_mode": "precise",
+                "route_type": "domestic",
+                "round_trip": "false",
+                "origin_select": "PVG",
+                "destination": "PEK",
+                "depart_date": "2026-06-10",
+                "price_strategy": "auto_judge",
+                "travel_scenario": ["tourism"],
+                "transfer_policy": "reasonable",
+                "baggage": "required",
+                "primary_goal": "buy_timing",
+                "notification_method": "pushplus",
+                "notification_frequency": "important_only",
+                "invoice_context": "true",
+            }
+        )
+
+        subscription = build_subscription(form)
+
+        self.assertTrue(subscription["preferences"]["invoice_needed"])
 
 
 if __name__ == "__main__":
