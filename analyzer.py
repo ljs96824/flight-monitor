@@ -4529,6 +4529,47 @@ def analyze_price_calendar(calendar: dict, target_date: str, current_price) -> d
     }
 
 
+def build_price_hint_from_calendar(calendar: dict | None) -> dict:
+    """Return a compact recent price range for form-side budget anchoring."""
+    prices = []
+    for info in ((calendar or {}).get("dates") or {}).values():
+        if not isinstance(info, dict):
+            continue
+        try:
+            price = float(info.get("min_price"))
+        except (TypeError, ValueError):
+            continue
+        if price > 0:
+            prices.append(price)
+
+    if not prices:
+        return {
+            "has_data": False,
+            "low": None,
+            "high": None,
+            "typical": None,
+            "sample_count": 0,
+            "scope": "oneway",
+        }
+
+    prices.sort()
+    count = len(prices)
+    mid = count // 2
+    if count % 2:
+        typical = prices[mid]
+    else:
+        typical = (prices[mid - 1] + prices[mid]) / 2
+
+    return {
+        "has_data": True,
+        "low": round(prices[0]),
+        "high": round(prices[-1]),
+        "typical": round(typical),
+        "sample_count": count,
+        "scope": "oneway",
+    }
+
+
 def verify_fare_rules(flight, hard_constraints):
     issues = []
     matches = []

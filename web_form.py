@@ -10,11 +10,12 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from dotenv import load_dotenv
-from flask import Flask, redirect, render_template_string, request, url_for
+from flask import Flask, jsonify, redirect, render_template_string, request, url_for
 
-from airports import AIRPORT_SHORT_NAMES, CITY_AIRPORTS, format_airport, resolve_location
-from analyzer import apply_default_rules
+from airports import AIRPORT_SHORT_NAMES, CITY_AIRPORTS, CITY_ALIASES, format_airport, resolve_location
+from analyzer import apply_default_rules, build_price_hint_from_calendar
 from filename_utils import sanitize_filename
+from price_calendar import load_calendar
 
 
 BASE_DIR = Path(__file__).parent
@@ -299,6 +300,26 @@ FORM_TEMPLATE = """
       color: #c5221f;
       font-size: 13px;
       margin: 6px 0 0;
+    }
+    .field-invalid {
+      border-color: #c5221f !important;
+      background: #fff7f7;
+    }
+    .inline-suggestion {
+      border: 0;
+      background: transparent;
+      color: #1a73e8;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 700;
+      margin: 0;
+      padding: 0;
+      text-decoration: underline;
+      width: auto;
+    }
+    #price-hint {
+      border-left: 3px solid #d7e3f7;
+      padding-left: 8px;
     }
     .server-error {
       background: #fef2f2;
@@ -668,6 +689,9 @@ FORM_TEMPLATE = """
       grid-template-columns: 1fr 1fr;
       gap: 12px;
     }
+    #mobile-action-bar {
+      display: none;
+    }
     .step-nav-row {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -689,6 +713,40 @@ FORM_TEMPLATE = """
       }
       #preview-button.step-final-visible {
         display: block;
+      }
+      body {
+        padding-bottom: 96px;
+      }
+      #mobile-action-bar {
+        align-items: center;
+        background: #fff;
+        border-top: 1px solid #e5e7eb;
+        bottom: 0;
+        box-shadow: 0 -4px 14px rgba(0,0,0,0.08);
+        display: flex;
+        gap: 10px;
+        left: 0;
+        padding: 10px 14px;
+        position: fixed;
+        right: 0;
+        z-index: 20;
+      }
+      #mobile-action-text {
+        color: #333;
+        flex: 1;
+        font-size: 13px;
+        line-height: 1.35;
+      }
+      #mobile-action-bar button {
+        flex: 0 0 auto;
+        margin: 0;
+        padding: 10px 12px;
+        width: auto;
+      }
+      #mobile-summary-button {
+        background: #f5f7fb;
+        border: 1px solid #c8d6f0;
+        color: #1a73e8;
       }
     }
     @media (max-width: 520px) {
@@ -762,12 +820,14 @@ FORM_TEMPLATE = """
         {% endfor %}
       </select>
       <input name="origin_manual" placeholder="或手动输入城市名/机场代码，例如上海或PVG">
+      <p id="origin-validation-error" class="field-error"></p>
       <p id="origin-airport-hint" class="hint"></p>
       <div id="origin-airport-tags" class="airport-tags"></div>
       <input id="origin_airports_active" name="origin_airports_active" type="hidden">
 
       <label for="destination">目的地</label>
       <input id="destination" name="destination" placeholder="输入城市名（如大阪、东京）或机场代码（如KIX）" required>
+      <p id="destination-validation-error" class="field-error"></p>
       <p id="destination-airport-hint" class="hint"></p>
       <div id="destination-airport-tags" class="airport-tags"></div>
       <input id="destination_airports_active" name="destination_airports_active" type="hidden">
@@ -780,6 +840,7 @@ FORM_TEMPLATE = """
 
       <label for="depart_date">出发日期</label>
       <input id="depart_date" name="depart_date" type="date" required>
+      <p id="depart-date-error" class="field-error"></p>
       <div data-show-if="route_type=domestic">
         <label class="hint" style="display:block;margin-top:8px;">
           <input id="same_day_round_trip" name="same_day_round_trip" type="checkbox" value="true">
@@ -811,7 +872,8 @@ FORM_TEMPLATE = """
           <label><input type="radio" name="transport_margin_mode" value="standard" checked> 标准 +30%(推荐)</label>
           <label><input type="radio" name="transport_margin_mode" value="loose"> 宽松 +50%</label>
         </div>
-        <p id="transport-margin-hint" class="hint"></p>
+      <p id="transport-margin-hint" class="hint"></p>
+      <p class="hint">路途冗余是在车程之上额外留出余量，应对堵车。</p>
         <label>安全余量</label>
         <div class="choice">
           <label><input type="radio" name="redundancy_min" value="15"> 15分钟</label>
@@ -826,6 +888,7 @@ FORM_TEMPLATE = """
       <div id="return-date-wrap" data-show-if="round_trip=true">
         <label for="return_date">返程日期</label>
         <input id="return_date" name="return_date" type="date">
+        <p id="return-date-error" class="field-error"></p>
 
         <label>返程日期灵活度</label>
         <div class="choice">
@@ -860,18 +923,21 @@ FORM_TEMPLATE = """
       <div id="budget-amount-fields" data-show-if="price_strategy=explicit">
       <label>最高可接受价格（超过这个价通常不考虑）</label>
       <input id="max_budget" name="max_budget" type="number" min="1" step="1" placeholder="例如 8000">
-      <p class="hint">超过这个价通常不考虑</p>
+      <p class="hint">超过这个价通常不作为主推荐</p>
+      <p id="max-budget-error" class="field-error"></p>
       <input type="hidden" name="max_budget_mode" value="fixed">
 
       <label>理想入手价格（可选，到这个价格就值得买）</label>
       <input id="target_price" name="target_price" type="number" min="1" step="1" placeholder="例如 6000（选填）">
-      <p class="hint">到这个价格就值得买（可选）</p>
+      <p class="hint">到这个价附近就提醒你，不等于最高预算</p>
       <p id="price-validation-error" class="field-error">理想入手价应低于最高可接受价，请确认是否填反了</p>
+      <p id="price-hint" class="hint"></p>
       <input type="hidden" name="target_price_mode" value="fixed">
       </div>
 
       <input type="hidden" name="price_tolerance_mode" value="100">
       <input id="price_tolerance_custom" name="price_tolerance_custom" type="hidden">
+      <p class="hint">中转接受程度会影响是否推荐低价中转方案；托运行李会影响实际支付价，不含行李的低价会被降权。</p>
 
       <label>中转接受程度</label>
       <div class="choice">
@@ -919,6 +985,7 @@ FORM_TEMPLATE = """
         <label><input type="radio" name="notification_frequency" value="daily_digest"> 每天汇总一次</label>
         <label><input type="radio" name="notification_frequency" value="price_change"> 价格变化就提醒</label>
       </div>
+      <p class="hint">提醒频率越高越及时，但打扰也更多。</p>
       <input id="notification_frequency_rule_shadow" type="hidden" name="notification_frequency_rule" value="important_only">
       <div class="sub-options" data-show-if="notification_frequency=price_change">
         <label>什么算价格变化？</label>
@@ -954,6 +1021,7 @@ FORM_TEMPLATE = """
         <label><input type="checkbox" name="travel_scenario" value="important"> 重要事项（考试/婚礼/医疗/邮轮等）</label>
         <label><input type="checkbox" name="travel_scenario" value="price_first"> 价格优先</label>
       </div>
+      <p class="hint">出行场景用于自动调整价格、时间、风险和舒适度的权重。</p>
       <div id="travel-scenario-notice" class="auto-notice"></div>
 
       <button id="advanced-toggle" class="secondary-button precise-only" type="button">＋ 补充偏好，让推荐更准确</button>
@@ -1379,6 +1447,13 @@ FORM_TEMPLATE = """
     </div>
   </form>
 
+  <div id="mobile-action-bar">
+    <span id="mobile-action-text">还缺:目的地、出发日期</span>
+    <button id="mobile-next-button" type="button">下一步</button>
+    <button id="mobile-summary-button" class="secondary-button" type="button">查看摘要</button>
+    <button id="mobile-submit-button" type="button">确认并开始监控</button>
+  </div>
+
   <script>
     const labels = {
       dateFlex: {"0": "不能调，就这天", "1": "前后1天可以", "3": "前后3天都行", "7": "前后一周都行"},
@@ -1415,6 +1490,7 @@ FORM_TEMPLATE = """
       best_overall: ["better_same_day"]
     };
     const cityAirports = {{ city_airports|tojson }};
+    const cityAliases = {{ city_aliases|tojson }};
     const airportShortNames = {{ airport_short_names|tojson }};
     const editSubscription = {{ edit_subscription|tojson }};
 
@@ -1434,7 +1510,9 @@ FORM_TEMPLATE = """
     const openPreciseModeButton = document.getElementById('open-precise-mode');
     const originSelect = document.getElementById('origin');
     const originManual = document.querySelector('input[name="origin_manual"]');
+    const originValidationError = document.getElementById('origin-validation-error');
     const destinationInput = document.getElementById('destination');
+    const destinationValidationError = document.getElementById('destination-validation-error');
     const originAirportHint = document.getElementById('origin-airport-hint');
     const destinationAirportHint = document.getElementById('destination-airport-hint');
     const originAirportTags = document.getElementById('origin-airport-tags');
@@ -1454,6 +1532,8 @@ FORM_TEMPLATE = """
     const tripRadios = document.querySelectorAll('input[name="round_trip"]');
     const returnWrap = document.getElementById('return-date-wrap');
     const returnDate = document.getElementById('return_date');
+    const departDateError = document.getElementById('depart-date-error');
+    const returnDateError = document.getElementById('return-date-error');
     const sameDayRoundTrip = document.getElementById('same_day_round_trip');
     const meetingTimeHandoffCard = document.getElementById('meeting-time-handoff-card');
     const meetingTimeHandoffText = document.getElementById('meeting-time-handoff-text');
@@ -1469,6 +1549,8 @@ FORM_TEMPLATE = """
     const maxBudgetInput = document.getElementById('max_budget');
     const targetPriceInput = document.getElementById('target_price');
     const priceValidationError = document.getElementById('price-validation-error');
+    const maxBudgetError = document.getElementById('max-budget-error');
+    const priceHint = document.getElementById('price-hint');
     const advanced = document.getElementById('advanced-preferences');
     const advancedToggle = document.getElementById('advanced-toggle');
     const advancedRules = document.getElementById('advanced-rules');
@@ -1511,6 +1593,11 @@ FORM_TEMPLATE = """
     const stepLabel = document.getElementById('step-label');
     const stepPrev = document.getElementById('step-prev');
     const stepNext = document.getElementById('step-next');
+    const mobileActionBar = document.getElementById('mobile-action-bar');
+    const mobileActionText = document.getElementById('mobile-action-text');
+    const mobileNextButton = document.getElementById('mobile-next-button');
+    const mobileSummaryButton = document.getElementById('mobile-summary-button');
+    const mobileSubmitButton = document.getElementById('mobile-submit-button');
     const stepTimePreferences = document.getElementById('step-time-preferences');
     const prefCardButtons = document.querySelectorAll('.pref-card-button');
     const prefCardDetails = document.querySelectorAll('.pref-card-detail');
@@ -1719,6 +1806,11 @@ FORM_TEMPLATE = """
         strictRulesWarning.textContent = '';
         strictRulesWarning.style.display = 'none';
       }
+      if (score >= 6) {
+        strictRulesWarning.textContent = '当前条件非常严格，可能较难找到特别低价。系统会优先保证出行稳定性，长期无结果可放宽中转或时间。';
+      } else if (score >= 4) {
+        strictRulesWarning.textContent = '当前条件较严格，可能较难找到特别低价，系统会优先保证出行稳定性。长期无结果可放宽中转或时间。';
+      }
     }
 
     function isMobileStepper() {
@@ -1744,6 +1836,27 @@ FORM_TEMPLATE = """
       } else if (mobile) {
         summaryCard.style.display = 'none';
       }
+      updateMobileActionBar();
+    }
+
+    function updateMobileActionBar() {
+      if (!mobileActionBar || !isMobileStepper()) return;
+      const missing = missingRequiredLabels(currentStep);
+      const finalStep = currentStep === stepTitles.length;
+      if (mobileActionText) {
+        mobileActionText.textContent = finalStep
+          ? '确认摘要后即可开始监控'
+          : (missing.length ? `还缺:${humanJoin(missing)}` : '基础项已完成');
+      }
+      if (mobileNextButton) {
+        mobileNextButton.style.display = finalStep ? 'none' : 'inline-block';
+      }
+      if (mobileSummaryButton) {
+        mobileSummaryButton.style.display = finalStep ? 'inline-block' : 'none';
+      }
+      if (mobileSubmitButton) {
+        mobileSubmitButton.style.display = finalStep ? 'inline-block' : 'none';
+      }
     }
 
     function goToStep(step) {
@@ -1766,6 +1879,12 @@ FORM_TEMPLATE = """
       if (!validatePriceInputs()) {
         alert('理想入手价应低于最高可接受价，请确认是否填反了');
         targetPriceInput.focus();
+        return false;
+      }
+      if (!validateDateFields()) {
+        return false;
+      }
+      if (!validateLocationField('origin') || !validateLocationField('destination')) {
         return false;
       }
       const currentFieldset = document.querySelector(`.form-step[data-step="${currentStep}"]`);
@@ -1837,6 +1956,7 @@ FORM_TEMPLATE = """
           ? `请先填写${humanJoin(missing)}`
           : '';
       }
+      updateMobileActionBar();
       return missing;
     }
 
@@ -1946,6 +2066,7 @@ FORM_TEMPLATE = """
           state.active = state.active.filter(item => item !== code);
           renderAirportTags(kind);
           autoDetectRouteType();
+          refreshPriceHint();
           refreshSummaryIfFinalStep();
         });
         tag.appendChild(remove);
@@ -1971,7 +2092,122 @@ FORM_TEMPLATE = """
       airportState[kind].active = savedActive.length ? savedActive : airports.slice();
       renderAirportTags(kind);
       autoDetectRouteType();
+      refreshPriceHint();
       refreshSummaryIfFinalStep();
+    }
+
+    function setFieldError(input, errorEl, message) {
+      if (!input || !errorEl) return;
+      if (message) {
+        input.classList.add('field-invalid');
+        errorEl.innerHTML = message;
+        errorEl.style.display = 'block';
+      } else {
+        input.classList.remove('field-invalid');
+        errorEl.textContent = '';
+        errorEl.style.display = 'none';
+      }
+    }
+
+    function localDateString(date = new Date()) {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    }
+
+    function aliasSuggestion(text) {
+      const value = String(text || '').trim();
+      if (!value) return '';
+      return cityAliases[value] || cityAliases[value.toUpperCase()] || '';
+    }
+
+    function validateLocationField(kind) {
+      const input = kind === 'origin' ? originManual : destinationInput;
+      const errorEl = kind === 'origin' ? originValidationError : destinationValidationError;
+      const value = kind === 'origin' ? selectedOrigin() : destinationInput.value.trim();
+      if (!value || value === '其他') {
+        setFieldError(input, errorEl, '');
+        return true;
+      }
+      const suggestion = aliasSuggestion(value);
+      if (suggestion && suggestion !== value) {
+        const buttonId = `${kind}-alias-suggestion`;
+        setFieldError(
+          input,
+          errorEl,
+          `未识别'${value}',是否指'${suggestion}'? <button id="${buttonId}" class="inline-suggestion" type="button">使用${suggestion}</button> 或输入机场三字码`
+        );
+        document.getElementById(buttonId)?.addEventListener('click', () => {
+          if (kind === 'origin') {
+            originManual.value = suggestion;
+          } else {
+            destinationInput.value = suggestion;
+          }
+          updateAirportSelection(kind);
+          validateLocationField(kind);
+          refreshPriceHint();
+        });
+        return false;
+      }
+      const airports = resolveAirportsForInput(value);
+      if (!airports.length) {
+        setFieldError(input, errorEl, `未识别'${value}',请输入机场三字码或已支持的城市`);
+        return false;
+      }
+      setFieldError(input, errorEl, '');
+      return true;
+    }
+
+    function validateDateFields() {
+      const today = localDateString();
+      let ok = true;
+      if (form.depart_date?.value && form.depart_date.value < today) {
+        setFieldError(form.depart_date, departDateError, '出发日期不能是过去');
+        ok = false;
+      } else {
+        setFieldError(form.depart_date, departDateError, '');
+      }
+      if (checkedValue('round_trip') === 'true' && returnDate?.value && form.depart_date?.value && returnDate.value < form.depart_date.value) {
+        setFieldError(returnDate, returnDateError, '返程不能早于出发');
+        ok = false;
+      } else {
+        setFieldError(returnDate, returnDateError, '');
+      }
+      return ok;
+    }
+
+    function firstActiveAirport(kind) {
+      return (airportState[kind].active || [])[0] || '';
+    }
+
+    let priceHintTimer = null;
+    function refreshPriceHint() {
+      if (!priceHint) return;
+      window.clearTimeout(priceHintTimer);
+      priceHintTimer = window.setTimeout(() => {
+        const origin = firstActiveAirport('origin');
+        const dest = firstActiveAirport('destination');
+        const date = form.depart_date?.value || '';
+        if (!origin || !dest || !date) {
+          priceHint.textContent = '';
+          return;
+        }
+        const params = new URLSearchParams({origin, dest, date});
+        fetch(`/price_hint?${params.toString()}`)
+          .then(resp => resp.ok ? resp.json() : Promise.reject(new Error('price hint failed')))
+          .then(data => {
+            if (data && data.has_data) {
+              const scope = data.scope === 'roundtrip' ? '往返' : '直飞单程';
+              priceHint.textContent = `💡 该航线近期参考区间:¥${data.low} - ¥${data.high}(${scope}), 中位约¥${data.typical}。你的理想价填在低位更容易触发提醒。`;
+            } else {
+              priceHint.textContent = '暂无该航线历史数据,系统会在采集后积累。';
+            }
+          })
+          .catch(() => {
+            priceHint.textContent = '暂无该航线历史数据,系统会在采集后积累。';
+          });
+      }, 250);
     }
 
     function updateAirportSelection(kind, activeAirports) {
@@ -3484,6 +3720,24 @@ FORM_TEMPLATE = """
       }
       goToStep(currentStep + 1);
     });
+    mobileNextButton?.addEventListener('click', () => {
+      if (!validateCurrentStep()) {
+        return;
+      }
+      goToStep(currentStep + 1);
+    });
+    mobileSummaryButton?.addEventListener('click', () => {
+      buildSummary();
+      summaryCard.style.display = 'block';
+      summaryCard.scrollIntoView({behavior: 'smooth', block: 'start'});
+    });
+    mobileSubmitButton?.addEventListener('click', () => {
+      if (summaryCard.style.display !== 'block') {
+        buildSummary();
+        summaryCard.style.display = 'block';
+      }
+      form.requestSubmit();
+    });
 
     window.addEventListener('resize', updateStepper);
 
@@ -3557,16 +3811,23 @@ FORM_TEMPLATE = """
       syncSameDayRoundTrip();
       updateRequiredProgress();
     });
-    form.depart_date?.addEventListener('change', syncSameDayRoundTrip);
+    form.depart_date?.addEventListener('change', () => {
+      syncSameDayRoundTrip();
+      validateDateFields();
+      refreshPriceHint();
+    });
+    returnDate?.addEventListener('change', validateDateFields);
     budgetStrategyRadios.forEach(radio => radio.addEventListener('change', toggleBudgetRequired));
     maxBudgetRadios.forEach(radio => radio.addEventListener('change', toggleBudgetRequired));
     targetPriceRadios.forEach(radio => radio.addEventListener('change', toggleBudgetRequired));
     maxBudgetInput.addEventListener('input', () => { validatePriceInputs(); updateRequiredProgress(); });
     targetPriceInput.addEventListener('input', () => { validatePriceInputs(); updateRequiredProgress(); });
-    originSelect.addEventListener('change', () => { updateOriginAirportHint(); updateRequiredProgress(); });
-    originManual.addEventListener('input', () => { updateOriginAirportHint(); updateRequiredProgress(); });
-    destinationInput.addEventListener('input', () => { updateDestinationAirportHint(); updateRequiredProgress(); });
-    destinationInput.addEventListener('change', () => { updateDestinationAirportHint(); updateRequiredProgress(); });
+    originSelect.addEventListener('change', () => { updateOriginAirportHint(); validateLocationField('origin'); updateRequiredProgress(); refreshPriceHint(); });
+    originManual.addEventListener('input', () => { updateOriginAirportHint(); setFieldError(originManual, originValidationError, ''); updateRequiredProgress(); refreshPriceHint(); });
+    originManual.addEventListener('blur', () => validateLocationField('origin'));
+    destinationInput.addEventListener('input', () => { updateDestinationAirportHint(); setFieldError(destinationInput, destinationValidationError, ''); updateRequiredProgress(); refreshPriceHint(); });
+    destinationInput.addEventListener('blur', () => validateLocationField('destination'));
+    destinationInput.addEventListener('change', () => { updateDestinationAirportHint(); validateLocationField('destination'); updateRequiredProgress(); refreshPriceHint(); });
     modeRadios.forEach(radio => radio.addEventListener('change', applyMonitorMode));
     travelScenarioRadios.forEach(radio => radio.addEventListener('change', applyTravelScenarioDefaults));
     timePreferenceRadios.forEach(radio => radio.addEventListener('change', toggleTimePreference));
@@ -3661,6 +3922,8 @@ FORM_TEMPLATE = """
     updateDateFlexHint();
     updateOriginAirportHint(editSubscription.origin_airports_active || editSubscription.origin_airports);
     updateDestinationAirportHint(editSubscription.destination_airports_active || editSubscription.destination_airports || editSubscription.dest_airports);
+    validateDateFields();
+    refreshPriceHint();
     updateRequiredProgress();
     updateStrictRulesWarning();
     advanced.style.display = 'none';
@@ -3696,6 +3959,10 @@ FORM_TEMPLATE = """
         event.preventDefault();
         alert('理想入手价应低于最高可接受价，请确认是否填反了');
         targetPriceInput.focus();
+        return;
+      }
+      if (!validateDateFields() || !validateLocationField('origin') || !validateLocationField('destination')) {
+        event.preventDefault();
         return;
       }
       if (!validateCabinArrangement(true)) {
@@ -5120,11 +5387,26 @@ def index():
         FORM_TEMPLATE,
         origins=COMMON_ORIGINS,
         city_airports=CITY_AIRPORTS,
+        city_aliases=CITY_ALIASES,
         airport_short_names=AIRPORT_SHORT_NAMES,
         edit_subscription=edit_subscription or {},
         edit_index=edit_index,
         form_error="",
     )
+
+
+@app.get("/price_hint")
+def price_hint():
+    origin = request.args.get("origin", "").strip().upper()
+    dest = request.args.get("dest", "").strip().upper()
+    if not origin or not dest:
+        return jsonify({"has_data": False, "scope": "oneway"})
+    for route in (f"{origin}-{dest}", f"{origin}_{dest}", f"{origin}→{dest}"):
+        hint = build_price_hint_from_calendar(load_calendar(route))
+        if hint.get("has_data"):
+            hint["route"] = route
+            return jsonify(hint)
+    return jsonify({"has_data": False, "scope": "oneway"})
 
 
 @app.post("/subscribe")
@@ -5159,6 +5441,7 @@ def subscribe():
             FORM_TEMPLATE,
             origins=COMMON_ORIGINS,
             city_airports=CITY_AIRPORTS,
+            city_aliases=CITY_ALIASES,
             airport_short_names=AIRPORT_SHORT_NAMES,
             edit_subscription={},
             edit_index=None,

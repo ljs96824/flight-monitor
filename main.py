@@ -6,7 +6,10 @@ import traceback
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-import httpx
+try:
+    import httpx
+except ModuleNotFoundError:  # Optional: only needed for PythonAnywhere payload sync.
+    httpx = None
 from dotenv import load_dotenv
 from airports import resolve_location
 
@@ -23,6 +26,7 @@ from analyzer import (
     analyze_all_flights,
     analyze_price_calendar,
     analyze_round_trip,
+    build_price_hint_from_calendar,
     determine_cabins,
     get_total_passengers,
     migrate_old_subscription,
@@ -40,7 +44,7 @@ from notifier import (
     render_pushplus,
     send,
 )
-from price_calendar import update_calendar
+from price_calendar import load_calendar, update_calendar
 from plan_tracker import feedback_acknowledgement
 from sources.aggregator import FlightAggregator, build_default_sources, is_domestic_route
 from storage import (
@@ -152,6 +156,36 @@ def _calendar_source_for_route(aggregator: FlightAggregator, origin: str, dest: 
             if str(getattr(source, "name", "")).lower() == "juhe":
                 return source
     return sources[0] if sources else None
+
+
+def _price_hint_route_candidates(origin: str, dest: str) -> list[str]:
+    origin_code = str(origin or "").strip().upper()
+    dest_code = str(dest or "").strip().upper()
+    if not origin_code or not dest_code:
+        return []
+    return [
+        f"{origin_code}-{dest_code}",
+        f"{origin_code}_{dest_code}",
+        f"{origin_code}→{dest_code}",
+    ]
+
+
+def price_hint_for_route(origin: str, dest: str, *, data_dir: Path | None = None) -> dict:
+    """Read local low-price calendar data and return a form-friendly anchor."""
+    for route in _price_hint_route_candidates(origin, dest):
+        calendar = load_calendar(route, data_dir=data_dir)
+        hint = build_price_hint_from_calendar(calendar)
+        if hint.get("has_data"):
+            hint["route"] = route
+            return hint
+    return {
+        "has_data": False,
+        "low": None,
+        "high": None,
+        "typical": None,
+        "sample_count": 0,
+        "scope": "oneway",
+    }
 
 
 def _as_bool(value) -> bool:
@@ -504,6 +538,9 @@ def _save_result_for_page(subscription_id: str, html_content: str, payload: dict
 
 
 def _upload_payload_to_pythonanywhere(payload_path: Path) -> bool:
+    if httpx is None:
+        print("[详情同步] 未安装httpx,跳过远程payload同步")
+        return False
     token = os.environ.get("PYTHONANYWHERE_TOKEN", "").strip()
     user = os.environ.get("PYTHONANYWHERE_USER", "").strip() or "ljs96824"
     if not token or token.lower() in {"token", "your_token"} or "your" in token.lower():

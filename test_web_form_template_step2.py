@@ -28,6 +28,7 @@ except ModuleNotFoundError:
         "flask",
         types.SimpleNamespace(
             Flask=_DummyFlask,
+            jsonify=lambda value=None, **kwargs: value if value is not None else kwargs,
             redirect=lambda *a, **k: None,
             render_template_string=lambda *a, **k: "",
             request=types.SimpleNamespace(form={}),
@@ -345,6 +346,25 @@ class WebFormTemplateStep2Test(unittest.TestCase):
         subscription = build_subscription(form)
 
         self.assertTrue(subscription["preferences"]["invoice_needed"])
+
+    def test_step5_inline_feedback_price_hint_and_mobile_action_markers_exist(self):
+        self.assertIn('const cityAliases = {{ city_aliases|tojson }};', FORM_TEMPLATE)
+        self.assertIn('id="origin-validation-error"', FORM_TEMPLATE)
+        self.assertIn('id="destination-validation-error"', FORM_TEMPLATE)
+        self.assertIn('id="depart-date-error"', FORM_TEMPLATE)
+        self.assertIn('id="return-date-error"', FORM_TEMPLATE)
+        self.assertIn('id="max-budget-error"', FORM_TEMPLATE)
+        self.assertIn('id="price-hint"', FORM_TEMPLATE)
+        self.assertIn("function validateLocationField", FORM_TEMPLATE)
+        self.assertIn("function validateDateFields", FORM_TEMPLATE)
+        self.assertIn("function validatePriceInputs", FORM_TEMPLATE)
+        self.assertIn("function refreshPriceHint", FORM_TEMPLATE)
+        self.assertIn("function updateMobileActionBar", FORM_TEMPLATE)
+        self.assertIn('id="mobile-action-bar"', FORM_TEMPLATE)
+        self.assertIn('未识别', FORM_TEMPLATE)
+        self.assertIn('是否指', FORM_TEMPLATE)
+        self.assertIn('该航线近期参考区间', FORM_TEMPLATE)
+        self.assertIn('当前条件较严格', FORM_TEMPLATE)
 
 
 if __name__ == "__main__":
