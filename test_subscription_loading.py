@@ -82,6 +82,40 @@ class SubscriptionLoadingTest(unittest.TestCase):
         self.assertEqual(loaded[0]["destination_airports"], ["KIX", "ITM"])
 
 
+    def test_paused_subscription_is_skipped_with_log(self):
+        records = [
+            {
+                "id": "paused-sub",
+                "origin": "PVG",
+                "destination": "PEK",
+                "depart_date": "2026-06-10",
+                "status": "paused",
+            },
+            {
+                "id": "active-sub",
+                "origin": "PVG",
+                "destination": "PEK",
+                "depart_date": "2026-06-10",
+                "status": "active",
+            },
+        ]
+
+        original_path = main.SUBSCRIPTIONS_PATH
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "subscriptions.json"
+            path.write_text(json.dumps(records, ensure_ascii=False), encoding="utf-8")
+            main.SUBSCRIPTIONS_PATH = path
+            try:
+                with patch("builtins.print") as fake_print:
+                    loaded = main.load_file_subscriptions()
+            finally:
+                main.SUBSCRIPTIONS_PATH = original_path
+
+        self.assertEqual([sub["id"] for sub in loaded], ["active-sub"])
+        printed = "\n".join(str(call.args[0]) for call in fake_print.call_args_list if call.args)
+        self.assertIn("[跳过] 订阅已暂停", printed)
+        self.assertIn("paused-sub", printed)
+
     def test_subscription_preferences_include_travel_scenarios(self):
         prefs = main.subscription_preferences(
             {

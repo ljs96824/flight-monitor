@@ -678,6 +678,9 @@ def load_file_subscriptions() -> list[dict]:
         if not isinstance(item, dict):
             continue
         if item.get("status", "active") != "active":
+            route = f"{item.get('origin') or (item.get('basic') or {}).get('origin', '')}→{item.get('destination') or (item.get('basic') or {}).get('destination', '')}"
+            sub_id = item.get("id") or item.get("index") or item.get("_index") or index
+            print(f"[跳过] 订阅已暂停: {sub_id} {route}")
             continue
         try:
             if not item.get("_index"):

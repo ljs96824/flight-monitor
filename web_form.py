@@ -661,6 +661,7 @@ FORM_TEMPLATE = """
 </head>
 <body>
   <h1>航班监控订阅</h1>
+  <p><a href="{{ url_for('subscription_list') }}">查看我的所有监控 →</a></p>
   <p class="hint">先填基础需求即可；高级偏好可以按需展开。</p>
   <div id="saved-template-banner" class="template-banner">
     检测到上次的偏好设置，是否套用？
@@ -3658,6 +3659,7 @@ SUCCESS_TEMPLATE = """
     <p><b>订阅已保存。系统正在采集第一批数据，预计1-2分钟内收到首次推送。</b></p>
   </div>
   <a href="{{ url_for('index') }}">继续添加订阅</a>
+  <a class="secondary-link" href="{{ url_for('subscription_list') }}">查看我的所有监控 →</a>
   {% if index is not none %}
   <div class="card" style="margin-top:16px;">
     <p><b>想让推荐更准确？你还可以补充（可选）：</b></p>
@@ -3687,6 +3689,78 @@ SUCCESS_TEMPLATE = """
   </div>
   <a class="secondary-link" href="{{ url_for('index', edit=index) }}">修改这条监控的偏好</a>
   {% endif %}
+</body>
+</html>
+"""
+
+
+LIST_TEMPLATE = """
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>我的航班监控</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 760px; margin: 28px auto; padding: 0 16px 40px; color: #222; line-height: 1.6; background: #fff; }
+    .topbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
+    h1 { margin: 0; font-size: 24px; }
+    .new-link, .button-link, button { border: 1px solid #c8d6f0; border-radius: 8px; background: #f7f9fc; color: #1a73e8; padding: 8px 12px; font-weight: 700; text-decoration: none; cursor: pointer; }
+    .new-link { background: #1a73e8; color: #fff; border-color: #1a73e8; }
+    .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; padding: 16px; margin: 14px 0; }
+    .route { font-size: 17px; font-weight: 700; margin-bottom: 6px; }
+    .meta, .decision { color: #555; font-size: 14px; margin: 4px 0; }
+    .status { display: inline-flex; align-items: center; gap: 5px; font-weight: 700; }
+    .status.active { color: #188038; }
+    .status.paused { color: #777; }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    .actions form { margin: 0; }
+    .danger { color: #b91c1c; border-color: #fecaca; background: #fff7f7; }
+    .empty { border: 1px dashed #c8d6f0; border-radius: 10px; padding: 24px; background: #f7f9fc; text-align: center; }
+    @media (max-width: 560px) {
+      .topbar { align-items: stretch; flex-direction: column; }
+      .actions { flex-direction: column; }
+      .actions a, .actions button { width: 100%; box-sizing: border-box; text-align: center; }
+    }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <h1>我的航班监控</h1>
+    <a class="new-link" href="{{ url_for('index') }}">+ 新建监控</a>
+  </div>
+
+  {% if not items %}
+  <div class="empty">
+    <p><b>还没有监控。</b></p>
+    <p>比如：监控上海→北京，低于¥800提醒我。</p>
+    <a class="new-link" href="{{ url_for('index') }}">创建第一个监控</a>
+  </div>
+  {% endif %}
+
+  {% for item in items %}
+  <div class="card">
+    <div class="route">{{ item.route }} · {{ item.route_type_label }} · {{ item.trip }}</div>
+    <div class="meta">{{ item.dates }} · 出行场景: {{ item.scenario }}</div>
+    <div class="meta">
+      状态:
+      <span class="status {{ item.status }}">
+        {{ "🟢 监控中" if item.status == "active" else "⏸ 已暂停" }}
+      </span>
+    </div>
+    <div class="decision">最近判断: {{ item.last_decision }}</div>
+    <div class="actions">
+      <a class="button-link" href="{{ item.detail_url }}">查看详情</a>
+      <a class="button-link" href="{{ url_for('index', edit=item.index) }}">编辑</a>
+      <form method="post" action="{{ url_for('toggle_subscription', index=item.index) }}">
+        <button type="submit">{{ "暂停" if item.status == "active" else "恢复" }}</button>
+      </form>
+      <form method="post" action="{{ url_for('delete_subscription', index=item.index) }}" onsubmit="return confirm('确认删除这条监控?');">
+        <button class="danger" type="submit">删除</button>
+      </form>
+    </div>
+  </div>
+  {% endfor %}
 </body>
 </html>
 """
@@ -3777,6 +3851,14 @@ def save_subscription(subscription: dict, index: int | None = None) -> int:
     return saved_index
 
 
+def save_subscriptions(subscriptions: list[dict]) -> None:
+    SUBSCRIPTIONS_PATH.parent.mkdir(exist_ok=True)
+    SUBSCRIPTIONS_PATH.write_text(
+        json.dumps(subscriptions, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
 def load_feedback() -> list[dict]:
     if not FEEDBACK_PATH.exists():
         return []
@@ -3829,6 +3911,111 @@ def _detail_storage_keys(results: list[dict]) -> list[str]:
     if PAGE_PAYLOADS_DIR.exists():
         keys.update(path.stem for path in PAGE_PAYLOADS_DIR.glob("*.json"))
     return sorted(keys)
+
+
+ROUTE_TYPE_LABELS = {
+    "domestic": "国内",
+    "international": "国际",
+    "greater_china": "港澳台",
+}
+
+SCENARIO_LABELS = {
+    "personal": "个人出行",
+    "business": "商务/会议",
+    "tourism": "旅游",
+    "family_visit": "探亲/回家",
+    "visit_family": "探亲/回家",
+    "family": "家庭/亲子",
+    "elderly": "有老人同行",
+    "with_elderly": "有老人同行",
+    "important": "重要事项",
+    "price_first": "价格优先",
+}
+
+
+def _sub_value(sub: dict, key: str, default=""):
+    basic = sub.get("basic") or {}
+    return basic.get(key) or sub.get(key) or default
+
+
+def _subscription_route_text(sub: dict) -> str:
+    origin = _sub_value(sub, "origin", "未设置")
+    destination = _sub_value(sub, "destination", "未设置")
+    return f"{origin} → {destination}"
+
+
+def _subscription_dates_text(sub: dict) -> str:
+    depart = _sub_value(sub, "departure_date") or sub.get("depart_date") or "未设置日期"
+    return_date = _sub_value(sub, "return_date") or sub.get("return_date")
+    if return_date:
+        return f"{depart} 出发 · {return_date} 返回"
+    return f"{depart} 出发"
+
+
+def _subscription_scenario_text(sub: dict) -> str:
+    soft = sub.get("soft_preferences") or {}
+    prefs = sub.get("preferences") or {}
+    scenarios = soft.get("travel_scenarios") or prefs.get("travel_scenarios") or sub.get("travel_scenarios")
+    if isinstance(scenarios, str):
+        scenarios = [item.strip() for item in scenarios.split(",") if item.strip()]
+    if not scenarios:
+        scenario = soft.get("travel_scenario") or prefs.get("travel_scenario") or sub.get("travel_scenario")
+        scenarios = [scenario] if scenario else []
+    labels = [SCENARIO_LABELS.get(str(item), str(item)) for item in scenarios if item]
+    return " + ".join(labels) if labels else "未设置"
+
+
+def _relative_time_label(value: str) -> str:
+    if not value:
+        return ""
+    try:
+        created = datetime.fromisoformat(str(value).replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError:
+        return str(value)
+    minutes = max(0, int((datetime.now() - created).total_seconds() // 60))
+    if minutes < 1:
+        return "刚刚"
+    if minutes < 60:
+        return f"{minutes}分钟前"
+    if minutes < 24 * 60:
+        return f"{minutes // 60}小时前"
+    return f"{minutes // (24 * 60)}天前"
+
+
+def _subscription_last_decision(sub: dict, index: int) -> str:
+    subscription_id = str(sub.get("id") or index)
+    record = _load_payload_result(subscription_id) or {}
+    payload = record.get("payload") if isinstance(record.get("payload"), dict) else record
+    if not isinstance(payload, dict) or not payload:
+        return "暂无"
+    decision = payload.get("execution_advice") or payload.get("recommendation") or payload.get("push_type") or "已生成"
+    price = payload.get("current_price") or payload.get("display_price") or payload.get("price")
+    price_text = f"(¥{int(price):,})" if isinstance(price, (int, float)) and price else ""
+    time_text = _relative_time_label(str(record.get("created_at") or payload.get("created_at") or ""))
+    return f"{decision}{price_text}" + (f" · {time_text}" if time_text else "")
+
+
+def build_subscription_list_items(subscriptions: list[dict]) -> list[dict]:
+    items = []
+    for index, sub in enumerate(subscriptions):
+        route_type = _sub_value(sub, "route_type", "domestic")
+        round_trip = bool(sub.get("round_trip") or _sub_value(sub, "trip_type") == "round_trip")
+        subscription_id = str(sub.get("id") or index)
+        items.append(
+            {
+                "index": index,
+                "route": _subscription_route_text(sub),
+                "route_type": route_type,
+                "route_type_label": ROUTE_TYPE_LABELS.get(route_type, route_type),
+                "trip": "往返" if round_trip else "单程",
+                "dates": _subscription_dates_text(sub),
+                "status": sub.get("status", "active"),
+                "last_decision": _subscription_last_decision(sub, index),
+                "scenario": _subscription_scenario_text(sub),
+                "detail_url": url_for("detail", sub=subscription_id),
+            }
+        )
+    return items
 
 
 DETAIL_TEMPLATE = """
@@ -4790,6 +4977,34 @@ def subscribe():
         print(f"[表单] 提交订阅失败: {exc}")
         traceback.print_exc()
         raise
+
+
+@app.get("/subscriptions")
+def subscription_list():
+    subscriptions = load_subscriptions()
+    return render_template_string(
+        LIST_TEMPLATE,
+        items=build_subscription_list_items(subscriptions),
+    )
+
+
+@app.post("/subscriptions/<int:index>/toggle")
+def toggle_subscription(index: int):
+    subscriptions = load_subscriptions()
+    if 0 <= index < len(subscriptions):
+        current = subscriptions[index].get("status", "active")
+        subscriptions[index]["status"] = "paused" if current == "active" else "active"
+        save_subscriptions(subscriptions)
+    return redirect(url_for("subscription_list"))
+
+
+@app.post("/subscriptions/<int:index>/delete")
+def delete_subscription(index: int):
+    subscriptions = load_subscriptions()
+    if 0 <= index < len(subscriptions):
+        subscriptions.pop(index)
+        save_subscriptions(subscriptions)
+    return redirect(url_for("subscription_list"))
 
 
 @app.post("/subscriptions/<int:index>/quick-update")
