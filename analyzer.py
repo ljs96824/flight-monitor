@@ -4762,6 +4762,39 @@ def calc_effective_cost(flight: dict, subscription, time_value_per_hour: float =
     }
 
 
+def calc_roundtrip_effective_cost(
+    outbound: dict,
+    return_flight: dict,
+    subscription,
+    time_value_per_hour: float = 50,
+) -> dict:
+    """Estimate effective travel cost for a complete round-trip plan."""
+    outbound_effective = (outbound or {}).get("effective_cost") or calc_effective_cost(
+        outbound or {}, subscription, time_value_per_hour
+    )
+    return_effective = (return_flight or {}).get("effective_cost") or calc_effective_cost(
+        return_flight or {}, subscription, time_value_per_hour
+    )
+    keys = ("ticket_price", "transport_cost", "time_cost", "baggage_cost", "effective_cost")
+    totals = {
+        key: round(
+            (_to_float(outbound_effective.get(key)) or 0)
+            + (_to_float(return_effective.get(key)) or 0)
+        )
+        for key in keys
+    }
+    totals["scope"] = "roundtrip"
+    totals["outbound"] = outbound_effective
+    totals["return"] = return_effective
+    totals["breakdown_note"] = (
+        f"往返机票¥{totals['ticket_price']}+机场交通约¥{totals['transport_cost']}"
+        f"+时间成本约¥{totals['time_cost']}"
+        + (f"+行李约¥{totals['baggage_cost']}" if totals["baggage_cost"] else "")
+    )
+    totals["note"] = "往返参考性综合估算，非精确费用。"
+    return totals
+
+
 def enrich_travel_risk_and_cost(flight: dict, preferences: dict | None = None) -> dict:
     """Attach punctuality, logistics notes, and effective cost to one flight."""
     flight = flight or {}
@@ -7420,11 +7453,54 @@ def _dedupe_and_limit_excluded_roundtrip_combos(combos: list[dict], max_show: in
     return result
 
 
+def _is_budget_exclusion_reason(reason: str) -> bool:
+    text = str(reason or "").lower()
+    return any(
+        token in text
+        for token in (
+            "最高可接受",
+            "最高价",
+            "最高预算",
+            "预算",
+            "超出",
+            "超过",
+            "max budget",
+            "over budget",
+            "budget",
+        )
+    )
+
+
+def _roundtrip_budget_safe_reasons(reasons: list[str], total, max_budget) -> list[str]:
+    total_value = _to_float(total)
+    max_budget_value = _to_float(max_budget)
+    cleaned: list[str] = []
+    removed_budget_reason = False
+    for reason in reasons or []:
+        text = str(reason or "").strip()
+        if not text:
+            continue
+        if _is_budget_exclusion_reason(text):
+            if max_budget_value is not None and total_value is not None:
+                if total_value > max_budget_value:
+                    cleaned.append(
+                        f"往返总价¥{total_value:,.0f}超过最高可接受价¥{max_budget_value:,.0f}"
+                    )
+                else:
+                    removed_budget_reason = True
+                continue
+        cleaned.append(text)
+    if not cleaned and removed_budget_reason:
+        cleaned.append("价格虽低但时间或其他条件不满足")
+    return cleaned
+
+
 def build_excluded_roundtrip_combos(
     outbound_analysis: dict,
     return_analysis: dict,
     recommended_total,
     max_show: int = 3,
+    max_budget=None,
 ) -> list[dict]:
     """Build same-unit excluded round-trip combos for notification explanations."""
     recommended_total = _to_float(recommended_total)
@@ -7451,6 +7527,9 @@ def build_excluded_roundtrip_combos(
                 continue
             total = outbound_price + return_price
             if total >= recommended_total:
+                continue
+            reasons = _roundtrip_budget_safe_reasons(reasons, total, max_budget)
+            if not reasons:
                 continue
 
             combos.append(
@@ -7632,6 +7711,14 @@ def analyze_round_trip(
                     }
                 )
 
+    for combo in combinations:
+        if combo.get("outbound") and combo.get("return") and not combo.get("effective_cost"):
+            combo["effective_cost"] = calc_roundtrip_effective_cost(
+                combo.get("outbound") or {},
+                combo.get("return") or {},
+                combined_preferences,
+            )
+
     combinations.sort(key=lambda item: item["total_price"])
     outbound_min = _to_float(outbound_top[0].get("price")) if outbound_top else None
     return_min = _to_float(return_top[0].get("price")) if return_top else None
@@ -7704,6 +7791,7 @@ def analyze_round_trip(
         return_analysis,
         combinations[0].get("total_price") if combinations else total_min,
         3,
+        max_budget=max_budget,
     )
 
     return {
