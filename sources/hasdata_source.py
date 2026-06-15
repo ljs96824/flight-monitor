@@ -39,15 +39,17 @@ class HasDataSource(FlightSource):
         self, origin: str, dest: str, date_str: str, cabin_class: str = "economy"
     ) -> dict:
         api_key = os.environ.get("HASDATA_KEY", "")
+        overrides = getattr(self, "query_overrides", {}) or {}
         params = {
             "departureId": origin,
             "arrivalId": dest,
             "outboundDate": date_str,
             "type": "oneWay",
-            "currency": "CNY",
-            "hl": "zh-cn",
+            "currency": overrides.get("currency") or "CNY",
+            "hl": overrides.get("hl") or "zh-cn",
+            "gl": overrides.get("gl") or "cn",
             "sortBy": "price",
-            "stops": "twoStopsOrFewer",
+            "stops": _hasdata_stops_value(overrides.get("stops")),
         }
         headers = {
             "x-api-key": api_key,
@@ -69,3 +71,10 @@ class HasDataSource(FlightSource):
             "source": self.name,
             "raw": results,
         }
+
+
+def _hasdata_stops_value(value) -> str:
+    return {
+        "nonstop_preferred": "nonStop",
+        "two_stops_or_fewer": "twoStopsOrFewer",
+    }.get(str(value or ""), "twoStopsOrFewer")

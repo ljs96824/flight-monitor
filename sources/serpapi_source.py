@@ -33,16 +33,18 @@ class SerpAPISource(FlightSource):
     def fetch(
         self, origin: str, dest: str, date_str: str, cabin_class: str = "economy"
     ) -> dict:
+        overrides = getattr(self, "query_overrides", {}) or {}
         params = {
             "engine": "google_flights",
             "departure_id": origin,
             "arrival_id": dest,
             "outbound_date": date_str,
             "type": "2",
-            "currency": "CNY",
-            "hl": "zh-CN",
+            "currency": overrides.get("currency") or "CNY",
+            "hl": overrides.get("hl") or "zh-CN",
+            "gl": overrides.get("gl") or "cn",
             "sort": "2",
-            "stops": "2",
+            "stops": _serpapi_stops_value(overrides.get("stops")),
             "api_key": os.environ.get("SERPAPI_KEY"),
         }
         selected_cabin = _google_cabin_code(cabin_class)
@@ -67,6 +69,13 @@ def _google_cabin_code(cabin_class: str) -> str:
         "economy": "M",
         "business": "C",
     }.get(cabin_class, "M")
+
+
+def _serpapi_stops_value(value) -> str:
+    return {
+        "nonstop_preferred": "1",
+        "two_stops_or_fewer": "2",
+    }.get(str(value or ""), "2")
 
 
 def _layover_minutes(arr_time: str, dep_time: str) -> int:

@@ -6,6 +6,7 @@ import json
 import os
 from datetime import datetime
 
+from source_profiles import get_source_profile, normalize_route_type
 from sources.base import FlightSource
 
 OPTIONAL_SOURCE_THRESHOLD = 8
@@ -37,6 +38,20 @@ CN_AIRPORTS = {
     "HRB",
     "SYX",
     "HAK",
+}
+
+GREATER_CHINA_AIRPORTS = {
+    "HKG",
+    "MFM",
+    "TPE",
+    "TSA",
+    "KHH",
+    "RMQ",
+    "TNN",
+    "HUN",
+    "CYI",
+    "MZG",
+    "KNH",
 }
 
 
@@ -188,34 +203,110 @@ def is_domestic_route(origin: str, dest: str) -> bool:
     return str(origin or "").upper() in CN_AIRPORTS and str(dest or "").upper() in CN_AIRPORTS
 
 
-def route_type_for(origin: str, dest: str) -> str:
-    return "domestic" if is_domestic_route(origin, dest) else "international"
+def classify_route(origin: str, dest: str) -> str:
+    origin_code = str(origin or "").upper()
+    dest_code = str(dest or "").upper()
+    origin_cn = origin_code in CN_AIRPORTS
+    dest_cn = dest_code in CN_AIRPORTS
+    origin_gc = origin_code in GREATER_CHINA_AIRPORTS
+    dest_gc = dest_code in GREATER_CHINA_AIRPORTS
+    if origin_cn and dest_cn:
+        return "domestic"
+    if (origin_cn or dest_cn) and (origin_gc or dest_gc):
+        return "greater_china"
+    if origin_gc and dest_gc:
+        return "greater_china"
+    return "international"
+
+
+def route_type_for(origin: str, dest: str, route_type: str | None = None) -> str:
+    return normalize_route_type(route_type) or classify_route(origin, dest)
 
 
 def _source_name(source) -> str:
     return str(getattr(source, "name", type(source).__name__)).lower()
 
 
-def _role_weight_for_source(source_name: str, domestic: bool) -> tuple[str, float]:
+def _profile_source_specs(route_type: str) -> list[dict]:
+    return list((get_source_profile(route_type) or {}).get("sources") or [])
+
+
+def _profile_query(route_type: str) -> dict:
+    return dict((get_source_profile(route_type) or {}).get("query") or {})
+
+
+def _search_source_names(route_type: str) -> list[str]:
+    return [
+        str(item.get("name") or "").lower()
+        for item in _profile_source_specs(route_type)
+        if item.get("role") != "enrichment"
+    ]
+
+
+def _enrichment_source_names(route_type: str) -> list[str]:
+    return [
+        str(item.get("name") or "").lower()
+        for item in _profile_source_specs(route_type)
+        if item.get("role") == "enrichment"
+    ]
+
+
+def _apply_source_spec(source: FlightSource, spec: dict, route_type: str) -> FlightSource:
+    source.role = spec.get("role") or "reference"
+    source.weight = float(spec.get("weight") or 0)
+    source.query_overrides = _profile_query(route_type)
+    source.route_type = route_type
+    return source
+
+
+def _apply_route_source_roles(sources: list[FlightSource], route_type: str) -> list[FlightSource]:
+    specs = {
+        str(item.get("name") or "").lower(): item
+        for item in _profile_source_specs(route_type)
+    }
+    ordered = []
+    for name in _search_source_names(route_type):
+        for source in sources:
+            if _source_name(source) == name and name in specs:
+                ordered.append(_apply_source_spec(source, specs[name], route_type))
+                break
+    return ordered
+
+
+def _instantiate_source(source_name: str):
     source_name = str(source_name or "").lower()
-    google_sources = {"serpapi", "searchapi", "hasdata"}
-    if domestic:
-        if source_name == "juhe":
-            return "primary", 1.0
-        if source_name in google_sources:
-            return "cross_check", 0.6
-        return "reference", 0.3
-    if source_name in google_sources:
-        return "primary", 1.0
-    return "reference", 0.3
+    try:
+        if source_name == "juhe" and os.environ.get("JUHE_FLIGHT_KEY"):
+            from sources.juhe_source import JuheSource
 
+            return JuheSource()
+        if source_name == "serpapi" and os.environ.get("SERPAPI_KEY"):
+            from sources.serpapi_source import SerpAPISource
 
-def _apply_route_source_roles(sources: list[FlightSource], domestic: bool) -> list[FlightSource]:
-    for source in sources:
-        role, weight = _role_weight_for_source(_source_name(source), domestic)
-        source.role = role
-        source.weight = weight
-    return sources
+            return SerpAPISource()
+        if source_name == "hasdata" and os.environ.get("HASDATA_KEY"):
+            from sources.hasdata_source import HasDataSource
+
+            return HasDataSource()
+        if source_name == "duffel" and os.environ.get("DUFFEL_TOKEN"):
+            from sources.duffel_source import DuffelSource
+
+            return DuffelSource()
+        if source_name == "searchapi" and os.environ.get("SEARCHAPI_KEY"):
+            from sources.searchapi_source import SearchAPISource
+
+            return SearchAPISource()
+        if source_name == "travelpayouts" and os.environ.get("TRAVELPAYOUTS_TOKEN"):
+            from sources.travelpayouts_source import TravelpayoutsSource
+
+            return TravelpayoutsSource()
+        if source_name == "skyscanner" and os.environ.get("RAPIDAPI_KEY"):
+            from sources.skyscanner_source import SkyscannerSource
+
+            return SkyscannerSource()
+    except Exception as exc:
+        print(f"[source-profile] skip {source_name}: {exc}")
+    return None
 
 
 def _flight_primary_priority(flight: dict, is_domestic: bool) -> tuple[int, float]:
@@ -258,16 +349,36 @@ def _primary_source_for_sources(sources: list[str], is_domestic: bool) -> str:
 
 
 def build_default_sources(
-    origin: str | None = None, dest: str | None = None
+    origin: str | None = None,
+    dest: str | None = None,
+    route_type: str | None = None,
 ) -> tuple[list[FlightSource], list[FlightSource]]:
     """Build search sources and enrichment sources separately."""
     search_sources = []
     enrichment_sources = []
+    resolved_route_type = normalize_route_type(route_type)
+    if not resolved_route_type and origin and dest:
+        resolved_route_type = classify_route(origin, dest)
 
-    if origin and dest:
-        domestic = is_domestic_route(origin, dest)
-        print(f"[source-route] {origin}->{dest} is_domestic={domestic}")
+    if resolved_route_type:
+        profile = get_source_profile(resolved_route_type)
+        specs = list(profile.get("sources") or [])
+        for spec in specs:
+            source = _instantiate_source(spec.get("name"))
+            if source is None:
+                continue
+            source = _apply_source_spec(source, spec, resolved_route_type)
+            if spec.get("role") == "enrichment":
+                enrichment_sources.append(source)
+            else:
+                search_sources.append(source)
+        print(
+            f"[源策略] {resolved_route_type} 启用: "
+            f"{[(source.name, source.role) for source in search_sources + enrichment_sources]}"
+        )
+        return search_sources, enrichment_sources
 
+    # Backward-compatible fallback for callers that have not supplied route context.
     if os.environ.get("JUHE_FLIGHT_KEY"):
         from sources.juhe_source import JuheSource
 
@@ -303,10 +414,6 @@ def build_default_sources(
 
         enrichment_sources.append(DuffelSource())
 
-    if origin and dest:
-        domestic = is_domestic_route(origin, dest)
-        search_sources = _apply_route_source_roles(search_sources, domestic)
-
     return search_sources, enrichment_sources
 
 
@@ -315,9 +422,11 @@ class FlightAggregator:
         self,
         search_sources: list[FlightSource],
         enrichment_sources: list[FlightSource] | None = None,
+        route_type: str | None = None,
     ):
         self.search_sources = search_sources
         self.enrichment_sources = enrichment_sources or []
+        self.route_type = normalize_route_type(route_type)
 
     def collect(
         self,
@@ -326,6 +435,7 @@ class FlightAggregator:
         date_str: str,
         target_combo: str | None = None,
         cabin_classes=None,
+        route_type: str | None = None,
     ) -> dict | None:
         cabin_classes = _normalize_cabin_classes(cabin_classes)
         run_collected_at = datetime.now().isoformat(timespec="seconds")
@@ -335,10 +445,10 @@ class FlightAggregator:
         source_errors = []
         price_insights = None
         raw_by_source = {}
-        search_sources = self._ordered_search_sources(origin, dest)
-        domestic_route = is_domestic_route(origin, dest)
-        route_type = route_type_for(origin, dest)
-        print(f"[source-route] {origin}->{dest} is_domestic={domestic_route}")
+        resolved_route_type = route_type_for(origin, dest, route_type or self.route_type)
+        search_sources = self._ordered_search_sources(origin, dest, resolved_route_type)
+        domestic_route = resolved_route_type == "domestic"
+        print(f"[source-route] {origin}->{dest} route_type={resolved_route_type}")
         print(
             "[source-route] enabled sources: "
             + str([getattr(source, "name", type(source).__name__) for source in search_sources])
@@ -390,7 +500,7 @@ class FlightAggregator:
                         flight["cabin_class"] = flight.get("cabin_class") or cabin_class
                         flight["source_role"] = flight.get("source_role") or source_role
                         flight["source_weight"] = flight.get("source_weight") or source_weight
-                        flight["route_type"] = route_type
+                        flight["route_type"] = resolved_route_type
                         if source_role == "primary":
                             flight["primary_source"] = source_name
                         if source_role == "reference":
@@ -450,7 +560,7 @@ class FlightAggregator:
                 "optional": source_optional,
                 "role": source_role,
                 "weight": source_weight,
-                "route_type": route_type,
+                "route_type": resolved_route_type,
             }
 
         total_raw = len(all_flights)
@@ -543,7 +653,7 @@ class FlightAggregator:
                 ),
                 "role": "enrichment",
                 "weight": 0.0,
-                "route_type": route_type,
+                "route_type": resolved_route_type,
             }
 
         enriched_count = 0
@@ -596,26 +706,18 @@ class FlightAggregator:
             "collected_at": run_collected_at,
         }
 
-    def _ordered_search_sources(self, origin: str, dest: str) -> list[FlightSource]:
+    def _ordered_search_sources(
+        self, origin: str, dest: str, route_type: str | None = None
+    ) -> list[FlightSource]:
         sources = list(self.search_sources)
-        domestic = is_domestic_route(origin, dest)
-        if domestic:
-            if not any(str(getattr(source, "name", "")).lower() == "juhe" for source in sources):
-                from sources.juhe_source import JuheSource
-
-                sources.append(JuheSource())
-            sources = _apply_route_source_roles(sources, domestic)
-            sources.sort(
-                key=lambda source: 0
-                if str(getattr(source, "name", "")).lower() == "juhe"
-                else 1
-            )
-            return sources
-        return _apply_route_source_roles([
-            source
-            for source in sources
-            if str(getattr(source, "name", "")).lower() != "juhe"
-        ], domestic)
+        resolved_route_type = route_type_for(origin, dest, route_type or self.route_type)
+        if resolved_route_type == "domestic" and not any(
+            _source_name(source) == "juhe" for source in sources
+        ):
+            source = _instantiate_source("juhe")
+            if source is not None:
+                sources.append(source)
+        return _apply_route_source_roles(sources, resolved_route_type)
 
     def _merge_flights(self, results: list[dict], is_domestic: bool = False) -> list[dict]:
         merged_by_combo = {}

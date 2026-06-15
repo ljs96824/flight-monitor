@@ -46,7 +46,7 @@ from notifier import (
 )
 from price_calendar import load_calendar, update_calendar
 from plan_tracker import feedback_acknowledgement
-from sources.aggregator import FlightAggregator, build_default_sources, is_domestic_route
+from sources.aggregator import FlightAggregator, build_default_sources, is_domestic_route, route_type_for
 from storage import (
     get_roundtrip_price_history,
     get_lowest_price_history,
@@ -98,6 +98,19 @@ def _subscription_airports(sub: dict, active_key: str, all_key: str, fallback_ke
             return filtered or active
         return active
     return all_codes or fallback
+
+
+def _subscription_route_type(sub: dict, origins: list[str], destinations: list[str]) -> str:
+    basic = sub.get("basic") or {}
+    constraints = sub.get("constraints") or {}
+    explicit = (
+        basic.get("route_type")
+        or sub.get("route_type")
+        or constraints.get("route_type")
+    )
+    origin = _first_airport(origins, sub.get("origin"))
+    dest = _first_airport(destinations, sub.get("destination"))
+    return route_type_for(origin, dest, explicit)
 
 
 def _flight_airport_value(flight: dict, kind: str) -> str:
@@ -588,6 +601,7 @@ def _collect_same_day_fallback_flights(
     dests: list[str],
     date_str: str,
     cabin_classes=None,
+    route_type: str | None = None,
 ) -> list[dict]:
     cache_path = _fallback_cache_path(origins, dests, date_str, cabin_classes)
     cached = _fresh_cached_flights(cache_path)
@@ -599,6 +613,7 @@ def _collect_same_day_fallback_flights(
         dests,
         date_str,
         cabin_classes=cabin_classes,
+        route_type=route_type,
     )
     flights = [
         _normalize_detail_flight(flight, flight.get("data_source") or flight.get("source"))
@@ -887,6 +902,7 @@ def collect_for_airport_matrix(
     destinations: list[str],
     date_str: str,
     cabin_classes=None,
+    route_type: str | None = None,
 ) -> dict | None:
     origins = _clean_airport_codes(origins)
     destinations = _clean_airport_codes(destinations)
@@ -894,12 +910,10 @@ def collect_for_airport_matrix(
         return None
 
     if len(origins) == 1 and len(destinations) == 1:
-        data = aggregator.collect(
-            origins[0],
-            destinations[0],
-            date_str,
-            cabin_classes=cabin_classes,
-        )
+        collect_kwargs = {"cabin_classes": cabin_classes}
+        if route_type:
+            collect_kwargs["route_type"] = route_type
+        data = aggregator.collect(origins[0], destinations[0], date_str, **collect_kwargs)
         if data:
             for flight in data.get("flights", []) or []:
                 flight["search_origin"] = flight.get("search_origin") or origins[0]
@@ -936,12 +950,10 @@ def collect_for_airport_matrix(
             break
 
         print(f"[城市搜索] 采集 {origin}→{destination} {date_str}")
-        data = aggregator.collect(
-            origin,
-            destination,
-            date_str,
-            cabin_classes=cabin_classes,
-        )
+        collect_kwargs = {"cabin_classes": cabin_classes}
+        if route_type:
+            collect_kwargs["route_type"] = route_type
+        data = aggregator.collect(origin, destination, date_str, **collect_kwargs)
         if not data:
             continue
         for flight in data.get("flights", []):
@@ -997,7 +1009,12 @@ def collect_nearby_dates(
         for source in aggregator.search_sources
         if getattr(source, "name", "").lower() == "serpapi"
     ] or aggregator.search_sources[:1]
-    primary_aggregator = FlightAggregator(primary_sources, [])
+    route_type = _subscription_route_type(
+        sub,
+        _subscription_airports(sub, "origin_airports_active", "origin_airports", "origin"),
+        _subscription_airports(sub, "destination_airports_active", "destination_airports", "destination"),
+    )
+    primary_aggregator = FlightAggregator(primary_sources, [], route_type=route_type)
 
     for stage in [1, 3, 7]:
         if days_range < stage:
@@ -1020,6 +1037,7 @@ def collect_nearby_dates(
                     ),
                     date_str,
                     cabin_classes=cabin_classes,
+                    route_type=route_type,
                 )
                 flights = data.get("flights", []) if data else []
                 prices = [
@@ -1066,14 +1084,21 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
     logging.info(f"开始处理 {route}")
 
     try:
-        search_sources, enrichment_sources = build_default_sources()
-        agg = FlightAggregator(search_sources, enrichment_sources)
         active_origins = _subscription_airports(
             sub, "origin_airports_active", "origin_airports", "origin"
         )
         active_dests = _subscription_airports(
             sub, "destination_airports_active", "destination_airports", "destination"
         )
+        route_type = _subscription_route_type(sub, active_origins, active_dests)
+        first_origin = _first_airport(active_origins, sub["origin"])
+        first_dest = _first_airport(active_dests, sub["destination"])
+        search_sources, enrichment_sources = build_default_sources(
+            first_origin,
+            first_dest,
+            route_type=route_type,
+        )
+        agg = FlightAggregator(search_sources, enrichment_sources, route_type=route_type)
         print(f"[机场调试] 全部目的地机场={sub.get('destination_airports')}")
         print(f"[机场调试] 激活的目的地机场={sub.get('destination_airports_active')}")
         print(f"[机场调试] 实际采集用的机场={active_dests}")
@@ -1083,6 +1108,7 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
             active_dests,
             sub["depart_date"],
             cabin_classes=sub.get("cabin_classes"),
+            route_type=route_type,
         )
 
         if data is None or not data.get("flights"):
@@ -1215,6 +1241,7 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
                 active_origins,
                 return_date,
                 cabin_classes=sub.get("cabin_classes"),
+                route_type=route_type,
             )
             return_collected_at = (return_data or {}).get("collected_at") or datetime.now().isoformat(timespec="seconds")
             normalized_return_flights = [
@@ -1320,6 +1347,7 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
                             active_dests,
                             previous_depart_date,
                             cabin_classes=sub.get("cabin_classes"),
+                            route_type=route_type,
                         )
                     except Exception as exc:
                         print(f"[当天往返备选] 前一晚去程补采失败: {exc}")
@@ -1334,6 +1362,7 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
                             active_origins,
                             next_return_date,
                             cabin_classes=sub.get("cabin_classes"),
+                            route_type=route_type,
                         )
                     except Exception as exc:
                         print(f"[当天往返备选] 次日返程补采失败: {exc}")

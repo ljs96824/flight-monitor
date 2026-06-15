@@ -34,7 +34,7 @@ class JuheIntegrationTest(unittest.TestCase):
 
         ordered = aggregator._ordered_search_sources("PVG", "PEK")
 
-        self.assertEqual([source.name for source in ordered], ["juhe", "serpapi", "hasdata"])
+        self.assertEqual([source.name for source in ordered], ["juhe", "serpapi"])
 
     def test_juhe_parse_reads_result_flight_info_and_ticket_price(self):
         source = JuheSource()
