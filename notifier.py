@@ -4863,7 +4863,26 @@ def _apply_plan_tiers(plans: list[dict]) -> list[dict]:
         return plans
     primary = plans[0]
     for index, plan in enumerate(plans):
-        tier, reason, condition = _plan_tier_reason(plan, primary if index else None)
+        existing_tier = str(plan.get("tier") or plan.get("variant") or "").split(":", 1)[0].strip()
+        if index > 0 and existing_tier and existing_tier not in {"推荐", "首选推荐"}:
+            tier = "备选方案" if existing_tier == "备选" else existing_tier
+            reason = str(plan.get("tier_reason") or "").strip()
+            condition = str(plan.get("suitable_condition") or "").strip()
+        else:
+            tier, reason, condition = _plan_tier_reason(plan, primary if index else None)
+        if index == 0:
+            tier = "首选推荐"
+            reason = reason or "综合得分最高，建议优先验证"
+            condition = condition or "适合优先验证该方案的价格和票规"
+        elif tier == "首选推荐":
+            tier = "次选方案"
+            plan_price = _to_float(plan.get("price"))
+            primary_price = _to_float(primary.get("price"))
+            if plan_price is not None and primary_price is not None and plan_price > primary_price:
+                reason = f"价格高于方案A{_price_text(plan_price - primary_price)}，综合排序次于方案A"
+            else:
+                reason = "综合排序次于方案A，作为备选验证"
+            condition = "如果方案A价格或票规不合适，可再验证该方案"
         plan["tier"] = tier
         plan["tier_reason"] = reason
         plan["suitable_condition"] = condition
@@ -5059,16 +5078,40 @@ def _payload_action_range(current, target, max_budget) -> dict:
     return {"current": current, "target": target, "max": max_budget, "ranges": ranges, "current_label": _action_zone_label(current, target, max_budget)}
 
 
-def _payload_verify_price(display_price) -> float | None:
+def _payload_verify_price(display_price, max_budget=None) -> float | None:
     display = _to_float(display_price)
-    return round(display * 1.05) if display else None
+    if not display:
+        return None
+    verify = round(display * 1.05)
+    max_b = _to_float(max_budget)
+    if max_b is not None and max_b > 0:
+        verify = min(verify, max_b)
+    return verify
 
 
-def _payload_price_policy_decision(display_price, transaction_price, verify_price, target_price, fallback="可以观察") -> dict:
+def _payload_price_policy_decision(
+    display_price,
+    transaction_price,
+    verify_price,
+    target_price,
+    max_price=None,
+    fallback="可以观察",
+) -> dict:
     display = _to_float(display_price)
     transaction = _to_float(transaction_price)
     verify = _to_float(verify_price)
     target = _to_float(target_price)
+    max_p = _to_float(max_price)
+
+    if display is not None and max_p is not None and display > max_p:
+        return {
+            "conclusion": (
+                f"当前搜索价{_price_text(display)}已超过你的最高可接受价{_price_text(max_p)}，"
+                "不满足购买条件，建议继续监控"
+            ),
+            "reason": "搜索参考价已超过最高可接受价，不建议按当前价买入",
+            "push_type_hint": None,
+        }
 
     if transaction is not None and verify is not None and transaction <= verify:
         return {
@@ -5095,10 +5138,10 @@ def _payload_price_policy_decision(display_price, transaction_price, verify_pric
     }
 
 
-def _payload_primary_price_values(current, primary_plan) -> dict:
+def _payload_primary_price_values(current, primary_plan, max_budget=None) -> dict:
     display = _to_float(primary_plan.get("price") if primary_plan else None) or _to_float(current)
     transaction = _to_float(primary_plan.get("estimated_price") if primary_plan else None) or display
-    verify = _payload_verify_price(display)
+    verify = _payload_verify_price(display, max_budget)
     return {
         "display_price": display,
         "transaction_price": transaction,
@@ -5457,7 +5500,7 @@ def build_notification_payload(
         primary_flight = flights[0] if flights else {}
 
     primary_plan = all_items[0] if all_items else {}
-    price_values = _payload_primary_price_values(current, primary_plan)
+    price_values = _payload_primary_price_values(current, primary_plan, max_budget)
     display_price = price_values.get("display_price")
     transaction_price = price_values.get("transaction_price")
     verify_limit = price_values.get("verify_price")
@@ -5466,6 +5509,7 @@ def build_notification_payload(
         transaction_price,
         verify_limit,
         target,
+        max_budget,
         decision.get("conclusion") or "可以观察",
     )
     price_signal = build_price_signal(
@@ -5473,7 +5517,7 @@ def build_notification_payload(
         target,
         _price_history_for_push(price_insights, analysis_result, is_roundtrip),
     )
-    execution_advice = build_execution_advice(display_price, transaction_price, verify_limit, target)
+    execution_advice = build_execution_advice(display_price, transaction_price, verify_limit, target, max_budget)
     if execution_advice.get("conclusion"):
         price_policy["conclusion"] = execution_advice["conclusion"]
     if execution_advice.get("summary"):
@@ -5493,6 +5537,18 @@ def build_notification_payload(
         (last_push or {}).get("price"),
         push_analysis,
     )
+    execution_advice = build_execution_advice(
+        display_price,
+        transaction_price,
+        verify_limit,
+        target,
+        max_budget,
+        (push_meta or {}).get("type"),
+    )
+    if execution_advice.get("conclusion"):
+        price_policy["conclusion"] = execution_advice["conclusion"]
+    if execution_advice.get("summary"):
+        price_policy["reason"] = execution_advice["summary"]
     if price_policy.get("push_type_hint"):
         push_meta["type"] = price_policy["push_type_hint"]
     if price_policy.get("reason"):
@@ -5619,14 +5675,24 @@ def build_notification_payload(
             or {}
         ),
         "buy_condition": (
-            f"支付页最终价≤{_price_text(verify_limit)}，且含托运行李"
-            if verify_limit
-            else "以支付页最终价和票规为准"
+            execution_advice.get("condition")
+            or (
+                f"支付页最终价≤{_price_text(verify_limit)}，且含托运行李"
+                if verify_limit
+                else "以支付页最终价和票规为准"
+            )
         ),
         "buy_condition_explanation": (
-            f"本次验证价{_price_text(verify_limit)} = 当前搜索参考价{_price_text(display_price)} "
-            f"+ 可接受浮动和费用容忍区间，用于判断该方案在当前价位是否仍值得买，"
-            f"与你的理想入手价{_price_text(target)}是不同概念。"
+            (
+                f"本次验证价{_price_text(verify_limit)}受你的最高可接受价{_price_text(max_budget)}封顶，"
+                f"当前搜索参考价{_price_text(display_price)}已超过该上限，不满足购买条件。"
+                if max_budget and verify_limit and display_price and verify_limit <= max_budget and display_price > max_budget
+                else (
+                    f"本次验证价{_price_text(verify_limit)} = 当前搜索参考价{_price_text(display_price)} "
+                    f"+ 可接受浮动和费用容忍区间，用于判断该方案在当前价位是否仍值得买，"
+                    f"与你的理想入手价{_price_text(target)}是不同概念。"
+                )
+            )
             if verify_limit and display_price
             else ""
         ),
@@ -7175,15 +7241,9 @@ def _email_action_panel_body(
         f"<div>当前判断:{html.escape(conclusion)}</div>",
         f"<div>首选方案:{html.escape(primary_line)}</div>",
         f"<div>购买条件:{html.escape(buy_condition)}</div>",
-        "<div>下一步:去验证价格 | 查看网页版完整分析(如未显示请稍后刷新) | 继续监控</div>",
+        "<div>下一步:去验证价格 | 查看详情 | 继续监控</div>",
         f"<div style='margin-top:8px;color:#666;font-size:12px;'>触发类型:{html.escape(trigger_type)}</div>",
         f"<div style='color:#666;font-size:12px;'>触发原因:{html.escape(trigger_reason)}</div>",
-        (
-            "<div style='margin-top:8px;color:#666;font-size:12px;'>"
-            f"验证价说明:这次方案值得买的上限,不等于你的最高预算。"
-            f"若支付页高于{html.escape(verify_text.replace('支付页≤', ''))},说明搜索低价没真正落地,建议继续监控。"
-            "</div>"
-        ),
         _email_action_links(payload, primary_plan, interactive_channels=interactive_channels),
     ]
     return "".join(blocks)
@@ -7219,8 +7279,13 @@ def _email_action_links(
     payload: dict,
     primary_plan: dict | None = None,
     interactive_channels: bool = False,
+    include_channel_picker: bool = True,
 ) -> str:
-    channel_picker = _email_channel_picker(primary_plan or {}, interactive=interactive_channels)
+    channel_picker = (
+        _email_channel_picker(primary_plan or {}, interactive=interactive_channels)
+        if include_channel_picker
+        else ""
+    )
     detail_url = str(payload.get("detail_url") or "")
     form_url = str(payload.get("form_url") or "")
     feedback_url = str(payload.get("feedback_url") or "")
@@ -7302,6 +7367,64 @@ def _email_channel_sections(plan: dict) -> list[tuple[str, list[tuple[str, str]]
     return sections
 
 
+def _active_airport_combo_count(payload: dict) -> int | None:
+    route_airports = payload.get("route_airports") or {}
+    origins = (
+        route_airports.get("origins")
+        or route_airports.get("origin_airports_active")
+        or route_airports.get("origin_airports")
+        or payload.get("origin_airports_active")
+        or payload.get("origin_airports")
+        or []
+    )
+    destinations = (
+        route_airports.get("destinations")
+        or route_airports.get("destination_airports_active")
+        or route_airports.get("destination_airports")
+        or payload.get("destination_airports_active")
+        or payload.get("destination_airports")
+        or []
+    )
+    if isinstance(origins, str):
+        origins = [origins]
+    if isinstance(destinations, str):
+        destinations = [destinations]
+    if origins or destinations:
+        return max(1, len(origins or [None])) * max(1, len(destinations or [None]))
+    return None
+
+
+def _should_show_airport_comparison(payload: dict) -> bool:
+    comparison = payload.get("airport_cost_comparison")
+    if not comparison:
+        return False
+    combo_count = _active_airport_combo_count(payload)
+    if combo_count is not None:
+        return combo_count >= 2
+    rows = comparison.get("rows") if isinstance(comparison, dict) else comparison
+    if not isinstance(rows, list):
+        return False
+    airports = {
+        str(item.get("airport") or item.get("iata") or item.get("arrival_airport") or "").strip().upper()
+        for item in rows
+        if isinstance(item, dict)
+    }
+    airports.discard("")
+    return len(airports) >= 2 or len(rows) >= 2
+
+
+def _non_price_change_reasons(payload: dict) -> list[str]:
+    result = []
+    for item in payload.get("trigger_reason") or []:
+        text = str(item or "").strip()
+        if not text:
+            continue
+        if "较上次提醒" in text or "上涨" in text or "下降" in text or "涨" in text or "降" in text:
+            continue
+        result.append(text)
+    return result
+
+
 def _extract_primary_channel_links(link_html: str) -> list[tuple[str, str]]:
     wanted = ("携程", "飞猪", "去哪儿")
     found: list[tuple[str, str]] = []
@@ -7370,11 +7493,21 @@ def _plan_for_render(plan: dict, payload: dict) -> dict:
     return rendered
 
 
-def _render_payload_plan_cards(payload: dict, plans: list[dict], primary_plan: dict, compact: bool = False) -> str:
-    return "".join(
-        _render_payload_plan_card(_plan_for_render(plan, payload), compact=compact, primary_plan=primary_plan)
-        for plan in plans
+def _prepared_payload_plans(payload: dict, plans: list[dict]) -> list[dict]:
+    rendered_plans = [
+        _plan_for_render(plan, payload)
+        for plan in (plans or [])
         if isinstance(plan, dict)
+    ]
+    return _apply_plan_tiers(rendered_plans)
+
+
+def _render_payload_plan_cards(payload: dict, plans: list[dict], primary_plan: dict, compact: bool = False) -> str:
+    rendered_plans = _prepared_payload_plans(payload, plans)
+    effective_primary = primary_plan or (rendered_plans[0] if rendered_plans else {})
+    return "".join(
+        _render_payload_plan_card(plan, compact=compact, primary_plan=effective_primary)
+        for plan in rendered_plans
     )
 
 
@@ -7958,6 +8091,8 @@ def _email_price_calendar_body(payload: dict) -> str:
 
 def _email_airport_cost_comparison_body(payload: dict) -> str:
     rows = payload.get("airport_cost_comparison") or []
+    if isinstance(rows, dict):
+        rows = rows.get("rows") or []
     if not rows:
         return "<div style='color:#888;font-size:12px;'>暂无多机场成本对比数据。</div>"
     parts = [
@@ -8076,7 +8211,7 @@ def render_email(payload: dict) -> tuple[str, str]:
     cabin_policy_body = _cabin_policy_summary_body(payload)
     if cabin_policy_body:
         cards.append(_email_card("经济舱 / 商务舱并列参考", cabin_policy_body))
-    if payload.get("airport_cost_comparison"):
+    if _should_show_airport_comparison(payload):
         cards.append(_email_card("机场选择对比", _email_airport_cost_comparison_body(payload)))
 
     profile_explanation = payload.get("travel_profile_explanation") or {}
@@ -8135,7 +8270,7 @@ def render_email(payload: dict) -> tuple[str, str]:
         )
     cards.append(_email_card("推荐依据", _email_table(profile_rows)))
 
-    cards.append(_email_card("为什么提醒你", _email_list(payload.get("trigger_reason") or [], 3)))
+    cards.append(_email_card("为什么提醒你", _email_list(_non_price_change_reasons(payload), 3)))
     status_text = _plan_status_change_text(payload)
     if status_text:
         cards.append(_email_card("上次推荐方案追踪", html.escape(status_text)))
@@ -8145,7 +8280,6 @@ def render_email(payload: dict) -> tuple[str, str]:
 
     action_rows = [
         ("购买条件", html.escape(str(payload.get("buy_condition") or "以支付页为准"))),
-        ("本次验证价", html.escape(verify_text)),
         ("理想入手价", _price_text(payload.get("ideal_price"))),
         ("最高可接受价", _price_text(payload.get("max_price"))),
     ]
@@ -8213,7 +8347,7 @@ def render_email(payload: dict) -> tuple[str, str]:
     cards.append(
         _email_card(
             "操作链接",
-            _email_action_links(payload, primary_plan)
+            _email_action_links(payload, primary_plan, include_channel_picker=False)
             + f"<div style='margin-top:8px;color:#666;font-size:12px;'>数据采集于 {html.escape(str(payload.get('collected_at') or ''))}。最终价格以购买平台支付页为准。</div>",
         )
     )
@@ -8241,7 +8375,7 @@ def render_detail_html(payload: dict) -> str:
             ),
         ),
         _render_payload_plan_cards(payload, payload.get("recommended_plans") or [], primary_plan),
-        _email_card("为什么提醒你", _email_list(payload.get("trigger_reason") or [], 3)),
+        _email_card("为什么提醒你", _email_list(_non_price_change_reasons(payload), 3)),
         _email_card("价格走势", _email_trend_card_body(payload)),
     ]
     if payload.get("feedback_ack"):
@@ -8266,12 +8400,11 @@ def render_detail_html(payload: dict) -> str:
     cabin_policy_body = _cabin_policy_summary_body(payload)
     if cabin_policy_body:
         cards.insert(3, _email_card("经济舱 / 商务舱并列参考", cabin_policy_body))
-    if payload.get("airport_cost_comparison"):
+    if _should_show_airport_comparison(payload):
         cards.insert(3, _email_card("机场选择对比", _email_airport_cost_comparison_body(payload)))
 
     action_rows = [
         ("购买条件", html.escape(str(payload.get("buy_condition") or "以支付页为准"))),
-        ("本次验证价", html.escape(verify_text)),
         ("理想入手价", _price_text(payload.get("ideal_price"))),
         ("最高可接受价", _price_text(payload.get("max_price"))),
     ]

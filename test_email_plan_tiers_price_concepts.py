@@ -355,7 +355,8 @@ class EmailPlanTiersPriceConceptsTest(unittest.TestCase):
         self.assertIn("\u65b9\u6848B \uff5c \u4f4e\u4ef7\u5907\u9009 \uff5c \u66f4\u4fbf\u5b9c\u4f46\u98ce\u9669\u66f4\u9ad8", html)
         self.assertIn("\u65b9\u6848B:\u4fbf\u5b9c\u7ea6\u00a5335,\u4f46\u4ef7\u683c\u66f4\u4f4e,\u4f46\u53bb\u7a0b\u4e2d\u8f6c\u4e14\u4e3a\u4e24\u4e2a\u5355\u7a0b\u62fc\u63a5", html)
         self.assertIn("\u9002\u5408\u4f60\u613f\u610f\u63a5\u53d7\u4e2d\u8f6c\u548c\u552e\u540e\u5206\u79bb", html)
-        self.assertIn("\u9a8c\u8bc1\u4ef7\u8bf4\u660e:\u8fd9\u6b21\u65b9\u6848\u503c\u5f97\u4e70\u7684\u4e0a\u9650", html)
+        self.assertIn("\u9a8c\u8bc1\u4ef7\u8bf4\u660e", html)
+        self.assertEqual(html.count("\u9a8c\u8bc1\u4ef7\u8bf4\u660e"), 1)
 
     def test_email_and_detail_show_channel_picker_for_price_verification(self):
         channel_links = (

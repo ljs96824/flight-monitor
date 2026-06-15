@@ -5681,12 +5681,44 @@ def build_price_signal(display_price, target_price=None, price_history=None) -> 
     }
 
 
-def build_execution_advice(display_price, transaction_price=None, verify_price=None, target_price=None) -> dict:
+def build_execution_advice(
+    display_price,
+    transaction_price=None,
+    verify_price=None,
+    target_price=None,
+    max_price=None,
+    push_type=None,
+) -> dict:
     """Describe whether the current plan is executable, using estimated/checkout price concepts."""
     display = _to_float(display_price)
     transaction = _to_float(transaction_price)
     verify = _to_float(verify_price)
     target = _to_float(target_price)
+    max_p = _to_float(max_price)
+    push_type_text = str(push_type or "")
+
+    if display is not None and max_p is not None and display > max_p:
+        return {
+            "label": "继续监控",
+            "conclusion": f"当前搜索价¥{display:,.0f}已超过你的最高可接受价¥{max_p:,.0f}，不满足购买条件，建议继续监控",
+            "summary": "搜索参考价已超过最高可接受价，不建议按当前价买入",
+            "condition": f"支付页最终价≤¥{max_p:,.0f}，且含托运行李",
+        }
+
+    if "涨价风险" in push_type_text and display is not None:
+        if target is not None and display <= target:
+            return {
+                "label": "可验证后决定",
+                "conclusion": "价格仍可接受，但呈上涨趋势，可验证后决定",
+                "summary": "搜索参考价仍在理想价内，但近期呈上涨趋势",
+                "condition": f"支付页最终价≤¥{verify:,.0f}，且含托运行李" if verify else "以支付页最终价和票规为准",
+            }
+        return {
+            "label": "继续监控",
+            "conclusion": "价格已高于你的理想价且在上涨，建议继续观察，暂不建议买入",
+            "summary": "涨价风险存在，但当前搜索参考价已高于理想入手价",
+            "condition": f"支付页最终价≤¥{verify:,.0f}，且含托运行李" if verify else "等待价格回落到理想区间",
+        }
 
     if transaction is not None and verify is not None and transaction <= verify:
         return {
