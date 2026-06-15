@@ -82,10 +82,13 @@ def save_calendar(route: str, calendar: dict, data_dir: Path | None = None) -> N
 def _query_dates(target_date: str) -> list[date]:
     target = parse_date(target_date)
     offsets = list(range(-3, 4)) + [-14, -7, 7, 14]
+    today = date.today()
     seen = set()
     dates = []
     for offset in offsets:
         current = target + timedelta(days=offset)
+        if current < today:
+            continue
         if current in seen:
             continue
         seen.add(current)
@@ -168,6 +171,8 @@ def analyze_date_savings(
         if not isinstance(info, dict) or not _valid_price(info.get("min_price")):
             continue
         d = parse_date(date_str)
+        if d < date.today():
+            continue
         diff_days = (d - target).days
         if diff_days == 0:
             continue
@@ -240,6 +245,8 @@ def calendar_rows(calendar: dict, target_date: str) -> list[dict]:
         if not isinstance(info, dict) or not _valid_price(info.get("min_price")):
             continue
         d = parse_date(date_str)
+        if d < date.today():
+            continue
         price = float(info["min_price"])
         rows.append(
             {

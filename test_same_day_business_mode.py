@@ -31,6 +31,59 @@ class SameDayBusinessModeTest(unittest.TestCase):
         self.assertGreaterEqual(combos[0]["stay_hours"], 4)
         self.assertEqual(combos[0]["tag"], "当天往返可行")
 
+    def test_default_same_day_picks_reasonable_business_window_not_extremes(self):
+        from analyzer import build_same_day_combos
+
+        outbound = [
+            {"flight_no": "EXTREME_EARLY", "price": 100, "departure_time": "05:20", "arrival_time": "07:10"},
+            {"flight_no": "GOOD_OB", "price": 500, "departure_time": "07:20", "arrival_time": "09:30"},
+            {"flight_no": "LATE_OB", "price": 300, "departure_time": "10:10", "arrival_time": "12:30"},
+        ]
+        returns = [
+            {"flight_no": "EARLY_RT", "price": 100, "departure_time": "15:00", "arrival_time": "17:10"},
+            {"flight_no": "GOOD_RT", "price": 600, "departure_time": "17:30", "arrival_time": "19:40"},
+            {"flight_no": "EXTREME_LATE", "price": 200, "departure_time": "22:40", "arrival_time": "23:55"},
+        ]
+
+        combos = build_same_day_combos(
+            outbound,
+            returns,
+            "2026-06-10",
+            constraints={"day_trip_period": "morning"},
+        )
+
+        self.assertGreaterEqual(combos[0]["stay_hours"], 5)
+        self.assertEqual(combos[0]["outbound"]["flight_no"], "GOOD_OB")
+        self.assertEqual(combos[0]["return"]["flight_no"], "GOOD_RT")
+        self.assertIn("默认方案", combos[0]["schedule_note"])
+
+    def test_default_same_day_period_changes_return_preference(self):
+        from analyzer import build_same_day_combos
+
+        outbound = [
+            {"flight_no": "OB", "price": 500, "departure_time": "08:20", "arrival_time": "10:30"},
+        ]
+        returns = [
+            {"flight_no": "AFTERNOON_RT", "price": 800, "departure_time": "16:30", "arrival_time": "18:30"},
+            {"flight_no": "EVENING_RT", "price": 850, "departure_time": "19:30", "arrival_time": "21:30"},
+        ]
+
+        morning = build_same_day_combos(
+            outbound,
+            returns,
+            "2026-06-10",
+            constraints={"day_trip_period": "morning"},
+        )
+        afternoon = build_same_day_combos(
+            outbound,
+            returns,
+            "2026-06-10",
+            constraints={"day_trip_period": "afternoon"},
+        )
+
+        self.assertEqual(morning[0]["return"]["flight_no"], "AFTERNOON_RT")
+        self.assertEqual(afternoon[0]["return"]["flight_no"], "EVENING_RT")
+
     def test_build_same_day_combos_filters_short_stay_and_late_outbound(self):
         from analyzer import build_same_day_combos
 

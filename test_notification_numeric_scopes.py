@@ -12,6 +12,7 @@ from notifier import (
     _email_price_calendar_body,
     _plan_effective_cost_line,
     _plan_feasibility_line,
+    build_notification_payload,
     render_pushplus,
 )
 
@@ -101,6 +102,56 @@ class NotificationNumericScopesTest(unittest.TestCase):
         self.assertIn("\u4f60\u9009\u768406-18\u504f\u8d35", text)
         self.assertNotIn("\u63a8\u8350\u4f9d\u636e", text)
         self.assertNotIn("\u4e0a\u6b21\u65b9\u6848\u8ffd\u8e2a", text)
+
+    def test_no_primary_payload_distinguishes_filtered_candidates_from_no_quote(self):
+        outbound = [
+            {"flight_no": "MU5099", "price": 795, "stops": 0, "departure_time": "07:00", "arrival_time": "09:15"},
+            {"flight_no": "MU5128", "price": 2095, "stops": 0, "departure_time": "14:00", "arrival_time": "16:20"},
+        ] + [
+            {"flight_no": f"MU{i}", "price": 900 + i, "stops": 0, "departure_time": "12:00", "arrival_time": "14:00"}
+            for i in range(17)
+        ]
+        return_flights = [
+            {"flight_no": "MU5166", "price": 1765, "stops": 0, "departure_time": "21:30", "arrival_time": "23:25"}
+        ]
+        analysis = {
+            "round_trip_analysis": {
+                "same_day_time_conflict": True,
+                "top_combinations": [],
+                "same_day_alternatives": [],
+                "same_day_no_feasible_note": "\u4f1a\u8bae\u7a97\u53e3\u65e0\u5b8c\u5168\u5339\u914d\u65b9\u6848",
+                "total_min": 2560,
+            },
+            "all_flights": outbound,
+            "return_analysis": {"all_flights": return_flights},
+            "excluded_flights": [
+                {"flight": f, "price": f["price"], "reason": "\u4f1a\u8bae\u65f6\u95f4\u7a97\u53e3\u4e0d\u7b26"}
+                for f in outbound
+            ],
+        }
+
+        payload = build_notification_payload(
+            analysis,
+            route_info={
+                "round_trip": True,
+                "origin": "SHA",
+                "destination": "PEK",
+                "depart_date": "2026-06-18",
+                "return_date": "2026-06-18",
+                "max_budget": 2000,
+            },
+            subscription={"id": "no-primary-diagnosis"},
+        )
+        text = render_pushplus(payload)
+
+        self.assertEqual(payload["no_primary_diagnosis"]["total_candidates"], 19)
+        self.assertEqual(payload["no_primary_diagnosis"]["valid_price_count"], 19)
+        self.assertEqual(payload["candidate_price_summary"]["lowest"], 795)
+        self.assertGreaterEqual(len(payload["same_day_alternatives"]), 1)
+        self.assertIn("\u91c7\u96c6\u523019\u4e2a\u822a\u73ed", text)
+        self.assertIn("\u5019\u9009\u4e2d\u6700\u4f4e\u00a5795", text)
+        self.assertIn("MU5099", text)
+        self.assertNotIn("\u7b26\u5408\u4f60\u8bbe\u7f6e\u7684\u76f4\u98de\u6761\u4ef6", text)
 
     def test_split_ticket_channel_picker_uses_leg_prices(self):
         plan = {

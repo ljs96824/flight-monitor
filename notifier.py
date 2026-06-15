@@ -27,6 +27,8 @@ from analyzer import (
     build_budget_gap,
     build_cabin_policy_summary,
     build_next_step_guidance,
+    build_no_result_alternatives,
+    build_no_result_diagnosis,
     build_price_signal,
     build_recommendation_basis,
     build_travel_profile,
@@ -4933,6 +4935,19 @@ def _payload_price_calendar(route_info: dict, analysis_result: dict) -> dict:
         return {}
     rows = calendar.get("rows") or []
     savings = calendar.get("savings") or []
+    today = date.today()
+    def is_future_row(row: dict) -> bool:
+        if not isinstance(row, dict) or not row.get("date"):
+            return False
+        try:
+            return date.fromisoformat(str(row.get("date"))[:10]) >= today
+        except ValueError:
+            return False
+
+    if isinstance(rows, list):
+        rows = [row for row in rows if is_future_row(row)]
+    if isinstance(savings, list):
+        savings = [row for row in savings if is_future_row(row)]
     weekday_pattern = calendar.get("weekday_pattern") or {}
     return {
         "route": calendar.get("route"),
@@ -5194,6 +5209,54 @@ def _email_subject(payload: dict) -> str:
     else:
         plan_label = "方案"
     return f"【{push_type}】{route}｜{plan_label}{display}"
+
+
+def _no_result_candidate_flights(
+    analysis_result: dict,
+    outbound_analysis: dict | None,
+    return_analysis: dict | None,
+    is_roundtrip: bool,
+) -> list[dict]:
+    sources: list = []
+    if is_roundtrip:
+        for analysis in (outbound_analysis, analysis_result):
+            if isinstance(analysis, dict):
+                sources.extend(analysis.get("all_flights") or [])
+                sources.extend(analysis.get("recommendations") or [])
+        round_trip = (analysis_result or {}).get("round_trip_analysis") or {}
+        for key in ("closest_same_day_outbound_options", "outbound_top3", "return_top3"):
+            sources.extend(round_trip.get(key) or [])
+    else:
+        sources.extend((analysis_result or {}).get("all_flights") or [])
+        sources.extend((analysis_result or {}).get("recommendations") or [])
+        sources.extend((analysis_result or {}).get("economy_recommendations") or [])
+    result = []
+    seen = set()
+    for item in sources:
+        flight = item.get("flight") if isinstance(item, dict) and isinstance(item.get("flight"), dict) else item
+        if not isinstance(flight, dict):
+            continue
+        key = (
+            flight.get("flight_no") or flight.get("flight_combo"),
+            flight.get("departure_time") or flight.get("dep_time"),
+            flight.get("arrival_time") or flight.get("arr_time"),
+            flight.get("price"),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(flight)
+    return result
+
+
+def _no_result_excluded_flights(analysis_result: dict, outbound_analysis: dict | None, return_analysis: dict | None) -> list[dict]:
+    result = []
+    for analysis in (analysis_result, outbound_analysis, return_analysis):
+        if isinstance(analysis, dict):
+            result.extend(analysis.get("excluded_flights") or [])
+    round_trip = (analysis_result or {}).get("round_trip_analysis") or {}
+    result.extend(round_trip.get("excluded_flights") or [])
+    return result
 
 
 def _layered_channel_links(link_html: str) -> str:
@@ -5651,14 +5714,53 @@ def build_notification_payload(
         or analysis_result.get("same_day_alternatives")
         or []
     )
+    no_primary_candidates = []
+    no_primary_diagnosis = {}
+    candidate_price_summary = {}
+    no_primary_reason = ""
+    if not all_items:
+        no_primary_candidates = _no_result_candidate_flights(
+            analysis_result,
+            outbound_analysis,
+            return_analysis,
+            is_roundtrip,
+        )
+        no_primary_excluded = _no_result_excluded_flights(analysis_result, outbound_analysis, return_analysis)
+        no_primary_diagnosis = build_no_result_diagnosis(
+            no_primary_candidates,
+            no_primary_excluded,
+            merged_constraints or route_info,
+            (analysis_result.get("filter_counts") or (analysis_result.get("round_trip_analysis") or {}).get("filter_counts") or {}),
+        )
+        candidate_price_summary = no_primary_diagnosis.get("price_summary") or {}
+        no_primary_reason = no_primary_diagnosis.get("reason") or ""
+        if not same_day_alternatives:
+            same_day_alternatives = build_no_result_alternatives(
+                no_primary_candidates,
+                no_primary_excluded,
+                3,
+            )
     payload_push_type = (push_meta or {}).get("type") or "价格提醒"
     if not all_items:
         payload_push_type = "无符合方案·备选参考"
+        push_meta["reasons"] = [
+            "本次为'无符合方案'提醒,告知你当前约束下暂无匹配航班"
+        ]
     payload = {
         "push_type": payload_push_type,
         "route": _payload_route_text(route_info),
         "subscription_id": route_info.get("subscription_id") or subscription.get("id"),
         "route_airports": _payload_route_airports(route_info),
+        "origin_airports_active": route_info.get("origin_airports_active"),
+        "destination_airports_active": route_info.get("destination_airports_active"),
+        "origin_airports": route_info.get("origin_airports"),
+        "destination_airports": route_info.get("destination_airports"),
+        "route_info": {
+            "origin_airports_active": route_info.get("origin_airports_active"),
+            "destination_airports_active": route_info.get("destination_airports_active"),
+            "origin_airports": route_info.get("origin_airports"),
+            "destination_airports": route_info.get("destination_airports"),
+        },
         "depart_date": route_info.get("depart_date"),
         "return_date": route_info.get("return_date"),
         "route_type": payload_route_type,
@@ -5685,6 +5787,9 @@ def build_notification_payload(
         "price_policy_reason": price_policy.get("reason") or "",
         "price_signal": price_signal,
         "execution_advice": execution_advice,
+        "no_primary_diagnosis": no_primary_diagnosis.get("counts") or {},
+        "no_primary_reason": no_primary_reason,
+        "candidate_price_summary": candidate_price_summary,
         "budget_gap": budget_gap,
         "next_step_guidance": next_step_guidance,
         "confidence": confidence.get("overall") or decision.get("confidence") or "中",
@@ -6127,17 +6232,44 @@ def _no_primary_plan_state(payload: dict) -> bool:
 
 
 def _no_primary_reason(payload: dict) -> str:
-    note = str(payload.get("same_day_no_feasible_note") or "").strip()
-    if note:
-        return note
     for key in ("no_primary_reason", "risk_summary", "price_policy_reason"):
         value = str(payload.get(key) or "").strip()
         if value:
             return value
+    note = str(payload.get("same_day_no_feasible_note") or "").strip()
+    if note:
+        return note
     reasons = [str(item).strip() for item in (payload.get("trigger_reason") or []) if str(item or "").strip()]
     if reasons:
         return reasons[0]
     return "当前约束或数据条件下没有可推荐的可执行航班"
+
+
+def _no_primary_next_step_text(payload: dict) -> str:
+    diagnosis = payload.get("no_primary_diagnosis") or {}
+    reason_counts = diagnosis.get("reason_counts") or {}
+    loosen = []
+    if reason_counts.get("direct"):
+        loosen.append("直飞")
+    if reason_counts.get("meeting"):
+        loosen.append("会议时间")
+    if reason_counts.get("budget"):
+        loosen.append("预算")
+    loosen_text = "/".join(loosen) if loosen else "当前硬约束"
+    return (
+        "下一步:① 放宽条件("
+        + loosen_text
+        + ") | ② 换日期看低价日历 | ③ 继续等待匹配航班"
+    )
+
+
+def _candidate_price_summary_text(payload: dict) -> str:
+    summary = payload.get("candidate_price_summary") or {}
+    lowest = _to_float(summary.get("lowest"))
+    count = int(summary.get("count") or 0)
+    if lowest is None or count <= 0:
+        return ""
+    return f"候选中最低{_price_text(lowest)}(但不满足你的约束)"
 
 
 def _alternative_labels(alternatives: list[dict]) -> str:
@@ -6387,6 +6519,9 @@ def _pushplus_plan_brief_lines(payload: dict) -> list[str]:
     feasibility = _pushplus_feasibility_summary(plan)
     if feasibility:
         lines.append(feasibility)
+    schedule_note = str(plan.get("schedule_note") or "").strip()
+    if schedule_note:
+        lines.append(f"安排说明:{schedule_note}")
     baggage = str(plan.get("baggage_line") or "").strip()
     if baggage:
         lines.append(f"行李/退改:{baggage}")
@@ -6427,14 +6562,17 @@ def render_pushplus(payload: dict) -> str:
             alt_text += f"({html.escape(alt_labels)})"
         else:
             alt_text = "暂无可展示备选"
+        price_hint = _candidate_price_summary_text(payload)
         lines = [
             f"<b>【无符合方案】{route} 提供{len(alternatives[:3])}个备选</b>",
             "",
             "当前判断:❌ 未找到完全符合条件的方案",
             f"原因:{reason}",
+            f"搜索参考价:{html.escape(price_hint)}" if price_hint else "",
             f"可用备选:{alt_text}",
-            "下一步:查看备选方案 ↓ | 放宽条件重新订阅 | 继续监控等待新航班",
+            html.escape(_no_primary_next_step_text(payload)),
         ]
+        lines = [line for line in lines if line != ""]
         if feedback_ack:
             lines.insert(2, html.escape(feedback_ack))
         same_day_note = str(payload.get("same_day_no_feasible_note") or "").strip()
@@ -7339,15 +7477,17 @@ def _email_action_panel_body(
             alt_text += f"({labels})"
         else:
             alt_text = "暂无可展示备选"
+        price_hint = _candidate_price_summary_text(payload)
         blocks = [
             "<div>当前判断:❌ 未找到完全符合条件的方案</div>",
             f"<div>原因:{html.escape(reason)}</div>",
+            f"<div>搜索参考价:{html.escape(price_hint)}</div>" if price_hint else "",
             f"<div>可用备选:{html.escape(alt_text)}</div>",
-            "<div>下一步:查看备选方案 ↓ | 放宽条件重新订阅 | 继续监控等待新航班</div>",
+            f"<div>{html.escape(_no_primary_next_step_text(payload))}</div>",
             "<div style='margin-top:8px;color:#666;font-size:12px;'>触发类型:无符合方案 | 备选参考 | 非直接购买</div>",
             _email_action_links(payload, None, interactive_channels=interactive_channels),
         ]
-        return "".join(blocks)
+        return "".join(block for block in blocks if block)
 
     conclusion = str(payload.get("recommendation") or "可以观察")
     primary_line = _email_primary_plan_line(payload, primary_plan)
@@ -7611,53 +7751,71 @@ def _email_channel_sections(plan: dict) -> list[tuple[str, list[tuple[str, str]]
     return sections
 
 
-def _active_airport_combo_count(payload: dict) -> int | None:
-    route_airports = payload.get("route_airports") or {}
+def _active_airport_combo_count(payload: dict) -> int:
+    route_airports = payload.get("route_airports")
+    print(f"[机场对比调试] route_airports类型={type(route_airports)}, 值={repr(route_airports)[:300]}")
+
+    def _to_list(value) -> list[str]:
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item or "").strip()]
+        if isinstance(value, tuple):
+            return [str(item).strip() for item in value if str(item or "").strip()]
+        if isinstance(value, str) and value.strip():
+            return [part for part in re.split(r"[、,，/\s]+", value.strip()) if part]
+        return []
+
+    route_airports_dict = route_airports if isinstance(route_airports, dict) else {}
+    route_info = payload.get("route_info") or {}
+    if not isinstance(route_info, dict):
+        route_info = {}
+    sub = payload.get("subscription") or payload.get("snapshot") or {}
+    if not isinstance(sub, dict):
+        sub = {}
+    basic = sub.get("basic") or {}
+    if not isinstance(basic, dict):
+        basic = {}
+
     origins = (
-        route_airports.get("origins")
-        or route_airports.get("origin_airports_active")
-        or route_airports.get("origin_airports")
-        or payload.get("origin_airports_active")
-        or payload.get("origin_airports")
-        or []
+        _to_list(route_info.get("origin_airports_active"))
+        or _to_list(basic.get("origin_airports_active"))
+        or _to_list(sub.get("origin_airports_active"))
+        or _to_list(payload.get("origin_airports_active"))
+        or _to_list(route_airports_dict.get("origins"))
+        or _to_list(route_airports_dict.get("origin_airports_active"))
+        or _to_list(route_airports_dict.get("origin_airports"))
+        or _to_list(route_info.get("origin_airports"))
+        or _to_list(payload.get("origin_airports"))
     )
     destinations = (
-        route_airports.get("destinations")
-        or route_airports.get("destination_airports_active")
-        or route_airports.get("destination_airports")
-        or payload.get("destination_airports_active")
-        or payload.get("destination_airports")
-        or []
+        _to_list(route_info.get("destination_airports_active"))
+        or _to_list(basic.get("destination_airports_active"))
+        or _to_list(sub.get("destination_airports_active"))
+        or _to_list(payload.get("destination_airports_active"))
+        or _to_list(route_airports_dict.get("destinations"))
+        or _to_list(route_airports_dict.get("destination_airports_active"))
+        or _to_list(route_airports_dict.get("destination_airports"))
+        or _to_list(route_info.get("destination_airports"))
+        or _to_list(payload.get("destination_airports"))
     )
-    if isinstance(origins, str):
-        origins = [origins]
-    if isinstance(destinations, str):
-        destinations = [destinations]
-    if origins or destinations:
-        return max(1, len(origins or [None])) * max(1, len(destinations or [None]))
-    return None
+    if not origins or not destinations:
+        return 0
+    return len(origins) * len(destinations)
 
 
 def _should_show_airport_comparison(payload: dict) -> bool:
-    comparison = payload.get("airport_cost_comparison")
-    if not comparison:
+    try:
+        comparison = payload.get("airport_cost_comparison")
+        if not comparison:
+            return False
+        return _active_airport_combo_count(payload) >= 2
+    except Exception as exc:
+        print(f"[机场对比] 判断失败,默认不显示: {exc}")
         return False
-    combo_count = _active_airport_combo_count(payload)
-    if combo_count is not None:
-        return combo_count >= 2
-    rows = comparison.get("rows") if isinstance(comparison, dict) else comparison
-    if not isinstance(rows, list):
-        return False
-    airports = {
-        str(item.get("airport") or item.get("iata") or item.get("arrival_airport") or "").strip().upper()
-        for item in rows
-        if isinstance(item, dict)
-    }
-    airports.discard("")
-    return len(airports) >= 2 or len(rows) >= 2
 
 
 def _non_price_change_reasons(payload: dict) -> list[str]:
+    if _no_primary_plan_state(payload):
+        return ["本次为'无符合方案'提醒,告知你当前约束下暂无匹配航班"]
     result = []
     for item in payload.get("trigger_reason") or []:
         text = str(item or "").strip()
@@ -8455,6 +8613,7 @@ def render_email(payload: dict) -> tuple[str, str]:
     baggage_line = ""
     primary_plan = (payload.get("recommended_plans") or [{}])[0] or {}
     no_primary = _no_primary_plan_state(payload)
+    no_primary_price_hint = _candidate_price_summary_text(payload) if no_primary else ""
     price_signal = payload.get("price_signal") or {}
     execution_advice = payload.get("execution_advice") or {}
     primary_plan_line = "方案待确认"
@@ -8482,7 +8641,12 @@ def render_email(payload: dict) -> tuple[str, str]:
                 [
                     ("价格信号", html.escape(f"{price_signal.get('label') or '待确认'} - {price_signal.get('summary') or '搜索参考价用于判断便不便宜'}")),
                     ("执行建议", html.escape(f"{execution_advice.get('label') or '待确认'} - {execution_advice.get('summary') or price_reason}")),
-                    ("搜索参考价", _email_price_span(payload.get("display_price") or payload.get("current_price"), "#2563eb")),
+                    (
+                        "搜索参考价",
+                        html.escape(no_primary_price_hint)
+                        if no_primary_price_hint
+                        else _email_price_span(payload.get("display_price") or payload.get("current_price"), "#2563eb"),
+                    ),
                     ("预估实付价", _email_price_span(payload.get("transaction_price"), "#111")),
                     ("本次验证价", html.escape(verify_text)),
                     ("理想入手价", _price_text(payload.get("ideal_price"))),

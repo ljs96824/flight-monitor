@@ -1,6 +1,7 @@
 import sys
 import types
 import unittest
+from datetime import date, timedelta
 
 
 sys.modules.setdefault(
@@ -13,6 +14,8 @@ class PriceCalendarPayloadTest(unittest.TestCase):
     def test_payload_carries_price_calendar_and_detail_renders_it(self):
         from notifier import build_notification_payload, render_detail_html
 
+        selected_date = (date.today() + timedelta(days=2)).isoformat()
+        cheaper_date = (date.today() + timedelta(days=1)).isoformat()
         analysis = {
             "all_flights": [
                 {
@@ -27,8 +30,8 @@ class PriceCalendarPayloadTest(unittest.TestCase):
                             "flight_no": "KN5978",
                             "dep_airport": "PVG",
                             "arr_airport": "PKX",
-                            "dep_time": "2026-06-10 08:15",
-                            "arr_time": "2026-06-10 10:25",
+                            "dep_time": f"{selected_date} 08:15",
+                            "arr_time": f"{selected_date} 10:25",
                         }
                     ],
                     "availability": {"age_minutes": 5, "source_count": 1},
@@ -38,11 +41,11 @@ class PriceCalendarPayloadTest(unittest.TestCase):
             "current_min_price": 527,
             "price_calendar": {
                 "rows": [
-                    {"date": "2026-06-09", "weekday": "周二", "min_price": 480, "lowest": True, "selected": False},
-                    {"date": "2026-06-10", "weekday": "周三", "min_price": 527, "lowest": False, "selected": True},
+                    {"date": cheaper_date, "weekday": "周二", "min_price": 480, "lowest": True, "selected": False},
+                    {"date": selected_date, "weekday": "周三", "min_price": 527, "lowest": False, "selected": True},
                 ],
                 "savings": [
-                    {"date": "2026-06-09", "weekday": "周二", "price": 480, "save": 220, "tip": "提前1天(2026-06-09 周二)出发，省¥220"}
+                    {"date": cheaper_date, "weekday": "周二", "price": 480, "save": 220, "tip": f"提前1天({cheaper_date} 周二)出发，省¥220"}
                 ],
                 "weekday_pattern": {"cheapest_weekday": "周二", "tip": "本航线周二通常更便宜"},
                 "scope": "oneway",
@@ -54,7 +57,7 @@ class PriceCalendarPayloadTest(unittest.TestCase):
             route_info={
                 "origin": "PVG",
                 "destination": "PEK",
-                "depart_date": "2026-06-10",
+                "depart_date": selected_date,
                 "round_trip": False,
                 "subscription_id": "calendar-test",
                 "notification_goals": {
@@ -66,7 +69,8 @@ class PriceCalendarPayloadTest(unittest.TestCase):
         )
         html = render_detail_html(payload)
 
-        self.assertEqual(payload["price_calendar"]["rows"][0]["date"], "2026-06-09")
+        self.assertEqual(payload["price_calendar"]["rows"][0]["date"], cheaper_date)
+        self.assertEqual(payload["price_calendar"]["rows"][1]["date"], selected_date)
         self.assertEqual(payload["push_type"], "前后日期更便宜")
         self.assertIn("低价日历", html)
         self.assertIn("单程最低参考价", html)

@@ -174,8 +174,46 @@ class WebFormTemplateStep2Test(unittest.TestCase):
     def test_same_day_business_time_fields_are_available_in_quick_mode(self):
         self.assertIn('id="same-day-business-fields" data-show-if="same_day_round_trip=true"', FORM_TEMPLATE)
         self.assertNotIn('id="same-day-business-fields" class="precise-only"', FORM_TEMPLATE)
-        self.assertIn("会议/办事开始时间", FORM_TEMPLATE)
-        self.assertIn("快速模式会按机场等级、车程估算和25分钟冗余自动预留。", FORM_TEMPLATE)
+        self.assertIn('name="day_trip_period"', FORM_TEMPLATE)
+        self.assertIn('value="morning"', FORM_TEMPLATE)
+        self.assertIn('value="afternoon"', FORM_TEMPLATE)
+        self.assertIn('value="full_day"', FORM_TEMPLATE)
+        self.assertIn("切换精准模式", FORM_TEMPLATE)
+
+    def test_quick_same_day_stores_day_trip_period_without_precise_meeting_window(self):
+        class Form(dict):
+            def getlist(self, key):
+                value = self.get(key)
+                if value is None:
+                    return []
+                return value if isinstance(value, list) else [value]
+
+        form = Form(
+            {
+                "round_trip": "false",
+                "monitor_mode": "quick",
+                "same_day_round_trip": "true",
+                "day_trip_period": "afternoon",
+                "origin_select": "PVG",
+                "destination": "PEK",
+                "depart_date": "2026-06-10",
+                "price_strategy": "auto_judge",
+                "travel_scenario": ["business"],
+                "transfer_policy": "reasonable",
+                "baggage": "required",
+                "primary_goal": "buy_timing",
+                "notification_method": "pushplus",
+                "notification_frequency": "important_only",
+            }
+        )
+
+        subscription = build_subscription(form)
+
+        self.assertTrue(subscription["constraints"]["same_day_round_trip"])
+        self.assertEqual(subscription["constraints"]["day_trip_period"], "afternoon")
+        self.assertEqual(subscription["constraints"]["business_start"], "")
+        self.assertEqual(subscription["constraints"]["business_end"], "")
+        self.assertEqual(subscription["constraints"]["time_source"], "user_defined")
 
     def test_precise_meeting_mode_takes_over_time_preferences(self):
         self.assertIn('id="meeting-time-handoff-card"', FORM_TEMPLATE)

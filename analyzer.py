@@ -650,6 +650,7 @@ def _same_day_constraints(source: dict | None) -> dict:
     constraints = dict(source.get("constraints") or {})
     hard = source.get("hard_constraints") or {}
     for key in (
+        "day_trip_period",
         "business_start",
         "business_end",
         "buffer_hours",
@@ -668,6 +669,76 @@ def _same_day_constraints(source: dict | None) -> dict:
         if key not in constraints and basic.get(key) is not None:
             constraints[key] = basic.get(key)
     return constraints
+
+
+def _normalize_day_trip_period(value) -> str:
+    text = str(value or "").strip()
+    if text in {"morning", "afternoon", "full_day"}:
+        return text
+    return "morning"
+
+
+def _same_day_default_profile(period: str | None) -> dict:
+    period = _normalize_day_trip_period(period)
+    profiles = {
+        "morning": {
+            "label": "上午办事",
+            "outbound_depart_after": 6 * 60 + 30,
+            "outbound_arrive_by": 10 * 60,
+            "outbound_target": 9 * 60 + 30,
+            "return_depart_after": 16 * 60,
+            "return_target": 17 * 60 + 30,
+            "return_arrive_by": 23 * 60 + 30,
+            "min_stay_minutes": 5 * 60,
+        },
+        "afternoon": {
+            "label": "下午办事",
+            "outbound_depart_after": 6 * 60 + 30,
+            "outbound_arrive_by": 12 * 60,
+            "outbound_target": 10 * 60 + 30,
+            "return_depart_after": 18 * 60,
+            "return_target": 19 * 60 + 30,
+            "return_arrive_by": 23 * 60 + 30,
+            "min_stay_minutes": 5 * 60,
+        },
+        "full_day": {
+            "label": "全天办事",
+            "outbound_depart_after": 6 * 60 + 30,
+            "outbound_arrive_by": 10 * 60 + 30,
+            "outbound_target": 9 * 60 + 30,
+            "return_depart_after": 18 * 60 + 30,
+            "return_target": 20 * 60,
+            "return_arrive_by": 23 * 60 + 30,
+            "min_stay_minutes": 5 * 60,
+        },
+    }
+    return profiles[period]
+
+
+def _same_day_relaxed_profile(period: str | None) -> dict:
+    profile = dict(_same_day_default_profile(period))
+    profile.update(
+        {
+            "outbound_depart_after": 6 * 60,
+            "outbound_arrive_by": 14 * 60,
+            "return_depart_after": 16 * 60,
+            "return_arrive_by": 23 * 60 + 30,
+            "min_stay_minutes": 4 * 60,
+            "relaxed": True,
+        }
+    )
+    return profile
+
+
+def _same_day_default_combo_score(combo: dict, profile: dict) -> float:
+    outbound_arr = _flight_arrival_minutes(combo.get("outbound") or {}) or 0
+    return_dep = _flight_departure_minutes(combo.get("return") or {}) or 0
+    total = _to_float(combo.get("total_price")) or 0
+    return (
+        abs(outbound_arr - int(profile.get("outbound_target") or outbound_arr)) * 2
+        + abs(return_dep - int(profile.get("return_target") or return_dep)) * 1.5
+        + total / 100
+    )
 
 
 def _optional_int(value, default: int | None = None) -> int | None:
@@ -993,91 +1064,114 @@ def build_same_day_combos(
     if date_str is None and isinstance(windows_or_date, str):
         date_str = windows_or_date
     combos: list[dict] = []
+    normalized_constraints = _same_day_constraints(constraints or {})
+    default_profile = _same_day_default_profile(normalized_constraints.get("day_trip_period"))
+    relaxed_profile = _same_day_relaxed_profile(normalized_constraints.get("day_trip_period"))
+    has_time_window_constraints = bool(
+        normalized_constraints.get("business_start") and normalized_constraints.get("business_end")
+    )
     outbound_flights = outbound_flights or []
     return_flights = return_flights or []
     print(f"[会议比较] 待比较去程数量={len(outbound_flights)}")
-    for outbound in outbound_flights or []:
-        outbound_dep = _flight_departure_minutes(outbound or {})
-        outbound_arr = _flight_arrival_minutes(outbound or {})
-        outbound_arr_dt = _flight_arrival_datetime(outbound or {}, date_str)
-        outbound_price = _to_float((outbound or {}).get("price"))
-        if outbound_dep is None or outbound_arr is None or outbound_price is None:
-            continue
-        dest_airport = _flight_airport(outbound or {}, "arrival_airport")
-        active_windows = windows or compute_same_day_windows(constraints or {}, None, dest_airport)
-        if active_windows:
-            arrive_by = active_windows.get("outbound_arrive_by_minutes")
-            arrive_by_dt, return_after_dt = _same_day_window_datetimes(active_windows, date_str)
-            arrive_limit = arrive_by_dt or active_windows.get("outbound_arrive_by")
-            print(
-                f"[会议窗口] 去程到达上限={arrive_limit} "
-                f"类型={type(arrive_limit)}"
-            )
-            print(
-                f"[会议窗口] 返程出发下限={return_after_dt or active_windows.get('return_depart_after')} "
-                f"类型={type(return_after_dt or active_windows.get('return_depart_after'))}"
-            )
-            passed = True
-            if arrive_by_dt is not None and outbound_arr_dt is not None:
-                passed = outbound_arr_dt <= arrive_by_dt
-            elif arrive_by is not None:
-                passed = outbound_arr <= arrive_by
-            print(
-                f"[会议比较] 去程{outbound.get('flight_no') or outbound.get('flight_combo')} "
-                f"原始到达={repr(_first_time_text(outbound or {}, 'arrival_time', 'arr_time'))} "
-                f"解析后={outbound_arr_dt if outbound_arr_dt is not None else outbound_arr} "
-                f"类型={type(outbound_arr_dt if outbound_arr_dt is not None else outbound_arr)} "
-                f"通过={passed}"
-            )
-            if not passed:
+    for profile in (default_profile, relaxed_profile):
+        for outbound in outbound_flights or []:
+            outbound_dep = _flight_departure_minutes(outbound or {})
+            outbound_arr = _flight_arrival_minutes(outbound or {})
+            outbound_arr_dt = _flight_arrival_datetime(outbound or {}, date_str)
+            outbound_price = _to_float((outbound or {}).get("price"))
+            if outbound_dep is None or outbound_arr is None or outbound_price is None:
                 continue
-        else:
-            if not (6 * 60 <= outbound_dep <= 10 * 60):
-                continue
-            if outbound_arr > 14 * 60:
-                continue
-        for return_flight in return_flights:
-            return_dep = _flight_departure_minutes(return_flight or {})
-            return_arr = _flight_arrival_minutes(return_flight or {})
-            return_dep_dt = _flight_departure_datetime(return_flight or {}, date_str)
-            return_arr_dt = _flight_arrival_datetime(return_flight or {}, date_str)
-            return_price = _to_float((return_flight or {}).get("price"))
-            if return_dep is None or return_arr is None or return_price is None:
-                continue
+            dest_airport = _flight_airport(outbound or {}, "arrival_airport")
+            active_windows = windows or compute_same_day_windows(constraints or {}, None, dest_airport)
             if active_windows:
-                depart_after = active_windows.get("return_depart_after_minutes")
-                _, return_after_dt = _same_day_window_datetimes(active_windows, date_str)
-                passed = True
-                if return_after_dt is not None and return_dep_dt is not None:
-                    passed = return_dep_dt >= return_after_dt
-                elif depart_after is not None:
-                    passed = return_dep >= depart_after
+                arrive_by = active_windows.get("outbound_arrive_by_minutes")
+                arrive_by_dt, return_after_dt = _same_day_window_datetimes(active_windows, date_str)
+                arrive_limit = arrive_by_dt or active_windows.get("outbound_arrive_by")
                 print(
-                    f"[会议比较] 返程{return_flight.get('flight_no') or return_flight.get('flight_combo')} "
-                    f"原始出发={repr(_first_time_text(return_flight or {}, 'departure_time', 'dep_time'))} "
-                    f"解析后={return_dep_dt if return_dep_dt is not None else return_dep} "
-                    f"类型={type(return_dep_dt if return_dep_dt is not None else return_dep)} "
+                    f"[会议窗口] 去程到达上限={arrive_limit} "
+                    f"类型={type(arrive_limit)}"
+                )
+                print(
+                    f"[会议窗口] 返程出发下限={return_after_dt or active_windows.get('return_depart_after')} "
+                    f"类型={type(return_after_dt or active_windows.get('return_depart_after'))}"
+                )
+                passed = True
+                if arrive_by_dt is not None and outbound_arr_dt is not None:
+                    passed = outbound_arr_dt <= arrive_by_dt
+                elif arrive_by is not None:
+                    passed = outbound_arr <= arrive_by
+                print(
+                    f"[会议比较] 去程{outbound.get('flight_no') or outbound.get('flight_combo')} "
+                    f"原始到达={repr(_first_time_text(outbound or {}, 'arrival_time', 'arr_time'))} "
+                    f"解析后={outbound_arr_dt if outbound_arr_dt is not None else outbound_arr} "
+                    f"类型={type(outbound_arr_dt if outbound_arr_dt is not None else outbound_arr)} "
                     f"通过={passed}"
                 )
                 if not passed:
                     continue
             else:
-                if not (16 * 60 <= return_dep <= 22 * 60):
+                if outbound_dep < int(profile["outbound_depart_after"]):
                     continue
-            if return_arr_dt is not None and return_dep_dt is not None:
-                if return_arr_dt < return_dep_dt:
+                if outbound_arr > int(profile["outbound_arrive_by"]):
                     continue
-            elif return_arr < return_dep:
-                continue
-            if return_dep_dt is not None and outbound_arr_dt is not None:
-                stay_minutes = (return_dep_dt - outbound_arr_dt).total_seconds() / 60
-            else:
-                stay_minutes = return_dep - outbound_arr
-            if stay_minutes < min_stay_hours * 60:
-                continue
-            total = outbound_price + return_price
-            combos.append(
-                {
+            for return_flight in return_flights:
+                return_dep = _flight_departure_minutes(return_flight or {})
+                return_arr = _flight_arrival_minutes(return_flight or {})
+                return_dep_dt = _flight_departure_datetime(return_flight or {}, date_str)
+                return_arr_dt = _flight_arrival_datetime(return_flight or {}, date_str)
+                return_price = _to_float((return_flight or {}).get("price"))
+                if return_dep is None or return_arr is None or return_price is None:
+                    continue
+                if active_windows:
+                    depart_after = active_windows.get("return_depart_after_minutes")
+                    _, return_after_dt = _same_day_window_datetimes(active_windows, date_str)
+                    passed = True
+                    if return_after_dt is not None and return_dep_dt is not None:
+                        passed = return_dep_dt >= return_after_dt
+                    elif depart_after is not None:
+                        passed = return_dep >= depart_after
+                    print(
+                        f"[会议比较] 返程{return_flight.get('flight_no') or return_flight.get('flight_combo')} "
+                        f"原始出发={repr(_first_time_text(return_flight or {}, 'departure_time', 'dep_time'))} "
+                        f"解析后={return_dep_dt if return_dep_dt is not None else return_dep} "
+                        f"类型={type(return_dep_dt if return_dep_dt is not None else return_dep)} "
+                        f"通过={passed}"
+                    )
+                    if not passed:
+                        continue
+                else:
+                    if return_dep < int(profile["return_depart_after"]):
+                        continue
+                    if return_arr > int(profile["return_arrive_by"]):
+                        continue
+                if return_arr_dt is not None and return_dep_dt is not None:
+                    if return_arr_dt < return_dep_dt:
+                        continue
+                elif return_arr < return_dep:
+                    continue
+                if return_dep_dt is not None and outbound_arr_dt is not None:
+                    stay_minutes = (return_dep_dt - outbound_arr_dt).total_seconds() / 60
+                else:
+                    stay_minutes = return_dep - outbound_arr
+                min_stay_minutes = min_stay_hours * 60 if active_windows else int(profile["min_stay_minutes"])
+                if stay_minutes < min_stay_minutes:
+                    continue
+                total = outbound_price + return_price
+                note = ""
+                if active_windows:
+                    note = f"去程{_minutes_to_text(outbound_arr)}到,返程{_minutes_to_text(return_dep)}走,办事时间充足"
+                elif profile.get("relaxed"):
+                    note = (
+                        "当天往返时间较紧,已适当放宽默认早去晚回规则；"
+                        "如不便可考虑前一晚到达"
+                    )
+                else:
+                    note = (
+                        f"当天往返默认方案(按{profile['label']}):去程选白天较早班,返程选傍晚/晚班,"
+                        f"中间办事时间约{round(stay_minutes / 60, 1):g}小时；"
+                        "如需精确按会议时间安排,可进精准模式填写会议时段"
+                    )
+                combo = {
                     "outbound": outbound,
                     "return": return_flight,
                     "outbound_price": outbound_price,
@@ -1092,14 +1186,16 @@ def build_same_day_combos(
                     "stay_hours": round(stay_minutes / 60, 1),
                     "feasible": True,
                     "same_day_windows": active_windows,
-                    "schedule_note": (
-                        f"去程{_minutes_to_text(outbound_arr)}到,返程{_minutes_to_text(return_dep)}走,办事时间充足"
-                        if active_windows
-                        else ""
-                    ),
+                    "schedule_note": note,
                     "tag": "当天往返可行",
                 }
-            )
+                if not active_windows:
+                    combo["same_day_default_period"] = _normalize_day_trip_period((constraints or {}).get("day_trip_period"))
+                    combo["same_day_default_score"] = _same_day_default_combo_score(combo, profile)
+                    combo["same_day_default_relaxed"] = bool(profile.get("relaxed"))
+                combos.append(combo)
+        if combos or has_time_window_constraints:
+            break
     for combo in combos:
         if combo.get("same_day_round_trip"):
             combo["tag"] = "当天往返可行"
@@ -1109,6 +1205,15 @@ def build_same_day_combos(
                 combo["schedule_note"] = (
                     f"去程{_minutes_to_text(outbound_arr)}到,返程{_minutes_to_text(return_dep)}走,办事时间充足"
                 )
+    if combos and not any(combo.get("same_day_windows") for combo in combos):
+        return sorted(
+            combos,
+            key=lambda item: (
+                1 if item.get("same_day_default_relaxed") else 0,
+                item.get("same_day_default_score") or 999999,
+                item.get("total_price") or 999999,
+            ),
+        )
     return sorted(combos, key=lambda item: item.get("total_price") or 999999)
 
 
@@ -5616,6 +5721,132 @@ def build_next_step_guidance(
             {"label": "因刚需必须出行", "summary": verify_summary, "action": "验证方案A渠道"},
         ],
     }
+
+
+def _no_result_reason_bucket(reason: str) -> str:
+    text = str(reason or "")
+    if "直飞" in text:
+        return "direct"
+    if "会议" in text or "窗口" in text or "时间" in text or "到达" in text or "起飞" in text:
+        return "meeting"
+    if "预算" in text or "最高" in text or "超" in text or "价格" in text:
+        return "budget"
+    return "other"
+
+
+def diagnose_no_result(counts: dict, constraints: dict | None = None) -> str:
+    """Explain why collected candidates produced no primary recommendation."""
+    constraints = constraints or {}
+    total = int(counts.get("total_candidates") or 0)
+    valid = int(counts.get("valid_price_count") or 0)
+    if total and valid == 0:
+        return "采集到航班但暂无有效报价,可能数据源未返回价格,建议稍后重试"
+    reason_counts = counts.get("reason_counts") or {}
+    parts = []
+    if reason_counts.get("direct"):
+        parts.append(f"必须直飞筛除了{int(reason_counts['direct'])}个中转方案")
+    if reason_counts.get("meeting"):
+        parts.append(f"会议/时间窗口筛除了{int(reason_counts['meeting'])}个时间不符的方案")
+    if reason_counts.get("budget"):
+        max_budget = _to_float(constraints.get("max_budget") or constraints.get("budget"))
+        if max_budget:
+            parts.append(f"最高可接受价¥{max_budget:,.0f}筛除了{int(reason_counts['budget'])}个超预算方案")
+        else:
+            parts.append(f"预算条件筛除了{int(reason_counts['budget'])}个方案")
+    if not parts and valid:
+        parts.append("综合约束下无完全匹配方案")
+    if not parts:
+        parts.append("当前数据源暂未返回可推荐方案")
+    prefix = f"本次采集到{total}个航班" if total else "本次暂未采集到可用航班"
+    return f"{prefix},但" + "；".join(parts)
+
+
+def build_no_result_diagnosis(
+    all_flights: list[dict] | None,
+    excluded_flights: list[dict] | None = None,
+    constraints: dict | None = None,
+    stage_counts: dict | None = None,
+) -> dict:
+    """Build no-result diagnostics from candidate and exclusion data."""
+    flights = [flight for flight in all_flights or [] if isinstance(flight, dict)]
+    excluded = [item for item in excluded_flights or [] if isinstance(item, dict)]
+    valid_price = [flight for flight in flights if _to_float(flight.get("price")) is not None]
+    reason_counts = {"direct": 0, "meeting": 0, "budget": 0, "other": 0}
+    for item in excluded:
+        reason = item.get("reason") or item.get("exclude_reason")
+        if not reason and isinstance(item.get("flight"), dict):
+            reason = item["flight"].get("exclude_reason")
+        reason_counts[_no_result_reason_bucket(str(reason or ""))] += 1
+    counts = {
+        "total_candidates": len(flights),
+        "valid_price_count": len(valid_price),
+        "after_basic_filter": (stage_counts or {}).get("after_basic_filter"),
+        "after_meeting_window": (stage_counts or {}).get("after_meeting_window"),
+        "after_budget": (stage_counts or {}).get("after_budget"),
+        "reason_counts": {key: value for key, value in reason_counts.items() if value},
+    }
+    sample = [
+        (flight.get("flight_no") or flight.get("flight_combo"), flight.get("price"))
+        for flight in flights[:5]
+    ]
+    print(f"[无方案诊断] 采集去重后总数={counts['total_candidates']}")
+    print(f"[无方案诊断] 有效价格航班={counts['valid_price_count']}")
+    print(f"[无方案诊断] 常规过滤后(直飞/红眼等)={counts.get('after_basic_filter')}")
+    print(f"[无方案诊断] 会议窗口过滤后={counts.get('after_meeting_window')}")
+    print(f"[无方案诊断] 预算过滤后={counts.get('after_budget')}")
+    print(f"[无方案诊断] 各航班价格样本: {sample}")
+    prices = sorted(_to_float(flight.get("price")) for flight in valid_price)
+    prices = [price for price in prices if price is not None]
+    summary = {
+        "count": len(prices),
+        "lowest": prices[0] if prices else None,
+        "highest": prices[-1] if prices else None,
+    }
+    counts["reason"] = diagnose_no_result(counts, constraints)
+    return {"counts": counts, "price_summary": summary, "reason": counts["reason"]}
+
+
+def build_no_result_alternatives(
+    candidate_flights: list[dict] | None,
+    excluded_flights: list[dict] | None = None,
+    limit: int = 3,
+) -> list[dict]:
+    """Turn nearest valid-price candidates into fallback alternatives."""
+    reason_by_key = {}
+    for item in excluded_flights or []:
+        if not isinstance(item, dict):
+            continue
+        flight = item.get("flight") if isinstance(item.get("flight"), dict) else item
+        key = flight.get("flight_no") or flight.get("flight_combo")
+        if key:
+            reason_by_key[str(key)] = item.get("reason") or flight.get("exclude_reason") or "不满足当前约束"
+    candidates = []
+    for flight in candidate_flights or []:
+        if not isinstance(flight, dict):
+            continue
+        price = _to_float(flight.get("price"))
+        if price is None or price <= 0:
+            continue
+        key = str(flight.get("flight_no") or flight.get("flight_combo") or "")
+        dep_min = _flight_departure_minutes(flight)
+        arr_min = _flight_arrival_minutes(flight)
+        time_key = arr_min if arr_min is not None else (dep_min if dep_min is not None else 99999)
+        candidates.append((time_key, price, flight, reason_by_key.get(key) or "不满足当前约束"))
+    candidates.sort(key=lambda row: (row[0], row[1]))
+    result = []
+    labels = ["备选A", "备选B", "备选C"]
+    for index, (_, price, flight, reason) in enumerate(candidates[:limit]):
+        result.append(
+            {
+                "category": "closest_candidate",
+                "title": f"{labels[index]} · 最接近条件",
+                "flight": dict(flight),
+                "price": price,
+                "tradeoff": str(reason),
+                "feasibility": str(reason),
+            }
+        )
+    return result
 
 
 def determine_push_type(

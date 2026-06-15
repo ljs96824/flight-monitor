@@ -849,11 +849,27 @@ FORM_TEMPLATE = """
       </div>
       <div id="same-day-business-fields" data-show-if="same_day_round_trip=true">
         <label>当天往返安排</label>
+        <div class="quick-only">
+          <label>当天大致办事时段</label>
+          <div class="choice">
+            <label><input type="radio" name="day_trip_period" value="morning" checked> 上午为主（默认去程上午到、返程下午晚些走）</label>
+            <label><input type="radio" name="day_trip_period" value="afternoon"> 下午为主（去程中午前到、返程傍晚晚上走）</label>
+            <label><input type="radio" name="day_trip_period" value="full_day"> 全天（去程上午到、返程晚上走）</label>
+          </div>
+          <p class="hint">
+            系统会按合理办事窗口选择适度早去晚回，不默认红眼早班或深夜到家。
+            需要按具体会议时间精确安排？
+            <button id="same-day-open-precise" class="link-button" type="button">切换精准模式</button>
+            填写会议时间，系统会按车程和缓冲精确反推航班。
+          </p>
+        </div>
+        <div class="precise-only">
         <div class="inline-grid">
           <label>会议/办事开始时间 <input name="business_start" type="time" value="10:00"></label>
           <label>会议/办事结束时间 <input name="business_end" type="time" value="16:00"></label>
         </div>
-        <p class="hint">快速模式会按机场等级、车程估算和25分钟冗余自动预留。</p>
+        <p class="hint">精准模式会按机场等级、车程估算和冗余设置精确反推航班窗口。</p>
+        </div>
       </div>
 
       <div id="trip-feasibility-fields" class="precise-only">
@@ -1508,6 +1524,7 @@ FORM_TEMPLATE = """
     const strictRulesWarning = document.getElementById('strict-rules-warning');
     const quickDefaultsNote = document.getElementById('quick-defaults-note');
     const openPreciseModeButton = document.getElementById('open-precise-mode');
+    const sameDayOpenPreciseButton = document.getElementById('same-day-open-precise');
     const originSelect = document.getElementById('origin');
     const originManual = document.querySelector('input[name="origin_manual"]');
     const originValidationError = document.getElementById('origin-validation-error');
@@ -3512,6 +3529,7 @@ FORM_TEMPLATE = """
         monitor_mode: checkedValue('monitor_mode'),
         route_type: checkedValue('route_type'),
         same_day_round_trip: Boolean(document.querySelector('input[name="same_day_round_trip"]')?.checked),
+        day_trip_period: checkedValue('day_trip_period') || 'morning',
         business_start: document.querySelector('input[name="business_start"]')?.value || '',
         business_end: document.querySelector('input[name="business_end"]')?.value || '',
         outbound_set_off: precise ? (document.querySelector('input[name="outbound_set_off"]')?.value || '') : '',
@@ -3619,6 +3637,7 @@ FORM_TEMPLATE = """
       if (sameDayRoundTrip) {
         sameDayRoundTrip.checked = Boolean(data.same_day_round_trip);
       }
+      if (data.day_trip_period) setRadio('day_trip_period', data.day_trip_period);
       const businessStart = document.querySelector('input[name="business_start"]');
       const businessEnd = document.querySelector('input[name="business_end"]');
       if (businessStart && data.business_start) businessStart.value = data.business_start;
@@ -3868,7 +3887,7 @@ FORM_TEMPLATE = """
       updateConditionalFields();
       refreshSummaryIfFinalStep();
     }));
-    ['companions', 'adult_count', 'child_count', 'elderly_count', 'infant_count', 'passenger_count', 'trip_natures', 'team_passenger_count', 'cabin_arrangement', 'business_start', 'business_end', 'outbound_set_off', 'return_set_off', 'user_transport_min', 'transport_margin_mode', 'redundancy_min', 'meeting_start', 'meeting_end', 'team_date_flexibility', 'same_flight_required', 'cabin_policy', 'user_level', 'business_seats', 'economy_seats', 'reimburse_per_person', 'invoice_context', 'invoice_needed', 'invoice_special_vat', 'invoice_cabin_limit', 'time_preference', 'refund_flexibility', 'airline_policy', 'accept_self_transfer', 'companion_constraints', 'solo_travel', 'no_late_arrival', 'prefer_daytime_arrival'].forEach(name => {
+    ['companions', 'adult_count', 'child_count', 'elderly_count', 'infant_count', 'passenger_count', 'day_trip_period', 'trip_natures', 'team_passenger_count', 'cabin_arrangement', 'business_start', 'business_end', 'outbound_set_off', 'return_set_off', 'user_transport_min', 'transport_margin_mode', 'redundancy_min', 'meeting_start', 'meeting_end', 'team_date_flexibility', 'same_flight_required', 'cabin_policy', 'user_level', 'business_seats', 'economy_seats', 'reimburse_per_person', 'invoice_context', 'invoice_needed', 'invoice_special_vat', 'invoice_cabin_limit', 'time_preference', 'refund_flexibility', 'airline_policy', 'accept_self_transfer', 'companion_constraints', 'solo_travel', 'no_late_arrival', 'prefer_daytime_arrival'].forEach(name => {
       document.querySelectorAll(`input[name="${name}"]`).forEach(input => {
         input.addEventListener('change', () => {
           syncPrefCards();
@@ -3895,6 +3914,11 @@ FORM_TEMPLATE = """
       advancedToggle.textContent = '－ 收起补充偏好';
       rulesToggle.textContent = '－ 收起筛选规则';
       advanced.scrollIntoView({behavior: 'smooth', block: 'start'});
+    });
+    sameDayOpenPreciseButton?.addEventListener('click', () => {
+      setRadio('monitor_mode', 'precise');
+      applyMonitorMode();
+      document.querySelector('input[name="business_start"]')?.focus();
     });
     transferRadios.forEach(radio => radio.addEventListener('change', () => {
       toggleShortTransferOptions();
@@ -4794,6 +4818,9 @@ def build_subscription(form) -> dict:
     max_budget = None
     if budget_strategy == "explicit" and max_budget_mode == "fixed":
         max_budget = infer_max_budget(parse_int(form.get("max_budget"), 0), target_price)
+    day_trip_period = form.get("day_trip_period", "morning").strip() or "morning"
+    if day_trip_period not in {"morning", "afternoon", "full_day"}:
+        day_trip_period = "morning"
     business_start = form.get("business_start", "").strip()
     business_end = form.get("business_end", "").strip()
     outbound_set_off = form.get("outbound_set_off", "").strip()
@@ -4969,6 +4996,8 @@ def build_subscription(form) -> dict:
     travel_scenario = travel_scenarios[0]
     derived_trip_type = derive_trip_type_from_scenarios(travel_scenarios)
     if monitor_mode != "precise":
+        business_start = ""
+        business_end = ""
         outbound_set_off = ""
         return_set_off = ""
         user_transport_min = 0
@@ -5105,6 +5134,7 @@ def build_subscription(form) -> dict:
             "transfer_policy": transfer_policy,
             "checked_baggage_required": form.get("baggage", "required") == "required",
             "same_day_round_trip": same_day_round_trip,
+            "day_trip_period": day_trip_period if same_day_round_trip else "",
             "business_start": business_start if same_day_round_trip else "",
             "business_end": business_end if same_day_round_trip else "",
             "outbound_set_off": outbound_set_off,
@@ -5211,6 +5241,7 @@ def build_subscription(form) -> dict:
             "transfer_policy": transfer_policy,
             "route_type": route_type,
             "same_day_round_trip": same_day_round_trip,
+            "day_trip_period": day_trip_period if same_day_round_trip else "",
             "business_start": business_start if same_day_round_trip else "",
             "business_end": business_end if same_day_round_trip else "",
             "outbound_set_off": outbound_set_off,

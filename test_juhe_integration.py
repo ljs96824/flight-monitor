@@ -1,5 +1,8 @@
 import os
+import sys
+import types
 import unittest
+from datetime import date, timedelta
 from unittest.mock import patch
 
 from sources.aggregator import FlightAggregator, build_default_sources, is_domestic_route
@@ -109,6 +112,47 @@ class JuheIntegrationTest(unittest.TestCase):
         self.assertNotIn("fromCity", params)
         self.assertNotIn("toCity", params)
         self.assertNotIn("date", params)
+
+    def test_juhe_fetch_skips_past_dates_before_request(self):
+        source = JuheSource()
+        past = (date.today() - timedelta(days=1)).isoformat()
+
+        with patch.dict(os.environ, {"JUHE_FLIGHT_KEY": "test-key"}, clear=True):
+            result = source.fetch("PVG", "PEK", past)
+
+        self.assertEqual(result["flights"], [])
+        self.assertEqual(result["source_status"], "skipped_past_date")
+        self.assertEqual(result["skipped_reason"], "过去日期不可售")
+
+    def test_juhe_fetch_marks_281801_as_invalid_date(self):
+        source = JuheSource()
+        future = (date.today() + timedelta(days=5)).isoformat()
+
+        class FakeResponse:
+            status_code = 200
+            text = '{"error_code":281801}'
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"error_code": 281801, "reason": "行程出发日期格式不正确或为空"}
+
+        calls = []
+
+        def fake_get(*args, **kwargs):
+            calls.append((args, kwargs))
+            return FakeResponse()
+
+        fake_requests = types.SimpleNamespace(get=fake_get)
+        with patch.dict(os.environ, {"JUHE_FLIGHT_KEY": "test-key"}, clear=True):
+            with patch.dict(sys.modules, {"requests": fake_requests}):
+                result = source.fetch("PVG", "PEK", future)
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(result["flights"], [])
+        self.assertEqual(result["source_status"], "invalid_date")
+        self.assertEqual(result["skipped_reason"], "日期无效或已过期")
 
 
 if __name__ == "__main__":

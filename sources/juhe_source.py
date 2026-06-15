@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from filename_utils import sanitize_filename
@@ -80,12 +80,26 @@ def _format_departure_date(date_str: str) -> str:
     return text.replace("/", "-")
 
 
+def _parse_departure_date(date_str: str) -> date | None:
+    text = _format_departure_date(date_str)
+    try:
+        return date.fromisoformat(str(text)[:10])
+    except (TypeError, ValueError):
+        return None
+
+
 def _is_success_response(raw) -> bool:
     if not isinstance(raw, dict):
         return False
     if "error_code" not in raw:
         return True
     return str(raw.get("error_code")) == "0"
+
+
+def _is_invalid_date_response(raw) -> bool:
+    if not isinstance(raw, dict):
+        return False
+    return str(raw.get("error_code")) == "281801"
 
 
 def _combine_date_time(date_value, time_value) -> str:
@@ -118,6 +132,17 @@ class JuheSource(FlightSource):
     def fetch(
         self, origin: str, dest: str, date_str: str, cabin_class: str = "economy"
     ) -> dict:
+        departure_date = _parse_departure_date(date_str)
+        if departure_date is not None and departure_date < date.today():
+            print(f"[juhe] skip past date {date_str}")
+            return {
+                "flights": [],
+                "source": self.name,
+                "raw": {},
+                "source_status": "skipped_past_date",
+                "skipped_reason": "过去日期不可售",
+            }
+
         key = os.getenv("JUHE_FLIGHT_KEY")
         print(f"[juhe] key_exists={bool(key)}, start {origin}->{dest} {date_str}")
         if not key:
@@ -153,6 +178,16 @@ class JuheSource(FlightSource):
         print(f"[juhe raw] {response.text[:2000]}")
         response.raise_for_status()
         raw = response.json()
+        if _is_invalid_date_response(raw):
+            print(f"[juhe] invalid date skipped {date_str}")
+            return {
+                "flights": [],
+                "source": self.name,
+                "raw": raw,
+                "source_status": "invalid_date",
+                "skipped_reason": "日期无效或已过期",
+                "collected_at": collected_at,
+            }
         if _is_success_response(raw):
             self._write_cache(origin, dest, date_str, cabin_class, raw)
         flights = self.normalize(self.parse(raw), collected_at=collected_at)
