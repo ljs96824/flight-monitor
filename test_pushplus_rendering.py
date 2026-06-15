@@ -435,9 +435,8 @@ class PushPlusRenderingTest(unittest.TestCase):
         msg = render_pushplus(payload)
         _, email_html = render_email(payload)
 
-        self.assertIn("去程总预留≈229分钟", msg)
-        self.assertIn("返程总预留≈213分钟", msg)
-        self.assertIn("06:11", msg)
+        self.assertNotIn("去程总预留≈229分钟", msg)
+        self.assertIn("更多完整分析见网页详情", msg)
         self.assertNotIn("预留999", msg)
         self.assertNotIn("缓冲999", msg)
         self.assertNotIn("车程999", msg)

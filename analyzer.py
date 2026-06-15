@@ -5553,6 +5553,71 @@ def determine_push_type(
     }
 
 
+def build_budget_gap(display_price, max_price=None, ideal_price=None) -> dict:
+    """Return positive budget gaps for user-facing notification copy."""
+    current = _to_float(display_price)
+    max_p = _to_float(max_price)
+    ideal = _to_float(ideal_price)
+    items = []
+    over_max = None
+    over_ideal = None
+    if current is not None and max_p is not None and current > max_p:
+        over_max = current - max_p
+        items.append(f"高于最高价¥{over_max:,.0f}")
+    if current is not None and ideal is not None and current > ideal:
+        over_ideal = current - ideal
+        items.append(f"高于理想价¥{over_ideal:,.0f}")
+    return {
+        "over_max": over_max,
+        "over_ideal": over_ideal,
+        "items": items,
+        "text": " | ".join(items),
+        "is_over_budget": over_max is not None,
+    }
+
+
+def build_next_step_guidance(
+    push_type=None,
+    display_price=None,
+    max_price=None,
+    ideal_price=None,
+    scenarios=None,
+    trip_rigidity=None,
+) -> dict:
+    """Build the three user choices after an over-budget or rising-price alert."""
+    current = _to_float(display_price)
+    max_p = _to_float(max_price)
+    scenario_values = scenarios or []
+    if isinstance(scenario_values, str):
+        scenario_values = [scenario_values]
+    scenario_text = " ".join(str(item) for item in scenario_values)
+    rigid = bool(trip_rigidity) or any(
+        key in scenario_text.lower()
+        for key in ("business", "meeting", "important", "商务", "会议", "重要")
+    )
+    watch_target = max_p if max_p is not None else _to_float(ideal_price)
+    watch_summary = (
+        f"系统会在跌破¥{watch_target:,.0f}时提醒你"
+        if watch_target is not None
+        else "系统会在价格回落或出现更优方案时提醒你"
+    )
+    if current is not None and max_p is not None and current <= max_p and "涨价" in str(push_type or ""):
+        watch_summary = "价格仍在预算内,但近期上涨,可继续观察下一次变化"
+    verify_summary = (
+        "你的出行场景偏刚性,若会议或行程无法改期,可只验证最终价和库存"
+        if rigid
+        else "若确实必须出行,可验证最终价；否则优先等待或换日期"
+    )
+    return {
+        "rigid": rigid,
+        "items": [
+            {"label": "继续监控等降价", "summary": watch_summary, "action": "保持监控"},
+            {"label": "调整预算或日期", "summary": "当前日期偏贵,换日期可能更便宜", "action": "修改监控"},
+            {"label": "因刚需必须出行", "summary": verify_summary, "action": "验证方案A渠道"},
+        ],
+    }
+
+
 def determine_push_type(
     current_price,
     target_price=None,

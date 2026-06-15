@@ -43,12 +43,12 @@ class NotifierTravelProfileTest(unittest.TestCase):
         push = render_pushplus(payload)
         subject, email_html = render_email(payload)
 
-        self.assertIn("推荐依据", push)
-        self.assertIn("家庭/亲子", push)
+        self.assertNotIn("推荐依据", push)
+        self.assertIn("未找到完全符合条件的方案", push)
         self.assertIn("推荐依据", email_html)
         self.assertIn("舒适度需求", email_html)
         self.assertIn("适合带孩子出行", email_html)
-        self.assertIn("值得验证", subject)
+        self.assertIn("无符合方案", subject)
 
     def test_email_explains_combined_scenarios_and_tradeoff(self):
         payload = {
@@ -88,11 +88,11 @@ class NotifierTravelProfileTest(unittest.TestCase):
         push = render_pushplus(payload)
         subject, email_html = render_email(payload)
 
-        self.assertIn("旅游 + 家庭/亲子", push)
+        self.assertNotIn("推荐依据", push)
         self.assertIn("旅游 + 家庭/亲子", email_html)
         self.assertIn("孩子", email_html)
         self.assertIn("纯低价", email_html)
-        self.assertIn("值得验证", subject)
+        self.assertIn("无符合方案", subject)
 
     def test_payload_prefers_subscription_scenarios_over_stale_analysis_profile(self):
         payload = build_notification_payload(

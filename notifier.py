@@ -24,7 +24,9 @@ from airports import (
 from channels import CHANNEL_INFO
 from analyzer import (
     build_execution_advice,
+    build_budget_gap,
     build_cabin_policy_summary,
+    build_next_step_guidance,
     build_price_signal,
     build_recommendation_basis,
     build_travel_profile,
@@ -5179,6 +5181,9 @@ def _email_subject(payload: dict) -> str:
     alternatives = payload.get("same_day_alternatives") or []
     if _no_primary_plan_state(payload):
         return f"【无符合方案】{route}｜提供{len(alternatives[:3])}个备选"
+    gap = _budget_gap(payload)
+    if gap.get("is_over_budget"):
+        return f"【{push_type}】{route}｜当前价已高于预算"
     primary_plan = _plan_for_render((payload.get("recommended_plans") or [{}])[0] or {}, payload)
     display = _price_text(primary_plan.get("price") or payload.get("display_price") or payload.get("current_price"))
     tier = str(primary_plan.get("tier") or "").strip()
@@ -5595,6 +5600,15 @@ def build_notification_payload(
     secondary_goals = goals.get("secondary") if isinstance(goals, dict) else []
     if not isinstance(secondary_goals, list):
         secondary_goals = []
+    budget_gap = build_budget_gap(display_price, max_budget, target)
+    next_step_guidance = build_next_step_guidance(
+        (push_meta or {}).get("type"),
+        display_price,
+        max_budget,
+        target,
+        (travel_profile.get("scenarios") or []) + (recommendation_basis.get("scenario_labels") or []),
+        (travel_profile.get("time") == "high" or travel_profile.get("risk_averse") == "high"),
+    )
     calendar_goal_enabled = (
         "cheaper_date" in secondary_goals
         or "nearby_date_cheaper" in secondary_goals
@@ -5671,6 +5685,8 @@ def build_notification_payload(
         "price_policy_reason": price_policy.get("reason") or "",
         "price_signal": price_signal,
         "execution_advice": execution_advice,
+        "budget_gap": budget_gap,
+        "next_step_guidance": next_step_guidance,
         "confidence": confidence.get("overall") or decision.get("confidence") or "中",
         "confidence_dimensions": confidence.get("dimensions") or {},
         "confidence_details": confidence.get("details") or {},
@@ -6323,6 +6339,79 @@ def _same_day_alternatives_body(payload: dict) -> str:
     )
 
 
+def _pushplus_next_step_lines(payload: dict) -> list[str]:
+    guidance = _next_step_guidance(payload)
+    items = guidance.get("items") or []
+    if not items:
+        return []
+    lines = ["你可以:"]
+    nums = ["①", "②", "③"]
+    for index, item in enumerate(items[:3]):
+        lines.append(
+            f"{nums[index]} {item.get('label')} —— {item.get('summary')}"
+        )
+    if guidance.get("rigid"):
+        lines.append("刚需提示:商务/会议等刚性行程可验证方案A;否则建议等待或换日期。")
+    return [html.escape(str(line)) for line in lines]
+
+
+def _pushplus_plan_brief_lines(payload: dict) -> list[str]:
+    plan = (payload.get("recommended_plans") or [{}])[0] or {}
+    if not plan:
+        return []
+    gap = _budget_gap(payload)
+    gap_suffix = (
+        f"(已超预算{_price_text(gap.get('over_max'))})"
+        if gap.get("over_max")
+        else ""
+    )
+    lines = [f"{plan.get('label') or '方案A'} | 当前最优候选{gap_suffix}"]
+    if plan.get("is_roundtrip"):
+        outbound = str(plan.get("outbound_push_line") or "").strip()
+        ret = str(plan.get("return_push_line") or "").strip()
+        if outbound:
+            lines.append(f"{outbound} {_price_text(plan.get('outbound_price'))}")
+        if ret:
+            lines.append(f"{ret} {_price_text(plan.get('return_price'))}")
+        lines.append(
+            f"往返{_price_text(plan.get('price'))} | {plan.get('purchase_mode') or '购票方式待确认'} | "
+            f"{'直飞' if _plan_total_stops(plan) == 0 else '含中转'}"
+        )
+    else:
+        line = str(plan.get("main_push_line") or plan.get("summary") or "").strip()
+        if line:
+            lines.append(line)
+        lines.append(f"价格:{_price_text(plan.get('price'))}")
+    if plan.get("tags"):
+        lines.append(f"标签:{plan.get('tags')}")
+    feasibility = _pushplus_feasibility_summary(plan)
+    if feasibility:
+        lines.append(feasibility)
+    baggage = str(plan.get("baggage_line") or "").strip()
+    if baggage:
+        lines.append(f"行李/退改:{baggage}")
+    lines.append("完整票规/成本/可行性 → 见网页详情")
+    return [html.escape(str(line)) for line in lines if str(line).strip()]
+
+
+def _pushplus_calendar_summary_lines(payload: dict) -> list[str]:
+    insight = _price_calendar_insight_text(payload)
+    rows = [
+        row
+        for row in ((payload.get("price_calendar") or {}).get("rows") or [])
+        if isinstance(row, dict) and _to_float(row.get("min_price")) is not None
+    ]
+    if not insight and not rows:
+        return []
+    lines = ["低价日历摘要:"]
+    if insight:
+        lines.append(insight)
+    for row in sorted(rows, key=lambda item: _to_float(item.get("min_price")) or float("inf"))[:3]:
+        date_text = f"{str(row.get('date') or '')[5:]} {row.get('weekday') or ''}".strip()
+        lines.append(f"{date_text} {_price_text(row.get('min_price'))}(单程)")
+    return [html.escape(str(line)) for line in lines if str(line).strip()]
+
+
 def render_pushplus(payload: dict) -> str:
     """Render the strictly short PushPlus message from the unified payload."""
     payload = payload or {}
@@ -6373,7 +6462,9 @@ def render_pushplus(payload: dict) -> str:
     recommendation = html.escape(str(payload.get("recommendation") or "可以观察"))
     buy_condition = html.escape(str(payload.get("buy_condition") or "以支付页最终价和票规为准"))
     primary_plan = (payload.get("recommended_plans") or [{}])[0] or {}
-    baggage_line = html.escape(str(primary_plan.get("baggage_line") or "行李:支付页需确认"))
+    max_price = _to_float(payload.get("max_price"))
+    display_price = _to_float(payload.get("display_price") or payload.get("current_price"))
+    gap_line = _budget_gap_line(payload)
 
     reasons = [str(item) for item in (payload.get("trigger_reason") or []) if item]
     diff = _to_float((payload.get("diff_from_last") or {}).get("diff"))
@@ -6384,63 +6475,49 @@ def render_pushplus(payload: dict) -> str:
     if current is not None and ideal and current <= ideal * 1.05:
         reasons.append(f"接近理想价{_price_text(ideal)}")
     reason_text = "，".join(dict.fromkeys(reasons[:2])) or "当前价格触发监控条件"
+    if max_price is not None and display_price is not None and display_price > max_price:
+        reason_line = f"原因:搜索参考价{_price_text(display_price)}高于最高可接受价{_price_text(max_price)}"
+    else:
+        reason_line = f"原因:{html.escape(reason_text)}"
 
     lines = [
         f"<b>【{push_type}】{route}</b>",
         "",
-        f"搜索参考价:{display_text}",
-        f"预估实付价:{transaction_text}",
-        f"本次验证价:支付页≤{verify_text}",
-        baggage_line,
+        f"当前判断:{recommendation}",
+        reason_line,
+        f"首选候选:{html.escape(str(primary_plan.get('label') or '方案A'))}, {_price_text(primary_plan.get('price') or payload.get('display_price'))}",
     ]
+    if gap_line:
+        lines.append(html.escape(gap_line))
+    lines.extend(
+        [
+            f"触发原因:{html.escape(reason_text)}",
+            f"购买条件:{buy_condition}",
+            "",
+            *_pushplus_next_step_lines(payload),
+            "",
+            "方案简卡:",
+            *_pushplus_plan_brief_lines(payload),
+        ]
+    )
     if feedback_ack:
         lines[2:2] = [html.escape(feedback_ack), ""]
     same_day_note = str(payload.get("same_day_no_feasible_note") or "").strip()
     if same_day_note:
         lines.append("当天往返提示:" + html.escape(same_day_note))
         lines.extend(_pushplus_same_day_alternative_lines(payload))
-    lines.extend([
-        f"结论:{recommendation}",
-        f"购买条件:{buy_condition}",
-    ])
-    lines.extend(_pushplus_plan_lines(payload))
-    if primary_plan.get("same_day_round_trip"):
-        stay = _to_float(primary_plan.get("stay_hours"))
-        stay_line = f"停留:约{stay:g}小时(可办事)" if stay is not None else "当天往返可行"
-        lines.append(stay_line)
-        windows = primary_plan.get("same_day_windows") or {}
-        if windows:
-            lines.append(
-                "当天往返安排:"
-                f"{html.escape(_same_day_reserve_text(windows))}"
-            )
-    status_text = _plan_status_change_text(payload)
-    if status_text:
-        lines.extend(["", "上次方案追踪:" + html.escape(status_text)])
-    recommendation_basis = payload.get("recommendation_basis") or {}
-    scenario_label = " + ".join(recommendation_basis.get("scenario_labels") or [])
-    profile_explanation = payload.get("travel_profile_explanation") or {}
-    if not scenario_label:
-        scenario_label = str(profile_explanation.get("scenario_label") or "")
-    basis_line = recommendation_basis.get("plain_language") or profile_explanation.get("basis") or ""
-    if scenario_label:
-        lines.extend(
-            [
-                "",
-                f"推荐依据:按“{html.escape(scenario_label)}”综合排序",
-                html.escape(str(basis_line)),
-            ]
-        )
     if payload.get("time_filter_note"):
         lines.extend(["", html.escape(str(payload.get("time_filter_note")))])
+    calendar_lines = _pushplus_calendar_summary_lines(payload)
+    if calendar_lines:
+        lines.extend(["", *calendar_lines])
     lines.extend(
         [
-            "",
-            f"提醒原因:{html.escape(reason_text)}",
             "",
             *_pushplus_channel_section(payload, primary_plan),
             "",
             _pushplus_freshness_line(payload),
+            "更多完整分析见网页详情。",
             "提示:最终价、库存、行李、退改签和机型以下单页为准",
         ]
     )
@@ -7277,13 +7354,27 @@ def _email_action_panel_body(
     buy_condition = str(payload.get("buy_condition") or "以支付页为准")
     trigger_type = _email_trigger_type(payload)
     trigger_reason = str(price_reason or _email_trigger_reason_text(payload) or "请查看下方原因")
+    gap_line = _budget_gap_line(payload)
+    max_price = _to_float(payload.get("max_price"))
+    display_price = _to_float(payload.get("display_price") or payload.get("current_price"))
+    if max_price is not None and display_price is not None and display_price > max_price:
+        route_scope = "往返搜索参考价" if payload.get("is_roundtrip") else "搜索参考价"
+        reason_line = (
+            f"原因:{route_scope}{_price_text(display_price)},"
+            f"高于你的最高可接受价{_price_text(max_price)}"
+        )
+    else:
+        reason_line = f"原因:{html.escape(trigger_reason)}"
     blocks = [
         f"<div>当前判断:{html.escape(conclusion)}</div>",
         f"<div>首选方案:{html.escape(primary_line)}</div>",
         f"<div>购买条件:{html.escape(buy_condition)}</div>",
-        "<div>下一步:去验证价格 | 查看详情 | 继续监控</div>",
+        f"<div>{html.escape(gap_line)}</div>" if gap_line else "",
+        f"<div>{html.escape(reason_line)}</div>",
+        "<div>下一步:继续监控 | 修改预算/日期 | (刚需)验证方案A</div>",
         f"<div style='margin-top:8px;color:#666;font-size:12px;'>触发类型:{html.escape(trigger_type)}</div>",
         f"<div style='color:#666;font-size:12px;'>触发原因:{html.escape(trigger_reason)}</div>",
+        _next_step_guidance_html(payload),
         _email_action_links(payload, primary_plan, interactive_channels=interactive_channels),
     ]
     return "".join(blocks)
@@ -7313,6 +7404,80 @@ def _email_trigger_type(payload: dict) -> str:
 def _email_trigger_reason_text(payload: dict) -> str:
     reasons = [str(item).strip() for item in (payload.get("trigger_reason") or []) if str(item or "").strip()]
     return ",".join(reasons[:2])
+
+
+def _budget_gap(payload: dict) -> dict:
+    gap = payload.get("budget_gap")
+    if isinstance(gap, dict):
+        return gap
+    return build_budget_gap(
+        payload.get("display_price") or payload.get("current_price"),
+        payload.get("max_price"),
+        payload.get("ideal_price"),
+    )
+
+
+def _budget_gap_line(payload: dict) -> str:
+    text = str((_budget_gap(payload) or {}).get("text") or "").strip()
+    return f"预算差距:{text}" if text else ""
+
+
+def _scenario_values_for_guidance(payload: dict) -> list[str]:
+    values = []
+    raw = payload.get("travel_scenarios") or []
+    if isinstance(raw, str):
+        raw = [raw]
+    values.extend(str(item) for item in raw if item)
+    basis = payload.get("recommendation_basis") or {}
+    labels = basis.get("scenario_labels") or []
+    if isinstance(labels, str):
+        labels = [labels]
+    values.extend(str(item) for item in labels if item)
+    return values
+
+
+def _next_step_guidance(payload: dict) -> dict:
+    guidance = payload.get("next_step_guidance")
+    if isinstance(guidance, dict) and guidance.get("items"):
+        return guidance
+    return build_next_step_guidance(
+        payload.get("push_type"),
+        payload.get("display_price") or payload.get("current_price"),
+        payload.get("max_price"),
+        payload.get("ideal_price"),
+        _scenario_values_for_guidance(payload),
+        payload.get("trip_rigidity"),
+    )
+
+
+def _next_step_guidance_html(payload: dict) -> str:
+    guidance = _next_step_guidance(payload)
+    items = guidance.get("items") or []
+    if not items:
+        return ""
+    parts = ["<div style='margin-top:8px;font-weight:600;'>你可以:</div>"]
+    nums = ["①", "②", "③"]
+    for index, item in enumerate(items[:3]):
+        label = html.escape(str(item.get("label") or "下一步"))
+        summary = html.escape(str(item.get("summary") or ""))
+        action = html.escape(str(item.get("action") or ""))
+        parts.append(
+            f"<div>{nums[index]} {label} —— {summary}"
+            + (f" [{action}]" if action else "")
+            + "</div>"
+        )
+    if guidance.get("rigid"):
+        labels = [
+            label
+            for label in _scenario_values_for_guidance(payload)
+            if any(key in label.lower() for key in ("business", "meeting", "商务", "会议", "重要", "important"))
+        ]
+        scenario = " + ".join(dict.fromkeys(labels)) or "商务/重要事项"
+        parts.append(
+            f"<div style='margin-top:6px;color:#666;font-size:12px;'>刚需提示:你的出行场景是{html.escape(scenario)},"
+            "若会议必须按时出行,可验证方案A;否则建议等待或换日期。</div>"
+        )
+    return "".join(parts)
 
 
 def _email_action_links(
@@ -8143,13 +8308,20 @@ def _email_price_calendar_body(payload: dict) -> str:
 
     table = [
         f"<div style='font-weight:600;margin-bottom:8px;color:#111;'>{html.escape(title)}</div>",
-        "<table style='width:100%;font-size:13px;line-height:1.6;border-collapse:collapse;'>",
-        "<thead><tr>",
-        "<th style='text-align:left;color:#666;border-bottom:1px solid #eee;padding:6px 4px;'>日期</th>",
-        "<th style='text-align:left;color:#666;border-bottom:1px solid #eee;padding:6px 4px;'>最低价</th>",
-        "<th style='text-align:left;color:#666;border-bottom:1px solid #eee;padding:6px 4px;'>说明</th>",
-        "</tr></thead><tbody>",
     ]
+    insight = _price_calendar_insight_text(payload)
+    if insight:
+        table.append(f"<div style='margin-bottom:10px;color:#374151;'>💡 {html.escape(insight)}</div>")
+    table.extend(
+        [
+            "<table style='width:100%;font-size:13px;line-height:1.6;border-collapse:collapse;'>",
+            "<thead><tr>",
+            "<th style='text-align:left;color:#666;border-bottom:1px solid #eee;padding:6px 4px;'>日期</th>",
+            "<th style='text-align:left;color:#666;border-bottom:1px solid #eee;padding:6px 4px;'>最低价</th>",
+            "<th style='text-align:left;color:#666;border-bottom:1px solid #eee;padding:6px 4px;'>说明</th>",
+            "</tr></thead><tbody>",
+        ]
+    )
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -8195,6 +8367,48 @@ def _email_price_calendar_body(payload: dict) -> str:
     note = calendar.get("note") or "为单程最低参考价，实付以支付页为准。"
     table.append(f"<div style='margin-top:8px;color:#666;font-size:12px;'>注:{html.escape(str(note))}</div>")
     return "".join(table)
+
+
+def _price_calendar_insight_text(payload: dict) -> str:
+    calendar = payload.get("price_calendar") or {}
+    rows = [row for row in (calendar.get("rows") or []) if isinstance(row, dict)]
+    if not rows:
+        return ""
+    selected = next((row for row in rows if row.get("selected")), None)
+    lowest = min(
+        (row for row in rows if _to_float(row.get("min_price")) is not None),
+        key=lambda row: _to_float(row.get("min_price")) or float("inf"),
+        default=None,
+    )
+    if not selected or not lowest or selected is lowest:
+        return ""
+    selected_price = _to_float(selected.get("min_price"))
+    lowest_price = _to_float(lowest.get("min_price"))
+    if selected_price is None or lowest_price is None or selected_price <= lowest_price:
+        return ""
+    selected_date = str(selected.get("date") or "")[5:] or str(selected.get("date") or "你选的日期")
+    lowest_weekday = str(lowest.get("weekday") or "").strip()
+    weekday_tip = str((calendar.get("weekday_pattern") or {}).get("tip") or "").strip()
+    if weekday_tip:
+        match = re.search(r"(周[一二三四五六日](?:/周[一二三四五六日])*)", weekday_tip)
+        weekday_text = match.group(1) if match else weekday_tip
+    else:
+        weekday_text = lowest_weekday or "其他日期"
+    current = _to_float(payload.get("display_price") or payload.get("current_price"))
+    scope = str(calendar.get("scope") or "oneway").lower()
+    current_scope = "当前往返" if payload.get("is_roundtrip") else "当前"
+    lowest_scope = "往返低至" if scope in {"roundtrip", "往返"} else "单程低至"
+    current_text = f"{current_scope}{_price_text(current)}" if current is not None else ""
+    date_flex = str(payload.get("date_flexibility") or payload.get("date_flex") or "").strip()
+    if date_flex in {"0", "none", "fixed", "不可调整", "不可调"}:
+        return (
+            f"你选的{selected_date}偏贵:{current_text}。你设了日期不可调;"
+            f"若未来行程灵活,{weekday_text}通常更便宜,{lowest_scope}{_price_text(lowest_price)}。"
+        )
+    return (
+        f"你选的{selected_date}偏贵:{current_text}。本航线近期最低出现在{weekday_text},"
+        f"{lowest_scope}{_price_text(lowest_price)},如日期可调,换日期可能省不少。"
+    )
 
 
 def _email_airport_cost_comparison_body(payload: dict) -> str:
