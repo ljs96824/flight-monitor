@@ -8622,13 +8622,99 @@ def _email_trend_card_body(payload: dict) -> str:
     return body
 
 
+def _calendar_row_price(row: dict):
+    if not isinstance(row, dict):
+        return None
+    return _to_float(row.get("min_price") or row.get("value") or row.get("price"))
+
+
+def _calendar_scope_unit(calendar: dict) -> tuple[bool, str]:
+    scope = str((calendar or {}).get("scope") or "oneway").lower()
+    is_roundtrip_scope = scope in {"roundtrip", "往返"}
+    return is_roundtrip_scope, "往返" if is_roundtrip_scope else "单程"
+
+
+def _calendar_short_date(row: dict) -> str:
+    raw = str((row or {}).get("date") or "")
+    return raw[5:] if len(raw) >= 10 else raw
+
+
+def _calendar_parse_date(value: str):
+    try:
+        return datetime.strptime(str(value or ""), "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def _calendar_selected_level(rows: list[dict], selected: dict, selected_price: float) -> str:
+    prices = sorted(
+        price
+        for price in (_calendar_row_price(row) for row in rows)
+        if price is not None and price > 0
+    )
+    if not prices:
+        return "价格位置待确认"
+    more_expensive = sum(1 for price in prices if price > selected_price)
+    percentile = more_expensive / len(prices)
+    print(
+        f"[日历对比] 你选日期价={selected_price:g}, 全部价格={prices}, "
+        f"比你选贵的天数={more_expensive}, 分位={percentile:.2f}"
+    )
+    if percentile >= 0.75:
+        return "较便宜"
+    if percentile <= 0.25:
+        return "偏贵"
+    return "中等水平"
+
+
+def _calendar_display_savings(calendar: dict) -> list[dict]:
+    rows = [row for row in ((calendar or {}).get("rows") or []) if isinstance(row, dict)]
+    selected = next((row for row in rows if row.get("selected")), None)
+    selected_price = _calendar_row_price(selected) if selected else None
+    if not selected or selected_price is None:
+        return (calendar or {}).get("savings") or []
+    _, unit = _calendar_scope_unit(calendar or {})
+    selected_date = _calendar_short_date(selected) or str(selected.get("date") or "")
+    target_dt = _calendar_parse_date(str(selected.get("date") or ""))
+    savings = []
+    for row in rows:
+        if row is selected:
+            continue
+        price = _calendar_row_price(row)
+        if price is None or price >= selected_price:
+            continue
+        save = round(selected_price - price)
+        row_date = str(row.get("date") or "")
+        row_dt = _calendar_parse_date(row_date)
+        direction = ""
+        if target_dt and row_dt:
+            diff_days = (row_dt - target_dt).days
+            direction = "提前" if diff_days < 0 else "推迟"
+            direction = f"{direction}{abs(diff_days)}天"
+        date_text = f"{_calendar_short_date(row)} {row.get('weekday') or ''}".strip()
+        savings.append(
+            {
+                "date": row_date,
+                "weekday": row.get("weekday"),
+                "price": price,
+                "save": save,
+                "tip": (
+                    f"{direction}({date_text},{unit}最低{_price_text(price)})"
+                    f"比你选的{selected_date}({_price_text(selected_price)})"
+                    f"省约{_price_text(save)}/{unit}"
+                ).lstrip("()"),
+            }
+        )
+    savings.sort(key=lambda item: item["save"], reverse=True)
+    return savings[:3]
+
+
 def _email_price_calendar_body(payload: dict) -> str:
     calendar = payload.get("price_calendar") or {}
     rows = calendar.get("rows") or []
     if not rows:
         return "<div style='color:#888;font-size:12px;'>暂无低价日历数据。</div>"
-    scope = str(calendar.get("scope") or "").lower()
-    is_roundtrip_scope = scope in {"roundtrip", "往返"}
+    is_roundtrip_scope, _unit = _calendar_scope_unit(calendar)
     title = "低价日历 ｜ 往返参考价" if is_roundtrip_scope else "低价日历 ｜ 单程最低参考价"
 
     table = [
@@ -8672,7 +8758,7 @@ def _email_price_calendar_body(payload: dict) -> str:
         )
     table.append("</tbody></table>")
 
-    savings = calendar.get("savings") or []
+    savings = _calendar_display_savings(calendar)
     if savings:
         table.append("<div style='margin-top:10px;font-weight:600;'>省钱提示</div>")
         for item in savings[:3]:
@@ -8690,6 +8776,12 @@ def _email_price_calendar_body(payload: dict) -> str:
         table.append("<div style='margin-top:8px;color:#888;font-size:12px;'>周几更便宜：数据积累中。</div>")
 
     note = calendar.get("note") or "为单程最低参考价，实付以支付页为准。"
+    if payload.get("is_roundtrip") and not is_roundtrip_scope:
+        roundtrip_price = _to_float(payload.get("display_price") or payload.get("current_price"))
+        roundtrip_note = "下方为单程最低参考价;你的往返方案需去程+返程各自验证。"
+        if roundtrip_price is not None:
+            roundtrip_note += f"往返总价约{_price_text(roundtrip_price)},与单程日历口径不同,仅供参考日期趋势。"
+        note = f"{roundtrip_note} {note}"
     table.append(f"<div style='margin-top:8px;color:#666;font-size:12px;'>注:{html.escape(str(note))}</div>")
     return "".join(table)
 
@@ -8701,39 +8793,32 @@ def _price_calendar_insight_text(payload: dict) -> str:
         return ""
     selected = next((row for row in rows if row.get("selected")), None)
     lowest = min(
-        (row for row in rows if _to_float(row.get("min_price")) is not None),
-        key=lambda row: _to_float(row.get("min_price")) or float("inf"),
+        (row for row in rows if _calendar_row_price(row) is not None),
+        key=lambda row: _calendar_row_price(row) or float("inf"),
         default=None,
     )
-    if not selected or not lowest or selected is lowest:
+    if not selected or not lowest:
         return ""
-    selected_price = _to_float(selected.get("min_price"))
-    lowest_price = _to_float(lowest.get("min_price"))
-    if selected_price is None or lowest_price is None or selected_price <= lowest_price:
+    selected_price = _calendar_row_price(selected)
+    lowest_price = _calendar_row_price(lowest)
+    if selected_price is None or lowest_price is None:
         return ""
-    selected_date = str(selected.get("date") or "")[5:] or str(selected.get("date") or "你选的日期")
+    selected_date = _calendar_short_date(selected) or str(selected.get("date") or "你选的日期")
+    lowest_date = _calendar_short_date(lowest) or str(lowest.get("date") or "低价日")
     lowest_weekday = str(lowest.get("weekday") or "").strip()
-    weekday_tip = str((calendar.get("weekday_pattern") or {}).get("tip") or "").strip()
-    if weekday_tip:
-        match = re.search(r"(周[一二三四五六日](?:/周[一二三四五六日])*)", weekday_tip)
-        weekday_text = match.group(1) if match else weekday_tip
-    else:
-        weekday_text = lowest_weekday or "其他日期"
-    current = _to_float(payload.get("display_price") or payload.get("current_price"))
-    scope = str(calendar.get("scope") or "oneway").lower()
-    current_scope = "当前往返" if payload.get("is_roundtrip") else "当前"
-    lowest_scope = "往返低至" if scope in {"roundtrip", "往返"} else "单程低至"
-    current_text = f"{current_scope}{_price_text(current)}" if current is not None else ""
+    is_roundtrip_scope, unit = _calendar_scope_unit(calendar)
+    level = _calendar_selected_level(rows, selected, selected_price)
+    lowest_text = f"{unit}最低{_price_text(lowest_price)}({lowest_date} {lowest_weekday})".strip()
     date_flex = str(payload.get("date_flexibility") or payload.get("date_flex") or "").strip()
+    base = f"你选的{selected_date}{unit}{_price_text(selected_price)},处于{level}。本航线近期{lowest_text}。"
+    if selected is lowest or selected_price <= lowest_price:
+        return base
+    save = round(selected_price - lowest_price)
     if date_flex in {"0", "none", "fixed", "不可调整", "不可调"}:
         return (
-            f"你选的{selected_date}偏贵:{current_text}。你设了日期不可调;"
-            f"若未来行程灵活,{weekday_text}通常更便宜,{lowest_scope}{_price_text(lowest_price)}。"
+            f"{base}你设了日期不可调;若未来行程灵活,低价日可省约{_price_text(save)}/{unit}。"
         )
-    return (
-        f"你选的{selected_date}偏贵:{current_text}。本航线近期最低出现在{weekday_text},"
-        f"{lowest_scope}{_price_text(lowest_price)},如日期可调,换日期可能省不少。"
-    )
+    return f"{base}如日期可调,换到低价日可省约{_price_text(save)}/{unit}。"
 
 
 def _email_airport_cost_comparison_body(payload: dict) -> str:

@@ -232,6 +232,111 @@ def analyze_weekday_pattern(calendar: dict, *, min_samples: int = 7) -> dict | N
     }
 
 
+def analyze_date_savings(
+    calendar: dict,
+    target_date: str,
+    current_price,
+    *,
+    threshold: float = 100,
+    limit: int = 3,
+) -> list[dict]:
+    """Find cheaper future dates using the same single-leg calendar price scope."""
+    try:
+        current = float(current_price)
+    except (TypeError, ValueError):
+        return []
+
+    target = parse_date(target_date)
+    savings = []
+    for date_str, info in (calendar.get("dates") or {}).items():
+        if not isinstance(info, dict) or not _valid_price(info.get("min_price")):
+            continue
+        d = parse_date(date_str)
+        if d < date.today():
+            continue
+        diff_days = (d - target).days
+        if diff_days == 0:
+            continue
+        price = float(info["min_price"])
+        price_diff = round(current - price)
+        if price_diff < threshold:
+            continue
+        direction = "提前" if diff_days < 0 else "推迟"
+        weekday = WEEKDAY_NAMES[d.weekday()]
+        savings.append(
+            {
+                "date": date_str,
+                "weekday": weekday,
+                "price": price,
+                "save": price_diff,
+                "offset": diff_days,
+                "tip": f"{direction}{abs(diff_days)}天({date_str} {weekday})出发，省¥{price_diff}/单程",
+            }
+        )
+
+    savings.sort(key=lambda item: item["save"], reverse=True)
+    return savings[:limit]
+
+
+def analyze_weekday_pattern(calendar: dict, *, min_samples: int = 7) -> dict | None:
+    """Report the actual lowest date, and only claim a usual weekday when clear."""
+    by_weekday = {i: [] for i in range(7)}
+    dated_prices = []
+    for date_str, info in (calendar.get("dates") or {}).items():
+        if not isinstance(info, dict) or not _valid_price(info.get("min_price")):
+            continue
+        d = parse_date(date_str)
+        if d < date.today():
+            continue
+        price = float(info["min_price"])
+        by_weekday[d.weekday()].append(price)
+        dated_prices.append((d, price))
+
+    sample_count = sum(len(values) for values in by_weekday.values())
+    if sample_count < min_samples or not dated_prices:
+        return {"data_insufficient": True}
+
+    averages = {
+        WEEKDAY_NAMES[index]: round(sum(values) / len(values))
+        for index, values in by_weekday.items()
+        if values
+    }
+    minimums = {
+        WEEKDAY_NAMES[index]: min(values)
+        for index, values in by_weekday.items()
+        if values
+    }
+    if not averages:
+        return {"data_insufficient": True}
+
+    min_day, min_price = min(dated_prices, key=lambda item: item[1])
+    min_weekday = WEEKDAY_NAMES[min_day.weekday()]
+    sorted_averages = sorted(averages.items(), key=lambda item: item[1])
+    avg_cheapest = sorted_averages[0][0]
+    usual_tip = ""
+    if len(sorted_averages) >= 2:
+        avg_cheapest_index = WEEKDAY_NAMES.index(avg_cheapest)
+        avg_cheapest_count = len(by_weekday[avg_cheapest_index])
+        avg_gap = sorted_averages[1][1] - sorted_averages[0][1]
+        if avg_cheapest_count >= 3 and avg_gap >= max(50, sorted_averages[1][1] * 0.05):
+            usual_tip = f"；{avg_cheapest}平均更低"
+    print(
+        f"[周几统计] 最低价日={min_day.isoformat()}({min_weekday}) CNY{min_price:,.0f}, "
+        f"各星期平均={averages}"
+    )
+    return {
+        "cheapest_weekday": avg_cheapest,
+        "usual_cheapest_weekday": avg_cheapest if usual_tip else "",
+        "by_weekday": averages,
+        "min_by_weekday": minimums,
+        "min_date": min_day.isoformat(),
+        "min_weekday": min_weekday,
+        "min_price": min_price,
+        "sample_count": sample_count,
+        "tip": f"近期最低出现在{min_weekday}({min_day.isoformat()},单程¥{min_price:,.0f}){usual_tip}",
+    }
+
+
 def calendar_rows(calendar: dict, target_date: str) -> list[dict]:
     target = parse_date(target_date)
     rows = []

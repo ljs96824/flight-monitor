@@ -122,7 +122,42 @@ class PriceCalendarTest(unittest.TestCase):
 
         pattern = analyze_weekday_pattern(calendar, min_samples=7)
         self.assertEqual(pattern["cheapest_weekday"], WEEKDAY_NAMES[(target - timedelta(days=1)).weekday()])
-        self.assertIn("通常更便宜", pattern["tip"])
+        self.assertEqual(pattern["min_date"], dates[2])
+        self.assertEqual(pattern["min_weekday"], WEEKDAY_NAMES[(target - timedelta(days=1)).weekday()])
+        self.assertEqual(pattern["min_price"], 480)
+        self.assertIn("近期最低", pattern["tip"])
+
+    def test_weekday_pattern_reports_actual_min_date_and_avoids_forced_weekend_claim(self):
+        from price_calendar import analyze_weekday_pattern
+
+        calendar = {
+            "route": "PVG-PEK",
+            "dates": {
+                "2026-06-20": {"min_price": 607},
+                "2026-06-21": {"min_price": 599},
+                "2026-06-22": {"min_price": 659},
+                "2026-06-23": {"min_price": 537},
+                "2026-06-24": {"min_price": 570},
+                "2026-06-25": {"min_price": 760},
+                "2026-06-26": {"min_price": 636},
+                "2026-06-27": {"min_price": 646},
+                "2026-06-28": {"min_price": 665},
+                "2026-06-29": {"min_price": 679},
+                "2026-06-30": {"min_price": 605},
+                "2026-07-01": {"min_price": 679},
+                "2026-07-02": {"min_price": 834},
+                "2026-07-03": {"min_price": 669},
+            },
+        }
+
+        pattern = analyze_weekday_pattern(calendar, min_samples=7)
+
+        self.assertEqual(pattern["min_date"], "2026-06-23")
+        self.assertEqual(pattern["min_weekday"], "周二")
+        self.assertEqual(pattern["min_price"], 537)
+        self.assertIn("2026-06-23", pattern["tip"])
+        self.assertIn("周二", pattern["tip"])
+        self.assertNotIn("周日通常更便宜", pattern["tip"])
 
     def test_weekday_pattern_requires_enough_samples(self):
         from price_calendar import analyze_weekday_pattern

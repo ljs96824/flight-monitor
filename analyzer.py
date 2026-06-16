@@ -4625,10 +4625,25 @@ def _parse_collected_at(value) -> datetime | None:
     return None
 
 
+def _calendar_selected_price(rows: list[dict]):
+    """Return the selected date's calendar price, preserving the calendar scope."""
+    for row in rows or []:
+        if not isinstance(row, dict) or not row.get("selected"):
+            continue
+        try:
+            price = float(row.get("min_price"))
+        except (TypeError, ValueError):
+            return None
+        return price if price > 0 else None
+    return None
+
+
 def analyze_price_calendar(calendar: dict, target_date: str, current_price) -> dict:
     """Analyze nearby date savings and weekday patterns from a rolling calendar."""
     rows = _calendar_rows(calendar or {}, target_date)
-    savings = _calendar_date_savings(calendar or {}, target_date, current_price)
+    selected_price = _calendar_selected_price(rows)
+    savings_basis = selected_price if selected_price is not None else current_price
+    savings = _calendar_date_savings(calendar or {}, target_date, savings_basis)
     weekday_pattern = _calendar_weekday_pattern(calendar or {})
     return {
         "route": (calendar or {}).get("route"),

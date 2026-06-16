@@ -86,10 +86,53 @@ class NotificationNumericScopesTest(unittest.TestCase):
 
         body = _email_price_calendar_body(payload)
 
-        self.assertIn("\u4f60\u9009\u768406-18\u504f\u8d35", body)
-        self.assertIn("\u00a52,560", body)
-        self.assertIn("\u5355\u7a0b\u4f4e\u81f3\u00a5520", body)
+        self.assertIn("\u4f60\u9009\u768406-18\u5355\u7a0b\u00a51,280", body)
+        self.assertIn("\u5904\u4e8e\u504f\u8d35", body)
+        self.assertIn("\u5355\u7a0b\u6700\u4f4e\u00a5520(06-20 \u5468\u516d)", body)
+        self.assertIn("\u7701\u7ea6\u00a5760/\u5355\u7a0b", body)
         self.assertIn("\u5468\u516d/\u5468\u65e5", body)
+
+    def test_calendar_insight_uses_oneway_scope_for_roundtrip_payload(self):
+        payload = {
+            "is_roundtrip": True,
+            "display_price": 2760,
+            "price_calendar": {
+                "scope": "oneway",
+                "rows": [
+                    {"date": "2026-06-20", "weekday": "\u5468\u516d", "min_price": 607},
+                    {"date": "2026-06-21", "weekday": "\u5468\u65e5", "min_price": 599},
+                    {"date": "2026-06-22", "weekday": "\u5468\u4e00", "min_price": 659},
+                    {"date": "2026-06-23", "weekday": "\u5468\u4e8c", "min_price": 537, "lowest": True},
+                    {"date": "2026-06-24", "weekday": "\u5468\u4e09", "min_price": 570},
+                    {"date": "2026-06-25", "weekday": "\u5468\u56db", "min_price": 760},
+                    {"date": "2026-06-26", "weekday": "\u5468\u4e94", "min_price": 636, "selected": True},
+                    {"date": "2026-06-27", "weekday": "\u5468\u516d", "min_price": 646},
+                    {"date": "2026-06-28", "weekday": "\u5468\u65e5", "min_price": 665},
+                    {"date": "2026-06-29", "weekday": "\u5468\u4e00", "min_price": 679},
+                    {"date": "2026-06-30", "weekday": "\u5468\u4e8c", "min_price": 605},
+                    {"date": "2026-07-01", "weekday": "\u5468\u4e09", "min_price": 679},
+                    {"date": "2026-07-02", "weekday": "\u5468\u56db", "min_price": 834},
+                    {"date": "2026-07-03", "weekday": "\u5468\u4e94", "min_price": 669},
+                ],
+                "weekday_pattern": {
+                    "min_date": "2026-06-23",
+                    "min_weekday": "\u5468\u4e8c",
+                    "min_price": 537,
+                    "tip": "\u8fd1\u671f\u6700\u4f4e\u51fa\u73b0\u5728\u5468\u4e8c(2026-06-23,\u5355\u7a0b\u00a5537)",
+                },
+                "note": "\u4e3a\u5355\u7a0b\u6700\u4f4e\u53c2\u8003\u4ef7\uff0c\u5b9e\u4ed8\u4ee5\u652f\u4ed8\u9875\u4e3a\u51c6\u3002",
+            },
+        }
+
+        body = _email_price_calendar_body(payload)
+
+        self.assertIn("\u4f60\u9009\u768406-26\u5355\u7a0b\u00a5636", body)
+        self.assertIn("\u4e2d\u7b49\u6c34\u5e73", body)
+        self.assertIn("\u5355\u7a0b\u6700\u4f4e\u00a5537(06-23 \u5468\u4e8c)", body)
+        self.assertIn("\u7701\u7ea6\u00a599/\u5355\u7a0b", body)
+        self.assertIn("\u5f80\u8fd4\u603b\u4ef7\u7ea6\u00a52,760", body)
+        self.assertNotIn("\u5f53\u524d\u5f80\u8fd4\u00a52,760", body)
+        self.assertNotIn("\u4f60\u9009\u768406-26\u504f\u8d35", body)
 
     def test_pushplus_is_slim_and_uses_budget_action_panel(self):
         payload = self._over_budget_payload()
@@ -100,7 +143,7 @@ class NotificationNumericScopesTest(unittest.TestCase):
 
         self.assertIn("\u9884\u7b97\u5dee\u8ddd", text)
         self.assertIn("\u4f60\u53ef\u4ee5", text)
-        self.assertIn("\u4f60\u9009\u768406-18\u504f\u8d35", text)
+        self.assertIn("\u4f60\u9009\u768406-18\u5355\u7a0b\u00a51,280", text)
         self.assertNotIn("\u63a8\u8350\u4f9d\u636e", text)
         self.assertNotIn("\u4e0a\u6b21\u65b9\u6848\u8ffd\u8e2a", text)
 
