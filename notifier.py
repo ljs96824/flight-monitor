@@ -4108,10 +4108,6 @@ def _append_detailed_analysis_section(
         _append_nearby_dates_bar_chart(lines, nearby_dates, is_round_trip=True)
         _append_option_price_bar_chart(lines, analysis_result, True, route_info)
         top_combinations = _round_trip_combinations(analysis_result)
-        if top_combinations:
-            first_combo = top_combinations[0]
-            _append_channel_price_bar_chart(lines, first_combo.get("outbound"))
-            _append_channel_price_bar_chart(lines, first_combo.get("return"))
         if not compact:
             _append_roundtrip_price_reference(lines, round_trip, route_info)
             _append_roundtrip_price_analysis(lines, round_trip)
@@ -4466,12 +4462,33 @@ def _payload_booking_links_for_flight(flight: dict | None, route_info: dict, dat
     return _flight_link_text(flight, route_info, limit)
 
 
-def _payload_channel_rows(flight: dict | None) -> list[dict]:
+def _payload_channel_rows(flight: dict | None, scope: str = "oneway") -> list[dict]:
     rows = []
     for option in _verified_booking_options(flight)[:6]:
         price = _option_price(option)
         if price:
-            rows.append({"label": str(option.get("platform") or "璐拱娓犻亾"), "value": price})
+            rows.append({"label": str(option.get("platform") or "购买渠道"), "value": price, "scope": scope})
+    return rows
+
+
+def _payload_roundtrip_channel_rows(combo: dict | None) -> list[dict]:
+    combo = combo or {}
+    rows = []
+    for option in (combo.get("booking_options") or combo.get("verified_booking_options") or [])[:6]:
+        if not isinstance(option, dict):
+            continue
+        price = _option_price(option)
+        if price:
+            rows.append({"label": str(option.get("platform") or "购买渠道"), "value": price, "scope": "roundtrip"})
+    for row in combo.get("channel_prices") or []:
+        if not isinstance(row, dict):
+            continue
+        price = _to_float(row.get("value") or row.get("price"))
+        if price:
+            item = dict(row)
+            item["value"] = price
+            item["scope"] = "roundtrip"
+            rows.append(item)
     return rows
 
 
@@ -4718,7 +4735,7 @@ def _payload_combo_plan(combo: dict, route_info: dict, index: int, variant: str)
             "outbound": _payload_booking_links_for_flight(outbound, route_info, outbound_date, 6),
             "return": _payload_booking_links_for_flight(return_flight, route_info, return_date, 6),
         },
-        "channel_prices": _payload_channel_rows(outbound) or _payload_channel_rows(return_flight),
+        "channel_prices": _payload_roundtrip_channel_rows(combo),
     }
 
 
@@ -4858,6 +4875,110 @@ def _plan_total_stops(plan: dict) -> int:
     return total
 
 
+def _flight_identity_for_plan(flight: dict | None) -> tuple:
+    flight = flight or {}
+    return (
+        flight.get("flight_combo")
+        or flight.get("flight_no")
+        or flight.get("flight_number")
+        or "",
+        flight.get("departure_airport") or flight.get("origin") or flight.get("dep_airport") or "",
+        flight.get("arrival_airport") or flight.get("destination") or flight.get("arr_airport") or "",
+        str(flight.get("departure_time") or flight.get("dep_time") or ""),
+        str(flight.get("arrival_time") or flight.get("arr_time") or ""),
+    )
+
+
+def _payload_plan_key(plan: dict) -> tuple:
+    if plan.get("is_roundtrip"):
+        return (
+            "roundtrip",
+            _flight_identity_for_plan(plan.get("outbound_flight")),
+            _flight_identity_for_plan(plan.get("return_flight")),
+            round(_to_float(plan.get("price")) or 0, 2),
+        )
+    return (
+        "oneway",
+        _flight_identity_for_plan(plan.get("main_flight")),
+        round(_to_float(plan.get("price")) or 0, 2),
+    )
+
+
+def _dedupe_payload_plans(plans: list[dict]) -> list[dict]:
+    seen = set()
+    result = []
+    for plan in plans or []:
+        if not isinstance(plan, dict):
+            continue
+        key = _payload_plan_key(plan)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(plan)
+    for index, plan in enumerate(result):
+        if str(plan.get("label") or "").startswith("方案"):
+            plan["label"] = f"方案{chr(65 + index)}"
+    return result
+
+
+def _plan_time_minutes(flight: dict | None, key: str) -> int | None:
+    flight = flight or {}
+    value = str(flight.get(key) or "").strip()
+    match = re.search(r"(\d{1,2}):(\d{2})", value)
+    if not match:
+        return None
+    return int(match.group(1)) * 60 + int(match.group(2))
+
+
+def _plan_flight_no_text(flight: dict | None) -> str:
+    flight = flight or {}
+    return str(flight.get("flight_combo") or flight.get("flight_no") or flight.get("flight_number") or "").strip()
+
+
+def _same_price_plan_difference_reason(plan: dict, primary: dict) -> str:
+    differences = []
+    outbound_no = _plan_flight_no_text(plan.get("outbound_flight") or plan.get("main_flight"))
+    primary_outbound_no = _plan_flight_no_text(primary.get("outbound_flight") or primary.get("main_flight"))
+    return_no = _plan_flight_no_text(plan.get("return_flight"))
+    primary_return_no = _plan_flight_no_text(primary.get("return_flight"))
+    if outbound_no and primary_outbound_no and outbound_no != primary_outbound_no:
+        differences.append("去程航班不同")
+    if return_no and primary_return_no and return_no != primary_return_no:
+        return_dep = _plan_time_minutes(plan.get("return_flight"), "departure_time")
+        primary_return_dep = _plan_time_minutes(primary.get("return_flight"), "departure_time")
+        if return_dep is not None and primary_return_dep is not None:
+            if return_dep > primary_return_dep:
+                differences.append("返程较晚")
+            elif return_dep < primary_return_dep:
+                differences.append("返程较早")
+            else:
+                differences.append("返程航班不同")
+        else:
+            differences.append("返程航班不同")
+    if _plan_total_stops(plan) != _plan_total_stops(primary):
+        differences.append("中转次数不同")
+    purchase_mode = str(plan.get("purchase_mode") or "")
+    primary_purchase_mode = str(primary.get("purchase_mode") or "")
+    if purchase_mode and primary_purchase_mode and purchase_mode != primary_purchase_mode:
+        differences.append(f"购票方式不同({purchase_mode})")
+    if differences:
+        return "与方案A同价，" + "、".join(dict.fromkeys(differences))
+    return "与方案A同价但无明显结构差异，综合排序次于方案A"
+
+
+def _plan_difference_reason(plan: dict, primary: dict) -> str:
+    plan_price = _to_float(plan.get("price"))
+    primary_price = _to_float(primary.get("price"))
+    if plan_price is not None and primary_price is not None:
+        if plan_price > primary_price:
+            return f"价格高于方案A{_price_text(plan_price - primary_price)}，综合排序次于方案A"
+        if abs(plan_price - primary_price) < 1:
+            return _same_price_plan_difference_reason(plan, primary)
+        if plan_price < primary_price:
+            return f"价格低于方案A{_price_text(primary_price - plan_price)}，但综合条件次于方案A"
+    return "综合排序次于方案A，作为备选验证"
+
+
 def _plan_execution_grade(plan: dict) -> str:
     risk = str(plan.get("risk") or "").strip()
     if risk in {"A", "B", "C", "D"}:
@@ -4889,6 +5010,7 @@ def _plan_tier_reason(plan: dict, primary_plan: dict | None = None) -> tuple[str
 def _apply_plan_tiers(plans: list[dict]) -> list[dict]:
     if not plans:
         return plans
+    plans = _dedupe_payload_plans(plans)
     primary = plans[0]
     for index, plan in enumerate(plans):
         existing_tier = str(plan.get("tier") or plan.get("variant") or "").split(":", 1)[0].strip()
@@ -4904,12 +5026,7 @@ def _apply_plan_tiers(plans: list[dict]) -> list[dict]:
             condition = condition or "适合优先验证该方案的价格和票规"
         elif tier == "首选推荐":
             tier = "次选方案"
-            plan_price = _to_float(plan.get("price"))
-            primary_price = _to_float(primary.get("price"))
-            if plan_price is not None and primary_price is not None and plan_price > primary_price:
-                reason = f"价格高于方案A{_price_text(plan_price - primary_price)}，综合排序次于方案A"
-            else:
-                reason = "综合排序次于方案A，作为备选验证"
+            reason = _plan_difference_reason(plan, primary)
             condition = "如果方案A价格或票规不合适，可再验证该方案"
         plan["tier"] = tier
         plan["tier_reason"] = reason
@@ -4981,19 +5098,25 @@ def _payload_plan_chart_description(plan: dict) -> str:
 
     outbound_stops = _plan_leg_stops(plan.get("outbound_flight") or {})
     return_stops = _plan_leg_stops(plan.get("return_flight") or {})
-    transfer_parts = []
+    parts = []
     if outbound_stops > 0:
-        transfer_parts.append("去程中转")
+        parts.append("去程中转")
     if return_stops > 0:
-        transfer_parts.append("返程中转")
-    if not transfer_parts:
-        transfer_parts.append("直飞往返")
+        parts.append("返程中转")
+    if not parts:
+        parts.append("去返均直飞")
 
     purchase_mode = str(plan.get("purchase_mode") or "")
     if "两个单程" in purchase_mode:
-        transfer_parts.append("两个单程拼接")
+        parts.append("购票方式:两个单程拼接")
+    elif purchase_mode:
+        parts.append(f"购票方式:{purchase_mode}")
 
-    return f"{'+'.join(transfer_parts)},{tier}"
+    reason = str(plan.get("tier_reason") or "").strip()
+    parts.append(tier)
+    if reason and reason not in parts:
+        parts.append(reason)
+    return " · ".join(parts)
 
 
 def _plan_leg_stops(flight: dict | None) -> int:
@@ -8349,6 +8472,36 @@ def _source_stat_is_usable(status: str) -> bool:
     return not any(item in text for item in blocked)
 
 
+def _display_channel_price_rows(payload: dict) -> list[dict]:
+    rows = payload.get("channel_price_rows") or []
+    is_roundtrip = bool(payload.get("is_roundtrip"))
+    scope_text = "往返" if is_roundtrip else "单程"
+    filtered = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        value = _to_float(row.get("value") or row.get("price"))
+        if value is None or value <= 0:
+            continue
+        row_scope = _chart_scope_label(row)
+        if is_roundtrip:
+            if row_scope != "往返":
+                continue
+        elif row_scope == "往返":
+            continue
+        item = dict(row)
+        item["value"] = value
+        if not item.get("scope"):
+            item["scope"] = "oneway"
+        filtered.append(item)
+
+    deduped = _dedupe_chart_rows(filtered)
+    print(f"[渠道对比] 来源数={len(deduped)}, 内容={deduped}, 方案口径={scope_text}")
+    if len(deduped) < 2:
+        return []
+    return deduped
+
+
 def _email_detail_charts_body(payload: dict) -> str:
     parts = []
     if payload.get("nearby_date_prices"):
@@ -8356,8 +8509,9 @@ def _email_detail_charts_body(payload: dict) -> str:
         parts.append(_payload_bar_html(title, payload["nearby_date_prices"]))
         if note:
             parts.append(f"<div style='color:#666;font-size:12px;'>{html.escape(note)}</div>")
-    if payload.get("channel_price_rows"):
-        parts.append(_payload_bar_html("不同渠道报价对比", payload["channel_price_rows"]))
+    channel_rows = _display_channel_price_rows(payload)
+    if channel_rows:
+        parts.append(_payload_bar_html("不同渠道报价对比", channel_rows))
     if payload.get("plan_price_rows"):
         parts.append(_payload_bar_html("方案价格对比", payload["plan_price_rows"]))
     return "<br>".join(part for part in parts if part) or "<div style='color:#888;font-size:12px;'>暂无更多图表数据。</div>"

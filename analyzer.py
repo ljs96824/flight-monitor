@@ -7764,6 +7764,40 @@ def _roundtrip_combo_dedupe_key(combo: dict) -> tuple:
     )
 
 
+def _dedupe_roundtrip_combinations(combos: list[dict]) -> list[dict]:
+    seen = set()
+    result = []
+    for combo in combos or []:
+        key = _roundtrip_combo_dedupe_key(combo)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(combo)
+    return result
+
+
+def _roundtrip_debug_flight_no(flight: dict | None) -> str:
+    flight = flight or {}
+    return str(
+        flight.get("flight_combo")
+        or flight.get("flight_no")
+        or flight.get("flight_number")
+        or "待确认"
+    )
+
+
+def _print_roundtrip_plan_comparison(combos: list[dict]) -> None:
+    for index, combo in enumerate((combos or [])[:2]):
+        label = "A" if index == 0 else "B"
+        outbound = combo.get("outbound") or {}
+        return_flight = combo.get("return") or {}
+        print(
+            f"[方案对比] {label}去程={_roundtrip_debug_flight_no(outbound)} "
+            f"{label}返程={_roundtrip_debug_flight_no(return_flight)} "
+            f"{label}价={combo.get('total_price')}"
+        )
+
+
 def _dedupe_and_limit_excluded_roundtrip_combos(combos: list[dict], max_show: int = 3) -> list[dict]:
     seen_pairs = set()
     seen_reasons = set()
@@ -8085,6 +8119,8 @@ def analyze_round_trip(
             )
 
     combinations.sort(key=lambda item: item["total_price"])
+    combinations = _dedupe_roundtrip_combinations(combinations)
+    _print_roundtrip_plan_comparison(combinations)
     best_combo = combinations[0] if combinations else {}
     if same_day_round_trip and best_combo:
         outbound_min = _to_float(best_combo.get("outbound_price"))

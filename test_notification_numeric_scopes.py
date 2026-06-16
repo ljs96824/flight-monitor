@@ -8,6 +8,7 @@ sys.modules.setdefault("httpx", types.SimpleNamespace(get=lambda *a, **k: None, 
 from analyzer import build_excluded_roundtrip_combos
 from notifier import (
     _email_channel_picker,
+    _email_detail_charts_body,
     _email_action_panel_body,
     _email_price_calendar_body,
     _plan_effective_cost_line,
@@ -175,6 +176,97 @@ class NotificationNumericScopesTest(unittest.TestCase):
         self.assertIn("ret", html)
         self.assertLess(html.find("795"), html.find("https://example.com/out"))
         self.assertLess(html.find("1,765"), html.find("https://example.com/ret"))
+
+    def test_roundtrip_detail_hides_single_leg_channel_comparison(self):
+        html = _email_detail_charts_body(
+            {
+                "is_roundtrip": True,
+                "channel_price_rows": [
+                    {
+                        "label": "Google Flights",
+                        "value": 1420,
+                        "scope": "oneway",
+                    }
+                ],
+                "plan_price_rows": [],
+            }
+        )
+
+        self.assertNotIn("\u4e0d\u540c\u6e20\u9053\u62a5\u4ef7\u5bf9\u6bd4", html)
+
+    def test_roundtrip_payload_does_not_promote_leg_channel_prices_to_combo_comparison(self):
+        outbound = {
+            "flight_no": "MU5099",
+            "flight_combo": "MU5099",
+            "price": 1420,
+            "stops": 0,
+            "departure_time": "07:00",
+            "arrival_time": "09:15",
+            "booking_options": [
+                {"platform": "Google Flights", "price": 1420},
+                {"platform": "\u643a\u7a0b", "price": 1430},
+            ],
+        }
+        return_flight = {
+            "flight_no": "MU5166",
+            "flight_combo": "MU5166",
+            "price": 1340,
+            "stops": 0,
+            "departure_time": "21:30",
+            "arrival_time": "23:25",
+        }
+        analysis = {
+            "round_trip_analysis": {
+                "top_combinations": [
+                    {
+                        "outbound": outbound,
+                        "return": return_flight,
+                        "outbound_price": 1420,
+                        "return_price": 1340,
+                        "total_price": 2760,
+                    }
+                ],
+                "total_min": 2760,
+            },
+        }
+
+        payload = build_notification_payload(
+            analysis,
+            route_info={
+                "round_trip": True,
+                "origin": "SHA",
+                "destination": "PEK",
+                "depart_date": "2026-06-18",
+                "return_date": "2026-06-18",
+            },
+            subscription={"id": "roundtrip-leg-channel"},
+        )
+
+        self.assertEqual(payload["channel_price_rows"], [])
+
+    def test_roundtrip_payload_dedupes_identical_combinations(self):
+        outbound = {"flight_no": "MU5099", "flight_combo": "MU5099", "price": 1420, "stops": 0}
+        return_flight = {"flight_no": "MU5166", "flight_combo": "MU5166", "price": 1340, "stops": 0}
+        combo = {
+            "outbound": outbound,
+            "return": return_flight,
+            "outbound_price": 1420,
+            "return_price": 1340,
+            "total_price": 2760,
+        }
+        payload = build_notification_payload(
+            {"round_trip_analysis": {"top_combinations": [combo, dict(combo)], "total_min": 2760}},
+            route_info={
+                "round_trip": True,
+                "origin": "SHA",
+                "destination": "PEK",
+                "depart_date": "2026-06-18",
+                "return_date": "2026-06-18",
+            },
+            subscription={"id": "roundtrip-dedupe"},
+        )
+
+        self.assertEqual(len(payload["recommended_plans"]), 1)
 
     def test_roundtrip_effective_cost_line_uses_roundtrip_components(self):
         plan = {
