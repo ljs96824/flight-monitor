@@ -292,6 +292,79 @@ class NotificationNumericScopesTest(unittest.TestCase):
         self.assertIn("a-out-ctrip", push_text)
         self.assertNotIn("b-out-ctrip", push_text)
 
+    def test_split_ticket_verification_shows_leg_specific_status_and_rules(self):
+        def links(prefix):
+            return (
+                f'<a href="https://example.com/{prefix}-ctrip" target="_blank">携程</a> | '
+                f'<a href="https://example.com/{prefix}-fliggy" target="_blank">飞猪</a> | '
+                f'<a href="https://example.com/{prefix}-qunar" target="_blank">去哪儿</a> | '
+                f'<a href="https://example.com/{prefix}-airline" target="_blank">航司官网</a>'
+            )
+
+        payload = {
+            "push_type": "值得验证",
+            "route": "上海 → 北京",
+            "recommendation": "值得验证",
+            "buy_condition": "以支付页为准",
+            "detail_url": "https://example.com/detail",
+            "form_url": "https://example.com/form",
+            "feedback_url": "https://example.com/feedback",
+            "recommended_plans": [
+                {
+                    "label": "方案A",
+                    "tier": "首选推荐",
+                    "is_roundtrip": True,
+                    "purchase_mode": "两个单程拼接",
+                    "price": 2760,
+                    "outbound_price": 1410,
+                    "return_price": 1350,
+                    "outbound_push_line": "去程:MU5099 SHA07:00→PEK09:15",
+                    "return_push_line": "返程:CA1589 PEK20:30→SHA22:40",
+                    "outbound_flight": {
+                        "flight_combo": "MU5099",
+                        "stops": 0,
+                        "buyability": {"label": "可购买"},
+                        "fare_rules": {
+                            "baggage": {"included": True, "checked_kg": 20},
+                            "refund": {"label": "退改适中"},
+                        },
+                    },
+                    "return_flight": {
+                        "flight_combo": "CA1589",
+                        "stops": 0,
+                        "buyability": {"label": "需验证"},
+                        "fare_rules": {
+                            "baggage": {"included": False, "note": "托运需另购"},
+                            "refund": {"label": "退改严格"},
+                        },
+                    },
+                    "links": {"outbound": links("a-out"), "return": links("a-ret")},
+                }
+            ],
+            "trigger_reason": ["测试"],
+        }
+
+        _subject, email_html = render_email(payload)
+        push_text = render_pushplus(payload)
+
+        self.assertIn("验证此方案(两段需分别购买)", email_html)
+        self.assertIn("去程 MU5099", email_html)
+        self.assertIn("票面价:¥1,410", email_html)
+        self.assertIn("库存:可购买", email_html)
+        self.assertIn("行李:已含托运20kg", email_html)
+        self.assertIn("退改:退改适中", email_html)
+        self.assertIn("a-out-ctrip", email_html)
+        self.assertIn("返程 CA1589", email_html)
+        self.assertIn("票面价:¥1,350", email_html)
+        self.assertIn("库存:需验证", email_html)
+        self.assertIn("行李:仅含手提,托运需另购", email_html)
+        self.assertIn("退改:退改严格", email_html)
+        self.assertIn("a-ret-ctrip", email_html)
+        self.assertIn("两段是独立机票,需分别下单", email_html)
+        self.assertIn("去程 MU5099", push_text)
+        self.assertIn("返程 CA1589", push_text)
+        self.assertIn("注:两段独立票,需分别下单", push_text)
+
     def test_roundtrip_detail_hides_single_leg_channel_comparison(self):
         html = _email_detail_charts_body(
             {

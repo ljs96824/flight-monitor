@@ -4567,6 +4567,25 @@ def _pushplus_baggage_line_for_flight(flight: dict | None) -> str:
     return "行李:支付页需确认"
 
 
+def _verification_refund_line_for_flight(flight: dict | None) -> str:
+    flight = flight or {}
+    fare_rules = flight.get("fare_rules") or {}
+    refund = fare_rules.get("refund") or {}
+    if isinstance(refund, dict):
+        parts = [
+            str(refund.get("label") or "").strip(),
+            str(refund.get("note") or "").strip(),
+        ]
+        text = "，".join(item for item in parts if item)
+        if text:
+            return f"退改:{text}"
+        level = str(refund.get("level") or "").strip()
+        if level:
+            return f"退改:{level}"
+    compact = _compact_refund_line(flight)
+    return re.sub(r"^[^退]*退改[:：]\s*", "退改:", compact).strip() or "退改:以支付页为准"
+
+
 def _pushplus_baggage_line_for_combo(outbound: dict | None, return_flight: dict | None) -> str:
     lines = [_pushplus_baggage_line_for_flight(outbound), _pushplus_baggage_line_for_flight(return_flight)]
     if any("不含托运" in line for line in lines):
@@ -4637,19 +4656,19 @@ def _pushplus_channel_section(payload: dict, plan: dict | None) -> list[str]:
     split_ticket = is_roundtrip and "单程" in purchase_mode
     total_price = plan.get("price") if isinstance(plan, dict) else None
     plan_label = str((plan or {}).get("label") or "方案A").strip() or "方案A"
-    lines = [f"验证首选{plan_label}:"]
+    lines = [f"验证首选{plan_label}{'(两段)' if split_ticket else ''}:"]
 
     if isinstance(links, dict) and split_ticket:
-        lines.append("本方案为两个单程拼接,需分别购买和验证")
         for direction in ("outbound", "return"):
             line = _pushplus_link_line(links.get(direction, ""), 6)
             if line:
                 price = plan.get(f"{direction}_price")
-                price_text = f"(约{_price_text(price)})" if price else ""
+                price_text = f" 约{_price_text(price)}" if price else ""
                 lines.append(f"{_pushplus_plan_flight_label(plan, direction)}{price_text}:")
                 lines.append(line)
         if total_price:
             lines.append(f"往返合计参考:{_price_text(total_price)}")
+        lines.append("注:两段独立票,需分别下单")
     elif isinstance(links, dict) and plan.get("is_roundtrip"):
         combo_price = f"约{_price_text(total_price)} " if total_price else ""
         lines.append(f"整套往返验证:{combo_price}建议同一渠道选择往返搜索")
@@ -6940,6 +6959,45 @@ def _route_specific_plan_rows(plan: dict) -> list[tuple[str, str]]:
     return rows
 
 
+def _split_ticket_leg_verification_html(plan: dict, direction: str) -> str:
+    flight = plan.get(f"{direction}_flight") or {}
+    links = (plan.get("links") or {}).get(direction) or ""
+    label = _pushplus_plan_flight_label(plan, direction)
+    price = _price_text(plan.get(f"{direction}_price") or flight.get("price"))
+    availability = _status_availability_label(flight) or "需支付页确认"
+    baggage = _pushplus_baggage_line_for_flight(flight)
+    refund = _verification_refund_line_for_flight(flight)
+    channel_links = _layered_channel_links(links) or links or "请到支付页确认"
+    rows = [
+        f"<div style='font-weight:600;color:#111;margin:8px 0 4px;'>{html.escape(label)}</div>",
+        f"<div>票面价:{price}</div>",
+        f"<div>库存:{html.escape(availability)}</div>",
+        f"<div>{html.escape(baggage)}</div>",
+        f"<div>{html.escape(refund)}</div>",
+        f"<div>验证渠道:{channel_links}</div>",
+    ]
+    return "".join(rows)
+
+
+def _split_ticket_verification_html(plan: dict) -> str:
+    parts = [
+        "<div style='font-weight:600;color:#111;margin-bottom:6px;'>━━ 验证此方案(两段需分别购买) ━━</div>",
+    ]
+    for direction in ("outbound", "return"):
+        if (plan.get("links") or {}).get(direction) or plan.get(f"{direction}_flight"):
+            parts.append(_split_ticket_leg_verification_html(plan, direction))
+    if plan.get("price"):
+        parts.append(
+            f"<div style='margin-top:8px;font-weight:600;'>往返合计参考:{_price_text(plan.get('price'))}(两段分别购买)</div>"
+        )
+    parts.append(
+        "<div style='margin-top:6px;color:#b91c1c;font-size:12px;'>"
+        "⚠ 提示:两段是独立机票,需分别下单;建议先确认两段都有票再购买,避免只买到一段。"
+        "</div>"
+    )
+    return "".join(parts)
+
+
 def _invoice_reimbursement_line(plan: dict) -> str:
     prefs = (plan or {}).get("invoice_preferences") or {}
     if not any(prefs.get(key) for key in ("invoice_needed", "invoice_special_vat", "invoice_cabin_limit")):
@@ -7017,25 +7075,21 @@ def _render_payload_plan_card(plan: dict, compact: bool = False, primary_plan: d
         if plan.get("same_day_tag"):
             rows.append(("商务模式", html.escape(str(plan.get("same_day_tag")))))
         links = plan.get("links") or {}
-        link_lines = []
         purchase_mode_text = str(plan.get("purchase_mode") or "")
         split_ticket = "单程" in purchase_mode_text
-        if links.get("outbound"):
-            base_label = _pushplus_plan_flight_label(plan, "outbound")
-            label = f"{base_label}(约{_price_text(plan.get('outbound_price'))})" if split_ticket else base_label
-            link_lines.append(label + "：" + (_layered_channel_links(links["outbound"]) or links["outbound"]))
-        if links.get("return"):
-            base_label = _pushplus_plan_flight_label(plan, "return")
-            label = f"{base_label}(约{_price_text(plan.get('return_price'))})" if split_ticket else base_label
-            link_lines.append(label + "：" + (_layered_channel_links(links["return"]) or links["return"]))
-        if link_lines:
-            if "单程" in purchase_mode_text:
-                verify_intro = "两个单程拼接：需分别购买和验证。"
+        if split_ticket and (links.get("outbound") or links.get("return")):
+            rows.append(("验证此方案", _split_ticket_verification_html(plan)))
+        else:
+            link_lines = []
+            if links.get("main") or links.get("outbound") or links.get("return"):
+                combo_links = links.get("main") or links.get("outbound") or links.get("return")
+                link_lines.append(_layered_channel_links(combo_links) or combo_links)
+            if link_lines:
+                verify_intro = "验证此方案(往返一张票):"
                 if plan.get("price"):
-                    verify_intro += f"往返合计参考:{_price_text(plan.get('price'))}。"
-            else:
-                verify_intro = "验证整套往返：建议先在同一渠道选择往返搜索。"
-            rows.append(("验证此方案", verify_intro + "<br>" + "<br>".join(link_lines)))
+                    verify_intro += f"{html.escape(str(plan.get('outbound_push_line') or '去程'))} / {html.escape(str(plan.get('return_push_line') or '返程'))},往返{_price_text(plan.get('price'))}。"
+                verify_intro += "建议在同一渠道选择往返搜索。"
+                rows.append(("验证此方案", verify_intro + "<br>" + "<br>".join(link_lines)))
     else:
         main_flight = plan.get("main_flight") or plan.get("outbound_flight") or plan.get("flight")
         body_parts.append(
