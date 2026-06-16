@@ -15,6 +15,7 @@ from notifier import (
     _plan_effective_cost_line,
     _plan_feasibility_line,
     build_notification_payload,
+    render_email,
     render_pushplus,
 )
 
@@ -220,6 +221,74 @@ class NotificationNumericScopesTest(unittest.TestCase):
         self.assertIn("ret", html)
         self.assertLess(html.find("795"), html.find("https://example.com/out"))
         self.assertLess(html.find("1,765"), html.find("https://example.com/ret"))
+
+    def test_plan_cards_bind_verification_links_to_each_plan(self):
+        def links(prefix):
+            return (
+                f'<a href="https://example.com/{prefix}-ctrip" target="_blank">携程</a> | '
+                f'<a href="https://example.com/{prefix}-fliggy" target="_blank">飞猪</a> | '
+                f'<a href="https://example.com/{prefix}-qunar" target="_blank">去哪儿</a> | '
+                f'<a href="https://example.com/{prefix}-airline" target="_blank">航司官网</a>'
+            )
+
+        payload = {
+            "push_type": "值得验证",
+            "route": "上海 → 北京",
+            "recommendation": "值得验证",
+            "buy_condition": "以支付页为准",
+            "detail_url": "https://example.com/detail",
+            "form_url": "https://example.com/form",
+            "feedback_url": "https://example.com/feedback",
+            "recommended_plans": [
+                {
+                    "label": "方案A",
+                    "tier": "首选推荐",
+                    "is_roundtrip": True,
+                    "purchase_mode": "两个单程拼接",
+                    "price": 2760,
+                    "outbound_price": 1410,
+                    "return_price": 1350,
+                    "outbound_push_line": "去程:MU5099 SHA07:00→PEK09:15",
+                    "return_push_line": "返程:CA1589 PEK21:30→SHA23:25",
+                    "outbound_flight": {"flight_combo": "MU5099", "stops": 0},
+                    "return_flight": {"flight_combo": "CA1589", "stops": 0},
+                    "links": {"outbound": links("a-out"), "return": links("a-ret")},
+                },
+                {
+                    "label": "方案B",
+                    "tier": "次选方案",
+                    "is_roundtrip": True,
+                    "purchase_mode": "两个单程拼接",
+                    "price": 2760,
+                    "outbound_price": 1410,
+                    "return_price": 1350,
+                    "outbound_push_line": "去程:MU5101 SHA08:00→PEK10:15",
+                    "return_push_line": "返程:CA1589 PEK21:30→SHA23:25",
+                    "outbound_flight": {"flight_combo": "MU5101", "stops": 0},
+                    "return_flight": {"flight_combo": "CA1589", "stops": 0},
+                    "links": {"outbound": links("b-out"), "return": links("b-ret")},
+                },
+            ],
+            "trigger_reason": ["测试"],
+        }
+
+        _subject, email_html = render_email(payload)
+        action_panel = email_html[email_html.find("行动面板"):email_html.find("价格口径与信号")]
+        plan_b = email_html[email_html.find("方案B"):]
+        operation_links = email_html[email_html.rfind("操作链接"):]
+        push_text = render_pushplus(payload)
+
+        self.assertIn("快速验证首选方案A", action_panel)
+        self.assertIn("a-out-ctrip", action_panel)
+        self.assertNotIn("b-out-ctrip", action_panel)
+        self.assertIn("验证此方案", plan_b)
+        self.assertIn("b-out-ctrip", plan_b)
+        self.assertIn("b-ret-airline", plan_b)
+        self.assertNotIn("a-out-ctrip", plan_b)
+        self.assertNotIn("a-out-ctrip", operation_links)
+        self.assertIn("验证首选方案A", push_text)
+        self.assertIn("a-out-ctrip", push_text)
+        self.assertNotIn("b-out-ctrip", push_text)
 
     def test_roundtrip_detail_hides_single_leg_channel_comparison(self):
         html = _email_detail_charts_body(

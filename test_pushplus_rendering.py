@@ -90,7 +90,7 @@ class PushPlusRenderingTest(unittest.TestCase):
         self.assertIn("9C6582｜春秋航空", msg)
         for channel in ["携程", "飞猪", "去哪儿", "Trip.com", "天巡", "Google Flights"]:
             self.assertGreaterEqual(msg.count(f">{channel}</a>"), 2)
-        self.assertIn("点击验证最终价格", msg)
+        self.assertIn("验证首选方案A", msg)
         self.assertIn("价格以各平台支付页为准", msg)
 
     def test_plan_card_channel_advice_does_not_fake_channel_prices(self):

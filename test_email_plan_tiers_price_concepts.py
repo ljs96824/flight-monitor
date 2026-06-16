@@ -395,7 +395,7 @@ class EmailPlanTiersPriceConceptsTest(unittest.TestCase):
         _, email_html = render_email(payload)
         detail_html = render_detail_html(payload)
 
-        self.assertIn("\u53bb\u9a8c\u8bc1\u4ef7\u683c(\u9009\u62e9\u6e20\u9053)", email_html)
+        self.assertIn("\u5feb\u901f\u9a8c\u8bc1\u9996\u9009\u65b9\u6848A", email_html)
         self.assertIn("\u5f80\u8fd4\u7ec4\u5408", email_html)
         self.assertIn("\u643a\u7a0b \u00a56,521", email_html)
         self.assertIn("\u643a\u7a0b", email_html)

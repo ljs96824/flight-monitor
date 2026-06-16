@@ -4636,7 +4636,8 @@ def _pushplus_channel_section(payload: dict, plan: dict | None) -> list[str]:
     purchase_mode = str(plan.get("purchase_mode") or "") if isinstance(plan, dict) else ""
     split_ticket = is_roundtrip and "单程" in purchase_mode
     total_price = plan.get("price") if isinstance(plan, dict) else None
-    lines = ["购买渠道:点击验证最终价格"]
+    plan_label = str((plan or {}).get("label") or "方案A").strip() or "方案A"
+    lines = [f"验证首选{plan_label}:"]
 
     if isinstance(links, dict) and split_ticket:
         lines.append("本方案为两个单程拼接,需分别购买和验证")
@@ -4671,6 +4672,8 @@ def _pushplus_channel_section(payload: dict, plan: dict | None) -> list[str]:
         ]
 
     lines.append("价格以各平台支付页为准")
+    if len(payload.get("recommended_plans") or []) > 1:
+        lines.append("方案B等详见邮件/网页")
     lines.append(f"查看网页版完整分析(如未显示请稍后刷新):{detail_link}")
     return lines
 
@@ -7018,10 +7021,12 @@ def _render_payload_plan_card(plan: dict, compact: bool = False, primary_plan: d
         purchase_mode_text = str(plan.get("purchase_mode") or "")
         split_ticket = "单程" in purchase_mode_text
         if links.get("outbound"):
-            label = f"去程(约{_price_text(plan.get('outbound_price'))})" if split_ticket else "去程"
+            base_label = _pushplus_plan_flight_label(plan, "outbound")
+            label = f"{base_label}(约{_price_text(plan.get('outbound_price'))})" if split_ticket else base_label
             link_lines.append(label + "：" + (_layered_channel_links(links["outbound"]) or links["outbound"]))
         if links.get("return"):
-            label = f"返程(约{_price_text(plan.get('return_price'))})" if split_ticket else "返程"
+            base_label = _pushplus_plan_flight_label(plan, "return")
+            label = f"{base_label}(约{_price_text(plan.get('return_price'))})" if split_ticket else base_label
             link_lines.append(label + "：" + (_layered_channel_links(links["return"]) or links["return"]))
         if link_lines:
             if "单程" in purchase_mode_text:
@@ -7030,7 +7035,7 @@ def _render_payload_plan_card(plan: dict, compact: bool = False, primary_plan: d
                     verify_intro += f"往返合计参考:{_price_text(plan.get('price'))}。"
             else:
                 verify_intro = "验证整套往返：建议先在同一渠道选择往返搜索。"
-            rows.append(("验证渠道", verify_intro + "<br>" + "<br>".join(link_lines)))
+            rows.append(("验证此方案", verify_intro + "<br>" + "<br>".join(link_lines)))
     else:
         main_flight = plan.get("main_flight") or plan.get("outbound_flight") or plan.get("flight")
         body_parts.append(
@@ -7045,7 +7050,7 @@ def _render_payload_plan_card(plan: dict, compact: bool = False, primary_plan: d
         )
         links = (plan.get("links") or {}).get("main")
         if links:
-            rows.append(("验证渠道", _layered_channel_links(links) or links))
+            rows.append(("验证此方案", _layered_channel_links(links) or links))
     if plan.get("tags"):
         rows.append(("状态", html.escape(str(plan.get("tags") or ""))))
     feasibility_line = _plan_feasibility_line(plan)
@@ -7770,8 +7775,13 @@ def _email_action_links(
     interactive_channels: bool = False,
     include_channel_picker: bool = True,
 ) -> str:
+    plan_label = str((primary_plan or {}).get("label") or "方案A").strip() or "方案A"
     channel_picker = (
-        _email_channel_picker(primary_plan or {}, interactive=interactive_channels)
+        _email_channel_picker(
+            primary_plan or {},
+            interactive=interactive_channels,
+            context_label=f"快速验证首选{plan_label}",
+        )
         if include_channel_picker
         else ""
     )
@@ -7802,7 +7812,7 @@ def _email_action_links(
     )
 
 
-def _email_channel_picker(plan: dict, interactive: bool = False) -> str:
+def _email_channel_picker(plan: dict, interactive: bool = False, context_label: str = "") -> str:
     price = plan.get("price") or plan.get("display_price") or plan.get("estimated_price")
     sections = _email_channel_sections(plan)
     is_roundtrip = bool((plan or {}).get("is_roundtrip"))
@@ -7823,7 +7833,7 @@ def _email_channel_picker(plan: dict, interactive: bool = False) -> str:
 
         body = (
             "<div style='font-weight:600;margin-bottom:4px;'>"
-            "去验证价格(本方案为两个单程拼接,需分别验证):</div>"
+            f"{html.escape(context_label or '去验证价格')}(两个单程拼接,需分别验证):</div>"
         )
         for title, links in sections:
             leg_price = section_price(title)
@@ -7836,9 +7846,10 @@ def _email_channel_picker(plan: dict, interactive: bool = False) -> str:
             )
         return body
     if is_roundtrip:
+        heading = context_label or "去验证价格(选择渠道)"
         body = (
             "<div style='font-weight:600;margin-bottom:4px;'>"
-            f"去验证价格(选择渠道):整套往返验证:{'约' + _price_text(price) if price else ''}</div>"
+            f"{html.escape(heading)}:整套往返验证:{'约' + _price_text(price) if price else ''}</div>"
         )
         body += "".join(_email_channel_section_html(title, links, price) for title, links in sections)
         if interactive:
@@ -7858,6 +7869,8 @@ def _email_channel_picker(plan: dict, interactive: bool = False) -> str:
             "</details>"
         )
     body = "<div style='font-weight:600;margin-bottom:4px;'>去验证价格(选择渠道):</div>"
+    if context_label:
+        body = f"<div style='font-weight:600;margin-bottom:4px;'>{html.escape(context_label)}:</div>"
     body += "".join(_email_channel_section_html(title, links, price) for title, links in sections)
     return body
 
@@ -7871,7 +7884,7 @@ def _email_channel_sections(plan: dict) -> list[tuple[str, list[tuple[str, str]]
         for key, title in (("outbound", "去程"), ("return", "返程")):
             channel_links = _extract_primary_channel_links(links.get(key))
             if channel_links:
-                sections.append((title, channel_links))
+                sections.append((_pushplus_plan_flight_label(plan or {}, key), channel_links))
         return sections
     if is_roundtrip:
         combo_links = _extract_primary_channel_links(links.get("main") or links.get("outbound") or links.get("return"))
@@ -7972,7 +7985,7 @@ def _non_price_change_reasons(payload: dict) -> list[str]:
 
 
 def _extract_primary_channel_links(link_html: str) -> list[tuple[str, str]]:
-    wanted = ("携程", "飞猪", "去哪儿")
+    wanted = ("携程", "飞猪", "去哪儿", "航司官网")
     found: list[tuple[str, str]] = []
     for href, label_html in re.findall(
         r'<a\s+[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
