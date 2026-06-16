@@ -9,6 +9,7 @@ from analyzer import build_excluded_roundtrip_combos
 from notifier import (
     _email_channel_picker,
     _email_detail_charts_body,
+    _email_excluded_compact_body,
     _email_action_panel_body,
     _email_price_calendar_body,
     _plan_effective_cost_line,
@@ -406,6 +407,68 @@ class NotificationNumericScopesTest(unittest.TestCase):
         reason_text = " ".join(combos[0]["reasons"])
         self.assertNotIn("\u8d85\u8fc7\u6700\u9ad8\u53ef\u63a5\u53d7\u4ef7", reason_text)
         self.assertIn("\u65f6\u95f4", reason_text)
+
+    def test_excluded_roundtrip_all_over_budget_does_not_blame_cheaper_combo_budget(self):
+        outbound = {
+            "scope": "outbound",
+            "price": 1000,
+            "reason": "\u8d85\u8fc7\u6700\u9ad8\u53ef\u63a5\u53d7\u4ef7\u00a51,500",
+            "flight": {"price": 1000, "flight_combo": "MU5107", "stops": 0},
+        }
+        ret = {
+            "price": 1386,
+            "flight_combo": "CA1507",
+            "stops": 0,
+        }
+
+        combos = build_excluded_roundtrip_combos(
+            {"excluded_flights": [outbound]},
+            {"all_flights": [ret]},
+            recommended_total=2760,
+            max_show=3,
+            max_budget=1500,
+        )
+
+        self.assertEqual(len(combos), 1)
+        reason_text = " ".join(combos[0]["reasons"])
+        self.assertTrue(combos[0].get("all_over_budget_reference"))
+        self.assertIn("\u9884\u7b97\u5916", reason_text)
+        self.assertNotIn("\u8d85\u8fc7\u6700\u9ad8\u53ef\u63a5\u53d7\u4ef7", reason_text)
+        self.assertNotIn("\u5f80\u8fd4\u603b\u4ef7\u00a52,386\u8d85\u8fc7", reason_text)
+
+    def test_excluded_compact_body_groups_shared_outbound_and_marks_budget_reference(self):
+        payload = {
+            "is_roundtrip": True,
+            "current_price": 2760,
+            "max_price": 1500,
+            "excluded_plans": [
+                {
+                    "scope": "roundtrip",
+                    "all_over_budget_reference": True,
+                    "outbound": {"flight_combo": "MU5107", "departure_airport": "SHA", "departure_time": "11:00", "arrival_airport": "PEK", "arrival_time": "13:15"},
+                    "return": {"flight_combo": "CA1507", "departure_airport": "PEK", "departure_time": "07:30", "arrival_airport": "SHA", "arrival_time": "10:00"},
+                    "total_price": 2386,
+                    "reason": "\u8fd4\u7a0b07:30\u51fa\u53d1,\u4f60\u5f53\u592917:00\u624d\u7ed3\u675f\u4f1a\u8bae,\u65f6\u95f4\u4e0d\u7b26",
+                },
+                {
+                    "scope": "roundtrip",
+                    "all_over_budget_reference": True,
+                    "outbound": {"flight_combo": "MU5107", "departure_airport": "SHA", "departure_time": "11:00", "arrival_airport": "PEK", "arrival_time": "13:15"},
+                    "return": {"flight_combo": "MU5102", "departure_airport": "PEK", "departure_time": "08:00", "arrival_airport": "SHA", "arrival_time": "10:20"},
+                    "total_price": 2483,
+                    "reason": "\u8fd4\u7a0b08:00\u51fa\u53d1,\u4f1a\u8bae\u7ed3\u675f\u524d\u65e0\u6cd5\u4e58\u5750",
+                },
+            ],
+        }
+
+        body = _email_excluded_compact_body(payload)
+
+        self.assertIn("\u9884\u7b97\u5916\u4f4e\u4ef7\u53c2\u8003", body)
+        self.assertIn("\u5171\u540c\u53bb\u7a0b", body)
+        self.assertIn("MU5107", body)
+        self.assertIn("CA1507", body)
+        self.assertIn("MU5102", body)
+        self.assertNotIn("\u5df2\u6392\u9664\u7684\u66f4\u4f4e\u4ef7", body)
 
 
 if __name__ == "__main__":

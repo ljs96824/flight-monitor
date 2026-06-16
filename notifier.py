@@ -3780,6 +3780,11 @@ def _excluded_price_intro(item: dict, current_price, is_roundtrip: bool) -> str:
     label = _excluded_scope_label(scope)
     if price is None:
         return f"已排除的{label}"
+    if item.get("all_over_budget_reference"):
+        current = _to_float(current_price)
+        diff = current - price if current is not None and price < current else None
+        diff_text = f"（比主推便宜{_price_text(diff)}）" if diff else ""
+        return f"预算外低价参考{label}：{_price_text(price)}{diff_text}"
     if is_roundtrip and scope != "roundtrip":
         return f"已排除的更低价{label}：{_price_text(price)}"
     diff = None
@@ -3881,7 +3886,10 @@ def _render_excluded_plan_card(item: dict, current_price, is_roundtrip: bool) ->
     reason = reason_lines[0] if reason_lines else (item.get("reason") or "不符合当前规则")
     intro = _excluded_price_intro(item, current_price, is_roundtrip).replace("已排除的", "").replace("已排除", "").strip("： ")
     semantic_intro = _excluded_price_intro(item, current_price, is_roundtrip)
-    title = f"已排除 · {intro}" if intro else "已排除"
+    if item.get("all_over_budget_reference"):
+        title = f"预算外低价参考 · {intro}" if intro else "预算外低价参考"
+    else:
+        title = f"已排除 · {intro}" if intro else "已排除"
     body_parts = []
     rows = []
     combo_text = str(item.get("flight_combo") or "").strip()
@@ -8547,19 +8555,40 @@ def _email_excluded_compact_body(payload: dict) -> str:
     if not candidates:
         return "<div style='color:#888;font-size:12px;'>暂无被排除的更低价方案。</div>"
 
+    shown_candidates = sorted(candidates, key=lambda row: row[0])[:3]
+    shown_items = [item for _price, item in shown_candidates]
+    all_over_budget_reference = any(item.get("all_over_budget_reference") for item in shown_items)
+    shared_outbound = _excluded_shared_outbound(shown_items)
+    heading = "预算外低价参考" if all_over_budget_reference else "已排除的更低价组合"
+    first_col = "返程选择" if shared_outbound else ("价格较低参考" if all_over_budget_reference else "更便宜方案")
+    parts = []
+    if all_over_budget_reference:
+        parts.append(
+            "<div style='margin-bottom:8px;color:#92400e;font-weight:600;'>"
+            "预算外低价参考：当前主推也超过预算，以下组合价格较低但仍在预算外，需结合你的时间/行李/执行约束判断。"
+            "</div>"
+        )
+    if shared_outbound:
+        parts.append(
+            f"<div style='margin-bottom:8px;color:#374151;'>"
+            f"共同去程:{html.escape(_excluded_flight_brief(shared_outbound))}"
+            "</div>"
+        )
+
     rows = [
+        f"<div style='font-weight:600;margin-bottom:8px;color:#111;'>{html.escape(heading)}</div>",
         "<table style='width:100%;font-size:13px;line-height:1.6;border-collapse:collapse;'>"
         "<thead><tr>"
-        "<th style='text-align:left;color:#666;border-bottom:1px solid #eee;padding:6px 4px;'>更便宜方案</th>"
+        f"<th style='text-align:left;color:#666;border-bottom:1px solid #eee;padding:6px 4px;'>{html.escape(first_col)}</th>"
         "<th style='text-align:left;color:#666;border-bottom:1px solid #eee;padding:6px 4px;'>价格</th>"
         "<th style='text-align:left;color:#666;border-bottom:1px solid #eee;padding:6px 4px;'>排除原因</th>"
         "</tr></thead><tbody>"
     ]
-    for index, (price, item) in enumerate(sorted(candidates, key=lambda row: row[0])[:3], start=1):
+    for index, (price, item) in enumerate(shown_candidates, start=1):
         scope = _excluded_scope(item, is_roundtrip)
         price_scope = "往返" if scope == "roundtrip" else "单程"
-        reason = _email_excluded_compact_reason(item, scope, is_roundtrip)
-        name = _excluded_compact_name(item, index)
+        reason = _email_excluded_compact_reason(item, scope, is_roundtrip, current_price)
+        name = _excluded_compact_name(item, index, shared_outbound=bool(shared_outbound))
         rows.append(
             "<tr>"
             f"<td style='padding:7px 4px;border-bottom:1px solid #f5f5f5;'>{html.escape(name)}</td>"
@@ -8573,10 +8602,44 @@ def _email_excluded_compact_body(payload: dict) -> str:
         "完整排除方案详情见网页详情页。"
         "</div>"
     )
-    return "".join(rows)
+    return "".join(parts + rows)
 
 
-def _excluded_compact_name(item: dict, index: int) -> str:
+def _excluded_shared_outbound(items: list[dict]) -> dict | None:
+    outbound_flights = [item.get("outbound") for item in items or [] if isinstance(item.get("outbound"), dict)]
+    if len(outbound_flights) < 2:
+        return None
+    identities = {
+        (
+            str(flight.get("flight_combo") or flight.get("flight_no") or "").strip(),
+            str(flight.get("departure_airport") or flight.get("origin") or "").strip(),
+            str(flight.get("arrival_airport") or flight.get("destination") or "").strip(),
+            str(flight.get("departure_time") or flight.get("dep_time") or "").strip(),
+        )
+        for flight in outbound_flights
+    }
+    if len(identities) == 1:
+        return outbound_flights[0]
+    return None
+
+
+def _excluded_flight_brief(flight: dict) -> str:
+    combo = str(flight.get("flight_combo") or flight.get("flight_no") or "航班待确认").strip()
+    dep = str(flight.get("departure_airport") or flight.get("origin") or "").strip()
+    arr = str(flight.get("arrival_airport") or flight.get("destination") or "").strip()
+    dep_time = str(flight.get("departure_time") or flight.get("dep_time") or "").strip()
+    arr_time = str(flight.get("arrival_time") or flight.get("arr_time") or "").strip()
+    route = f" {dep}{dep_time}→{arr}{arr_time}" if dep or arr or dep_time or arr_time else ""
+    transfer = _excluded_transfer_text(flight)
+    return f"{combo}{route} {transfer}".strip()
+
+
+def _excluded_compact_name(item: dict, index: int, shared_outbound: bool = False) -> str:
+    if shared_outbound and isinstance(item.get("return"), dict):
+        ret = item["return"]
+        combo = str(ret.get("flight_combo") or ret.get("flight_no") or "").strip()
+        if combo:
+            return f"返程{combo}"
     for key in ("name", "label", "flight_combo", "combo"):
         value = str(item.get(key) or "").strip()
         if value:
@@ -8595,12 +8658,16 @@ def _excluded_item_price(item: dict):
     return _to_float(item.get("total_price") or item.get("roundtrip_price") or item.get("price"))
 
 
-def _email_excluded_compact_reason(item: dict, scope: str, is_roundtrip: bool) -> str:
+def _email_excluded_compact_reason(item: dict, scope: str, is_roundtrip: bool, current_price=None) -> str:
     details = [str(value).strip() for value in _excluded_reason_details(item) if str(value or "").strip()]
     reason = details[0] if details else "不符合当前规则"
     if is_roundtrip and scope != "roundtrip" and "非往返总价" not in reason:
         direction = _excluded_scope_label(scope).replace("方案", "") or "单段"
         reason += f"(注:此为{direction}单段价,非往返总价)"
+    price = _excluded_item_price(item)
+    current = _to_float(current_price)
+    if price is not None and current is not None and price < current and "对比主推" not in reason:
+        reason += f"；对比主推:虽便宜{_price_text(current - price)},但上述条件不满足"
     return reason
 
 

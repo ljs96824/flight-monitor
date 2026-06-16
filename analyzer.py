@@ -7874,6 +7874,72 @@ def _roundtrip_budget_safe_reasons(reasons: list[str], total, max_budget) -> lis
     return cleaned
 
 
+def _roundtrip_budget_context(total, max_budget, recommended_total) -> dict:
+    total_value = _to_float(total)
+    max_budget_value = _to_float(max_budget)
+    recommended_value = _to_float(recommended_total)
+    recommended_over_budget = (
+        total_value is not None
+        and max_budget_value is not None
+        and recommended_value is not None
+        and recommended_value > max_budget_value
+    )
+    return {
+        "total": total_value,
+        "max_budget": max_budget_value,
+        "recommended_total": recommended_value,
+        "recommended_over_budget": recommended_over_budget,
+        "all_over_budget_reference": bool(
+            recommended_over_budget
+            and total_value is not None
+            and total_value > max_budget_value
+            and recommended_value is not None
+            and total_value < recommended_value
+        ),
+    }
+
+
+def _roundtrip_budget_safe_reasons_v2(
+    reasons: list[str],
+    total,
+    max_budget,
+    recommended_total=None,
+) -> list[str]:
+    """Remove budget-only contradictions from cheaper round-trip exclusions."""
+    context = _roundtrip_budget_context(total, max_budget, recommended_total)
+    total_value = context["total"]
+    max_budget_value = context["max_budget"]
+    all_over_budget_reference = context["all_over_budget_reference"]
+    cleaned: list[str] = []
+    removed_budget_reason = False
+    for reason in reasons or []:
+        text = str(reason or "").strip()
+        if not text:
+            continue
+        if _is_budget_exclusion_reason(text):
+            removed_budget_reason = True
+            if (
+                max_budget_value is not None
+                and total_value is not None
+                and total_value > max_budget_value
+                and not all_over_budget_reference
+            ):
+                cleaned.append(
+                    f"往返总价¥{total_value:,.0f}超过最高可接受价¥{max_budget_value:,.0f}"
+                )
+            continue
+        cleaned.append(text)
+
+    if not cleaned and removed_budget_reason:
+        if all_over_budget_reference and max_budget_value is not None:
+            cleaned.append(
+                f"预算外低价参考：当前主推也超过预算¥{max_budget_value:,.0f}，此组合虽更便宜但仍仅作参考"
+            )
+        else:
+            cleaned.append("价格虽低但时间或其他条件不满足")
+    return cleaned
+
+
 def build_excluded_roundtrip_combos(
     outbound_analysis: dict,
     return_analysis: dict,
@@ -7907,7 +7973,13 @@ def build_excluded_roundtrip_combos(
             total = outbound_price + return_price
             if total >= recommended_total:
                 continue
-            reasons = _roundtrip_budget_safe_reasons(reasons, total, max_budget)
+            budget_context = _roundtrip_budget_context(total, max_budget, recommended_total)
+            reasons = _roundtrip_budget_safe_reasons_v2(
+                reasons,
+                total,
+                max_budget,
+                recommended_total,
+            )
             if not reasons:
                 continue
 
@@ -7924,9 +7996,22 @@ def build_excluded_roundtrip_combos(
                     "diff": recommended_total - total,
                     "reasons": reasons,
                     "reason": "；".join(reasons),
+                    "recommended_price": recommended_total,
+                    "max_budget": budget_context.get("max_budget"),
+                    "recommended_over_budget": budget_context.get("recommended_over_budget"),
+                    "all_over_budget_reference": budget_context.get("all_over_budget_reference"),
                 }
             )
 
+    print(
+        f"[排除诊断] 推荐方案价={recommended_total}, 最高可接受价={max_budget}, "
+        f"排除候选价={[combo.get('total_price') for combo in combos]}"
+    )
+    max_budget_value = _to_float(max_budget)
+    print(
+        f"[排除诊断] 推荐方案是否超预算="
+        f"{bool(max_budget_value is not None and recommended_total > max_budget_value)}"
+    )
     limited = _dedupe_and_limit_excluded_roundtrip_combos(combos, max_show)
     for combo in limited:
         outbound_flight = combo.get("outbound") or {}
