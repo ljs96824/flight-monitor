@@ -99,7 +99,7 @@ class NotificationContradictionsTest(unittest.TestCase):
         self.assertIn("方案A ｜ 首选推荐", html)
         self.assertIn("方案B ｜ 次选方案", html)
         self.assertNotIn("方案B ｜ 首选推荐", html)
-        self.assertEqual(html.count("去验证价格(选择渠道)"), 1)
+        self.assertEqual(html.count("快速验证首选方案A"), 1)
 
     def test_single_airport_combo_hides_airport_comparison(self):
         payload = {

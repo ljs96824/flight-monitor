@@ -658,7 +658,7 @@ def _reason_description(analysis: dict) -> str:
         window = "临近出发"
 
     if cheaper_than is None:
-        return f"当前处于{window}，系统会继续监控价格变化。"
+        return f"当前处于{window}，系统会继续盯这条航线的价格变化。"
     return (
         f"当前处于{window}。\n"
         f"当前价格低于历史约{cheaper_than:.0f}%的记录。"
@@ -1528,7 +1528,7 @@ def _execution_advice_lines(
         lines.extend([
             "✅ 操作建议：",
             f"若支付页最终价不超过{final_limit_text}，{baggage_clause}，建议购买。",
-            f"若最终价超过{target_price_text}，建议继续监控。",
+            f"若最终价超过{target_price_text}，建议保持本条航线监控。",
         ])
     elif grade == "B":
         lines.extend([
@@ -3561,7 +3561,7 @@ def _append_operation_section(
         )
     if max_budget:
         price_name = "总价" if is_round_trip else "价格"
-        lines.append(f"若{price_name}涨到{_price_text(max_budget)}以上，建议继续监控。")
+        lines.append(f"若{price_name}涨到{_price_text(max_budget)}以上，建议保持本条航线监控。")
     advice = decision.get("action_advice")
     if advice:
         lines.append(advice)
@@ -5282,7 +5282,7 @@ def _payload_price_policy_decision(
         return {
             "conclusion": (
                 f"当前搜索价{_price_text(display)}已超过你的最高可接受价{_price_text(max_p)}，"
-                "不满足购买条件，建议继续监控"
+                "不满足购买条件，建议保持监控本条航线"
             ),
             "reason": "搜索参考价已超过最高可接受价，不建议按当前价买入",
             "push_type_hint": None,
@@ -7638,7 +7638,7 @@ def _email_action_panel_body(
         ]
         return "".join(block for block in blocks if block)
 
-    conclusion = str(payload.get("recommendation") or "可以观察")
+    conclusion = _clarify_monitoring_copy(str(payload.get("recommendation") or "可以观察"))
     primary_line = _email_primary_plan_line(payload, primary_plan)
     buy_condition = str(payload.get("buy_condition") or "以支付页为准")
     trigger_type = _email_trigger_type(payload)
@@ -7660,7 +7660,7 @@ def _email_action_panel_body(
         f"<div>购买条件:{html.escape(buy_condition)}</div>",
         f"<div>{html.escape(gap_line)}</div>" if gap_line else "",
         f"<div>{html.escape(reason_line)}</div>",
-        "<div>下一步:继续监控 | 修改预算/日期 | (刚需)验证方案A</div>",
+        "<div>下一步:保持当前监控本条航线(无需操作,有变化会再次提醒你) | 修改本监控 | (刚需)验证方案A</div>",
         f"<div style='margin-top:8px;color:#666;font-size:12px;'>触发类型:{html.escape(trigger_type)}</div>",
         f"<div style='color:#666;font-size:12px;'>触发原因:{html.escape(trigger_reason)}</div>",
         _next_step_guidance_html(payload),
@@ -7711,6 +7711,25 @@ def _budget_gap_line(payload: dict) -> str:
     return f"预算差距:{text}" if text else ""
 
 
+def _clarify_monitoring_copy(text: str) -> str:
+    """Make passive monitoring copy explicit: keeping this subscription needs no action."""
+    value = str(text or "")
+    replacements = {
+        "继续监控等降价": "继续盯这条航线等降价",
+        "保持监控": "保持当前监控",
+        "建议继续监控": "建议保持监控本条航线",
+        "建议继续观察": "建议保持监控本条航线并观察",
+        "不建议购买,继续监控": "不建议购买,保持监控本条航线",
+        "不建议购买，继续监控": "不建议购买，保持监控本条航线",
+        "继续监控价格变化": "继续盯这条航线的价格变化",
+        "继续监控并等待": "保持监控本条航线并等待",
+        "继续监控": "保持监控本条航线",
+    }
+    for old, new in replacements.items():
+        value = value.replace(old, new)
+    return value
+
+
 def _scenario_values_for_guidance(payload: dict) -> list[str]:
     values = []
     raw = payload.get("travel_scenarios") or []
@@ -7747,9 +7766,15 @@ def _next_step_guidance_html(payload: dict) -> str:
     parts = ["<div style='margin-top:8px;font-weight:600;'>你可以:</div>"]
     nums = ["①", "②", "③"]
     for index, item in enumerate(items[:3]):
-        label = html.escape(str(item.get("label") or "下一步"))
-        summary = html.escape(str(item.get("summary") or ""))
-        action = html.escape(str(item.get("action") or ""))
+        label_text = _clarify_monitoring_copy(str(item.get("label") or "下一步"))
+        summary_text = _clarify_monitoring_copy(str(item.get("summary") or ""))
+        action_text = _clarify_monitoring_copy(str(item.get("action") or ""))
+        if index == 0 and ("盯这条航线" in label_text or "监控" in label_text):
+            summary_text = f"无需任何操作,{summary_text}"
+            action_text = "保持当前监控"
+        label = html.escape(label_text)
+        summary = html.escape(summary_text)
+        action = html.escape(action_text)
         parts.append(
             f"<div>{nums[index]} {label} —— {summary}"
             + (f" [{action}]" if action else "")
@@ -7792,7 +7817,7 @@ def _email_action_links(
     if detail_url:
         links.append(("查看网页版完整分析(如未显示请稍后刷新)", detail_url))
     if form_url:
-        links.append(("继续监控", form_url))
+        links.append(("修改本监控", form_url))
     if feedback_url:
         links.append(("反馈买不到", feedback_url))
     if not links and not channel_picker:
@@ -7807,6 +7832,7 @@ def _email_action_links(
     return (
         "<div style='margin-top:10px;'>"
         + channel_picker
+        + "<div style='margin-top:8px;color:#666;font-size:12px;'>保持本条监控:无需操作,系统会继续盯这条航线,有变化会再次提醒你。</div>"
         + action_links
         + "</div>"
     )
@@ -9109,7 +9135,7 @@ def render_email(payload: dict) -> tuple[str, str]:
         _email_card(
             "操作建议",
             _email_table(action_rows)
-            + "<div style='margin-top:8px;color:#666;font-size:12px;'>若支付页最终价、行李和票规不满足上方条件，建议继续监控。</div>",
+            + "<div style='margin-top:8px;color:#666;font-size:12px;'>若支付页最终价、行李和票规不满足上方条件，建议保持本条航线监控。</div>",
         )
     )
 
@@ -9230,7 +9256,7 @@ def render_detail_html(payload: dict) -> str:
         _email_card(
             "操作建议",
             _email_table(action_rows)
-            + "<div style='margin-top:8px;color:#666;font-size:12px;'>若支付页最终价、行李和票规不满足上方条件，建议继续监控。</div>",
+            + "<div style='margin-top:8px;color:#666;font-size:12px;'>若支付页最终价、行李和票规不满足上方条件，建议保持本条航线监控。</div>",
         )
     )
 

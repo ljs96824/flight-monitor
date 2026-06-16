@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import threading
 import traceback
 from datetime import datetime, timedelta
+import html
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -4312,6 +4314,39 @@ def save_feedback(record: dict) -> None:
     )
 
 
+def notify_feedback_author(record: dict) -> bool:
+    """Send a best-effort feedback notification to the configured author email."""
+    author_email = os.environ.get("FEEDBACK_NOTIFY_EMAIL", "").strip()
+    if not author_email:
+        return False
+    subject = f"[航班监控反馈] {record.get('feedback_type', '')} - 订阅{record.get('subscription_id', '')}"
+    body = "\n".join(
+        [
+            "收到一条用户反馈:",
+            "",
+            f"订阅ID:{record.get('subscription_id', '')}",
+            f"反馈类型:{record.get('feedback_type', '')}",
+            f"买不到原因:{record.get('unavailable_reason', '')}",
+            f"补充说明:{record.get('comment', '')}",
+            f"时间:{record.get('created_at', '')}",
+            f"User-Agent:{record.get('user_agent', '')}",
+        ]
+    )
+    html_body = "<br>".join(html.escape(line) for line in body.splitlines())
+    try:
+        from email_notifier import send_email
+
+        ok = bool(send_email(author_email, subject, html_body, {}))
+        if ok:
+            print(f"[反馈] 已发送到作者邮箱 {author_email}")
+        else:
+            print(f"[反馈] 邮件发送失败(已存本地): send_email返回False")
+        return ok
+    except Exception as exc:
+        print(f"[反馈] 邮件发送失败(已存本地): {exc}")
+        return False
+
+
 def load_page_results() -> list[dict]:
     if not PAGE_RESULTS_PATH.exists():
         return []
@@ -5550,6 +5585,7 @@ def feedback():
             "user_agent": request.headers.get("User-Agent", ""),
         }
         save_feedback(record)
+        notify_feedback_author(record)
         return render_template_string(
             FEEDBACK_TEMPLATE,
             saved=True,

@@ -27,6 +27,7 @@ except ModuleNotFoundError:
         "flask",
         types.SimpleNamespace(
             Flask=_DummyFlask,
+            jsonify=lambda value=None, **kwargs: value if value is not None else kwargs,
             redirect=lambda value: value,
             render_template_string=lambda template, **kwargs: template,
             request=types.SimpleNamespace(args={}, form={}, values={}, headers={}),
@@ -166,6 +167,58 @@ class SubscriptionManagementPageTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("下次采集时重新核实", body)
         self.assertIn("返回我的监控", body)
+
+    def test_feedback_post_saves_locally_and_notifies_author_email(self):
+        client = getattr(web_form.app, "test_client", None)
+        if client is None:
+            self.skipTest("Flask test client is unavailable")
+
+        with patch.dict("os.environ", {"FEEDBACK_NOTIFY_EMAIL": "author@example.com"}), patch(
+            "email_notifier.send_email", return_value=True
+        ) as send_email:
+            response = web_form.app.test_client().post(
+                "/feedback",
+                data={
+                    "subscription_id": "sub-active",
+                    "feedback_type": "unavailable",
+                    "unavailable_reason": "sold_out",
+                    "comment": "price changed",
+                },
+                headers={"User-Agent": "UnitTestAgent"},
+            )
+
+        records = json.loads(web_form.FEEDBACK_PATH.read_text(encoding="utf-8"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(records[-1]["subscription_id"], "sub-active")
+        send_email.assert_called_once()
+        args, _kwargs = send_email.call_args
+        self.assertEqual(args[0], "author@example.com")
+        self.assertIn("unavailable", args[1])
+        self.assertIn("sub-active", args[1])
+        self.assertIn("price changed", args[2])
+
+    def test_feedback_author_email_helper_uses_configured_recipient(self):
+        record = {
+            "subscription_id": "sub-active",
+            "feedback_type": "unavailable",
+            "unavailable_reason": "sold_out",
+            "comment": "price changed",
+            "created_at": "2026-06-16T10:00:00",
+            "user_agent": "UnitTestAgent",
+        }
+
+        with patch.dict("os.environ", {"FEEDBACK_NOTIFY_EMAIL": "author@example.com"}), patch(
+            "email_notifier.send_email", return_value=True
+        ) as send_email:
+            web_form.notify_feedback_author(record)
+
+        send_email.assert_called_once()
+        args, _kwargs = send_email.call_args
+        self.assertEqual(args[0], "author@example.com")
+        self.assertIn("unavailable", args[1])
+        self.assertIn("sub-active", args[1])
+        self.assertIn("price changed", args[2])
 
 
 if __name__ == "__main__":
