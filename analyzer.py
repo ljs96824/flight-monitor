@@ -19,6 +19,7 @@ from price_calendar import (
     analyze_weekday_pattern as _calendar_weekday_pattern,
     calendar_rows as _calendar_rows,
 )
+from domestic_fare_rules import get_aircraft_name
 from storage import get_all_history, get_latest_alternatives, get_target_history
 
 IATA_CITY_NAMES = {
@@ -1526,6 +1527,11 @@ def build_same_day_alternatives(
                 "note": "返程窗口过紧时的镜像备选",
             }
         )
+    labels = ["备选A", "备选B", "备选C"]
+    for index, item in enumerate(alternatives[:3]):
+        title = str(item.get("title") or "").strip()
+        suffix = title.split("·", 1)[1] if "·" in title else title or "备选方案"
+        item["title"] = f"{labels[index]}·{suffix}"
     return alternatives
 
 
@@ -5770,6 +5776,8 @@ def build_no_result_diagnosis(
     """Build no-result diagnostics from candidate and exclusion data."""
     flights = [flight for flight in all_flights or [] if isinstance(flight, dict)]
     excluded = [item for item in excluded_flights or [] if isinstance(item, dict)]
+    stage_counts = stage_counts or {}
+    print(f"[计数诊断] diagnose_no_result收到的counts={stage_counts}")
     valid_price = [flight for flight in flights if _to_float(flight.get("price")) is not None]
     reason_counts = {"direct": 0, "meeting": 0, "budget": 0, "other": 0}
     for item in excluded:
@@ -5777,13 +5785,24 @@ def build_no_result_diagnosis(
         if not reason and isinstance(item.get("flight"), dict):
             reason = item["flight"].get("exclude_reason")
         reason_counts[_no_result_reason_bucket(str(reason or ""))] += 1
+    total_candidates = int(stage_counts.get("total_candidates") or stage_counts.get("valid_price_count") or len(flights))
+    valid_price_count = int(stage_counts.get("valid_price_count") or len(valid_price))
+    if total_candidates < valid_price_count:
+        total_candidates = valid_price_count
+    capped_reasons = {}
+    remaining = total_candidates
+    for key in ("direct", "meeting", "budget", "other"):
+        value = min(int(reason_counts.get(key) or 0), max(remaining, 0))
+        if value:
+            capped_reasons[key] = value
+            remaining -= value
     counts = {
-        "total_candidates": len(flights),
-        "valid_price_count": len(valid_price),
-        "after_basic_filter": (stage_counts or {}).get("after_basic_filter"),
-        "after_meeting_window": (stage_counts or {}).get("after_meeting_window"),
-        "after_budget": (stage_counts or {}).get("after_budget"),
-        "reason_counts": {key: value for key, value in reason_counts.items() if value},
+        "total_candidates": total_candidates,
+        "valid_price_count": valid_price_count,
+        "after_basic_filter": stage_counts.get("after_basic_filter"),
+        "after_meeting_window": stage_counts.get("after_meeting_window"),
+        "after_budget": stage_counts.get("after_budget"),
+        "reason_counts": capped_reasons,
     }
     sample = [
         (flight.get("flight_no") or flight.get("flight_combo"), flight.get("price"))
@@ -5801,7 +5820,17 @@ def build_no_result_diagnosis(
         "count": len(prices),
         "lowest": prices[0] if prices else None,
         "highest": prices[-1] if prices else None,
+        "reason": "",
     }
+    if prices:
+        reason_parts = []
+        if capped_reasons.get("meeting"):
+            reason_parts.append("时间不符合会议窗口")
+        if capped_reasons.get("budget"):
+            reason_parts.append("超出预算")
+        if capped_reasons.get("direct"):
+            reason_parts.append("不满足直飞要求")
+        summary["reason"] = "、".join(reason_parts) or "不满足当前约束"
     counts["reason"] = diagnose_no_result(counts, constraints)
     return {"counts": counts, "price_summary": summary, "reason": counts["reason"]}
 
@@ -7444,6 +7473,7 @@ def analyze_roundtrip_prices(
     target_price=None,
     max_budget=None,
     days_to_dept=None,
+    budget_is_roundtrip: bool = False,
 ) -> dict:
     """Analyze round-trip total price references, trend, and leg contribution."""
     rows = history or []
@@ -7586,18 +7616,20 @@ def analyze_roundtrip_prices(
 
     target = _to_float(target_price)
     max_b = _to_float(max_budget)
+    target_total = target if budget_is_roundtrip and target else (target * 2 if target else None)
+    max_total = max_b if budget_is_roundtrip and max_b else (max_b * 2 if max_b else None)
     advice = ""
-    if target and current_total <= target * 2:
+    if target_total and current_total <= target_total:
         advice = (
-            f"往返总价¥{current_total:,.0f}已低于理想价¥{target * 2:,.0f}，"
+            f"往返总价¥{current_total:,.0f}已低于理想价¥{target_total:,.0f}，"
             "且处于近期低位。可以考虑锁定，继续等待的降幅空间有限。"
         )
-    elif max_b and current_total <= max_b * 2:
+    elif max_total and current_total <= max_total:
         advice = (
             f"往返总价¥{current_total:,.0f}在最高预算内，"
             "但仍高于理想价，可结合出行确定性继续观察。"
         )
-    elif max_b and current_total > max_b * 2:
+    elif max_total and current_total > max_total:
         advice = (
             f"往返总价¥{current_total:,.0f}超出最高预算，"
             "可等待下一轮价格变化或扩大日期范围。"
@@ -7615,17 +7647,19 @@ def analyze_roundtrip_prices(
     }
 
 
-def _roundtrip_budget_advice(roundtrip_lowest, target_price=None, max_budget=None) -> str:
+def _roundtrip_budget_advice(roundtrip_lowest, target_price=None, max_budget=None, budget_is_roundtrip: bool = False) -> str:
     total = _to_float(roundtrip_lowest)
     target = _to_float(target_price)
     max_b = _to_float(max_budget)
     if total is None:
         return ""
-    if target and total <= target * 2:
-        return f"往返总价¥{total:,.0f}已低于理想总价¥{target * 2:,.0f}，建议锁定"
-    if max_b and total <= max_b * 2:
+    target_total = target if budget_is_roundtrip and target else (target * 2 if target else None)
+    max_total = max_b if budget_is_roundtrip and max_b else (max_b * 2 if max_b else None)
+    if target_total and total <= target_total:
+        return f"往返总价¥{total:,.0f}已低于理想总价¥{target_total:,.0f}，建议锁定"
+    if max_total and total <= max_total:
         return "往返总价在预算内但高于理想价，可继续观望"
-    if max_b and total > max_b * 2:
+    if max_total and total > max_total:
         return "往返总价超出预算，建议等待降价"
     return ""
 
@@ -7708,7 +7742,7 @@ def _roundtrip_debug_aircraft(flight: dict) -> str:
     if segments:
         value = segments[0].get("aircraft") or segments[0].get("plane_type") or segments[0].get("equipment")
         if value:
-            return str(value)
+            return get_aircraft_name(value)
     return str(flight.get("aircraft") or flight.get("plane_type") or flight.get("equipment") or "待确认")
 
 
@@ -7890,9 +7924,11 @@ def analyze_round_trip(
     same_day_time_conflict = False
     closest_same_day_outbound_options = []
     same_day_alternatives = []
+    same_day_filter_counts = {}
     if same_day_round_trip:
         outbound_candidates = _all_roundtrip_flights_for_same_day(outbound_analysis)
         return_candidates = _all_roundtrip_flights_for_same_day(return_analysis)
+        print(f"[计数诊断] 去程采集={len(outbound_candidates)} 返程采集={len(return_candidates)}")
         sample_dest = ""
         for flight in outbound_candidates:
             sample_dest = _flight_airport(flight or {}, "arrival_airport")
@@ -7924,6 +7960,39 @@ def analyze_round_trip(
             depart_date_for_same_day,
             constraints=combined_preferences,
         )
+        if windows:
+            arrive_by = windows.get("outbound_arrive_by_minutes")
+            depart_after = windows.get("return_depart_after_minutes")
+            ob_ok = [
+                flight
+                for flight in outbound_candidates
+                if _flight_arrival_minutes(flight or {}) is not None
+                and (arrive_by is None or _flight_arrival_minutes(flight or {}) <= arrive_by)
+            ]
+            rt_ok = [
+                flight
+                for flight in return_candidates
+                if _flight_departure_minutes(flight or {}) is not None
+                and (depart_after is None or _flight_departure_minutes(flight or {}) >= depart_after)
+            ]
+        else:
+            ob_ok = list(outbound_candidates)
+            rt_ok = list(return_candidates)
+        same_day_filter_counts = {
+            "outbound_collected": len(outbound_candidates),
+            "return_collected": len(return_candidates),
+            "total_candidates": len(outbound_candidates) + len(return_candidates),
+            "valid_price_count": len(outbound_candidates) + len(return_candidates),
+            "after_meeting_outbound": len(ob_ok),
+            "after_meeting_return": len(rt_ok),
+            "after_meeting_window": len(ob_ok) + len(rt_ok),
+            "same_day_combos": len(same_day_combos),
+        }
+        print(
+            f"[当天往返诊断] same_day={same_day_round_trip}, 去程窗口符合数={len(ob_ok)}, "
+            f"返程窗口符合数={len(rt_ok)}"
+        )
+        print(f"[当天往返诊断] 配对出的当天往返组合数={len(same_day_combos)}")
         if same_day_combos:
             first_combo = same_day_combos[0]
             first_outbound = first_combo.get("outbound") or {}
@@ -8016,13 +8085,19 @@ def analyze_round_trip(
             )
 
     combinations.sort(key=lambda item: item["total_price"])
-    outbound_min = _to_float(outbound_top[0].get("price")) if outbound_top else None
-    return_min = _to_float(return_top[0].get("price")) if return_top else None
-    total_min = (
-        outbound_min + return_min
-        if outbound_min is not None and return_min is not None
-        else None
-    )
+    best_combo = combinations[0] if combinations else {}
+    if same_day_round_trip and best_combo:
+        outbound_min = _to_float(best_combo.get("outbound_price"))
+        return_min = _to_float(best_combo.get("return_price"))
+        total_min = _to_float(best_combo.get("total_price"))
+    else:
+        outbound_min = _to_float(outbound_top[0].get("price")) if outbound_top else None
+        return_min = _to_float(return_top[0].get("price")) if return_top else None
+        total_min = (
+            outbound_min + return_min
+            if outbound_min is not None and return_min is not None
+            else None
+        )
 
     insight = None
     if outbound_min is not None and return_min is not None:
@@ -8044,8 +8119,8 @@ def analyze_round_trip(
         target_price=target_price,
         max_budget=max_budget,
         days_to_dept=outbound_analysis.get("days_to_dept"),
+        budget_is_roundtrip=same_day_round_trip,
     )
-    best_combo = combinations[0] if combinations else {}
     combo_grades = [
         (best_combo.get("outbound") or {}).get("execution_grade"),
         (best_combo.get("return") or {}).get("execution_grade"),
@@ -8068,10 +8143,12 @@ def analyze_round_trip(
     )
     target_float = _to_float(target_price)
     max_budget_float = _to_float(max_budget)
+    summary_target = target_float if same_day_round_trip and target_float else (target_float * 2 if target_float else None)
+    summary_budget = max_budget_float if same_day_round_trip and max_budget_float else (max_budget_float * 2 if max_budget_float else None)
     decision_summary = generate_decision_summary(
         total_min,
-        target_float * 2 if target_float else None,
-        max_budget_float * 2 if max_budget_float else None,
+        summary_target,
+        summary_budget,
         confidence_breakdown,
         execution_grade,
     )
@@ -8079,15 +8156,16 @@ def analyze_round_trip(
         total_min,
         [row.get("total") for row in (history or []) if isinstance(row, dict)],
         outbound_analysis.get("days_to_dept"),
-        target_float * 2 if target_float else None,
+        summary_target,
         execution_grade,
     )
+    combo_max_budget = summary_budget
     excluded_roundtrip_combos = build_excluded_roundtrip_combos(
         outbound_analysis,
         return_analysis,
         combinations[0].get("total_price") if combinations else total_min,
         3,
-        max_budget=max_budget,
+        max_budget=combo_max_budget,
     )
 
     return {
@@ -8102,6 +8180,7 @@ def analyze_round_trip(
         "same_day_time_conflict": same_day_time_conflict,
         "closest_same_day_outbound_options": closest_same_day_outbound_options,
         "same_day_alternatives": same_day_alternatives,
+        "filter_counts": same_day_filter_counts,
         "outbound_top3": [] if same_day_time_conflict else outbound_top,
         "return_top3": return_top,
         "insight": insight,
@@ -8118,7 +8197,7 @@ def analyze_round_trip(
         "buy_vs_wait_risk": buy_vs_wait_risk,
         "excluded_roundtrip_combos": excluded_roundtrip_combos,
         "previous": previous,
-        "advice": _roundtrip_budget_advice(total_min, target_price, max_budget),
+        "advice": _roundtrip_budget_advice(total_min, target_price, max_budget, budget_is_roundtrip=same_day_round_trip),
     }
 
 

@@ -22,6 +22,7 @@ from airports import (
     get_airport_timezone,
 )
 from channels import CHANNEL_INFO
+from domestic_fare_rules import get_aircraft_name
 from analyzer import (
     build_execution_advice,
     build_budget_gap,
@@ -1062,7 +1063,7 @@ def _ordered_cabin_classes(flights: list[dict], configured=None) -> list[str]:
 def _aircraft_summary(flight: dict) -> str:
     aircrafts = []
     for segment in flight.get("segments") or []:
-        aircraft = segment.get("aircraft")
+        aircraft = get_aircraft_name(segment.get("aircraft") or segment.get("equipment"))
         if aircraft and aircraft not in aircrafts:
             aircrafts.append(aircraft)
     return " / ".join(aircrafts) if aircrafts else "请查询航司官网"
@@ -1342,9 +1343,9 @@ def _compact_flight_numbers(flight: dict) -> str:
 
 def _compact_aircrafts(flight: dict) -> str:
     aircrafts = [
-        segment.get("aircraft", "")
+        get_aircraft_name(segment.get("aircraft", "") or segment.get("equipment", ""))
         for segment in _email_plan_segments(flight)
-        if segment.get("aircraft")
+        if segment.get("aircraft") or segment.get("equipment")
     ]
     return " → ".join(aircrafts) if aircrafts else "请查询航司官网"
 
@@ -1590,6 +1591,7 @@ def _round_trip_aircraft_text(flight: dict) -> str:
     aircraft = ""
     if segments:
         aircraft = segments[0].get("aircraft") or ""
+    aircraft = get_aircraft_name(aircraft)
     return str(aircraft).strip() or "机型待确认"
 
 
@@ -4663,7 +4665,14 @@ def _pushplus_freshness_line(payload: dict) -> str:
 def _payload_freshness_text(payload: dict) -> str:
     age = _to_float(payload.get("freshness_minutes"))
     if age is None:
-        return "采集时间待确认"
+        collected = str(payload.get("collected_at") or payload.get("run_started_at") or "").strip()
+        if collected:
+            try:
+                value = datetime.fromisoformat(collected.replace("Z", "+00:00"))
+                return value.strftime("%Y-%m-%d %H:%M采集")
+            except ValueError:
+                return f"{collected[:16]}采集"
+        return "刚刚采集"
     if age < 1:
         return "刚刚采集"
     if age < 60:
@@ -5951,6 +5960,7 @@ def _pushplus_aircraft_text(flight: dict) -> str:
     aircraft = ""
     if segments:
         aircraft = str(segments[0].get("aircraft") or "").strip()
+    aircraft = get_aircraft_name(aircraft)
     if not aircraft or aircraft in {"未知", "请查询航司官网", "unknown", "Unknown"}:
         return ""
     return aircraft
@@ -6269,7 +6279,8 @@ def _candidate_price_summary_text(payload: dict) -> str:
     count = int(summary.get("count") or 0)
     if lowest is None or count <= 0:
         return ""
-    return f"候选中最低{_price_text(lowest)}(但不满足你的约束)"
+    reason = str(summary.get("reason") or "不满足当前约束").strip()
+    return f"候选中最低{_price_text(lowest)}(但{reason})"
 
 
 def _alternative_labels(alternatives: list[dict]) -> str:
@@ -7270,8 +7281,8 @@ def _normalize_email_segment(segment: dict | None, fallback_airline: str = "") -
             segment, "arr_time", "arrival_time", "arrival", default=""
         )
         or _safe_nested_field(arr, "time", "arrival_time", default=""),
-        "aircraft": _safe_nested_field(
-            segment, "aircraft", "airplane", "plane_type", "equipment", default=""
+        "aircraft": get_aircraft_name(
+            _safe_nested_field(segment, "aircraft", "airplane", "plane_type", "equipment", default="")
         ),
         "duration_min": _safe_nested_field(segment, "duration_min", "duration", default=0),
     }
@@ -7297,7 +7308,7 @@ def _email_plan_segments(flight: dict | None) -> list[dict]:
     )
     dep_time = _safe_flight_field(flight, "departure_time", "dep_time")
     arr_time = _safe_flight_field(flight, "arrival_time", "arr_time")
-    aircraft = _safe_flight_field(flight, "aircraft", "airplane", "plane_type", "equipment")
+    aircraft = get_aircraft_name(_safe_flight_field(flight, "aircraft", "airplane", "plane_type", "equipment"))
     if not any([dep_airport, arr_airport, dep_time, arr_time, aircraft, flight.get("flight_combo")]):
         return []
     return [
@@ -7344,9 +7355,11 @@ def _email_plan_aircraft_text(flight: dict | None) -> str:
             or segment.get("equipment")
             or ""
         ).strip()
+        item = get_aircraft_name(item)
         if item and item not in {"未知", "unknown", "Unknown", "请查询航司官网"} and item not in aircraft:
             aircraft.append(item)
     top_level = str(_safe_flight_field(flight, "aircraft", "airplane", "plane_type", "equipment") or "").strip()
+    top_level = get_aircraft_name(top_level)
     if top_level and top_level not in {"未知", "unknown", "Unknown", "请查询航司官网"} and top_level not in aircraft:
         aircraft.append(top_level)
     return " / ".join(aircraft) if aircraft else "机型待确认"

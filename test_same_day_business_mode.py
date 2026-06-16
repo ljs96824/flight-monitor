@@ -847,5 +847,90 @@ class SameDayBusinessModeTest(unittest.TestCase):
         )
 
 
+    def test_same_day_roundtrip_analysis_uses_actual_combo_total_and_roundtrip_budget(self):
+        from analyzer import analyze_round_trip
+
+        outbound = [
+            {
+                "flight_no": "OB_CHEAP_BUT_LATE",
+                "flight_combo": "OB_CHEAP_BUT_LATE",
+                "price": 100,
+                "departure_airport": "SHA",
+                "arrival_airport": "PEK",
+                "departure_time": "2026-06-18 13:00",
+                "arrival_time": "2026-06-18 15:00",
+                "departure_date": "2026-06-18",
+                "arrival_date": "2026-06-18",
+                "stops": 0,
+            },
+            {
+                "flight_no": "OB_OK",
+                "flight_combo": "OB_OK",
+                "price": 700,
+                "departure_airport": "SHA",
+                "arrival_airport": "PEK",
+                "departure_time": "2026-06-18 06:30",
+                "arrival_time": "2026-06-18 08:00",
+                "departure_date": "2026-06-18",
+                "arrival_date": "2026-06-18",
+                "stops": 0,
+            },
+        ]
+        returns = [
+            {
+                "flight_no": "RT_CHEAP_BUT_EARLY",
+                "flight_combo": "RT_CHEAP_BUT_EARLY",
+                "price": 100,
+                "departure_airport": "PEK",
+                "arrival_airport": "SHA",
+                "departure_time": "2026-06-18 12:00",
+                "arrival_time": "2026-06-18 14:00",
+                "departure_date": "2026-06-18",
+                "arrival_date": "2026-06-18",
+                "stops": 0,
+            },
+            {
+                "flight_no": "RT_OK",
+                "flight_combo": "RT_OK",
+                "price": 900,
+                "departure_airport": "PEK",
+                "arrival_airport": "SHA",
+                "departure_time": "2026-06-18 19:00",
+                "arrival_time": "2026-06-18 21:00",
+                "departure_date": "2026-06-18",
+                "arrival_date": "2026-06-18",
+                "stops": 0,
+            },
+        ]
+        constraints = {
+            "same_day_round_trip": True,
+            "business_start": "10:00",
+            "business_end": "16:00",
+            "buffer_hours": 1,
+        }
+
+        result = analyze_round_trip(
+            {
+                "all_flights": outbound,
+                "hard_constraints": constraints,
+                "depart_date": "2026-06-18",
+            },
+            {
+                "all_flights": returns,
+                "hard_constraints": constraints,
+                "depart_date": "2026-06-18",
+            },
+            target_price=1600,
+            max_budget=2200,
+        )
+
+        self.assertFalse(result["same_day_time_conflict"])
+        self.assertEqual(result["top_combinations"][0]["outbound"]["flight_no"], "OB_OK")
+        self.assertEqual(result["top_combinations"][0]["return"]["flight_no"], "RT_OK")
+        self.assertEqual(result["total_min"], 1600)
+        self.assertNotIn("4,400", str(result["decision_summary"]))
+        self.assertNotIn("4,400", result["advice"])
+
+
 if __name__ == "__main__":
     unittest.main()

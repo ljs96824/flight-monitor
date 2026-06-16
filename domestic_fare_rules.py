@@ -33,6 +33,54 @@ FULL_SERVICE = {
 FLEXIBLE_CABINS = {"Y", "B", "M", "U", "H", "W"}
 MEDIUM_CABINS = {"K", "L", "N", "R", "S", "V", "Q"}
 
+AIRCRAFT_NAMES = {
+    "33L": "空客A330",
+    "33J": "空客A330",
+    "33E": "空客A330",
+    "332": "空客A330-200",
+    "333": "空客A330-300",
+    "339": "空客A330-900",
+    "33": "空客A330",
+    "32L": "空客A321",
+    "32Q": "空客A321neo",
+    "32J": "空客A321",
+    "321": "空客A321",
+    "32A": "空客A320",
+    "32N": "空客A320neo",
+    "320": "空客A320",
+    "73L": "波音737",
+    "73J": "波音737",
+    "73E": "波音737",
+    "73U": "波音737",
+    "737": "波音737",
+    "738": "波音737-800",
+    "789": "波音787-9",
+    "788": "波音787-8",
+    "787": "波音787",
+    "359": "空客A350",
+    "351": "空客A350",
+    "919": "国产C919",
+    "909": "国产ARJ21",
+}
+
+
+def get_aircraft_name(code) -> str:
+    text = str(code or "").strip()
+    if not text:
+        return ""
+    if any(token in text for token in ("空客", "波音", "国产", "Airbus", "Boeing", "C919", "ARJ")):
+        return text
+    key = text.upper()
+    if key in AIRCRAFT_NAMES:
+        return AIRCRAFT_NAMES[key]
+    if 2 <= len(key) <= 4 and re_match_aircraft_code(key):
+        return f"机型代码{key}(以航司为准)"
+    return text
+
+
+def re_match_aircraft_code(value: str) -> bool:
+    return all(ch.isalnum() for ch in value)
+
 
 def airline_code_from_flight(flight: dict | None) -> str:
     flight = flight or {}

@@ -13,6 +13,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from filename_utils import sanitize_filename
+from domestic_fare_rules import get_aircraft_name
 from sources.base import FlightSource
 
 
@@ -225,7 +226,7 @@ class JuheSource(FlightSource):
                 continue
 
             equipment = str(_first(item, "equipment", "planeType", "aircraft")).strip()
-            aircraft = AIRCRAFT_NAMES.get(equipment, equipment)
+            aircraft = get_aircraft_name(equipment)
             transfer_num = _to_int(item.get("transferNum"), 1)
             stops = max(0, transfer_num - 1)
             dep_airport = _first(item, "departure", "departureAirport", "depAirport")
