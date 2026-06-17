@@ -16,8 +16,11 @@ from on_time_data import estimate_punctuality
 from price_estimator import calc_transaction_price
 from price_calendar import (
     analyze_date_savings as _calendar_date_savings,
+    analyze_row_savings as _calendar_row_savings,
     analyze_weekday_pattern as _calendar_weekday_pattern,
     calendar_rows as _calendar_rows,
+    calendar_price_on_date as _calendar_price_on_date,
+    roundtrip_calendar_rows as _roundtrip_calendar_rows,
 )
 from domestic_fare_rules import get_aircraft_name
 from storage import get_all_history, get_latest_alternatives, get_target_history
@@ -4638,8 +4641,64 @@ def _calendar_selected_price(rows: list[dict]):
     return None
 
 
-def analyze_price_calendar(calendar: dict, target_date: str, current_price) -> dict:
+def analyze_roundtrip_price_calendar(
+    outbound_calendar: dict,
+    target_date: str,
+    return_calendar: dict | None,
+    return_date: str,
+    current_price=None,
+) -> dict:
+    """Analyze a fixed-return-date roundtrip reference calendar."""
+    return_low = _calendar_price_on_date(return_calendar or {}, return_date)
+    if return_low is None:
+        fallback = analyze_price_calendar(outbound_calendar or {}, target_date, current_price)
+        fallback["fallback_reason"] = "return_price_missing"
+        fallback["note"] = (
+            "返程日价格暂无，以下为出发日单程趋势。"
+            + str(fallback.get("note") or "")
+        )
+        return fallback
+
+    rows = _roundtrip_calendar_rows(
+        outbound_calendar or {},
+        target_date,
+        return_low=return_low,
+        return_date=return_date,
+    )
+    savings = _calendar_row_savings(rows, target_date)
+    return {
+        "route": (outbound_calendar or {}).get("route"),
+        "rows": rows,
+        "savings": savings,
+        "weekday_pattern": {},
+        "scope": "roundtrip",
+        "return_date": return_date,
+        "return_min_price": return_low,
+        "note": (
+            f"每行=该出发日单程最低 + 返程日({str(return_date)[5:10]})单程最低，"
+            "为往返价格参考下限，实际同渠道拼接价可能略高。"
+        ),
+    }
+
+
+def analyze_price_calendar(
+    calendar: dict,
+    target_date: str,
+    current_price,
+    *,
+    round_trip: bool = False,
+    return_calendar: dict | None = None,
+    return_date: str | None = None,
+) -> dict:
     """Analyze nearby date savings and weekday patterns from a rolling calendar."""
+    if round_trip and return_date:
+        return analyze_roundtrip_price_calendar(
+            calendar or {},
+            target_date,
+            return_calendar or {},
+            return_date,
+            current_price,
+        )
     rows = _calendar_rows(calendar or {}, target_date)
     selected_price = _calendar_selected_price(rows)
     savings_basis = selected_price if selected_price is not None else current_price

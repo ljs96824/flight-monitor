@@ -367,3 +367,121 @@ def calendar_rows(calendar: dict, target_date: str) -> list[dict]:
             }
         )
     return rows
+
+
+def calendar_price_on_date(calendar: dict, target_date: str) -> float | None:
+    """Return the one-way minimum price for an exact calendar date."""
+    try:
+        date_key = parse_date(target_date).isoformat()
+    except (TypeError, ValueError):
+        return None
+    info = (calendar or {}).get("dates", {}).get(date_key)
+    if not isinstance(info, dict) or not _valid_price(info.get("min_price")):
+        return None
+    return float(info["min_price"])
+
+
+def roundtrip_calendar_rows(
+    outbound_calendar: dict,
+    target_date: str,
+    *,
+    return_low,
+    return_date: str,
+) -> list[dict]:
+    """Build fixed-return-date roundtrip reference rows.
+
+    Each row equals the outbound date's one-way low plus the fixed return date's
+    one-way low. This keeps quota usage bounded while giving round-trip monitors
+    a comparable price scope.
+    """
+    if not _valid_price(return_low):
+        return []
+    return_price = float(return_low)
+    rows = []
+    for row in calendar_rows(outbound_calendar or {}, target_date):
+        outbound_price = row.get("min_price")
+        if not _valid_price(outbound_price):
+            continue
+        outbound_price = float(outbound_price)
+        combined = outbound_price + return_price
+        updated = dict(row)
+        updated.update(
+            {
+                "outbound_min_price": outbound_price,
+                "return_min_price": return_price,
+                "return_date": str(return_date or ""),
+                "min_price": combined,
+                "value": combined,
+                "scope": "roundtrip",
+                "breakdown": f"去¥{outbound_price:,.0f}+返¥{return_price:,.0f}",
+            }
+        )
+        rows.append(updated)
+
+    if rows:
+        lowest_price = min(row["min_price"] for row in rows)
+        for row in rows:
+            row["lowest"] = row["min_price"] == lowest_price
+    return rows
+
+
+def analyze_row_savings(
+    rows: list[dict],
+    target_date: str,
+    *,
+    threshold: float = 100,
+    limit: int = 3,
+) -> list[dict]:
+    """Find cheaper dates from already-scoped calendar rows."""
+    selected = next((row for row in rows if isinstance(row, dict) and row.get("selected")), None)
+    if selected is None:
+        try:
+            target = parse_date(target_date)
+        except (TypeError, ValueError):
+            target = None
+        if target:
+            selected = next(
+                (
+                    row
+                    for row in rows
+                    if isinstance(row, dict)
+                    and row.get("date")
+                    and parse_date(str(row["date"])) == target
+                ),
+                None,
+            )
+    if not isinstance(selected, dict) or not _valid_price(selected.get("min_price")):
+        return []
+
+    current = float(selected["min_price"])
+    target = parse_date(selected.get("date") or target_date)
+    savings = []
+    for row in rows:
+        if not isinstance(row, dict) or row is selected or not _valid_price(row.get("min_price")):
+            continue
+        row_date = row.get("date")
+        if not row_date:
+            continue
+        d = parse_date(str(row_date))
+        if d < date.today():
+            continue
+        price = float(row["min_price"])
+        price_diff = round(current - price)
+        if price_diff < threshold:
+            continue
+        diff_days = (d - target).days
+        direction = "鎻愬墠" if diff_days < 0 else "鎺ㄨ繜"
+        weekday = row.get("weekday") or WEEKDAY_NAMES[d.weekday()]
+        unit = "往返" if row.get("scope") == "roundtrip" else "单程"
+        savings.append(
+            {
+                "date": str(row_date),
+                "weekday": weekday,
+                "price": price,
+                "save": price_diff,
+                "offset": diff_days,
+                "tip": f"{direction}{abs(diff_days)}天({str(row_date)} {weekday})出发，省¥{price_diff}/{unit}",
+            }
+        )
+    savings.sort(key=lambda item: item["save"], reverse=True)
+    return savings[:limit]

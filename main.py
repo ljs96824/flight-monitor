@@ -1164,6 +1164,12 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
             analysis.get("price_range", [0])[0] if analysis.get("price_range") else 0
         )
         price_calendar_result = None
+        outbound_price_calendar = None
+        calendar_cabin_class = (
+            (sub.get("cabin_classes") or ["economy"])[0]
+            if isinstance(sub.get("cabin_classes"), list)
+            else (sub.get("cabin_classes") or "economy")
+        )
         calendar_origin = _first_airport(active_origins, sub["origin"])
         calendar_dest = _first_airport(active_dests, sub["destination"])
         calendar_route = f"{calendar_origin}-{calendar_dest}"
@@ -1178,10 +1184,9 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
                         calendar_dest,
                         sub["depart_date"],
                         calendar_source,
-                        cabin_class=(sub.get("cabin_classes") or ["economy"])[0]
-                        if isinstance(sub.get("cabin_classes"), list)
-                        else (sub.get("cabin_classes") or "economy"),
+                        cabin_class=calendar_cabin_class,
                     )
+                    outbound_price_calendar = calendar
                     price_calendar_result = analyze_price_calendar(
                         calendar,
                         sub["depart_date"],
@@ -1300,6 +1305,41 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
                     if return_analysis.get("price_range")
                     else 0
                 )
+                if price_calendar_result and outbound_price_calendar and return_min_price:
+                    try:
+                        return_calendar_origin = calendar_dest
+                        return_calendar_dest = calendar_origin
+                        return_calendar_route = f"{return_calendar_origin}-{return_calendar_dest}"
+                        return_calendar_source = _calendar_source_for_route(
+                            agg, return_calendar_origin, return_calendar_dest
+                        )
+                        if return_calendar_source and is_domestic_route(
+                            return_calendar_origin, return_calendar_dest
+                        ):
+                            print(f"[低价日历] 更新返程固定日 {return_calendar_route} {return_date}")
+                            return_calendar = update_calendar(
+                                return_calendar_route,
+                                return_calendar_origin,
+                                return_calendar_dest,
+                                return_date,
+                                return_calendar_source,
+                                cabin_class=calendar_cabin_class,
+                            )
+                            price_calendar_result = analyze_price_calendar(
+                                outbound_price_calendar,
+                                sub["depart_date"],
+                                current_min_price,
+                                round_trip=True,
+                                return_calendar=return_calendar,
+                                return_date=return_date,
+                            )
+                            analysis["price_calendar"] = price_calendar_result
+                            print(
+                                "[低价日历] 往返参考价完成: "
+                                f"{len(price_calendar_result.get('rows') or [])}个日期"
+                            )
+                    except Exception as exc:
+                        print(f"[低价日历] 返程固定日更新失败,保留单程趋势: {exc}")
                 return_sub = {
                     **sub,
                     "origin": sub["destination"],

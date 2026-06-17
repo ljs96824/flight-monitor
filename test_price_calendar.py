@@ -96,6 +96,74 @@ class PriceCalendarTest(unittest.TestCase):
         self.assertIn(today, dates)
         self.assertIn(tomorrow, dates)
 
+    def test_roundtrip_reference_rows_add_fixed_return_low(self):
+        from price_calendar import roundtrip_calendar_rows
+
+        target = date.today() + timedelta(days=9)
+        cheaper = target - timedelta(days=3)
+        later = target + timedelta(days=1)
+        return_date = target + timedelta(days=4)
+        calendar = {
+            "route": "SHA-PEK",
+            "dates": {
+                cheaper.isoformat(): {"min_price": 547, "airline": "MU"},
+                target.isoformat(): {"min_price": 679, "airline": "CA"},
+                later.isoformat(): {"min_price": 760, "airline": "MU"},
+            },
+        }
+
+        rows = roundtrip_calendar_rows(
+            calendar,
+            target.isoformat(),
+            return_low=557,
+            return_date=return_date.isoformat(),
+        )
+
+        selected = next(row for row in rows if row["selected"])
+        lowest = next(row for row in rows if row["lowest"])
+        self.assertEqual(selected["outbound_min_price"], 679)
+        self.assertEqual(selected["return_min_price"], 557)
+        self.assertEqual(selected["min_price"], 1236)
+        self.assertEqual(selected["scope"], "roundtrip")
+        self.assertEqual(selected["return_date"], return_date.isoformat())
+        self.assertEqual(lowest["date"], cheaper.isoformat())
+        self.assertEqual(lowest["min_price"], 1104)
+
+    def test_analyzer_roundtrip_calendar_uses_fixed_return_date_price(self):
+        from analyzer import analyze_price_calendar
+
+        target = date.today() + timedelta(days=9)
+        cheaper = target - timedelta(days=3)
+        return_date = target + timedelta(days=4)
+        outbound_calendar = {
+            "route": "SHA-PEK",
+            "dates": {
+                cheaper.isoformat(): {"min_price": 547},
+                target.isoformat(): {"min_price": 679},
+            },
+        }
+        return_calendar = {
+            "route": "PEK-SHA",
+            "dates": {return_date.isoformat(): {"min_price": 557}},
+        }
+
+        result = analyze_price_calendar(
+            outbound_calendar,
+            target.isoformat(),
+            2760,
+            round_trip=True,
+            return_calendar=return_calendar,
+            return_date=return_date.isoformat(),
+        )
+
+        selected = next(row for row in result["rows"] if row["selected"])
+        self.assertEqual(result["scope"], "roundtrip")
+        self.assertEqual(result["return_min_price"], 557)
+        self.assertEqual(selected["min_price"], 1236)
+        self.assertEqual(selected["outbound_min_price"], 679)
+        self.assertEqual(selected["return_min_price"], 557)
+        self.assertEqual(result["savings"][0]["save"], 132)
+
     def test_analyze_date_savings_and_weekday_pattern(self):
         from price_calendar import WEEKDAY_NAMES, analyze_date_savings, analyze_weekday_pattern
 

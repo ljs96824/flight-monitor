@@ -142,6 +142,48 @@ class NotificationNumericScopesTest(unittest.TestCase):
         self.assertNotIn("\u5f53\u524d\u5f80\u8fd4\u00a52,760", body)
         self.assertNotIn("\u4f60\u9009\u768406-26\u504f\u8d35", body)
 
+    def test_roundtrip_calendar_body_uses_roundtrip_reference_scope(self):
+        payload = {
+            "is_roundtrip": True,
+            "display_price": 2760,
+            "price_calendar": {
+                "scope": "roundtrip",
+                "return_date": "2026-06-30",
+                "return_min_price": 557,
+                "rows": [
+                    {
+                        "date": "2026-06-23",
+                        "weekday": "\u5468\u4e8c",
+                        "outbound_min_price": 547,
+                        "return_min_price": 557,
+                        "min_price": 1104,
+                        "lowest": True,
+                    },
+                    {
+                        "date": "2026-06-26",
+                        "weekday": "\u5468\u4e94",
+                        "outbound_min_price": 679,
+                        "return_min_price": 557,
+                        "min_price": 1236,
+                        "selected": True,
+                    },
+                ],
+                "note": "\u6bcf\u884c=\u8be5\u51fa\u53d1\u65e5\u5355\u7a0b\u6700\u4f4e+\u8fd4\u7a0b\u65e5\u5355\u7a0b\u6700\u4f4e,\u4e3a\u5f80\u8fd4\u4ef7\u683c\u53c2\u8003\u4e0b\u9650\u3002",
+            },
+        }
+
+        body = _email_price_calendar_body(payload)
+
+        self.assertIn("\u5f80\u8fd4\u53c2\u8003\u4ef7", body)
+        self.assertIn("\u8fd4\u7a0b\u65e5\u56fa\u5b9a06-30", body)
+        self.assertIn("\u6bcf\u884c=\u8be5\u51fa\u53d1\u65e5\u5355\u7a0b\u6700\u4f4e + \u8fd4\u7a0b\u65e5(06-30)\u5355\u7a0b\u6700\u4f4e", body)
+        self.assertIn("\u4f60\u9009\u768406-26\u5f80\u8fd4\u00a51,236", body)
+        self.assertIn("\u5f80\u8fd4\u6700\u4f4e\u00a51,104(06-23 \u5468\u4e8c)", body)
+        self.assertIn("\u7701\u7ea6\u00a5132/\u5f80\u8fd4", body)
+        self.assertIn("\u53bb\u00a5679+\u8fd4\u00a5557", body)
+        self.assertIn("\u5f53\u524d\u5b9e\u9645\u65b9\u6848\u5f80\u8fd4\u00a52,760", body)
+        self.assertNotIn("\u5355\u7a0b\u4ef7\u683c\u8d8b\u52bf", body)
+
     def test_pushplus_is_slim_and_uses_budget_action_panel(self):
         payload = self._over_budget_payload()
         payload["plan_status_change"] = {"msg": "\u4e0a\u6b21\u65b9\u6848\u6da8\u4ef7"}

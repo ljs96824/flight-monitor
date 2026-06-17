@@ -5114,6 +5114,8 @@ def _payload_price_calendar(route_info: dict, analysis_result: dict) -> dict:
         "savings": savings if isinstance(savings, list) else [],
         "weekday_pattern": weekday_pattern if isinstance(weekday_pattern, dict) else {},
         "scope": calendar.get("scope") or "oneway",
+        "return_date": calendar.get("return_date"),
+        "return_min_price": calendar.get("return_min_price"),
         "note": calendar.get("note") or "为单程最低参考价，实付以支付页为准。",
     }
 
@@ -6709,7 +6711,12 @@ def _pushplus_calendar_summary_lines(payload: dict) -> list[str]:
     is_roundtrip_scope, _unit = _calendar_scope_unit(calendar)
     primary_plan = ((payload.get("recommended_plans") or [{}]) or [{}])[0] or {}
     is_roundtrip_payload = bool(payload.get("is_roundtrip") or primary_plan.get("is_roundtrip"))
-    if is_roundtrip_payload and not is_roundtrip_scope:
+    if is_roundtrip_scope:
+        return_date = str(calendar.get("return_date") or "").strip()
+        return_short = return_date[5:10] if len(return_date) >= 10 else return_date
+        suffix = f"(返程日固定{return_short})" if return_short else ""
+        lines = [f"往返参考价摘要{suffix}:"]
+    elif is_roundtrip_payload:
         lines = ["单程价格趋势摘要(仅供参考出发日选择):"]
     else:
         lines = ["低价日历摘要:"]
@@ -6717,7 +6724,15 @@ def _pushplus_calendar_summary_lines(payload: dict) -> list[str]:
         lines.append(insight)
     for row in sorted(rows, key=lambda item: _to_float(item.get("min_price")) or float("inf"))[:3]:
         date_text = f"{str(row.get('date') or '')[5:]} {row.get('weekday') or ''}".strip()
-        lines.append(f"{date_text} {_price_text(row.get('min_price'))}(单程)")
+        if is_roundtrip_scope:
+            outbound_price = _to_float(row.get("outbound_min_price"))
+            return_price = _to_float(row.get("return_min_price") or calendar.get("return_min_price"))
+            breakdown = ""
+            if outbound_price is not None and return_price is not None:
+                breakdown = f" (去{_price_text(outbound_price)}+返{_price_text(return_price)})"
+            lines.append(f"{date_text} {_price_text(row.get('min_price'))}(往返){breakdown}")
+        else:
+            lines.append(f"{date_text} {_price_text(row.get('min_price'))}(单程)")
     return [html.escape(str(line)) for line in lines if str(line).strip()]
 
 
@@ -8922,8 +8937,11 @@ def _email_price_calendar_body(payload: dict) -> str:
     primary_plan = ((payload.get("recommended_plans") or [{}]) or [{}])[0] or {}
     is_roundtrip_monitor = bool(payload.get("is_roundtrip") or primary_plan.get("is_roundtrip"))
     is_roundtrip_monitor_with_oneway_calendar = is_roundtrip_monitor and not is_roundtrip_scope
+    return_date_text = str(calendar.get("return_date") or "").strip()
+    return_short = return_date_text[5:10] if len(return_date_text) >= 10 else return_date_text
     if is_roundtrip_scope:
-        title = "低价日历 ｜ 往返参考价"
+        fixed_return = f"(返程日固定{return_short})" if return_short else ""
+        title = f"低价日历 ｜ 往返参考价{fixed_return}"
     elif is_roundtrip_monitor_with_oneway_calendar:
         title = "单程价格趋势(仅供参考出发日选择)"
     else:
@@ -8939,6 +8957,14 @@ def _email_price_calendar_body(payload: dict) -> str:
             "你的往返方案需去程+返程各自验证,单程趋势仅供日期趋势参考。"
             "</div>"
         )
+    elif is_roundtrip_scope:
+        return_desc = f"返程日({html.escape(return_short)})" if return_short else "返程日"
+        table.append(
+            "<div style='margin-bottom:8px;color:#666;font-size:12px;'>"
+            f"说明:每行=该出发日单程最低 + {return_desc}单程最低,"
+            "为往返价格参考下限,实际同渠道拼接价可能略高。"
+            "</div>"
+        )
     insight = _price_calendar_insight_text(payload)
     if insight:
         table.append(f"<div style='margin-bottom:10px;color:#374151;'>💡 {html.escape(insight)}</div>")
@@ -8947,7 +8973,7 @@ def _email_price_calendar_body(payload: dict) -> str:
             "<table style='width:100%;font-size:13px;line-height:1.6;border-collapse:collapse;'>",
             "<thead><tr>",
             "<th style='text-align:left;color:#666;border-bottom:1px solid #eee;padding:6px 4px;'>日期</th>",
-            "<th style='text-align:left;color:#666;border-bottom:1px solid #eee;padding:6px 4px;'>最低价</th>",
+            f"<th style='text-align:left;color:#666;border-bottom:1px solid #eee;padding:6px 4px;'>{'往返参考价' if is_roundtrip_scope else '最低价'}</th>",
             "<th style='text-align:left;color:#666;border-bottom:1px solid #eee;padding:6px 4px;'>说明</th>",
             "</tr></thead><tbody>",
         ]
@@ -8961,6 +8987,11 @@ def _email_price_calendar_body(payload: dict) -> str:
             tags.append("最低")
         if row.get("selected"):
             tags.append("你选的")
+        if is_roundtrip_scope:
+            outbound_price = _to_float(row.get("outbound_min_price"))
+            return_price = _to_float(row.get("return_min_price") or calendar.get("return_min_price"))
+            if outbound_price is not None and return_price is not None:
+                tags.append(f"去{_price_text(outbound_price)}+返{_price_text(return_price)}")
         tag_text = " / ".join(tags)
         price_style = "color:#16a34a;font-weight:600;" if row.get("lowest") else "color:#333;"
         if row.get("selected"):
@@ -8995,6 +9026,19 @@ def _email_price_calendar_body(payload: dict) -> str:
         table.append("<div style='margin-top:8px;color:#888;font-size:12px;'>周几更便宜：数据积累中。</div>")
 
     note = calendar.get("note") or "为单程最低参考价，实付以支付页为准。"
+    if is_roundtrip_scope:
+        selected = next((row for row in rows if isinstance(row, dict) and row.get("selected")), None)
+        selected_ref = _calendar_row_price(selected) if isinstance(selected, dict) else None
+        actual_roundtrip = _to_float(payload.get("display_price") or payload.get("current_price"))
+        if selected_ref is not None and actual_roundtrip is not None and actual_roundtrip > selected_ref:
+            gap = actual_roundtrip - selected_ref
+            table.append(
+                "<div style='margin-top:8px;color:#374151;font-size:12px;'>"
+                f"你选日期的往返参考下限约{_price_text(selected_ref)},"
+                f"当前实际方案往返{_price_text(actual_roundtrip)},"
+                f"高于参考下限约{_price_text(gap)},可能因临近出发或舱位原因。"
+                "</div>"
+            )
     if is_roundtrip_monitor and not is_roundtrip_scope:
         roundtrip_price = _to_float(payload.get("display_price") or payload.get("current_price"))
         roundtrip_note = "下方为单程最低参考价;你的往返方案需去程+返程各自验证。"
