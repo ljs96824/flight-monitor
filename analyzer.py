@@ -7958,6 +7958,153 @@ def _roundtrip_budget_context(total, max_budget, recommended_total) -> dict:
     }
 
 
+def _duration_text_from_minutes(minutes: int | float | None) -> str:
+    if minutes is None:
+        return ""
+    total = int(round(abs(minutes)))
+    hours, mins = divmod(total, 60)
+    if hours and mins:
+        return f"{hours}小时{mins}分钟"
+    if hours:
+        return f"{hours}小时"
+    return f"{mins}分钟"
+
+
+def _roundtrip_exclusion_basis(constraints: dict | None, max_budget=None) -> list[str]:
+    constraints = constraints or {}
+    basis = []
+    if constraints.get("same_day_round_trip"):
+        basis.append("当天往返")
+    business_start = str(constraints.get("business_start") or "").strip()
+    business_end = str(constraints.get("business_end") or "").strip()
+    if business_start and business_end:
+        basis.append(f"会议{business_start}-{business_end}")
+    direct_only = str(
+        constraints.get("direct_only")
+        or constraints.get("transfer_policy")
+        or constraints.get("direct_policy")
+        or ""
+    ).strip()
+    if direct_only in {"must", "direct", "direct_only", "nonstop", "必须直飞"}:
+        basis.append("必须直飞")
+    baggage = str(constraints.get("need_baggage") or constraints.get("baggage") or "").strip()
+    if baggage in {"required", "must", "checked_required", "必须托运"}:
+        basis.append("必须含托运")
+    max_budget_value = _to_float(max_budget)
+    if max_budget_value is not None:
+        basis.append(f"最高可接受价¥{max_budget_value:,.0f}")
+    return basis
+
+
+def _roundtrip_specific_exclusion_reasons(
+    outbound_flight: dict,
+    return_flight: dict,
+    original_reasons: list[str],
+    constraints: dict | None,
+    total,
+    max_budget,
+    budget_context: dict,
+) -> list[str]:
+    constraints = constraints or {}
+    reasons = []
+    business_start = _parse_time_minutes(constraints.get("business_start"))
+    business_end = _parse_time_minutes(constraints.get("business_end"))
+    business_start_text = _minutes_to_text(business_start) if business_start is not None else ""
+    business_end_text = _minutes_to_text(business_end) if business_end is not None else ""
+    meeting_text = f"会议{business_start_text}-{business_end_text}" if business_start_text and business_end_text else ""
+
+    return_departure = _flight_departure_minutes(return_flight or {})
+    return_departure_text = _minutes_to_text(return_departure) if return_departure is not None else ""
+    if (
+        constraints.get("same_day_round_trip")
+        and business_end is not None
+        and return_departure is not None
+        and return_departure < business_end
+    ):
+        diff_text = _duration_text_from_minutes(business_end - return_departure)
+        reasons.append(
+            f"返程{return_departure_text}出发,但你的{meeting_text}还没结束,"
+            f"返程早了约{diff_text},无法乘坐。"
+        )
+
+    outbound_arrival = _flight_arrival_minutes(outbound_flight or {})
+    outbound_arrival_text = _minutes_to_text(outbound_arrival) if outbound_arrival is not None else ""
+    if (
+        constraints.get("same_day_round_trip")
+        and business_start is not None
+        and outbound_arrival is not None
+        and outbound_arrival > business_start
+    ):
+        diff_text = _duration_text_from_minutes(outbound_arrival - business_start)
+        reasons.append(
+            f"去程{outbound_arrival_text}到达,但你的{meeting_text}已开始,"
+            f"到达晚了约{diff_text},无法按时赶到。"
+        )
+
+    direct_only = str(
+        constraints.get("direct_only")
+        or constraints.get("transfer_policy")
+        or constraints.get("direct_policy")
+        or ""
+    ).strip()
+    if direct_only in {"must", "direct", "direct_only", "nonstop", "必须直飞"}:
+        for label, flight in (("去程", outbound_flight), ("返程", return_flight)):
+            if _stops_count(flight or {}) > 0:
+                reasons.append(f"{label}需中转,但你设置了'必须直飞'。")
+
+    total_value = _to_float(total)
+    max_budget_value = _to_float(max_budget)
+    if (
+        max_budget_value is not None
+        and total_value is not None
+        and total_value > max_budget_value
+        and not budget_context.get("all_over_budget_reference")
+    ):
+        reasons.append(
+            f"往返总价¥{total_value:,.0f},超过你的最高可接受价¥{max_budget_value:,.0f},"
+            f"超出¥{total_value - max_budget_value:,.0f}。"
+        )
+
+    generic = []
+    for reason in original_reasons or []:
+        text = str(reason or "").strip()
+        if not text:
+            continue
+        if reasons and any(token in text for token in ("时间", "会议", "窗口", "不符")):
+            continue
+        if text not in generic:
+            generic.append(text)
+    return (reasons + generic) or ["不符合当前约束"]
+
+
+def _roundtrip_comparison_points(combo: dict, recommended_combo: dict | None, recommended_total) -> list[str]:
+    points = []
+    total = _to_float(combo.get("total_price"))
+    recommended_value = _to_float(recommended_total)
+    if total is not None and recommended_value is not None:
+        diff = recommended_value - total
+        if diff > 0:
+            points.append(f"价格:此方案¥{total:,.0f},比推荐便宜¥{diff:,.0f} ✓")
+        elif diff < 0:
+            points.append(f"价格:此方案¥{total:,.0f},比推荐贵¥{abs(diff):,.0f} ✗")
+        else:
+            points.append(f"价格:此方案¥{total:,.0f},与推荐持平")
+
+    recommended_combo = recommended_combo or {}
+    return_flight = combo.get("return") or {}
+    recommended_return = recommended_combo.get("return") or {}
+    return_dep = _minutes_to_text(_flight_departure_minutes(return_flight))
+    recommended_return_dep = _minutes_to_text(_flight_departure_minutes(recommended_return))
+    if return_dep and recommended_return_dep:
+        reason_text = str(combo.get("reason") or " ".join(combo.get("reasons") or []))
+        this_mark = "不可用" if any(token in reason_text for token in ("无法乘坐", "时间不符", "会议")) else "需确认"
+        points.append(f"返程时间:此方案{return_dep}({this_mark}) vs 推荐{recommended_return_dep}(可用) ✗")
+
+    if points and any("不可用" in point for point in points):
+        points.append("结论:虽便宜但返程时间不符合你的会议安排")
+    return points
+
+
 def _roundtrip_budget_safe_reasons_v2(
     reasons: list[str],
     total,
@@ -8005,6 +8152,8 @@ def build_excluded_roundtrip_combos(
     recommended_total,
     max_show: int = 3,
     max_budget=None,
+    constraints: dict | None = None,
+    recommended_combo: dict | None = None,
 ) -> list[dict]:
     """Build same-unit excluded round-trip combos for notification explanations."""
     recommended_total = _to_float(recommended_total)
@@ -8039,28 +8188,42 @@ def build_excluded_roundtrip_combos(
                 max_budget,
                 recommended_total,
             )
+            reasons = _roundtrip_specific_exclusion_reasons(
+                outbound["flight"],
+                return_item["flight"],
+                reasons,
+                constraints,
+                total,
+                max_budget,
+                budget_context,
+            )
             if not reasons:
                 continue
-
-            combos.append(
-                {
-                    "scope": "roundtrip",
-                    "is_roundtrip": True,
-                    "outbound": outbound["flight"],
-                    "return": return_item["flight"],
-                    "outbound_price": outbound_price,
-                    "return_price": return_price,
-                    "total_price": total,
-                    "roundtrip_price": total,
-                    "diff": recommended_total - total,
-                    "reasons": reasons,
-                    "reason": "；".join(reasons),
-                    "recommended_price": recommended_total,
-                    "max_budget": budget_context.get("max_budget"),
-                    "recommended_over_budget": budget_context.get("recommended_over_budget"),
-                    "all_over_budget_reference": budget_context.get("all_over_budget_reference"),
-                }
+            combo_payload = {
+                "scope": "roundtrip",
+                "is_roundtrip": True,
+                "outbound": outbound["flight"],
+                "return": return_item["flight"],
+                "outbound_price": outbound_price,
+                "return_price": return_price,
+                "total_price": total,
+                "roundtrip_price": total,
+                "diff": recommended_total - total,
+                "reasons": reasons,
+                "reason": "；".join(reasons),
+                "recommended_price": recommended_total,
+                "max_budget": budget_context.get("max_budget"),
+                "recommended_over_budget": budget_context.get("recommended_over_budget"),
+                "all_over_budget_reference": budget_context.get("all_over_budget_reference"),
+                "exclusion_basis": _roundtrip_exclusion_basis(constraints, max_budget),
+            }
+            combo_payload["comparison_points"] = _roundtrip_comparison_points(
+                combo_payload,
+                recommended_combo,
+                recommended_total,
             )
+
+            combos.append(combo_payload)
 
     print(
         f"[排除诊断] 推荐方案价={recommended_total}, 最高可接受价={max_budget}, "
@@ -8361,6 +8524,8 @@ def analyze_round_trip(
         combinations[0].get("total_price") if combinations else total_min,
         3,
         max_budget=combo_max_budget,
+        constraints=combined_preferences,
+        recommended_combo=combinations[0] if combinations else None,
     )
 
     return {

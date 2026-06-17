@@ -171,8 +171,10 @@ class EmailPlanTiersPriceConceptsTest(unittest.TestCase):
         self.assertIn("\u6392\u9664\u539f\u56e0", html)
         self.assertIn("\u00a54,564(\u5355\u7a0b)", html)
         self.assertIn("\u00a55,714(\u5f80\u8fd4)", html)
-        self.assertIn("\u5b8c\u6574\u6392\u9664\u65b9\u6848\u8be6\u60c5\u89c1\u7f51\u9875\u8be6\u60c5\u9875", html)
-        self.assertNotIn("\u822a\u73ed\u7ec4\u5408", html)
+        self.assertIn("\u822a\u73ed\u7ec4\u5408", html)
+        self.assertIn("\u53bb\u7a0b", html)
+        self.assertIn("\u5f80\u8fd4\u603b\u4ef7", html)
+        self.assertNotIn("\u5b8c\u6574\u6392\u9664\u65b9\u6848\u8be6\u60c5\u89c1\u7f51\u9875\u8be6\u60c5\u9875", html)
 
     def test_detail_html_uses_collapsed_sections_for_complex_analysis(self):
         payload = {

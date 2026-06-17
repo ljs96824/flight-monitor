@@ -668,6 +668,130 @@ class NotificationNumericScopesTest(unittest.TestCase):
         self.assertIn("\u9000\u6539\u4e25\u683c", body)
         self.assertNotIn("\u5df2\u6392\u9664\u7684\u66f4\u4f4e\u4ef7", body)
 
+    def test_excluded_roundtrip_combo_carries_specific_basis_and_comparison(self):
+        outbound = {
+            "price": 1036,
+            "flight_combo": "MU5107",
+            "departure_airport": "SHA",
+            "departure_time": "11:00",
+            "arrival_airport": "PEK",
+            "arrival_time": "13:15",
+            "aircraft": "333",
+            "stops": 0,
+        }
+        ret = {
+            "price": 1350,
+            "flight_combo": "CA1507",
+            "departure_airport": "PEK",
+            "departure_time": "07:30",
+            "arrival_airport": "SHA",
+            "arrival_time": "10:00",
+            "aircraft": "789",
+            "stops": 0,
+        }
+        recommended = {
+            "total_price": 2760,
+            "return": {
+                "flight_combo": "CA1589",
+                "departure_time": "20:30",
+            },
+        }
+
+        combos = build_excluded_roundtrip_combos(
+            {"all_flights": [outbound]},
+            {"excluded_flights": [{"flight": ret, "reason": "\u4f1a\u8bae\u65f6\u95f4\u7a97\u53e3\u4e0d\u7b26"}]},
+            recommended_total=2760,
+            max_show=3,
+            max_budget=3000,
+            constraints={
+                "same_day_round_trip": True,
+                "business_start": "13:00",
+                "business_end": "17:00",
+                "direct_only": "must",
+            },
+            recommended_combo=recommended,
+        )
+
+        self.assertEqual(len(combos), 1)
+        reason_text = combos[0]["reason"]
+        comparison = "\n".join(combos[0]["comparison_points"])
+        basis = " ".join(combos[0]["exclusion_basis"])
+        self.assertIn("\u8fd4\u7a0b07:30\u51fa\u53d1", reason_text)
+        self.assertIn("\u4f1a\u8bae13:00-17:00", reason_text)
+        self.assertIn("\u65e9\u4e86\u7ea69\u5c0f\u65f630\u5206\u949f", reason_text)
+        self.assertIn("\u65e0\u6cd5\u4e58\u5750", reason_text)
+        self.assertIn("\u6bd4\u63a8\u8350\u4fbf\u5b9c\u00a5374", comparison)
+        self.assertIn("\u63a8\u835020:30", comparison)
+        self.assertIn("\u5f53\u5929\u5f80\u8fd4", basis)
+        self.assertIn("\u4f1a\u8bae13:00-17:00", basis)
+
+    def test_email_excluded_body_renders_full_roundtrip_cards_with_basis_and_comparison(self):
+        payload = {
+            "is_roundtrip": True,
+            "current_price": 2760,
+            "excluded_plans": [
+                {
+                    "scope": "roundtrip",
+                    "outbound": {
+                        "flight_combo": "MU5107",
+                        "airline": "\u4e1c\u65b9\u822a\u7a7a",
+                        "departure_airport": "SHA",
+                        "departure_time": "11:00",
+                        "arrival_airport": "PEK",
+                        "arrival_time": "13:15",
+                        "aircraft": "333",
+                        "price": 1036,
+                        "stops": 0,
+                    },
+                    "return": {
+                        "flight_combo": "CA1507",
+                        "airline": "\u4e2d\u56fd\u56fd\u9645\u822a\u7a7a",
+                        "departure_airport": "PEK",
+                        "departure_time": "07:30",
+                        "arrival_airport": "SHA",
+                        "arrival_time": "10:00",
+                        "aircraft": "789",
+                        "price": 1350,
+                        "stops": 0,
+                    },
+                    "outbound_price": 1036,
+                    "return_price": 1350,
+                    "total_price": 2386,
+                    "recommended_price": 2760,
+                    "reason": "\u8fd4\u7a0b07:30\u51fa\u53d1,\u4f46\u4f60\u7684\u4f1a\u8bae13:00-17:00\u8fd8\u6ca1\u7ed3\u675f,\u8fd4\u7a0b\u65e9\u4e86\u7ea69\u5c0f\u65f630\u5206\u949f,\u65e0\u6cd5\u4e58\u5750\u3002",
+                    "exclusion_basis": ["\u5f53\u5929\u5f80\u8fd4", "\u4f1a\u8bae13:00-17:00", "\u5fc5\u987b\u76f4\u98de"],
+                    "comparison_points": [
+                        "\u4ef7\u683c:\u6b64\u65b9\u6848\u00a52,386,\u6bd4\u63a8\u8350\u4fbf\u5b9c\u00a5374 \u2713",
+                        "\u8fd4\u7a0b\u65f6\u95f4:\u6b64\u65b9\u684807:30(\u4e0d\u53ef\u7528) vs \u63a8\u835020:30(\u53ef\u7528) \u2717",
+                    ],
+                }
+            ],
+        }
+
+        body = _email_excluded_compact_body(payload)
+
+        self.assertIn("\u5df2\u6392\u9664\u65b9\u6848", body)
+        self.assertIn("\u5f80\u8fd4\u00a52,386", body)
+        self.assertIn("\u6bd4\u63a8\u8350\u65b9\u6848\u4fbf\u5b9c\u00a5374", body)
+        self.assertIn("\u53bb\u7a0b", body)
+        self.assertIn("MU5107", body)
+        self.assertIn("\u8679\u6865(SHA) 11:00", body)
+        self.assertIn("\u9996\u90fd(PEK) 13:15", body)
+        self.assertIn("\u7a7a\u5ba2A330-300", body)
+        self.assertIn("\u7968\u9762\u4ef7", body)
+        self.assertIn("\u00a51,036", body)
+        self.assertIn("\u8fd4\u7a0b", body)
+        self.assertIn("CA1507", body)
+        self.assertIn("\u9996\u90fd(PEK) 07:30", body)
+        self.assertIn("\u6ce2\u97f3787-9", body)
+        self.assertIn("\u00a51,350", body)
+        self.assertIn("\u6392\u9664\u539f\u56e0(\u57fa\u4e8e\u4f60\u7684\u8bbe\u7f6e)", body)
+        self.assertIn("\u8fd4\u7a0b\u65e9\u4e86\u7ea69\u5c0f\u65f630\u5206\u949f", body)
+        self.assertIn("\u4f9d\u636e:\u5f53\u5929\u5f80\u8fd4\u00b7\u4f1a\u8bae13:00-17:00\u00b7\u5fc5\u987b\u76f4\u98de", body)
+        self.assertIn("\u5bf9\u6bd4\u63a8\u8350\u65b9\u6848", body)
+        self.assertIn("\u63a8\u835020:30", body)
+        self.assertNotIn("\u5b8c\u6574\u6392\u9664\u65b9\u6848\u8be6\u60c5\u89c1\u7f51\u9875", body)
+
 
 if __name__ == "__main__":
     unittest.main()
