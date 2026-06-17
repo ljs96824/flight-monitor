@@ -3828,7 +3828,7 @@ def _excluded_segment_value(segment: dict) -> str:
     arr = str(segment.get("arr_airport") or "").strip().upper()
     dep_time = _local_time_label(dep, segment.get("dep_time"))
     arr_time = _local_time_label(arr, segment.get("arr_time"))
-    aircraft = str(segment.get("aircraft") or "").strip()
+    aircraft = get_aircraft_name(segment.get("aircraft") or segment.get("equipment") or segment.get("plane_type") or "")
     left = " ".join(part for part in [flight_no, airline] if part) or "航班信息待确认"
     value = f"{html.escape(left)}｜{html.escape(dep)} {html.escape(dep_time)} → {html.escape(arr)} {html.escape(arr_time)}"
     if aircraft and aircraft not in {"未知", "unknown", "Unknown", "请查询航司官网"}:
@@ -3839,7 +3839,7 @@ def _excluded_segment_value(segment: dict) -> str:
 def _excluded_aircraft_text(flight: dict) -> str:
     aircrafts = []
     for segment in flight.get("segments") or []:
-        aircraft = str(segment.get("aircraft") or "").strip()
+        aircraft = get_aircraft_name(segment.get("aircraft") or segment.get("equipment") or segment.get("plane_type") or "")
         if aircraft and aircraft not in {"未知", "unknown", "Unknown", "请查询航司官网"} and aircraft not in aircrafts:
             aircrafts.append(aircraft)
     return " / ".join(aircrafts) if aircrafts else "机型待确认"
@@ -3908,6 +3908,9 @@ def _render_excluded_plan_card(item: dict, current_price, is_roundtrip: bool) ->
     rows.append(_excluded_table_row("排除原因", html.escape(str(reason)), danger=True))
     for extra in reason_lines[1:3]:
         rows.append(_excluded_table_row("", html.escape(str(extra)), danger=True))
+    execution_summary = _excluded_compact_execution_summary(item)
+    if execution_summary:
+        rows.append(_excluded_table_row("执行信息", html.escape(execution_summary)))
     return (
         f'<div style="{EXCLUDED_CARD_STYLE}">'
         f'<div style="{EXCLUDED_TITLE_STYLE}">{html.escape(title)}</div>'
@@ -6702,7 +6705,14 @@ def _pushplus_calendar_summary_lines(payload: dict) -> list[str]:
     ]
     if not insight and not rows:
         return []
-    lines = ["低价日历摘要:"]
+    calendar = payload.get("price_calendar") or {}
+    is_roundtrip_scope, _unit = _calendar_scope_unit(calendar)
+    primary_plan = ((payload.get("recommended_plans") or [{}]) or [{}])[0] or {}
+    is_roundtrip_payload = bool(payload.get("is_roundtrip") or primary_plan.get("is_roundtrip"))
+    if is_roundtrip_payload and not is_roundtrip_scope:
+        lines = ["单程价格趋势摘要(仅供参考出发日选择):"]
+    else:
+        lines = ["低价日历摘要:"]
     if insight:
         lines.append(insight)
     for row in sorted(rows, key=lambda item: _to_float(item.get("min_price")) or float("inf"))[:3]:
@@ -8724,15 +8734,17 @@ def _excluded_flight_brief(flight: dict) -> str:
     arr_time = str(flight.get("arrival_time") or flight.get("arr_time") or "").strip()
     route = f" {dep}{dep_time}→{arr}{arr_time}" if dep or arr or dep_time or arr_time else ""
     transfer = _excluded_transfer_text(flight)
-    return f"{combo}{route} {transfer}".strip()
+    aircraft = _email_plan_aircraft_text(flight)
+    aircraft_text = "" if aircraft in {"", "机型待确认"} else f" {aircraft}"
+    return f"{combo}{route} {transfer}{aircraft_text}".strip()
 
 
 def _excluded_compact_name(item: dict, index: int, shared_outbound: bool = False) -> str:
     if shared_outbound and isinstance(item.get("return"), dict):
         ret = item["return"]
-        combo = str(ret.get("flight_combo") or ret.get("flight_no") or "").strip()
-        if combo:
-            return f"返程{combo}"
+        brief = _excluded_flight_brief(ret)
+        if brief:
+            return f"返程{brief}"
     for key in ("name", "label", "flight_combo", "combo"):
         value = str(item.get(key) or "").strip()
         if value:
@@ -8751,6 +8763,35 @@ def _excluded_item_price(item: dict):
     return _to_float(item.get("total_price") or item.get("roundtrip_price") or item.get("price"))
 
 
+def _excluded_leg_execution_summary(label: str, flight: dict | None) -> list[str]:
+    flight = flight or {}
+    if not flight:
+        return []
+    parts = []
+    status = _status_availability_label(flight)
+    if status:
+        parts.append(f"{label}库存:{status}")
+    baggage = _pushplus_baggage_line_for_flight(flight)
+    if baggage:
+        parts.append(baggage.replace("行李:", f"{label}行李:", 1))
+    refund = _verification_refund_line_for_flight(flight)
+    if refund:
+        parts.append(refund.replace("退改:", f"{label}退改:", 1))
+    return parts
+
+
+def _excluded_compact_execution_summary(item: dict) -> str:
+    parts = []
+    if isinstance(item.get("outbound"), dict):
+        parts.extend(_excluded_leg_execution_summary("去程", item.get("outbound")))
+    if isinstance(item.get("return"), dict):
+        parts.extend(_excluded_leg_execution_summary("返程", item.get("return")))
+    if not parts:
+        flight = _excluded_item_flight(item)
+        parts.extend(_excluded_leg_execution_summary("", flight))
+    return " / ".join(part for part in parts if part)
+
+
 def _email_excluded_compact_reason(item: dict, scope: str, is_roundtrip: bool, current_price=None) -> str:
     details = [str(value).strip() for value in _excluded_reason_details(item) if str(value or "").strip()]
     reason = details[0] if details else "不符合当前规则"
@@ -8761,6 +8802,9 @@ def _email_excluded_compact_reason(item: dict, scope: str, is_roundtrip: bool, c
     current = _to_float(current_price)
     if price is not None and current is not None and price < current and "对比主推" not in reason:
         reason += f"；对比主推:虽便宜{_price_text(current - price)},但上述条件不满足"
+    execution = _excluded_compact_execution_summary(item)
+    if execution:
+        reason += f"；执行信息:{execution}"
     return reason
 
 
@@ -8875,11 +8919,26 @@ def _email_price_calendar_body(payload: dict) -> str:
     if not rows:
         return "<div style='color:#888;font-size:12px;'>暂无低价日历数据。</div>"
     is_roundtrip_scope, _unit = _calendar_scope_unit(calendar)
-    title = "低价日历 ｜ 往返参考价" if is_roundtrip_scope else "低价日历 ｜ 单程最低参考价"
+    primary_plan = ((payload.get("recommended_plans") or [{}]) or [{}])[0] or {}
+    is_roundtrip_monitor = bool(payload.get("is_roundtrip") or primary_plan.get("is_roundtrip"))
+    is_roundtrip_monitor_with_oneway_calendar = is_roundtrip_monitor and not is_roundtrip_scope
+    if is_roundtrip_scope:
+        title = "低价日历 ｜ 往返参考价"
+    elif is_roundtrip_monitor_with_oneway_calendar:
+        title = "单程价格趋势(仅供参考出发日选择)"
+    else:
+        title = "低价日历 ｜ 单程最低参考价"
 
     table = [
         f"<div style='font-weight:600;margin-bottom:8px;color:#111;'>{html.escape(title)}</div>",
     ]
+    if is_roundtrip_monitor_with_oneway_calendar:
+        table.append(
+            "<div style='margin-bottom:8px;color:#666;font-size:12px;'>"
+            "说明:下方为各日期的单程最低价,用于判断哪天出发的单程更便宜。"
+            "你的往返方案需去程+返程各自验证,单程趋势仅供日期趋势参考。"
+            "</div>"
+        )
     insight = _price_calendar_insight_text(payload)
     if insight:
         table.append(f"<div style='margin-bottom:10px;color:#374151;'>💡 {html.escape(insight)}</div>")
@@ -8936,11 +8995,12 @@ def _email_price_calendar_body(payload: dict) -> str:
         table.append("<div style='margin-top:8px;color:#888;font-size:12px;'>周几更便宜：数据积累中。</div>")
 
     note = calendar.get("note") or "为单程最低参考价，实付以支付页为准。"
-    if payload.get("is_roundtrip") and not is_roundtrip_scope:
+    if is_roundtrip_monitor and not is_roundtrip_scope:
         roundtrip_price = _to_float(payload.get("display_price") or payload.get("current_price"))
         roundtrip_note = "下方为单程最低参考价;你的往返方案需去程+返程各自验证。"
         if roundtrip_price is not None:
-            roundtrip_note += f"往返总价约{_price_text(roundtrip_price)},与单程日历口径不同,仅供参考日期趋势。"
+            roundtrip_note += f"往返总价约{_price_text(roundtrip_price)},与单程日历口径不同。"
+        roundtrip_note += "单程趋势仅帮你发现便宜的出发日,不等于往返总价。"
         note = f"{roundtrip_note} {note}"
     table.append(f"<div style='margin-top:8px;color:#666;font-size:12px;'>注:{html.escape(str(note))}</div>")
     return "".join(table)

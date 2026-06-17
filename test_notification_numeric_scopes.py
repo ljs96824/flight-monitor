@@ -130,11 +130,15 @@ class NotificationNumericScopesTest(unittest.TestCase):
 
         body = _email_price_calendar_body(payload)
 
+        self.assertIn("\u5355\u7a0b\u4ef7\u683c\u8d8b\u52bf", body)
+        self.assertIn("\u4ec5\u4f9b\u53c2\u8003\u51fa\u53d1\u65e5\u9009\u62e9", body)
         self.assertIn("\u4f60\u9009\u768406-26\u5355\u7a0b\u00a5636", body)
         self.assertIn("\u4e2d\u7b49\u6c34\u5e73", body)
         self.assertIn("\u5355\u7a0b\u6700\u4f4e\u00a5537(06-23 \u5468\u4e8c)", body)
         self.assertIn("\u7701\u7ea6\u00a599/\u5355\u7a0b", body)
         self.assertIn("\u5f80\u8fd4\u603b\u4ef7\u7ea6\u00a52,760", body)
+        self.assertIn("\u5355\u7a0b\u8d8b\u52bf\u4ec5\u5e2e\u4f60\u53d1\u73b0\u4fbf\u5b9c\u7684\u51fa\u53d1\u65e5", body)
+        self.assertIn("\u4e0d\u7b49\u4e8e\u5f80\u8fd4\u603b\u4ef7", body)
         self.assertNotIn("\u5f53\u524d\u5f80\u8fd4\u00a52,760", body)
         self.assertNotIn("\u4f60\u9009\u768406-26\u504f\u8d35", body)
 
@@ -147,6 +151,7 @@ class NotificationNumericScopesTest(unittest.TestCase):
 
         self.assertIn("\u9884\u7b97\u5dee\u8ddd", text)
         self.assertIn("\u4f60\u53ef\u4ee5", text)
+        self.assertIn("\u5355\u7a0b\u4ef7\u683c\u8d8b\u52bf\u6458\u8981", text)
         self.assertIn("\u4f60\u9009\u768406-18\u5355\u7a0b\u00a51,280", text)
         self.assertNotIn("\u63a8\u8350\u4f9d\u636e", text)
         self.assertNotIn("\u4e0a\u6b21\u65b9\u6848\u8ffd\u8e2a", text)
@@ -589,16 +594,16 @@ class NotificationNumericScopesTest(unittest.TestCase):
                 {
                     "scope": "roundtrip",
                     "all_over_budget_reference": True,
-                    "outbound": {"flight_combo": "MU5107", "departure_airport": "SHA", "departure_time": "11:00", "arrival_airport": "PEK", "arrival_time": "13:15"},
-                    "return": {"flight_combo": "CA1507", "departure_airport": "PEK", "departure_time": "07:30", "arrival_airport": "SHA", "arrival_time": "10:00"},
+                    "outbound": {"flight_combo": "MU5107", "departure_airport": "SHA", "departure_time": "11:00", "arrival_airport": "PEK", "arrival_time": "13:15", "aircraft": "773", "fare_rules": {"baggage": {"included": True, "checked_kg": 20}, "refund": {"label": "\u9000\u6539\u9002\u4e2d"}}, "buyability": {"label": "\u9700\u9a8c\u8bc1"}},
+                    "return": {"flight_combo": "CA1507", "departure_airport": "PEK", "departure_time": "07:30", "arrival_airport": "SHA", "arrival_time": "10:00", "aircraft": "789", "fare_rules": {"baggage": {"included": False, "note": "\u6258\u8fd0\u9700\u53e6\u8d2d"}, "refund": {"label": "\u9000\u6539\u4e25\u683c"}}, "buyability": {"label": "\u9700\u652f\u4ed8\u9875\u786e\u8ba4"}},
                     "total_price": 2386,
                     "reason": "\u8fd4\u7a0b07:30\u51fa\u53d1,\u4f60\u5f53\u592917:00\u624d\u7ed3\u675f\u4f1a\u8bae,\u65f6\u95f4\u4e0d\u7b26",
                 },
                 {
                     "scope": "roundtrip",
                     "all_over_budget_reference": True,
-                    "outbound": {"flight_combo": "MU5107", "departure_airport": "SHA", "departure_time": "11:00", "arrival_airport": "PEK", "arrival_time": "13:15"},
-                    "return": {"flight_combo": "MU5102", "departure_airport": "PEK", "departure_time": "08:00", "arrival_airport": "SHA", "arrival_time": "10:20"},
+                    "outbound": {"flight_combo": "MU5107", "departure_airport": "SHA", "departure_time": "11:00", "arrival_airport": "PEK", "arrival_time": "13:15", "aircraft": "773"},
+                    "return": {"flight_combo": "MU5102", "departure_airport": "PEK", "departure_time": "08:00", "arrival_airport": "SHA", "arrival_time": "10:20", "aircraft": "33L"},
                     "total_price": 2483,
                     "reason": "\u8fd4\u7a0b08:00\u51fa\u53d1,\u4f1a\u8bae\u7ed3\u675f\u524d\u65e0\u6cd5\u4e58\u5750",
                 },
@@ -611,7 +616,14 @@ class NotificationNumericScopesTest(unittest.TestCase):
         self.assertIn("\u5171\u540c\u53bb\u7a0b", body)
         self.assertIn("MU5107", body)
         self.assertIn("CA1507", body)
+        self.assertIn("PEK07:30\u2192SHA10:00", body)
         self.assertIn("MU5102", body)
+        self.assertIn("\u6ce2\u97f3777-300", body)
+        self.assertIn("\u6ce2\u97f3787-9", body)
+        self.assertIn("\u8fd4\u7a0b\u884c\u674e", body)
+        self.assertIn("\u6258\u8fd0\u9700\u53e6\u8d2d", body)
+        self.assertIn("\u8fd4\u7a0b\u9000\u6539", body)
+        self.assertIn("\u9000\u6539\u4e25\u683c", body)
         self.assertNotIn("\u5df2\u6392\u9664\u7684\u66f4\u4f4e\u4ef7", body)
 
 

@@ -9,6 +9,9 @@ class DomesticAircraftMappingTest(unittest.TestCase):
         self.assertEqual(get_aircraft_name("33J"), "空客A330")
         self.assertEqual(get_aircraft_name("332"), "空客A330-200")
         self.assertEqual(get_aircraft_name("789"), "波音787-9")
+        self.assertEqual(get_aircraft_name("773"), "波音777-300")
+        self.assertEqual(get_aircraft_name("77W"), "波音777-300ER")
+        self.assertEqual(get_aircraft_name("388"), "空客A380")
         self.assertEqual(get_aircraft_name("919"), "国产C919")
         self.assertEqual(get_aircraft_name("ZZZ"), "机型代码ZZZ(以航司为准)")
 
