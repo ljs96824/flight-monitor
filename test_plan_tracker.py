@@ -29,7 +29,7 @@ class PlanTrackerTest(unittest.TestCase):
         self.assertEqual(status["flight_no"], "MU5101")
         self.assertEqual(status["price_diff"], 80)
 
-    def test_tracks_sold_out_when_previous_plan_missing(self):
+    def test_tracks_unavailable_when_previous_plan_missing(self):
         from plan_tracker import save_pushed_plans, track_plan_status
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -46,8 +46,9 @@ class PlanTrackerTest(unittest.TestCase):
                 data_dir=data_dir,
             )
 
-        self.assertEqual(status["status"], "sold_out")
+        self.assertEqual(status["status"], "unavailable")
         self.assertIn("CA1234", status["msg"])
+        self.assertIn("本次未获取到报价", status["msg"])
 
     def test_saved_payload_contains_plan_a_record(self):
         from plan_tracker import save_pushed_plans
@@ -63,6 +64,115 @@ class PlanTrackerTest(unittest.TestCase):
 
         self.assertEqual(record["last_pushed"]["plan_a"]["flight_no"], "KN5978")
         self.assertEqual(record["last_pushed"]["plan_a"]["price"], 527)
+
+    def test_roundtrip_tracking_compares_same_combo_same_scope(self):
+        from plan_tracker import save_pushed_plans, track_plan_status
+
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            save_pushed_plans(
+                "sub-rt",
+                [
+                    {
+                        "label": "方案A",
+                        "is_roundtrip": True,
+                        "outbound_flight": {"flight_no": "MU5099", "price": 1410},
+                        "return_flight": {"flight_no": "CA1589", "price": 1350},
+                        "price": 2760,
+                        "roundtrip_price": 2760,
+                    }
+                ],
+                data_dir=data_dir,
+            )
+
+            status = track_plan_status(
+                "sub-rt",
+                [
+                    {
+                        "is_roundtrip": True,
+                        "outbound": {"flight_no": "MU5099", "price": 1448},
+                        "return": {"flight_no": "CA1589", "price": 1362},
+                        "total_price": 2810,
+                    },
+                    {"flight_no": "MU5099", "price": 1448},
+                    {"flight_no": "CA1589", "price": 1362},
+                ],
+                data_dir=data_dir,
+            )
+
+        self.assertEqual(status["status"], "stable")
+        self.assertEqual(status["scope"], "roundtrip")
+        self.assertEqual(status["previous_price"], 2760)
+        self.assertEqual(status["current_price"], 2810)
+        self.assertIn("MU5099去+CA1589回", status["msg"])
+        self.assertIn("同往返口径对比", status["msg"])
+        self.assertNotIn("降了", status["msg"])
+
+    def test_roundtrip_tracking_does_not_compare_roundtrip_to_single_leg(self):
+        from plan_tracker import save_pushed_plans, track_plan_status
+
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            save_pushed_plans(
+                "sub-rt",
+                [
+                    {
+                        "label": "方案A",
+                        "is_roundtrip": True,
+                        "outbound_flight": {"flight_no": "MU5099", "price": 1410},
+                        "return_flight": {"flight_no": "CA1589", "price": 1350},
+                        "roundtrip_price": 2760,
+                    }
+                ],
+                data_dir=data_dir,
+            )
+
+            status = track_plan_status(
+                "sub-rt",
+                [{"flight_no": "MU5099", "price": 1448}],
+                data_dir=data_dir,
+            )
+
+        self.assertEqual(status["status"], "partial_unavailable")
+        self.assertEqual(status["scope"], "roundtrip")
+        self.assertIn("返程CA1589本次未获取到报价", status["msg"])
+        self.assertIn("无法计算完整往返价", status["msg"])
+        self.assertNotIn("降了", status["msg"])
+        self.assertNotIn("售罄", status["msg"])
+
+    def test_roundtrip_tracking_reports_scope_mismatch_for_abnormal_diff(self):
+        from plan_tracker import save_pushed_plans, track_plan_status
+
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            save_pushed_plans(
+                "sub-rt",
+                [
+                    {
+                        "label": "方案A",
+                        "is_roundtrip": True,
+                        "outbound_flight": {"flight_no": "MU5099", "price": 1410},
+                        "return_flight": {"flight_no": "CA1589", "price": 1350},
+                        "roundtrip_price": 2760,
+                    }
+                ],
+                data_dir=data_dir,
+            )
+
+            status = track_plan_status(
+                "sub-rt",
+                [
+                    {
+                        "is_roundtrip": False,
+                        "flight_no": "MU5099",
+                        "price": 1448,
+                    }
+                ],
+                data_dir=data_dir,
+            )
+
+        self.assertIn(status["status"], {"partial_unavailable", "scope_mismatch"})
+        self.assertNotIn("降了¥1,312", status["msg"])
 
     def test_illegal_subscription_id_is_sanitized_for_windows_filename(self):
         from filename_utils import sanitize_filename

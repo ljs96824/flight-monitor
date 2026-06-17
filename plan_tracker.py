@@ -63,7 +63,76 @@ def _plan_primary_flight(plan: dict | None) -> dict:
     return {}
 
 
+def _plan_leg_flight(plan: dict | None, direction: str) -> dict:
+    plan = plan or {}
+    keys = (
+        ("outbound_flight", "outbound", "go_flight")
+        if direction == "outbound"
+        else ("return_flight", "return", "back_flight")
+    )
+    for key in keys:
+        flight = plan.get(key)
+        if isinstance(flight, dict) and flight:
+            return flight
+    return {}
+
+
+def _is_roundtrip_plan(plan: dict | None) -> bool:
+    plan = plan or {}
+    scope = str(plan.get("scope") or "").lower()
+    if bool(plan.get("is_roundtrip")) or scope == "roundtrip":
+        return True
+    return bool(_plan_leg_flight(plan, "outbound") and _plan_leg_flight(plan, "return"))
+
+
+def _leg_price(plan: dict | None, direction: str, flight: dict | None) -> float | None:
+    plan = plan or {}
+    key = "outbound_price" if direction == "outbound" else "return_price"
+    return _to_float(plan.get(key) or (flight or {}).get("price"))
+
+
+def _roundtrip_price(plan: dict | None, outbound: dict | None, return_flight: dict | None) -> float | None:
+    plan = plan or {}
+    for key in ("roundtrip_price", "total_price", "roundtrip_total", "price"):
+        value = _to_float(plan.get(key))
+        if value is not None:
+            return value
+    outbound_price = _leg_price(plan, "outbound", outbound)
+    return_price = _leg_price(plan, "return", return_flight)
+    if outbound_price is not None and return_price is not None:
+        return outbound_price + return_price
+    return None
+
+
 def _plan_record(plan: dict, index: int) -> dict | None:
+    label = plan.get("label") or f"方案{chr(65 + index)}"
+    pushed_at = datetime.now().isoformat(timespec="seconds")
+    if _is_roundtrip_plan(plan):
+        outbound = _plan_leg_flight(plan, "outbound")
+        return_flight = _plan_leg_flight(plan, "return")
+        outbound_no = _flight_no(outbound)
+        return_no = _flight_no(return_flight)
+        if not outbound_no and not return_no:
+            return None
+        outbound_price = _leg_price(plan, "outbound", outbound)
+        return_price = _leg_price(plan, "return", return_flight)
+        total = _roundtrip_price(plan, outbound, return_flight)
+        return {
+            "flight_no": f"{outbound_no}+{return_no}".strip("+"),
+            "is_roundtrip": True,
+            "scope": "roundtrip",
+            "outbound_flight": outbound_no,
+            "return_flight": return_no,
+            "roundtrip_price": total,
+            "price": total,
+            "outbound_price": outbound_price,
+            "return_price": return_price,
+            "date": plan.get("date") or outbound.get("departure_date"),
+            "return_date": plan.get("return_date") or return_flight.get("departure_date"),
+            "label": label,
+            "pushed_at": pushed_at,
+        }
+
     flight = _plan_primary_flight(plan)
     flight_no = _flight_no(flight)
     price = _to_float(plan.get("price") or flight.get("price"))
@@ -71,9 +140,11 @@ def _plan_record(plan: dict, index: int) -> dict | None:
         return None
     return {
         "flight_no": flight_no,
+        "is_roundtrip": False,
+        "scope": "single",
         "price": price,
-        "label": plan.get("label") or f"方案{chr(65 + index)}",
-        "pushed_at": datetime.now().isoformat(timespec="seconds"),
+        "label": label,
+        "pushed_at": pushed_at,
     }
 
 
@@ -167,47 +238,277 @@ def find_flight(current_flights: list[dict] | None, flight_no: str) -> dict | No
     return None
 
 
+def _item_leg_flight(item: dict | None, direction: str) -> dict:
+    item = item or {}
+    keys = (
+        ("outbound", "outbound_flight", "go_flight")
+        if direction == "outbound"
+        else ("return", "return_flight", "back_flight")
+    )
+    for key in keys:
+        flight = item.get(key)
+        if isinstance(flight, dict) and flight:
+            return flight
+    return {}
+
+
+def _find_roundtrip_combo(current_items: list[dict] | None, outbound_no: str, return_no: str) -> dict | None:
+    outbound_target = str(outbound_no or "").replace(" ", "").upper()
+    return_target = str(return_no or "").replace(" ", "").upper()
+    if not outbound_target or not return_target:
+        return None
+    for item in current_items or []:
+        if not isinstance(item, dict):
+            continue
+        outbound = _item_leg_flight(item, "outbound")
+        return_flight = _item_leg_flight(item, "return")
+        if not outbound or not return_flight:
+            continue
+        current_outbound = _flight_no(outbound).replace(" ", "").upper()
+        current_return = _flight_no(return_flight).replace(" ", "").upper()
+        if current_outbound == outbound_target and current_return == return_target:
+            return item
+    return None
+
+
+def _format_price(value) -> str:
+    price = _to_float(value)
+    return f"¥{price:,.0f}" if price is not None else "暂无报价"
+
+
+def _roundtrip_desc(outbound_no: str, return_no: str) -> str:
+    if outbound_no and return_no:
+        return f"{outbound_no}去+{return_no}回"
+    return outbound_no or return_no or "航班待确认"
+
+
+def _current_roundtrip_from_combo(combo: dict | None) -> tuple[float | None, float | None, float | None]:
+    combo = combo or {}
+    outbound = _item_leg_flight(combo, "outbound")
+    return_flight = _item_leg_flight(combo, "return")
+    outbound_price = _leg_price(combo, "outbound", outbound)
+    return_price = _leg_price(combo, "return", return_flight)
+    total = _roundtrip_price(combo, outbound, return_flight)
+    return total, outbound_price, return_price
+
+
+def _change_payload(
+    status: str,
+    flight_no: str,
+    previous_price,
+    current_price,
+    diff,
+    msg: str,
+    scope: str,
+    extra: dict | None = None,
+) -> dict:
+    payload = {
+        "status": status,
+        "flight_no": flight_no,
+        "previous_price": previous_price,
+        "current_price": current_price,
+        "price_diff": diff,
+        "scope": scope,
+        "msg": msg,
+    }
+    if extra:
+        payload.update(extra)
+    return payload
+
+
+def _price_change_status(diff: float | None, previous_price: float | None, previous_scope: str, current_scope: str) -> str:
+    if diff is None or previous_price in (None, 0):
+        return "stable"
+    if abs(diff) / previous_price > 0.4 and previous_scope != current_scope:
+        return "scope_mismatch"
+    if diff > 50:
+        return "price_up"
+    if diff < -50:
+        return "price_down"
+    return "stable"
+
+
+def _format_change(diff: float | None) -> str:
+    if diff is None:
+        return ""
+    if diff > 0:
+        return f"↑¥{diff:,.0f}"
+    if diff < 0:
+        return f"↓¥{abs(diff):,.0f}"
+    return "持平"
+
+
+def _track_roundtrip_plan(plan_a: dict, current_items: list[dict] | None) -> dict | None:
+    outbound_no = str(plan_a.get("outbound_flight") or "").strip()
+    return_no = str(plan_a.get("return_flight") or "").strip()
+    desc = _roundtrip_desc(outbound_no, return_no)
+    previous_price = _to_float(plan_a.get("roundtrip_price") or plan_a.get("price"))
+    combo = _find_roundtrip_combo(current_items, outbound_no, return_no)
+    outbound_current = find_flight(current_items, outbound_no)
+    return_current = find_flight(current_items, return_no)
+
+    print(f"[方案追踪诊断] 航班={desc}")
+    print(
+        f"[方案追踪诊断] 上次价={previous_price}, 上次口径=往返, "
+        f"上次记录的是={json.dumps(plan_a, ensure_ascii=False, default=str)}"
+    )
+
+    if combo:
+        current_price, outbound_price, return_price = _current_roundtrip_from_combo(combo)
+        current_source = combo
+    elif outbound_current and return_current:
+        outbound_price = _to_float(outbound_current.get("price"))
+        return_price = _to_float(return_current.get("price"))
+        current_price = (
+            outbound_price + return_price
+            if outbound_price is not None and return_price is not None
+            else None
+        )
+        current_source = {"outbound": outbound_current, "return": return_current}
+    else:
+        current_price = None
+        outbound_price = _to_float((outbound_current or {}).get("price")) if outbound_current else None
+        return_price = _to_float((return_current or {}).get("price")) if return_current else None
+        current_source = {"outbound": outbound_current, "return": return_current}
+
+    print(
+        f"[方案追踪诊断] 本次价={current_price}, 本次口径=往返, "
+        f"本次取到的是={json.dumps(current_source, ensure_ascii=False, default=str)}"
+    )
+    diff = current_price - previous_price if current_price is not None and previous_price is not None else None
+    print(f"[方案追踪诊断] 差额={None if diff is None else previous_price - current_price}")
+
+    if current_price is None:
+        missing = []
+        available = []
+        if outbound_no:
+            if outbound_price is None:
+                missing.append(f"去程{outbound_no}")
+            else:
+                available.append(f"去程{outbound_no}仍{_format_price(outbound_price)}")
+        if return_no:
+            if return_price is None:
+                missing.append(f"返程{return_no}")
+            else:
+                available.append(f"返程{return_no}仍{_format_price(return_price)}")
+        if missing:
+            msg = (
+                f"上次推荐:{desc},往返{_format_price(previous_price)}。"
+                f"本次:{'，'.join(available) + '，' if available else ''}"
+                f"{'、'.join(missing)}本次未获取到报价,无法计算完整往返价,建议在渠道核实。"
+            )
+            return _change_payload(
+                "partial_unavailable",
+                desc,
+                previous_price,
+                current_price,
+                None,
+                msg,
+                "roundtrip",
+                {
+                    "outbound_flight": outbound_no,
+                    "return_flight": return_no,
+                    "outbound_price": outbound_price,
+                    "return_price": return_price,
+                },
+            )
+        msg = (
+            f"上次推荐:{desc},往返{_format_price(previous_price)}。"
+            "本次未获取到该组合报价,可能是采集覆盖问题或售罄,建议在渠道核实。"
+        )
+        return _change_payload("unavailable", desc, previous_price, None, None, msg, "roundtrip")
+
+    status = _price_change_status(diff, previous_price, "roundtrip", "roundtrip")
+    change_text = _format_change(diff)
+    if status == "price_up":
+        verdict = f"上涨{change_text.replace('↑', '')}"
+    elif status == "price_down":
+        verdict = f"下降{change_text.replace('↓', '')}"
+    elif change_text in {"", "持平"}:
+        verdict = "价格稳定"
+    else:
+        verdict = f"小幅变化({change_text})"
+    msg = (
+        f"上次推荐:{desc},往返{_format_price(previous_price)}。"
+        f"本次同组合:往返{_format_price(current_price)}({verdict})。"
+        "（同往返口径对比）"
+    )
+    return _change_payload(
+        status,
+        desc,
+        previous_price,
+        current_price,
+        diff,
+        msg,
+        "roundtrip",
+        {
+            "outbound_flight": outbound_no,
+            "return_flight": return_no,
+            "outbound_price": outbound_price,
+            "return_price": return_price,
+        },
+    )
+
+
 def track_plan_status(sub_id, current_flights: list[dict] | None, data_dir=None) -> dict | None:
     last = load_pushed_plans(sub_id, data_dir)
     plan_a = (last.get("last_pushed") or {}).get("plan_a") or {}
+    if plan_a.get("is_roundtrip") or plan_a.get("scope") == "roundtrip":
+        return _track_roundtrip_plan(plan_a, current_flights)
+
     flight_no = plan_a.get("flight_no")
     if not flight_no:
         return None
     same = find_flight(current_flights, flight_no)
     previous_price = _to_float(plan_a.get("price"))
+    print(f"[方案追踪诊断] 航班={flight_no}")
+    print(
+        f"[方案追踪诊断] 上次价={previous_price}, 上次口径=单程, "
+        f"上次记录的是={json.dumps(plan_a, ensure_ascii=False, default=str)}"
+    )
     if not same:
         return {
-            "status": "sold_out",
+            "status": "unavailable",
             "flight_no": flight_no,
             "previous_price": previous_price,
-            "msg": f"上次推荐的{flight_no}当前已无报价(可能售罄或停售)",
+            "scope": "single",
+            "msg": f"上次推荐的{flight_no}本次未获取到报价(可能是采集覆盖问题或售罄,建议在渠道核实)",
         }
     current_price = _to_float(same.get("price"))
+    print(
+        f"[方案追踪诊断] 本次价={current_price}, 本次口径=单程, "
+        f"本次取到的是={json.dumps(same, ensure_ascii=False, default=str)}"
+    )
+    diff = current_price - previous_price if current_price is not None and previous_price is not None else None
+    print(f"[方案追踪诊断] 差额={None if diff is None else previous_price - current_price}")
     if previous_price is None or current_price is None:
         return {
             "status": "stable",
             "flight_no": flight_no,
             "previous_price": previous_price,
             "current_price": current_price,
+            "scope": "single",
             "msg": f"上次推荐的{flight_no}仍有报价,价格需支付页确认",
         }
-    diff = current_price - previous_price
-    if diff > 50:
+    status = _price_change_status(diff, previous_price, "single", "single")
+    if status == "price_up":
         return {
             "status": "price_up",
             "flight_no": flight_no,
             "previous_price": previous_price,
             "current_price": current_price,
             "price_diff": diff,
+            "scope": "single",
             "msg": f"上次推荐的{flight_no}已涨价¥{diff:,.0f}(¥{previous_price:,.0f}→¥{current_price:,.0f})",
         }
-    if diff < -50:
+    if status == "price_down":
         return {
             "status": "price_down",
             "flight_no": flight_no,
             "previous_price": previous_price,
             "current_price": current_price,
             "price_diff": diff,
+            "scope": "single",
             "msg": f"上次推荐的{flight_no}又降了¥{abs(diff):,.0f}",
         }
     return {
@@ -216,5 +517,6 @@ def track_plan_status(sub_id, current_flights: list[dict] | None, data_dir=None)
         "previous_price": previous_price,
         "current_price": current_price,
         "price_diff": diff,
+        "scope": "single",
         "msg": f"上次推荐的{flight_no}价格稳定(¥{current_price:,.0f})",
     }

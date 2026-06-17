@@ -4933,6 +4933,19 @@ def _tracking_current_flights(
     return unique
 
 
+def _tracking_current_items(
+    analysis_result: dict,
+    all_items: list[dict],
+    is_roundtrip: bool,
+) -> list[dict]:
+    items: list[dict] = []
+    if is_roundtrip:
+        items.extend(_round_trip_combinations(analysis_result))
+    items.extend(all_items or [])
+    items.extend(_tracking_current_flights(analysis_result, all_items, is_roundtrip))
+    return [item for item in items if isinstance(item, dict) and item]
+
+
 def _plan_total_stops(plan: dict) -> int:
     total = 0
     for flight in _plan_flights(plan):
@@ -5773,7 +5786,7 @@ def build_notification_payload(
     )
     plan_status_change = track_plan_status(
         route_info.get("subscription_id") or subscription.get("id") or route_key,
-        _tracking_current_flights(analysis_result, all_items, is_roundtrip),
+        _tracking_current_items(analysis_result, all_items, is_roundtrip),
     )
 
     primary_flight = None
