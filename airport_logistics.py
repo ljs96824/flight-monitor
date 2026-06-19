@@ -121,6 +121,50 @@ ROUTE_TYPE_BUFFER_LABELS = {
 }
 
 
+
+MEETING_IMPORTANCE_DEFAULTS = {
+    "normal": {
+        "label": "普通商务",
+        "airport_advance_min": 90,
+        "road_margin_ratio": 0.20,
+        "road_margin_min": 15,
+        "arrival_exit_min": 25,
+        "delay_buffer_min": 30,
+        "pre_meeting_buffer_min": 30,
+        "post_meeting_buffer_min": 30,
+        "checked_baggage_extra_min": 15,
+    },
+    "important": {
+        "label": "重要会议",
+        "airport_advance_min": 105,
+        "road_margin_ratio": 0.30,
+        "road_margin_min": 30,
+        "arrival_exit_min": 35,
+        "delay_buffer_min": 45,
+        "pre_meeting_buffer_min": 60,
+        "post_meeting_buffer_min": 30,
+        "checked_baggage_extra_min": 20,
+    },
+    "critical": {
+        "label": "不可迟到",
+        "airport_advance_min": 120,
+        "road_margin_ratio": 0.40,
+        "road_margin_min": 35,
+        "arrival_exit_min": 45,
+        "delay_buffer_min": 90,
+        "pre_meeting_buffer_min": 90,
+        "post_meeting_buffer_min": 30,
+        "checked_baggage_extra_min": 30,
+    },
+}
+
+
+def get_meeting_importance_defaults(importance: str | None) -> dict:
+    key = str(importance or "important").strip().lower()
+    if key not in MEETING_IMPORTANCE_DEFAULTS:
+        key = "important"
+    return {"key": key, **MEETING_IMPORTANCE_DEFAULTS[key]}
+
 def _airport_buffer_defaults(code: str) -> dict:
     if code in MEGA_AIRPORTS:
         return {"size": "mega", "arrival_buffer_min": 120, "checkin_buffer_min": 110}

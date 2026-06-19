@@ -201,5 +201,40 @@ class WebFormTravelScenarioTest(unittest.TestCase):
         self.assertEqual(sub["constraints"]["redundancy_min"], 25)
 
 
+    def test_quick_same_day_business_keeps_meeting_facts_for_auto_buffer_model(self):
+        sub = build_subscription(
+            _Form(
+                {
+                    "origin_select": "上海",
+                    "destination": "北京",
+                    "route_type": "domestic",
+                    "round_trip": "false",
+                    "same_day_round_trip": "true",
+                    "depart_date": "2026-10-01",
+                    "budget_strategy": "auto_judge",
+                    "transfer_policy": "reasonable",
+                    "baggage": "required",
+                    "primary_goal": "buy_timing",
+                    "monitor_mode": "quick",
+                    "travel_scenario": ["business"],
+                    "business_start": "10:00",
+                    "business_end": "17:00",
+                    "meeting_location": "国贸",
+                    "meeting_importance": "important",
+                    "passenger_count": "1",
+                    "notification_method": "pushplus",
+                    "notification_frequency": "important_only",
+                }
+            )
+        )
+
+        self.assertTrue(sub["constraints"]["same_day_round_trip"])
+        self.assertEqual(sub["constraints"]["business_start"], "10:00")
+        self.assertEqual(sub["constraints"]["business_end"], "17:00")
+        self.assertEqual(sub["constraints"]["meeting_location"], "国贸")
+        self.assertEqual(sub["constraints"]["meeting_importance"], "important")
+        self.assertEqual(sub["constraints"]["time_source"], "meeting_derived")
+        self.assertEqual(sub["basic"]["return_date"], "2026-10-01")
+
 if __name__ == "__main__":
     unittest.main()

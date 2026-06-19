@@ -1,4 +1,4 @@
-﻿"""PushPlus notification helpers."""
+"""PushPlus notification helpers."""
 
 from __future__ import annotations
 
@@ -4797,6 +4797,10 @@ def _payload_combo_plan(combo: dict, route_info: dict, index: int, variant: str)
         "stay_hours": combo.get("stay_hours"),
         "same_day_tag": combo.get("tag") or ("当天往返可行" if combo.get("same_day_round_trip") else ""),
         "same_day_windows": combo.get("same_day_windows") or {},
+        "business_feasibility": combo.get("business_feasibility") or {},
+        "business_feasibility_rank": combo.get("business_feasibility_rank"),
+        "meeting_arrival_margin_min": combo.get("meeting_arrival_margin_min"),
+        "return_departure_margin_min": combo.get("return_departure_margin_min"),
         "schedule_note": combo.get("schedule_note") or "",
         "tags": _round_trip_combo_tags(combo, route_info, None),
         "risk": _combo_grade(combo),
@@ -6012,7 +6016,7 @@ def build_notification_payload(
             "label": "保持监控本条航线",
             "conclusion": (
                 f"当前预估实付总价{_price_text(budget_compare_price)}已超过你的最高可接受价"
-                f"{_price_text(compare_max_budget)}，不满足购买条件"
+                f"{_price_text(compare_max_budget)}，不满足购买条件，建议继续保持监控本条航线"
             ),
             "summary": "预估实付总价已超过最高可接受价",
             "condition": f"支付页总价≤{_price_text(compare_max_budget)}，且含托运行李",
@@ -6520,6 +6524,9 @@ def _pushplus_plan_lines(payload: dict) -> list[str]:
 
 
 def _pushplus_feasibility_summary(plan: dict) -> str:
+    business_feasibility = _business_feasibility_text(plan)
+    if business_feasibility:
+        return "商务安全:" + business_feasibility
     feasibility = plan.get("feasibility") or {}
     if not isinstance(feasibility, dict) or not feasibility:
         return ""
@@ -6550,6 +6557,34 @@ def _reserve_breakdown_part(item: dict | None, direction_label: str) -> str:
         buffer_h = item.get("buffer_hours")
         transport = item.get("transport_min")
         return f"{direction_label}预留{total}分钟(旧版设置{buffer_h}小时,车程约{transport}分钟)"
+    if item.get("model") == "meeting_fixed":
+        importance = item.get("importance_label") or "会议"
+        custom = _to_float(item.get("custom_redundancy_min")) or 0
+        custom_part = f"+自定义冗余{int(custom)}分钟" if custom > 0 else ""
+        if direction_label == "去程" or item.get("arrival_exit_min") is not None:
+            ratio = _reserve_ratio_text(item.get("destination_transport_margin_ratio"))
+            rush = "+高峰上浮" if item.get("destination_transport_rush") else ""
+            baggage = _to_float(item.get("checked_baggage_extra_min")) or 0
+            baggage_part = f"(含托运行李+{int(baggage)}分钟)" if baggage > 0 else ""
+            return (
+                f"{direction_label}总预留≈{item.get('total_min')}分钟({importance})="
+                f"落地离场{item.get('arrival_exit_min')}分钟{baggage_part}"
+                f"+机场到会场{item.get('destination_transport_min')}分钟({item.get('destination_transport_source') or '估算'})"
+                f"+路途冗余{item.get('destination_transport_margin_min')}分钟({ratio}{rush})"
+                f"+延误冗余{item.get('delay_buffer_min')}分钟"
+                f"+会前准备{item.get('pre_meeting_buffer_min')}分钟"
+                f"{custom_part}"
+            )
+        ratio = _reserve_ratio_text(item.get("meeting_to_airport_margin_ratio"))
+        rush = "+高峰上浮" if item.get("meeting_to_airport_rush") else ""
+        return (
+            f"{direction_label}总预留≈{item.get('total_min')}分钟({importance})="
+            f"会后缓冲{item.get('post_meeting_buffer_min')}分钟"
+            f"+会场到机场{item.get('meeting_to_airport_min')}分钟({item.get('meeting_to_airport_source') or '估算'})"
+            f"+路途冗余{item.get('meeting_to_airport_margin_min')}分钟({ratio}{rush})"
+            f"+机场提前量{item.get('departure_airport_process_min')}分钟"
+            f"{custom_part}"
+        )
     buffer_label = str(item.get("buffer_label") or "机场缓冲")
     airport = str(item.get("airport_iata") or "").strip()
     size = str(item.get("airport_size") or "").strip()
@@ -6564,6 +6599,31 @@ def _reserve_breakdown_part(item: dict | None, direction_label: str) -> str:
         f"+安全余量{item.get('safety_min')}分钟"
     )
 
+
+def _business_feasibility_text(plan: dict | None) -> str:
+    plan = plan or {}
+    feasibility = plan.get("business_feasibility") or {}
+    if not isinstance(feasibility, dict) or not feasibility:
+        return ""
+
+    def part(label: str, item: dict | None) -> str:
+        item = item or {}
+        level = item.get("level")
+        if not level:
+            return ""
+        margin = _to_float(item.get("margin_min"))
+        if margin is None:
+            return f"{label}{level}"
+        minutes = int(round(margin))
+        if minutes >= 0:
+            return f"{label}{level}(安全余量{minutes}分钟)"
+        return f"{label}{level}(预计差{abs(minutes)}分钟)"
+
+    pieces = [
+        part("到会", feasibility.get("outbound")),
+        part("返程", feasibility.get("return")),
+    ]
+    return "；".join(piece for piece in pieces if piece)
 
 def _same_day_reserve_text(windows: dict | None) -> str:
     windows = windows or {}
@@ -7360,6 +7420,9 @@ def _render_payload_plan_card(plan: dict, compact: bool = False, primary_plan: d
                         html.escape(_same_day_reserve_text(windows)),
                     )
                 )
+            business_feasibility = _business_feasibility_text(plan)
+            if business_feasibility:
+                rows.append(("到会/返程安全", html.escape(business_feasibility)))
             if plan.get("schedule_note"):
                 rows.append(("安排说明", html.escape(str(plan.get("schedule_note")))))
         if plan.get("same_day_tag"):
@@ -8856,6 +8919,9 @@ def _render_domestic_payload_plan_card(plan: dict, compact: bool = False, primar
         rows.append(("渠道", _layered_channel_links(str(link_value)) or str(link_value)))
     if plan.get("tags"):
         rows.append(("标签", html.escape(str(plan.get("tags")))))
+    business_feasibility = _business_feasibility_text(plan)
+    if business_feasibility:
+        rows.append(("到会/返程安全", html.escape(business_feasibility)))
     feasibility_line = _plan_feasibility_line(plan)
     if feasibility_line:
         rows.append(("可行性分析", feasibility_line))

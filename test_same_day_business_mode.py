@@ -380,6 +380,34 @@ class SameDayBusinessModeTest(unittest.TestCase):
         self.assertIn("06:10", combos[0]["schedule_note"])
         self.assertIn("19:50", combos[0]["schedule_note"])
 
+    def test_meeting_fixed_combos_sort_by_business_safety_before_price(self):
+        from analyzer import build_same_day_combos, compute_same_day_windows
+
+        windows = compute_same_day_windows(
+            {
+                "constraints": {
+                    "business_start": "10:00",
+                    "business_end": "17:00",
+                    "meeting_importance": "important",
+                    "destination_transport_min": 50,
+                }
+            },
+            "SHA",
+            "PEK",
+        )
+        outbound = [
+            {"flight_no": "TIGHT_OB", "price": 100, "arrival_airport": "PEK", "departure_time": "05:30", "arrival_time": "05:50"},
+            {"flight_no": "SAFE_OB", "price": 500, "arrival_airport": "PEK", "departure_time": "04:30", "arrival_time": "05:00"},
+        ]
+        returns = [
+            {"flight_no": "RT", "price": 700, "departure_airport": "PEK", "departure_time": "22:00", "arrival_time": "23:55"},
+        ]
+
+        combos = build_same_day_combos(outbound, returns, windows, "2026-06-10")
+
+        self.assertEqual(combos[0]["outbound"]["flight_no"], "SAFE_OB")
+        self.assertEqual(combos[0]["business_feasibility"]["outbound"]["level"], "稳妥可行")
+        self.assertEqual(combos[1]["business_feasibility"]["outbound"]["level"], "可行但偏紧")
     def test_parse_flight_time_keeps_24_hour_clock(self):
         from analyzer import parse_flight_time
 
@@ -931,6 +959,70 @@ class SameDayBusinessModeTest(unittest.TestCase):
         self.assertNotIn("4,400", str(result["decision_summary"]))
         self.assertNotIn("4,400", result["advice"])
 
+
+    def test_important_meeting_fixed_buffer_model_has_single_breakdown_source(self):
+        from analyzer import compute_same_day_windows
+
+        windows = compute_same_day_windows(
+            {
+                "constraints": {
+                    "same_day_round_trip": True,
+                    "business_start": "10:00",
+                    "business_end": "17:00",
+                    "meeting_importance": "important",
+                    "destination_transport_min": 50,
+                    "checked_baggage_required": False,
+                }
+            },
+            "SHA",
+            "PEK",
+        )
+
+        outbound = windows["reserve_breakdown"]["outbound"]
+        self.assertEqual(windows["buffer_model"], "meeting_fixed")
+        self.assertEqual(outbound["arrival_exit_min"], 35)
+        self.assertEqual(outbound["destination_transport_min"], 50)
+        self.assertEqual(outbound["destination_transport_margin_min"], 30)
+        self.assertEqual(outbound["delay_buffer_min"], 45)
+        self.assertEqual(outbound["pre_meeting_buffer_min"], 60)
+        self.assertEqual(outbound["total_min"], 220)
+        self.assertEqual(windows["outbound_arrive_by"], "06:20")
+        self.assertEqual(windows["reserve_breakdown"]["windows"]["arrive_by"], windows["outbound_arrive_by"])
+
+    def test_critical_meeting_fixed_defaults_and_checked_baggage_extra(self):
+        from analyzer import compute_same_day_windows
+
+        windows = compute_same_day_windows(
+            {
+                "constraints": {
+                    "same_day_round_trip": True,
+                    "business_start": "10:00",
+                    "business_end": "17:00",
+                    "meeting_importance": "critical",
+                    "destination_transport_min": 20,
+                    "checked_baggage_required": True,
+                }
+            },
+            "SHA",
+            "PEK",
+        )
+
+        outbound = windows["reserve_breakdown"]["outbound"]
+        ret = windows["reserve_breakdown"]["return"]
+        self.assertEqual(outbound["destination_transport_margin_min"], 35)
+        self.assertEqual(outbound["arrival_exit_min"], 75)
+        self.assertEqual(outbound["delay_buffer_min"], 90)
+        self.assertEqual(outbound["pre_meeting_buffer_min"], 90)
+        self.assertEqual(ret["departure_airport_process_min"], 120)
+        self.assertEqual(ret["post_meeting_buffer_min"], 30)
+
+    def test_business_time_margin_uses_four_levels(self):
+        from analyzer import classify_business_time_margin
+
+        self.assertEqual(classify_business_time_margin(75)["level"], "稳妥可行")
+        self.assertEqual(classify_business_time_margin(45)["level"], "可行但偏紧")
+        self.assertEqual(classify_business_time_margin(18)["level"], "高风险卡点")
+        self.assertEqual(classify_business_time_margin(-1)["level"], "不可行")
 
 if __name__ == "__main__":
     unittest.main()
