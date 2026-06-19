@@ -6858,8 +6858,132 @@ def _same_day_alternative_feasibility(item: dict) -> str:
     return str(item.get("schedule_note") or item.get("note") or item.get("tradeoff") or "以实际行程安排为准")
 
 
+def _same_day_has_roundtrip_legs(item: dict | None) -> bool:
+    return isinstance(item, dict) and isinstance(item.get("outbound"), dict) and isinstance(item.get("return"), dict)
+
+
+def _same_day_leg_date(item: dict, payload: dict, direction: str) -> str:
+    item = item or {}
+    flight = item.get(direction) or {}
+    if direction == "outbound" and item.get("date"):
+        return str(item.get("date"))[:10]
+    for key in ("departure_date", "date", "date_str", "depart_date"):
+        value = flight.get(key)
+        if value:
+            return str(value)[:10]
+    if direction == "return":
+        route_info = payload.get("route_info") or {}
+        for value in (payload.get("return_date"), route_info.get("return_date")):
+            if value:
+                return str(value)[:10]
+    return _same_day_alternative_date(item, payload)
+
+
+def _same_day_leg_links(flight: dict, date_str: str, limit: int = 6) -> str:
+    segments = _email_plan_segments(flight)
+    first = segments[0] if segments else {}
+    last = segments[-1] if segments else {}
+    origin = (
+        first.get("dep_airport")
+        or _safe_flight_field(flight, "departure_airport", "dep_airport", "origin_airport", "origin")
+    )
+    dest = (
+        last.get("arr_airport")
+        or _safe_flight_field(flight, "arrival_airport", "arr_airport", "destination_airport", "destination")
+    )
+    route_info = {"depart_date": date_str, "origin": origin, "destination": dest}
+    links = _payload_booking_links_for_flight(flight, route_info, date_str, limit)
+    if links:
+        return links
+    if origin and dest and date_str:
+        return _compact_link_text(
+            generate_booking_links(origin, dest, date_str, flight.get("flight_no") or flight.get("flight_combo") or ""),
+            limit,
+        )
+    return ""
+
+
+def _same_day_leg_baggage_text(flight: dict | None) -> str:
+    flight = flight or {}
+    fare_rules = flight.get("fare_rules") if isinstance(flight.get("fare_rules"), dict) else {}
+    baggage_rules = fare_rules.get("baggage") if isinstance(fare_rules.get("baggage"), dict) else {}
+    return str(
+        flight.get("baggage_line")
+        or baggage_rules.get("note")
+        or "以支付页为准"
+    )
+
+
+def _same_day_roundtrip_leg_rows(label: str, flight: dict, date_str: str, price) -> list[tuple[str, str]]:
+    segments = _email_plan_segments(flight)
+    first = segments[0] if segments else {}
+    last = segments[-1] if segments else {}
+    dep_airport = str(first.get("dep_airport") or "").strip().upper()
+    arr_airport = str(last.get("arr_airport") or "").strip().upper()
+    return [
+        ("日期", html.escape(str(date_str or "日期待确认"))),
+        ("航班", _email_plan_flight_text(flight)),
+        ("起飞", _email_plan_local_time(dep_airport, first.get("dep_time")) if segments else "时间待确认"),
+        ("到达", _email_plan_local_time(arr_airport, last.get("arr_time")) if segments else "时间待确认"),
+        ("中转", html.escape(_email_plan_transfer_text(flight))),
+        ("机型", html.escape(_email_plan_aircraft_text(flight))),
+        ("票面价", f"{_price_text(price)}(单程)"),
+        ("行李", html.escape(_same_day_leg_baggage_text(flight))),
+    ]
+
+
+def _same_day_roundtrip_alternative_card(item: dict, payload: dict) -> str:
+    outbound = item.get("outbound") or {}
+    return_flight = item.get("return") or {}
+    title = html.escape(str(item.get("title") or "备选方案"))
+    tradeoff = html.escape(str(item.get("tradeoff") or item.get("note") or "请根据时间、成本和疲劳风险自行取舍"))
+    outbound_date = _same_day_leg_date(item, payload, "outbound")
+    return_date = _same_day_leg_date(item, payload, "return")
+    outbound_price = item.get("outbound_price") if item.get("outbound_price") is not None else outbound.get("price")
+    return_price = item.get("return_price") if item.get("return_price") is not None else return_flight.get("price")
+    total = item.get("roundtrip_price") or item.get("total_price") or item.get("price")
+    outbound_links = _same_day_leg_links(outbound, outbound_date, 6)
+    return_links = _same_day_leg_links(return_flight, return_date, 6)
+    link_block = ""
+    if outbound_links or return_links:
+        link_lines = [
+            "<div style='font-weight:600;margin-bottom:4px;'>验证此备选(两段需分别确认)</div>",
+        ]
+        if outbound_links:
+            link_lines.append(f"<div>去程 {_email_plan_flight_text(outbound)}({_price_text(outbound_price)}):{outbound_links}</div>")
+        if return_links:
+            link_lines.append(f"<div>返程 {_email_plan_flight_text(return_flight)}({_price_text(return_price)}):{return_links}</div>")
+        link_lines.append("<div style='color:#b45309;margin-top:4px;'>提示:两段独立机票需分别下单,请先确认两段都有票。</div>")
+        link_block = (
+            "<div style='margin-top:10px;padding-top:8px;border-top:1px solid #f0f0f0;'>"
+            + "".join(link_lines)
+            + "</div>"
+        )
+    total_rows = _email_leg_table(
+        [
+            ("往返总价", f"{_price_text(total)}(去程{_price_text(outbound_price)} + 返程{_price_text(return_price)})"),
+            ("可行性", html.escape(_same_day_alternative_feasibility(item))),
+        ]
+    )
+    return (
+        "<div style='border:1px solid #e5e7eb;border-radius:10px;padding:16px;margin:14px 0;background:#fff;'>"
+        "<div style='font-weight:600;color:#d97706;margin-bottom:4px;'>"
+        f"{title}</div>"
+        f"<div style='font-size:13px;color:#666;margin-bottom:10px;'>权衡:{tradeoff}</div>"
+        "<div style='font-weight:600;margin:8px 0 4px;'>去程</div>"
+        f"{_email_leg_table(_same_day_roundtrip_leg_rows('去程', outbound, outbound_date, outbound_price))}"
+        "<div style='font-weight:600;margin:12px 0 4px;'>返程</div>"
+        f"{_email_leg_table(_same_day_roundtrip_leg_rows('返程', return_flight, return_date, return_price))}"
+        "<div style='font-weight:600;margin:12px 0 4px;'>合计</div>"
+        f"{total_rows}"
+        f"{link_block}"
+        "</div>"
+    )
+
 def _same_day_alternative_card(item: dict, payload: dict) -> str:
     item = item or {}
+    if _same_day_has_roundtrip_legs(item):
+        return _same_day_roundtrip_alternative_card(item, payload)
     flight = item.get("flight") or {}
     title = html.escape(str(item.get("title") or "备选方案"))
     tradeoff = html.escape(str(item.get("tradeoff") or item.get("note") or "请根据时间、成本和疲劳风险自行取舍"))
@@ -6906,6 +7030,31 @@ def _same_day_alternative_card(item: dict, payload: dict) -> str:
     )
 
 
+def _pushplus_same_day_roundtrip_alternative_lines(item: dict, payload: dict) -> list[str]:
+    title = html.escape(str(item.get("title") or "备选方案"))
+    outbound = item.get("outbound") or {}
+    return_flight = item.get("return") or {}
+    outbound_no = html.escape(str(outbound.get("flight_no") or outbound.get("flight_combo") or "去程待确认"))
+    return_no = html.escape(str(return_flight.get("flight_no") or return_flight.get("flight_combo") or "返程待确认"))
+    outbound_dep = html.escape(_time_only(outbound.get("departure_time") or outbound.get("dep_time")) or "--:--")
+    outbound_arr = html.escape(_time_only(outbound.get("arrival_time") or outbound.get("arr_time")) or "--:--")
+    return_dep = html.escape(_time_only(return_flight.get("departure_time") or return_flight.get("dep_time")) or "--:--")
+    return_arr = html.escape(_time_only(return_flight.get("arrival_time") or return_flight.get("arr_time")) or "--:--")
+    outbound_links = _same_day_leg_links(outbound, _same_day_leg_date(item, payload, "outbound"), 3)
+    return_links = _same_day_leg_links(return_flight, _same_day_leg_date(item, payload, "return"), 3)
+    lines = [
+        title,
+        f"去程:{outbound_no} {outbound_dep}->{outbound_arr} {_price_text(item.get('outbound_price') or outbound.get('price'))}",
+        f"返程:{return_no} {return_dep}->{return_arr} {_price_text(item.get('return_price') or return_flight.get('price'))}",
+        f"往返总价:{_price_text(item.get('roundtrip_price') or item.get('total_price') or item.get('price'))}",
+    ]
+    if outbound_links:
+        lines.append(f"去程验证:{outbound_links}")
+    if return_links:
+        lines.append(f"返程验证:{return_links}")
+    lines.append("注:两段独立票,需分别下单并先确认两段都有票")
+    return lines
+
 def _pushplus_same_day_alternative_lines(payload: dict) -> list[str]:
     alternatives = payload.get("same_day_alternatives") or []
     if not alternatives:
@@ -6913,6 +7062,9 @@ def _pushplus_same_day_alternative_lines(payload: dict) -> list[str]:
     lines = ["", "可选备选(由你决定):"]
     for item in alternatives[:3]:
         item = item or {}
+        if _same_day_has_roundtrip_legs(item):
+            lines.extend(_pushplus_same_day_roundtrip_alternative_lines(item, payload))
+            continue
         title = html.escape(str(item.get("title") or "备选方案"))
         flight = item.get("flight") or {}
         flight_no = html.escape(str(flight.get("flight_no") or flight.get("flight_combo") or "航班待确认"))

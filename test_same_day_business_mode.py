@@ -348,6 +348,76 @@ class SameDayBusinessModeTest(unittest.TestCase):
             "MU5099",
         )
 
+    def test_build_same_day_alternatives_keep_roundtrip_return_and_price(self):
+        from analyzer import build_same_day_alternatives, compute_same_day_windows
+
+        windows = compute_same_day_windows(
+            {
+                "constraints": {
+                    "same_day_round_trip": True,
+                    "business_start": "10:00",
+                    "business_end": "17:00",
+                    "meeting_importance": "important",
+                    "destination_transport_min": 50,
+                }
+            },
+            "SHA",
+            "PEK",
+        )
+        current_day = [
+            {
+                "flight_no": "MU5099",
+                "price": 895,
+                "departure_airport": "SHA",
+                "arrival_airport": "PEK",
+                "departure_date": "2026-06-19",
+                "arrival_date": "2026-06-19",
+                "departure_time": "07:00",
+                "arrival_time": "09:15",
+            }
+        ]
+        returns = [
+            {
+                "flight_no": "CA1589",
+                "price": 1350,
+                "departure_airport": "PEK",
+                "arrival_airport": "SHA",
+                "departure_date": "2026-06-19",
+                "arrival_date": "2026-06-19",
+                "departure_time": "21:30",
+                "arrival_time": "23:30",
+            }
+        ]
+        previous_day = [
+            {
+                "flight_no": "MU5137",
+                "price": 620,
+                "departure_airport": "SHA",
+                "arrival_airport": "PEK",
+                "departure_date": "2026-06-18",
+                "arrival_date": "2026-06-18",
+                "departure_time": "19:00",
+                "arrival_time": "21:15",
+            }
+        ]
+
+        alternatives = build_same_day_alternatives(
+            current_day,
+            returns,
+            windows,
+            "2026-06-19",
+            previous_day_outbound=previous_day,
+        )
+
+        previous = next(item for item in alternatives if item["category"] == "previous_evening")
+        earliest = next(item for item in alternatives if item["category"] == "same_day_earliest")
+        self.assertEqual(previous["outbound"]["flight_no"], "MU5137")
+        self.assertEqual(previous["return"]["flight_no"], "CA1589")
+        self.assertEqual(previous["roundtrip_price"], 1970)
+        self.assertEqual(previous["price"], 1970)
+        self.assertEqual(earliest["outbound"]["flight_no"], "MU5099")
+        self.assertEqual(earliest["return"]["flight_no"], "CA1589")
+        self.assertEqual(earliest["roundtrip_price"], 2245)
     def test_build_same_day_combos_uses_computed_business_window(self):
         from analyzer import build_same_day_combos, compute_same_day_windows
 
@@ -494,6 +564,24 @@ class SameDayBusinessModeTest(unittest.TestCase):
         self.assertTrue(ok)
         self.assertIn("返程晚班", note)
 
+    def test_same_day_no_feasible_note_names_empty_return_window(self):
+        from analyzer import _same_day_no_feasible_note
+
+        note = _same_day_no_feasible_note(
+            [{"flight_no": "MU5099", "arrival_airport": "PEK", "arrival_time": "09:15"}],
+            [{"flight_no": "CA1507", "departure_airport": "PEK", "departure_time": "18:00"}],
+            {
+                "same_day_round_trip": True,
+                "business_start": "10:00",
+                "business_end": "17:00",
+                "meeting_importance": "important",
+                "destination_transport_min": 50,
+            },
+        )
+
+        self.assertIn("返程当天无符合航班", note)
+        self.assertIn("需", note)
+        self.assertIn("后出发", note)
     def test_same_day_no_feasible_note_counts_relaxed_two_hour_candidates(self):
         from analyzer import _same_day_no_feasible_note
 

@@ -1742,6 +1742,15 @@ def _same_day_no_feasible_note(
         parts.append(f"最早去程约{_minutes_to_text(earliest_arrival)}到，要求不晚于{windows.get('outbound_arrive_by')}")
     if latest_departure is not None:
         parts.append(f"最晚返程约{_minutes_to_text(latest_departure)}走，要求不早于{windows.get('return_depart_after')}")
+    return_required = windows.get("return_depart_after_minutes")
+    if return_required is not None:
+        return_ok = sum(
+            1
+            for flight in return_candidates
+            if (_flight_departure_minutes(flight) is not None and _flight_departure_minutes(flight) >= return_required)
+        )
+        if return_ok == 0:
+            parts.append(f"返程当天无符合航班(需{windows.get('return_depart_after')}后出发)")
 
     relaxed_constraints = dict(_same_day_constraints(constraints or {}))
     if windows.get("buffer_model") == "airport_split":
@@ -1909,6 +1918,156 @@ def _flight_time_range_text(flight: dict) -> str:
     return f"{dep}->{arr}"
 
 
+def _same_day_return_sort_key(flight: dict, date_str: str | None):
+    dep_dt = _flight_departure_datetime(flight or {}, date_str)
+    if dep_dt is None:
+        dep_min = _flight_departure_minutes(flight or {})
+        dep_dt = _minutes_datetime(date_str, dep_min) if dep_min is not None else datetime.max
+    return (dep_dt, _flight_sort_price(flight or {}))
+
+
+def _same_day_window_return_candidates(
+    return_flights: list[dict] | None,
+    windows: dict | None,
+    date_str: str | None,
+) -> list[dict]:
+    windows = windows or {}
+    depart_after = windows.get("return_depart_after_minutes")
+    _, return_after_dt = _same_day_window_datetimes(windows, date_str)
+    candidates = []
+    for flight in return_flights or []:
+        if _flight_departure_minutes(flight or {}) is None:
+            continue
+        if _to_float((flight or {}).get("price")) is None:
+            continue
+        dep_date = _flight_date_text(flight or {}, "departure")
+        if date_str and dep_date and dep_date != str(date_str)[:10]:
+            continue
+        dep_dt = _flight_departure_datetime(flight or {}, date_str)
+        if return_after_dt is not None and dep_dt is not None:
+            if dep_dt < return_after_dt:
+                continue
+        elif depart_after is not None:
+            dep_min = _flight_departure_minutes(flight or {})
+            if dep_min is not None and dep_min < depart_after:
+                continue
+        candidates.append(flight)
+    return sorted(candidates, key=lambda item: _same_day_return_sort_key(item, date_str))
+
+
+def _same_day_next_return_candidates(
+    return_flights: list[dict] | None,
+    date_str: str | None,
+) -> list[dict]:
+    next_date = _date_plus_one(date_str)
+    candidates = []
+    for flight in return_flights or []:
+        if _flight_departure_minutes(flight or {}) is None:
+            continue
+        if _to_float((flight or {}).get("price")) is None:
+            continue
+        dep_date = _flight_date_text(flight or {}, "departure")
+        if next_date and dep_date and dep_date != next_date:
+            continue
+        candidates.append(flight)
+    return sorted(candidates, key=lambda item: _same_day_return_sort_key(item, next_date or date_str))
+
+
+def _same_day_flight_identity(flight: dict | None) -> str:
+    flight = flight or {}
+    return str(
+        flight.get("flight_no")
+        or flight.get("flight_combo")
+        or flight.get("id")
+        or f"{flight.get('departure_time')}->{flight.get('arrival_time')}"
+    )
+
+
+def _same_day_roundtrip_alternative(
+    category: str,
+    title: str,
+    outbound: dict,
+    return_flight: dict | None,
+    tradeoff: str,
+    note: str = "",
+    date_override: str | None = None,
+    passengers: dict | None = None,
+    route_type: str | None = None,
+    extra: dict | None = None,
+) -> dict:
+    outbound_price = _to_float((outbound or {}).get("price")) or 0
+    if not return_flight:
+        payload = {
+            "category": category,
+            "title": title,
+            "flight": outbound,
+            "price": outbound_price,
+            "time": _flight_time_range_text(outbound),
+            "tradeoff": tradeoff,
+            "note": note,
+        }
+        if date_override:
+            payload["date"] = date_override
+        if extra:
+            payload.update(extra)
+        return payload
+
+    return_price = _to_float((return_flight or {}).get("price")) or 0
+    adult_roundtrip = outbound_price + return_price
+    passenger_pricing = build_passenger_roundtrip_pricing(outbound_price, return_price, passengers, route_type)
+    display_total = _to_float(passenger_pricing.get("total_price"))
+    if display_total is None:
+        display_total = adult_roundtrip
+    print(
+        f"[备选价格诊断] 备选去程价={outbound_price:g} 返程价={return_price:g} "
+        f"往返总价={adult_roundtrip:g} 全员往返总价={display_total:g}"
+    )
+    payload = {
+        "category": category,
+        "title": title,
+        "outbound": outbound,
+        "return": return_flight,
+        "flight": outbound,
+        "outbound_price": outbound_price,
+        "return_price": return_price,
+        "adult_roundtrip_price": adult_roundtrip,
+        "single_adult_price": adult_roundtrip,
+        "roundtrip_price": display_total,
+        "total_price": display_total,
+        "price": display_total,
+        "passenger_pricing": passenger_pricing,
+        "price_tiers": passenger_pricing.get("price_tiers") or {},
+        "is_roundtrip": True,
+        "purchase_type": "两个单程拼接",
+        "time": f"{_flight_time_range_text(outbound)} / {_flight_time_range_text(return_flight)}",
+        "tradeoff": tradeoff,
+        "note": note,
+    }
+    if date_override:
+        payload["date"] = date_override
+    if extra:
+        payload.update(extra)
+    return payload
+
+
+def _dedupe_same_day_alternatives(alternatives: list[dict]) -> list[dict]:
+    result = []
+    seen = set()
+    for item in alternatives or []:
+        outbound = item.get("outbound") or item.get("flight") or {}
+        return_flight = item.get("return") or {}
+        key = (
+            item.get("category"),
+            _same_day_flight_identity(outbound),
+            _same_day_flight_identity(return_flight),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(item)
+    return result
+
+
 def build_same_day_alternatives(
     outbound_flights: list[dict] | None,
     return_flights: list[dict] | None,
@@ -1917,12 +2076,33 @@ def build_same_day_alternatives(
     previous_day_outbound: list[dict] | None = None,
     next_day_return: list[dict] | None = None,
     limit_per_type: int = 2,
+    passengers: dict | None = None,
+    route_type: str | None = None,
 ) -> list[dict]:
     """Build transparent fallback choices when meeting-window same-day trips are impossible."""
     alternatives: list[dict] = []
     windows = windows or {}
     previous_date = _date_minus_one(date_str)
     next_date = _date_plus_one(date_str)
+    current_return_choices = _same_day_window_return_candidates(return_flights, windows, date_str)
+    next_return_source = list(next_day_return or [])
+    if not next_return_source and next_date:
+        next_return_source = [
+            flight
+            for flight in return_flights or []
+            if _flight_date_text(flight or {}, "departure") == next_date
+        ]
+    next_return_choices = _same_day_next_return_candidates(next_return_source, date_str)
+    best_current_return = current_return_choices[0] if current_return_choices else None
+    best_next_return = next_return_choices[0] if next_return_choices else None
+    best_return = best_current_return or best_next_return
+    is_roundtrip_alt = bool(best_return)
+    print(f"[当天往返全诊断] 进入备选逻辑时 is_roundtrip 标志={is_roundtrip_alt}")
+    print(
+        "[当天往返全诊断] 备选生成用的是 "
+        + ("往返函数" if is_roundtrip_alt else "单程函数")
+    )
+
     prev_candidates = list(previous_day_outbound or [])
     if not prev_candidates and previous_date:
         prev_candidates = [
@@ -1948,28 +2128,32 @@ def build_same_day_alternatives(
 
     for flight in sorted(evening, key=_flight_sort_price)[:limit_per_type]:
         alternatives.append(
-            {
-                "category": "previous_evening",
-                "title": "备选A·前一晚到达",
-                "flight": flight,
-                "price": _flight_sort_price(flight),
-                "time": _flight_time_range_text(flight),
-                "tradeoff": "多一晚酒店成本,但会议时间最稳",
-                "note": "到达后入住酒店,次日从容赴会",
-            }
+            _same_day_roundtrip_alternative(
+                "previous_evening",
+                "备选A·前一晚到达",
+                flight,
+                best_return,
+                "多一晚酒店成本，但会议时间最稳",
+                "到达后入住酒店，次日从容赴会",
+                previous_date,
+                passengers,
+                route_type,
+            )
         )
 
     for flight in sorted(redeye, key=_flight_sort_price)[:limit_per_type]:
         alternatives.append(
-            {
-                "category": "previous_redeye",
-                "title": "备选B·前夜深夜班",
-                "flight": flight,
-                "price": _flight_sort_price(flight),
-                "time": _flight_time_range_text(flight),
-                "tradeoff": "省酒店时间,但凌晨到达有疲劳风险",
-                "note": "该备选为主动兜底场景,不受通用红眼规则限制",
-            }
+            _same_day_roundtrip_alternative(
+                "previous_redeye",
+                "备选B·前夜深夜班",
+                flight,
+                best_return,
+                "省酒店时间，但凌晨到达有疲劳风险",
+                "这是兜底场景，需自行权衡红眼疲劳风险",
+                previous_date,
+                passengers,
+                route_type,
+            )
         )
 
     flight = pick_earliest_same_day(outbound_flights, date_str, windows, "raw_valid_outbound")
@@ -1987,54 +2171,57 @@ def build_same_day_alternatives(
         elif late_minutes:
             late_text = f"预计到会晚{late_minutes}分钟"
         else:
-            late_text = "时间仍较紧,需自行确认会议弹性"
+            late_text = "时间仍较紧，需自行确认会议弹性"
         if flight.get("meeting_arrival_note"):
             late_text = flight.get("meeting_arrival_note")
         alternatives.append(
-            {
-                "category": "same_day_earliest",
-                "title": "备选C·当天最早班",
-                "flight": flight,
-                "price": _flight_sort_price(flight),
-                "time": _flight_time_range_text(flight),
-                "tradeoff": "有迟到风险,仅在会议可弹性时考虑",
-                "note": late_text,
-                "meeting_arrival_time": _minutes_to_text(meeting_arrival) if meeting_arrival is not None else "",
-                "late_minutes": late_minutes,
-            }
+            _same_day_roundtrip_alternative(
+                "same_day_earliest",
+                "备选C·当天最早班",
+                flight,
+                best_return,
+                "有迟到风险，仅在会议可弹性时考虑",
+                late_text,
+                date_str,
+                passengers,
+                route_type,
+                {
+                    "meeting_arrival_time": _minutes_to_text(meeting_arrival) if meeting_arrival is not None else "",
+                    "late_minutes": late_minutes,
+                },
+            )
         )
 
-    next_return_candidates = list(next_day_return or [])
-    if not next_return_candidates and next_date:
-        next_return_candidates = [
-            flight
-            for flight in return_flights or []
-            if _flight_date_text(flight or {}, "departure") == next_date
-        ]
     morning_returns = [
         flight
-        for flight in next_return_candidates
+        for flight in next_return_choices
         if (_flight_departure_minutes(flight or {}) is not None and _flight_departure_minutes(flight or {}) <= 10 * 60)
     ]
-    for flight in sorted(morning_returns, key=_flight_sort_price)[:1]:
-        alternatives.append(
-            {
-                "category": "next_morning_return",
-                "title": "备选D·次日早班返程",
-                "flight": flight,
-                "price": _flight_sort_price(flight),
-                "time": _flight_time_range_text(flight),
-                "tradeoff": "需在目的地多留一晚,但返程时间更从容",
-                "note": "返程窗口过紧时的镜像备选",
-            }
-        )
-    labels = ["备选A", "备选B", "备选C"]
-    for index, item in enumerate(alternatives[:3]):
+    if morning_returns and not current_return_choices:
+        outbound_for_next_return = pick_earliest_same_day(outbound_flights, date_str, windows, "raw_valid_outbound")
+        if outbound_for_next_return:
+            for return_flight in morning_returns[:1]:
+                alternatives.append(
+                    _same_day_roundtrip_alternative(
+                        "next_morning_return",
+                        "备选D·次日早班返程",
+                        outbound_for_next_return,
+                        return_flight,
+                        "需在目的地多留一晚，但返程时间更从容",
+                        "返程窗口过紧时的次日返程备选",
+                        date_str,
+                        passengers,
+                        route_type,
+                    )
+                )
+
+    alternatives = _dedupe_same_day_alternatives(alternatives)
+    labels = ["备选A", "备选B", "备选C", "备选D", "备选E"]
+    for index, item in enumerate(alternatives[:5]):
         title = str(item.get("title") or "").strip()
         suffix = title.split("·", 1)[1] if "·" in title else title or "备选方案"
         item["title"] = f"{labels[index]}·{suffix}"
     return alternatives
-
 
 def _same_day_candidate_debug_rows(
     outbound_flights: list[dict] | None,
@@ -9066,6 +9253,12 @@ def analyze_round_trip(
             "after_meeting_window": len(ob_ok) + len(rt_ok),
             "same_day_combos": len(same_day_combos),
         }
+        print(f"[当天往返全诊断] same_day_round_trip={same_day_round_trip}")
+        print(f"[当天往返全诊断] 去程采集数={len(outbound_candidates)}")
+        print(f"[当天往返全诊断] 返程采集数={len(return_candidates)}")
+        print(f"[当天往返全诊断] 去程窗口符合(到达<=上限)={len(ob_ok)}")
+        print(f"[当天往返全诊断] 返程窗口符合(出发>=下限)={len(rt_ok)}")
+        print(f"[当天往返全诊断] 配对出的当天往返组合={len(same_day_combos)}")
         print(
             f"[当天往返诊断] same_day={same_day_round_trip}, 去程窗口符合数={len(ob_ok)}, "
             f"返程窗口符合数={len(rt_ok)}"
@@ -9115,6 +9308,8 @@ def analyze_round_trip(
                     or return_analysis.get("next_day_return")
                     or return_analysis.get("next_day_return_flights")
                 ),
+                passengers=pricing_passengers,
+                route_type=pricing_route_type,
             )
             same_day_no_feasible_note = _same_day_no_feasible_note(
                 outbound_candidates,

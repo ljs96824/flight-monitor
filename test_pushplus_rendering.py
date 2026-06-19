@@ -330,6 +330,51 @@ class PushPlusRenderingTest(unittest.TestCase):
         self.assertIn("飞猪", body)
         self.assertIn("去哪儿", body)
 
+    def test_same_day_alternatives_body_renders_roundtrip_legs_and_total(self):
+        body = _same_day_alternatives_body(
+            {
+                "route": "SHA -> PEK",
+                "depart_date": "2026-06-19",
+                "same_day_alternatives": [
+                    {
+                        "category": "previous_evening",
+                        "title": "Alternative A previous evening",
+                        "date": "2026-06-18",
+                        "outbound": {
+                            "flight_no": "MU5137",
+                            "departure_airport": "SHA",
+                            "arrival_airport": "PEK",
+                            "departure_date": "2026-06-18",
+                            "arrival_date": "2026-06-18",
+                            "departure_time": "19:00",
+                            "arrival_time": "21:15",
+                            "price": 620,
+                        },
+                        "return": {
+                            "flight_no": "CA1589",
+                            "departure_airport": "PEK",
+                            "arrival_airport": "SHA",
+                            "departure_date": "2026-06-19",
+                            "arrival_date": "2026-06-19",
+                            "departure_time": "21:30",
+                            "arrival_time": "23:30",
+                            "price": 1350,
+                        },
+                        "outbound_price": 620,
+                        "return_price": 1350,
+                        "roundtrip_price": 1970,
+                        "price": 1970,
+                        "tradeoff": "extra hotel cost, most stable",
+                    }
+                ],
+            }
+        )
+
+        self.assertIn("MU5137", body)
+        self.assertIn("CA1589", body)
+        self.assertIn("1,970", body)
+        self.assertIn("620", body)
+        self.assertIn("1,350", body)
     def test_email_and_detail_put_alternatives_before_analysis_when_no_primary(self):
         payload = {
             "push_type": "business time conflict",

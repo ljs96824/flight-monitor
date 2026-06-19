@@ -298,7 +298,14 @@ def _normalize_subscription(item: dict) -> dict:
     soft_preferences["passenger_count"] = passenger_count
     notification_goals = item.get("notification_goals") or {}
     return_date = item.get("return_date") or hard_constraints.get("return_date")
-    round_trip = _as_bool(item.get("round_trip", hard_constraints.get("round_trip", False)))
+    same_day_round_trip = bool(
+        hard_constraints.get("same_day_round_trip")
+        or constraints.get("same_day_round_trip")
+        or item.get("same_day_round_trip")
+    )
+    if same_day_round_trip and not return_date:
+        return_date = item.get("depart_date", "")
+    round_trip = _as_bool(item.get("round_trip", hard_constraints.get("round_trip", False))) or same_day_round_trip
     origin_info = resolve_location(item.get("origin", ""))
     destination_info = resolve_location(item.get("destination", ""))
     if origin_info.get("type") == "unknown":

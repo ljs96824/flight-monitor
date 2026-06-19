@@ -116,6 +116,25 @@ class SubscriptionLoadingTest(unittest.TestCase):
         self.assertIn("[跳过] 订阅已暂停", printed)
         self.assertIn("paused-sub", printed)
 
+    def test_same_day_subscription_defaults_to_roundtrip_same_return_date(self):
+        normalized = main._normalize_subscription(
+            {
+                "id": "same-day-business",
+                "origin": "PVG",
+                "destination": "PEK",
+                "depart_date": "2026-06-19",
+                "status": "active",
+                "constraints": {
+                    "same_day_round_trip": True,
+                    "business_start": "10:00",
+                    "business_end": "17:00",
+                },
+            }
+        )
+
+        self.assertTrue(normalized["round_trip"])
+        self.assertEqual(normalized["return_date"], "2026-06-19")
+        self.assertTrue(normalized["hard_constraints"]["same_day_round_trip"])
     def test_subscription_preferences_include_travel_scenarios(self):
         prefs = main.subscription_preferences(
             {
