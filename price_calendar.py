@@ -13,6 +13,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from filename_utils import sanitize_filename
+from request_cache import cached_fetch
 
 DEFAULT_DATA_DIR = Path(__file__).parent / "data" / "price_calendar"
 WEEKDAY_NAMES = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
@@ -96,10 +97,8 @@ def _query_dates(target_date: str) -> list[date]:
     return dates
 
 
-def _source_fetch(source, origin: str, dest: str, date_str: str, cabin_class: str):
-    if hasattr(source, "fetch_and_parse"):
-        return source.fetch_and_parse(origin, dest, date_str)
-    result = source.fetch(origin, dest, date_str, cabin_class)
+def _source_fetch(source, origin: str, dest: str, date_str: str, cabin_class: str, passengers=None, ttl_seconds: int = 6 * 60 * 60):
+    result = cached_fetch(source, origin, dest, date_str, passengers, cabin_class, ttl_seconds=ttl_seconds)
     if isinstance(result, dict):
         return result.get("flights") or []
     return result or []
@@ -120,6 +119,7 @@ def update_calendar(
     source,
     *,
     cabin_class: str = "economy",
+    passengers=None,
     data_dir: Path | None = None,
     cache_hours: int = 6,
     sleep_seconds: float = 0.5,
@@ -134,7 +134,7 @@ def update_calendar(
         if isinstance(cached, dict) and not is_stale(cached.get("updated_at"), cache_hours):
             continue
 
-        flights = _source_fetch(source, origin, dest, date_str, cabin_class)
+        flights = _source_fetch(source, origin, dest, date_str, cabin_class, passengers, cache_hours * 60 * 60)
         priced = [flight for flight in flights if isinstance(flight, dict) and _valid_price(flight.get("price"))]
         if priced:
             cheapest = min(priced, key=lambda flight: float(flight.get("price") or 10**9))

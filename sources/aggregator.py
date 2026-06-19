@@ -7,6 +7,7 @@ import os
 from datetime import datetime
 
 from source_profiles import get_source_profile, normalize_route_type
+from request_cache import cached_fetch
 from sources.base import FlightSource
 
 OPTIONAL_SOURCE_THRESHOLD = 8
@@ -436,6 +437,7 @@ class FlightAggregator:
         target_combo: str | None = None,
         cabin_classes=None,
         route_type: str | None = None,
+        passengers: dict | None = None,
     ) -> dict | None:
         cabin_classes = _normalize_cabin_classes(cabin_classes)
         run_collected_at = datetime.now().isoformat(timespec="seconds")
@@ -468,7 +470,15 @@ class FlightAggregator:
 
             for cabin_class in cabin_classes:
                 try:
-                    result = source.fetch(origin, dest, date_str, cabin_class)
+                    result = cached_fetch(
+                        source,
+                        origin,
+                        dest,
+                        date_str,
+                        passengers,
+                        cabin_class,
+                        ttl_seconds=15 * 60,
+                    )
                     source_status = result.get("source_status")
                     if source_status:
                         source_statuses.append(source_status)
@@ -620,7 +630,15 @@ class FlightAggregator:
 
             for cabin_class in cabin_classes:
                 try:
-                    result = source.fetch(origin, dest, date_str, cabin_class)
+                    result = cached_fetch(
+                        source,
+                        origin,
+                        dest,
+                        date_str,
+                        passengers,
+                        cabin_class,
+                        ttl_seconds=15 * 60,
+                    )
                     enrichment_flights = result.get("flights", []) or []
                     enrichment_count += len(enrichment_flights)
                     cabin_counts[cabin_class] = len(enrichment_flights)

@@ -1,3 +1,4 @@
+import inspect
 import json
 import logging
 import os
@@ -45,6 +46,7 @@ from notifier import (
     send,
 )
 from price_calendar import load_calendar, update_calendar
+from request_cache import print_request_cache_stats
 from plan_tracker import feedback_acknowledgement
 from sources.aggregator import FlightAggregator, build_default_sources, is_domestic_route, route_type_for
 from storage import (
@@ -77,6 +79,14 @@ PYTHONANYWHERE_PAYLOAD_PATH = "/home/{user}/flight-monitor/data/payloads/{filena
 def _first_airport(codes, fallback):
     values = [str(code).strip().upper() for code in (codes or []) if str(code or "").strip()]
     return values[0] if values else str(fallback or "").strip().upper()
+
+def _subscription_passengers(sub: dict):
+    if not isinstance(sub, dict):
+        return None
+    soft = sub.get("soft_preferences") or {}
+    preferences = sub.get("preferences") or {}
+    passengers = sub.get("passengers") or soft.get("passengers") or preferences.get("passengers")
+    return passengers if isinstance(passengers, dict) else None
 
 
 def _clean_airport_codes(codes) -> list[str]:
@@ -609,6 +619,7 @@ def _collect_same_day_fallback_flights(
     date_str: str,
     cabin_classes=None,
     route_type: str | None = None,
+    passengers=None,
 ) -> list[dict]:
     cache_path = _fallback_cache_path(origins, dests, date_str, cabin_classes)
     cached = _fresh_cached_flights(cache_path)
@@ -621,6 +632,7 @@ def _collect_same_day_fallback_flights(
         date_str,
         cabin_classes=cabin_classes,
         route_type=route_type,
+        passengers=passengers,
     )
     flights = [
         _normalize_detail_flight(flight, flight.get("data_source") or flight.get("source"))
@@ -903,6 +915,16 @@ def _dedupe_flights(flights: list[dict]) -> list[dict]:
     return sorted(seen.values(), key=lambda item: float(item.get("price") or 999999))
 
 
+
+def _aggregator_collect(aggregator, origin, destination, date_str, passengers=None, **kwargs):
+    try:
+        params = inspect.signature(aggregator.collect).parameters
+    except (TypeError, ValueError):
+        params = {}
+    if "passengers" in params:
+        kwargs["passengers"] = passengers
+    return aggregator.collect(origin, destination, date_str, **kwargs)
+
 def collect_for_airport_matrix(
     aggregator: FlightAggregator,
     origins: list[str],
@@ -910,6 +932,7 @@ def collect_for_airport_matrix(
     date_str: str,
     cabin_classes=None,
     route_type: str | None = None,
+    passengers=None,
 ) -> dict | None:
     origins = _clean_airport_codes(origins)
     destinations = _clean_airport_codes(destinations)
@@ -920,7 +943,7 @@ def collect_for_airport_matrix(
         collect_kwargs = {"cabin_classes": cabin_classes}
         if route_type:
             collect_kwargs["route_type"] = route_type
-        data = aggregator.collect(origins[0], destinations[0], date_str, **collect_kwargs)
+        data = _aggregator_collect(aggregator, origins[0], destinations[0], date_str, passengers=passengers, **collect_kwargs)
         if data:
             for flight in data.get("flights", []) or []:
                 flight["search_origin"] = flight.get("search_origin") or origins[0]
@@ -960,7 +983,7 @@ def collect_for_airport_matrix(
         collect_kwargs = {"cabin_classes": cabin_classes}
         if route_type:
             collect_kwargs["route_type"] = route_type
-        data = aggregator.collect(origin, destination, date_str, **collect_kwargs)
+        data = _aggregator_collect(aggregator, origin, destination, date_str, passengers=passengers, **collect_kwargs)
         if not data:
             continue
         for flight in data.get("flights", []):
@@ -1045,6 +1068,7 @@ def collect_nearby_dates(
                     date_str,
                     cabin_classes=cabin_classes,
                     route_type=route_type,
+                    passengers=_subscription_passengers(sub),
                 )
                 flights = data.get("flights", []) if data else []
                 prices = [
@@ -1098,6 +1122,7 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
             sub, "destination_airports_active", "destination_airports", "destination"
         )
         route_type = _subscription_route_type(sub, active_origins, active_dests)
+        request_passengers = _subscription_passengers(sub)
         first_origin = _first_airport(active_origins, sub["origin"])
         first_dest = _first_airport(active_dests, sub["destination"])
         search_sources, enrichment_sources = build_default_sources(
@@ -1116,6 +1141,7 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
             sub["depart_date"],
             cabin_classes=sub.get("cabin_classes"),
             route_type=route_type,
+            passengers=request_passengers,
         )
 
         if data is None or not data.get("flights"):
@@ -1192,6 +1218,7 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
                         sub["depart_date"],
                         calendar_source,
                         cabin_class=calendar_cabin_class,
+                        passengers=request_passengers,
                     )
                     outbound_price_calendar = calendar
                     price_calendar_result = analyze_price_calendar(
@@ -1254,6 +1281,7 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
                 return_date,
                 cabin_classes=sub.get("cabin_classes"),
                 route_type=route_type,
+                passengers=request_passengers,
             )
             return_collected_at = (return_data or {}).get("collected_at") or datetime.now().isoformat(timespec="seconds")
             normalized_return_flights = [
@@ -1331,6 +1359,7 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
                                 return_date,
                                 return_calendar_source,
                                 cabin_class=calendar_cabin_class,
+                                passengers=request_passengers,
                             )
                             price_calendar_result = analyze_price_calendar(
                                 outbound_price_calendar,
@@ -1395,6 +1424,7 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
                             previous_depart_date,
                             cabin_classes=sub.get("cabin_classes"),
                             route_type=route_type,
+                            passengers=request_passengers,
                         )
                     except Exception as exc:
                         print(f"[当天往返备选] 前一晚去程补采失败: {exc}")
@@ -1410,6 +1440,7 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
                             next_return_date,
                             cabin_classes=sub.get("cabin_classes"),
                             route_type=route_type,
+                            passengers=request_passengers,
                         )
                     except Exception as exc:
                         print(f"[当天往返备选] 次日返程补采失败: {exc}")
@@ -1533,6 +1564,9 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
         logging.error(f"{route} 处理失败: {e}", exc_info=True)
         return False
 
+
+    finally:
+        print_request_cache_stats()
 
 def run(sync_remote: bool = True):
     if sync_remote:

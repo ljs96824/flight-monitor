@@ -5,6 +5,7 @@ from pathlib import Path
 
 from sources.aggregator import FlightAggregator, build_default_sources, normalize_combo
 from sources.fare_rules import standardize_fare_rules
+from request_cache import cached_fetch
 
 
 BASE_DIR = Path(__file__).parent
@@ -22,7 +23,7 @@ def get_aggregator() -> FlightAggregator:
     return FlightAggregator(search_sources, enrichment_sources)
 
 
-def fetch_flights(origin: str, dest: str, date_str: str) -> dict:
+def fetch_flights(origin: str, dest: str, date_str: str, passengers: dict | None = None) -> dict:
     """Fetch raw Google Flights response from the first available source."""
     aggregator = get_aggregator()
     if not aggregator.search_sources:
@@ -31,7 +32,7 @@ def fetch_flights(origin: str, dest: str, date_str: str) -> dict:
     last_error = None
     for source in aggregator.search_sources:
         try:
-            result = source.fetch(origin, dest, date_str)
+            result = cached_fetch(source, origin, dest, date_str, passengers, "economy", ttl_seconds=15 * 60)
         except Exception as exc:
             last_error = exc
             continue
@@ -357,13 +358,13 @@ def _merge_detail_flights(flights: list[dict]) -> list[dict]:
     return list(merged.values())
 
 
-def collect_all_flights(origin, dest, date_str, cabin_classes=None) -> dict:
+def collect_all_flights(origin, dest, date_str, cabin_classes=None, passengers=None) -> dict:
     """采集所有航班并返回详细解析结果"""
     aggregator = get_aggregator()
     if not aggregator.search_sources:
         raise RuntimeError("请在.env文件中设置SERPAPI_KEY或SEARCHAPI_KEY")
 
-    result = aggregator.collect(origin, dest, date_str, cabin_classes=cabin_classes)
+    result = aggregator.collect(origin, dest, date_str, cabin_classes=cabin_classes, passengers=passengers)
     if result is None:
         return {
             "flights": [],
@@ -405,6 +406,7 @@ def collect_and_classify(
     date_str: str,
     target_combo: str,
     cabin_classes=None,
+    passengers=None,
 ) -> dict | None:
     """
     采集并分类：目标航班 vs 替代方案。
@@ -416,7 +418,7 @@ def collect_and_classify(
         return None
 
     result = aggregator.collect(
-        origin, dest, date_str, target_combo, cabin_classes=cabin_classes
+        origin, dest, date_str, target_combo, cabin_classes=cabin_classes, passengers=passengers
     )
     if result is None:
         print(f"未找到任何航班: {origin}→{dest} {date_str}")
