@@ -388,6 +388,157 @@ def get_total_passengers(subscription: dict | None) -> tuple[int, dict | None]:
     return max(1, count), None
 
 
+PASSENGER_RULE_DEFAULT_WEIGHTS = {
+    "price": 0.35,
+    "time": 0.20,
+    "comfort": 0.15,
+    "execution_risk": 0.15,
+    "baggage": 0.10,
+    "refund": 0.05,
+}
+
+PASSENGER_RULE_FAMILY_ELDER_WEIGHTS = {
+    "price": 0.18,
+    "time": 0.22,
+    "comfort": 0.22,
+    "execution_risk": 0.22,
+    "baggage": 0.10,
+    "refund": 0.06,
+}
+
+
+def build_passenger_profile(passengers: dict | None, extra: dict | None = None) -> dict:
+    """Derive recommendation-facing passenger needs without storing age/gender."""
+    normalized = _normalize_passengers(passengers) or {
+        "adult": 1,
+        "child": 0,
+        "elderly": 0,
+        "infant": 0,
+    }
+    extra = dict(extra or {})
+    adult = _to_non_negative_int(normalized.get("adult"), 0)
+    child = _to_non_negative_int(normalized.get("child"), 0)
+    elderly = _to_non_negative_int(normalized.get("elderly"), 0)
+    infant = _to_non_negative_int(normalized.get("infant"), 0)
+    child_type = str(extra.get("child_type") or "").strip()
+    has_infant = infant > 0 or child_type == "infant"
+    has_child = child > 0 or has_infant or child_type in {"preschool", "school_age"} or bool(extra.get("scenario_has_child"))
+    has_elderly = elderly > 0 or bool(extra.get("scenario_has_elderly"))
+    companion_constraints = extra.get("companion_constraints") or []
+    if isinstance(companion_constraints, str):
+        companion_constraints = [item.strip() for item in companion_constraints.split(",") if item.strip()]
+    mobility_limited = bool(extra.get("mobility_limited") or "limited_mobility" in companion_constraints)
+    no_redeye_strict = bool(extra.get("no_redeye_strict") or "no_redeye" in companion_constraints)
+    transfer_sensitive = bool(extra.get("transfer_sensitive") or "avoid_long_layover" in companion_constraints)
+    needs_baggage = bool(extra.get("needs_baggage_clarity") or "need_baggage" in companion_constraints)
+    needs_refund = bool(extra.get("needs_refund_flexibility") or "need_refund_change" in companion_constraints)
+    elderly_condition = str(extra.get("elderly_condition") or "")
+    if elderly_condition in {"limited_walk_transfer", "no_redeye_early"}:
+        mobility_limited = True
+    if elderly_condition == "no_redeye_early":
+        no_redeye_strict = True
+    return {
+        "adults": adult,
+        "children": child,
+        "elderly": elderly,
+        "infants": infant,
+        "has_child": has_child,
+        "has_elderly": has_elderly,
+        "has_infant": has_infant,
+        "needs_low_fatigue": has_child or has_elderly,
+        "needs_baggage_clarity": has_child or has_elderly or has_infant or needs_baggage,
+        "needs_time_stability": has_child or has_elderly or no_redeye_strict,
+        "needs_refund_flexibility": needs_refund,
+        "mobility_sensitive": has_elderly or has_infant or mobility_limited,
+        "mobility_limited": mobility_limited,
+        "no_redeye_strict": no_redeye_strict,
+        "transfer_sensitive": transfer_sensitive,
+        "child_type": child_type,
+        "elderly_condition": elderly_condition,
+    }
+
+
+def _passenger_rule_base() -> dict:
+    weights = dict(PASSENGER_RULE_DEFAULT_WEIGHTS)
+    return {
+        "prefer_direct": False,
+        "allow_red_eye": True,
+        "allow_self_transfer": True,
+        "allow_airport_change": True,
+        "allow_overnight_transfer": True,
+        "require_baggage_clarity": False,
+        "max_transfers": 2,
+        "min_connection_min": 90,
+        "prefer_daytime": False,
+        "allow_transfer": True,
+        "mobility_penalty": "normal",
+        "prefer_near_city_airport": False,
+        "seat_together_priority": "normal",
+        "weights": weights,
+        "w_price": weights["price"],
+        "w_time": weights["time"],
+        "w_comfort": weights["comfort"],
+        "w_execution_risk": weights["execution_risk"],
+        "w_baggage": weights["baggage"],
+        "w_refund": weights["refund"],
+    }
+
+
+def build_passenger_friendly_rules(
+    profile: dict | None,
+    base_rules: dict | None = None,
+    route_type: str | None = None,
+) -> dict:
+    """Convert passenger profile into hard gates, soft penalties, and weights."""
+    passenger_profile = profile or build_passenger_profile(None)
+    rules = _passenger_rule_base()
+    if base_rules:
+        rules.update(base_rules)
+        merged_weights = dict(PASSENGER_RULE_DEFAULT_WEIGHTS)
+        merged_weights.update((base_rules or {}).get("weights") or {})
+        rules["weights"] = merged_weights
+    if passenger_profile.get("has_child") or passenger_profile.get("has_elderly"):
+        rules.update(
+            {
+                "prefer_direct": True,
+                "allow_red_eye": False,
+                "allow_self_transfer": False,
+                "allow_airport_change": False,
+                "allow_overnight_transfer": False,
+                "require_baggage_clarity": True,
+                "max_transfers": 1,
+                "min_connection_min": int(rules.get("min_connection_min") or 90) + 30,
+                "prefer_daytime": True,
+                "weights": dict(PASSENGER_RULE_FAMILY_ELDER_WEIGHTS),
+            }
+        )
+    if passenger_profile.get("has_elderly"):
+        rules["mobility_penalty"] = "high"
+        rules["prefer_near_city_airport"] = True
+    if passenger_profile.get("has_infant"):
+        rules["require_baggage_clarity"] = True
+        rules["seat_together_priority"] = "high"
+    if passenger_profile.get("mobility_limited"):
+        rules["allow_transfer"] = False
+        rules["prefer_direct"] = True
+        rules["max_transfers"] = 0
+    if passenger_profile.get("no_redeye_strict"):
+        rules["allow_red_eye"] = False
+    weights = rules.get("weights") or dict(PASSENGER_RULE_DEFAULT_WEIGHTS)
+    rules.update(
+        {
+            "w_price": weights.get("price", 0),
+            "w_time": weights.get("time", 0),
+            "w_comfort": weights.get("comfort", 0),
+            "w_execution_risk": weights.get("execution_risk", 0),
+            "w_baggage": weights.get("baggage", 0),
+            "w_refund": weights.get("refund", 0),
+            "route_type": route_type or "",
+        }
+    )
+    return rules
+
+
 def normalize_budget_scope(value) -> str:
     scope = str(value or "total").strip().lower()
     if scope in {"per_person", "person", "per-passenger", "per_passenger", "single"}:
@@ -1795,6 +1946,35 @@ def build_travel_profile(soft_prefs: dict | None) -> dict:
     if passengers.get("infant", 0) > 0:
         profile["infant"] = True
         profile["infant_note"] = "婴儿票、摇篮和行李额需在支付页单独确认"
+    companion_constraints = soft_prefs.get("companion_constraints") or []
+    if isinstance(companion_constraints, str):
+        companion_constraints = [item.strip() for item in companion_constraints.split(",") if item.strip()]
+    scenario_has_child = any(item in scenarios for item in ("family", "with_child", "with_elderly_child"))
+    scenario_has_elderly = any(item in scenarios for item in ("elderly", "with_elderly", "with_elderly_child"))
+    passenger_extra = {
+        "scenario_has_child": scenario_has_child,
+        "scenario_has_elderly": scenario_has_elderly,
+        "companion_constraints": companion_constraints,
+        "mobility_limited": bool(soft_prefs.get("mobility_limited")) or "limited_mobility" in companion_constraints,
+        "no_redeye_strict": bool(soft_prefs.get("no_redeye_strict")) or "no_redeye" in companion_constraints,
+        "transfer_sensitive": "avoid_long_layover" in companion_constraints,
+        "needs_baggage_clarity": "need_baggage" in companion_constraints,
+        "needs_refund_flexibility": "need_refund_change" in companion_constraints,
+        "elderly_condition": soft_prefs.get("elderly_condition") or "",
+        "child_type": soft_prefs.get("child_type") or "",
+    }
+    passenger_profile = build_passenger_profile(
+        passengers or {"adult": passenger_count, "child": 0, "elderly": 0, "infant": 0},
+        passenger_extra,
+    )
+    passenger_rules = build_passenger_friendly_rules(
+        passenger_profile,
+        route_type=soft_prefs.get("route_type") or soft_prefs.get("basic_route_type"),
+    )
+
+    profile["passenger_profile"] = passenger_profile
+    profile["passenger_rules"] = passenger_rules
+    profile["score_weights"] = dict(passenger_rules.get("weights") or {})
     profile["scenario"] = scenario
     profile["scenarios"] = scenarios
     profile["scenario_combo"] = "+".join(scenarios)
@@ -4263,6 +4443,29 @@ def _is_likely_self_transfer(flight: dict) -> bool:
     return int(flight.get("stops") or 0) > 0 and len(set(airlines)) > 1
 
 
+def _has_airport_change_transfer(flight: dict) -> bool:
+    if flight.get("airport_change") or flight.get("change_airport"):
+        return True
+    for layover in flight.get("layovers") or []:
+        if isinstance(layover, dict) and (layover.get("airport_change") or layover.get("change_airport")):
+            return True
+    segments = [segment for segment in flight.get("segments") or [] if isinstance(segment, dict)]
+    for prev_segment, next_segment in zip(segments, segments[1:]):
+        arrival_airport = (
+            prev_segment.get("arrival_airport")
+            or prev_segment.get("arrival")
+            or prev_segment.get("arrival_airport_code")
+        )
+        next_departure_airport = (
+            next_segment.get("departure_airport")
+            or next_segment.get("departure")
+            or next_segment.get("departure_airport_code")
+        )
+        if arrival_airport and next_departure_airport and str(arrival_airport).upper() != str(next_departure_airport).upper():
+            return True
+    return False
+
+
 def _format_hours(minutes: int) -> str:
     hours = minutes // 60
     mins = minutes % 60
@@ -4993,12 +5196,45 @@ def calc_effective_cost(flight: dict, subscription, time_value_per_hour: float =
     if _needs_checked_baggage(preferences) and baggage_info.get("included") is False:
         baggage_cost = 100
 
-    effective = round(price + transport_cost + time_cost + baggage_cost)
+    profile_source = preferences
+    if isinstance(preferences, dict) and (preferences.get("preferences") or preferences.get("soft_preferences")):
+        profile_source = {
+            **(preferences.get("soft_preferences") or {}),
+            **(preferences.get("preferences") or {}),
+        }
+    passenger_profile = None
+    if isinstance(profile_source, dict):
+        passenger_profile = profile_source.get("passenger_profile")
+        if not passenger_profile:
+            passenger_profile = build_travel_profile(profile_source).get("passenger_profile")
+    passenger_profile = passenger_profile or build_passenger_profile(None)
+    family_fatigue_cost = 0
+    if passenger_profile.get("needs_low_fatigue"):
+        stops = _stops_count(flight)
+        if stops > 0:
+            family_fatigue_cost += 180 * stops
+        if _is_red_eye(flight):
+            family_fatigue_cost += 260
+        if _is_likely_self_transfer(flight):
+            family_fatigue_cost += 220
+        if _has_airport_change_transfer(flight):
+            family_fatigue_cost += 240
+        dep_hour = _first_departure_hour(flight)
+        arr_hour = _last_arrival_hour(flight)
+        if dep_hour is not None and dep_hour < 8:
+            family_fatigue_cost += 80
+        if arr_hour is not None and arr_hour >= 21:
+            family_fatigue_cost += 120
+    effective = round(price + transport_cost + time_cost + baggage_cost + family_fatigue_cost)
     return {
         "ticket_price": round(price),
         "transport_cost": round(transport_cost),
         "time_cost": time_cost,
         "baggage_cost": baggage_cost,
+        "family_fatigue_cost": round(family_fatigue_cost),
+        "passenger_friendly_note": (
+            "考虑老人/小孩同行的舒适度估算" if family_fatigue_cost else ""
+        ),
         "effective_cost": effective,
         "time_value_per_hour": time_value_per_hour,
         "transport_minutes": round(transport_min),
@@ -5024,7 +5260,7 @@ def calc_roundtrip_effective_cost(
     return_effective = (return_flight or {}).get("effective_cost") or calc_effective_cost(
         return_flight or {}, subscription, time_value_per_hour
     )
-    keys = ("ticket_price", "transport_cost", "time_cost", "baggage_cost", "effective_cost")
+    keys = ("ticket_price", "transport_cost", "time_cost", "baggage_cost", "family_fatigue_cost", "effective_cost")
     totals = {
         key: round(
             (_to_float(outbound_effective.get(key)) or 0)
@@ -5197,6 +5433,22 @@ def make_domestic_tags(flight, profile, lowest_price=None):
         tags.append("商务友好")
     if stops == 0 and (dep_hour is None or 8 <= dep_hour <= 18) and baggage_included:
         tags.append("家庭友好")
+    passenger_profile = profile.get("passenger_profile") or {}
+    family_or_elder = bool(passenger_profile.get("has_child") or passenger_profile.get("has_elderly"))
+    if family_or_elder:
+        if passenger_profile.get("has_child") and stops == 0 and baggage_included:
+            tags.append("亲子友好")
+        if passenger_profile.get("has_elderly") and stops == 0 and (dep_hour is None or 8 <= dep_hour <= 20):
+            tags.append("老人友好")
+        if stops == 0:
+            tags.append("直飞优先")
+            tags.append("低折腾")
+        if dep_hour is None or 8 <= dep_hour <= 20:
+            tags.append("白天到达")
+        if baggage_included is not False:
+            tags.append("行李明确")
+        if stops <= 1:
+            tags.append("中转风险低")
     if stops == 0 and airline in FULL_SERVICE:
         tags.append("低风险")
     if airline in LCC_AIRLINES:
@@ -5208,7 +5460,7 @@ def make_domestic_tags(flight, profile, lowest_price=None):
     if profile.get("time") == "high":
         scenario_priority.extend(["商务友好", "低风险", "时间最优"])
     if profile.get("comfort") == "high" or profile.get("risk_averse") == "high":
-        scenario_priority.extend(["家庭友好", "少折腾", "低风险"])
+        scenario_priority.extend(["亲子友好", "老人友好", "低折腾", "直飞优先", "家庭友好", "少折腾", "低风险", "行李明确"])
 
     ordered = []
     for tag in scenario_priority + tags:
@@ -6467,10 +6719,26 @@ def _apply_user_preferences(
             item.strip() for item in companion_constraints.split(",") if item.strip()
         ]
     companion_constraints = set(companion_constraints)
+    passenger_profile = travel_profile.get("passenger_profile") or build_passenger_profile(
+        travel_profile.get("passengers"),
+        {"companion_constraints": list(companion_constraints)},
+    )
+    passenger_rules = travel_profile.get("passenger_rules") or build_passenger_friendly_rules(
+        passenger_profile,
+        route_type=preferences.get("route_type"),
+    )
+    passenger_friendly_mode = bool(passenger_profile.get("has_child") or passenger_profile.get("has_elderly"))
+    if passenger_rules.get("prefer_direct"):
+        preferences.setdefault("direct_preferred", True)
+    if passenger_rules.get("require_baggage_clarity"):
+        preferences.setdefault("need_baggage", "required")
+        need_baggage = "required" if need_baggage == "unknown" else need_baggage
+    if passenger_profile.get("needs_refund_flexibility") and refund_flexibility == "unknown":
+        refund_flexibility = "preferred"
     direct_preferred = bool(preferences.get("direct_preferred")) or "direct_preferred" in companion_constraints
     avoid_long_layover = bool(preferences.get("avoid_long_layover")) or "avoid_long_layover" in companion_constraints
     no_late_arrival = bool(preferences.get("no_late_arrival")) or "daytime_arrival" in companion_constraints
-    prefer_daytime_arrival = bool(preferences.get("prefer_daytime_arrival")) or "daytime_arrival" in companion_constraints
+    prefer_daytime_arrival = bool(preferences.get("prefer_daytime_arrival")) or "daytime_arrival" in companion_constraints or bool(passenger_rules.get("prefer_daytime"))
     solo_travel = bool(preferences.get("solo_travel"))
     price_sensitivity = preferences.get("price_sensitivity", "low")
     trip_rigidity = preferences.get("trip_rigidity", "confirmed")
@@ -6490,6 +6758,10 @@ def _apply_user_preferences(
     allow_self_transfer = bool(preferences.get("allow_self_transfer"))
     if "allow_self_transfer" not in preferences:
         allow_self_transfer = bool(preferences.get("accept_self_transfer"))
+    if passenger_rules.get("allow_self_transfer") is False:
+        allow_self_transfer = False
+    if passenger_rules.get("allow_overnight_transfer") is False:
+        allow_overnight_transfer = False
     if transfer_policy == "reasonable" and max_extra_duration_hours is None and max_total_duration_hours is None:
         max_extra_duration_hours = 6
 
@@ -6618,6 +6890,24 @@ def _apply_user_preferences(
         if stops > 0 and not allow_self_transfer and _is_likely_self_transfer(flight):
             excluded.append({**flight, "exclude_reason": "系统默认不推荐疑似非联程中转"})
             continue
+        if passenger_friendly_mode:
+            max_transfers = passenger_rules.get("max_transfers")
+            if max_transfers is not None and stops > int(max_transfers):
+                excluded.append({**flight, "exclude_reason": "老人/儿童同行：中转次数超过友好规则"})
+                continue
+            if passenger_rules.get("allow_transfer") is False and stops > 0:
+                excluded.append({**flight, "exclude_reason": "老人/儿童同行且存在行动敏感：尽量选择直飞"})
+                continue
+            if passenger_rules.get("allow_airport_change") is False and stops > 0 and _has_airport_change_transfer(flight):
+                excluded.append({**flight, "exclude_reason": "老人/儿童同行：默认不推荐换机场中转"})
+                continue
+            min_connection = int(passenger_rules.get("min_connection_min") or 0)
+            if stops > 0 and min_connection and (_min_layover_minutes(flight) or 9999) < min_connection:
+                excluded.append({**flight, "exclude_reason": f"老人/儿童同行：中转安全时间低于{min_connection}分钟"})
+                continue
+            if not same_day_meeting_time_override and passenger_rules.get("allow_red_eye") is False and _is_red_eye(flight):
+                excluded.append({**flight, "exclude_reason": "老人/儿童同行：默认不推荐红眼或凌晨到达"})
+                continue
         if (
             travel_profile.get("risk_averse") == "high"
             and transfer_policy != "price_first"
@@ -6657,8 +6947,9 @@ def _apply_user_preferences(
                 penalty += 4
                 penalties.append("未确认可退改")
 
-        has_family_companion = companions in {"with_elderly", "with_child", "with_elderly_child"}
+        has_family_companion = passenger_friendly_mode or companions in {"with_elderly", "with_child", "with_elderly_child"}
         if has_family_companion:
+            flight["passenger_friendly"] = {"active": True, "profile": dict(passenger_profile), "rules": dict(passenger_rules)}
             airline_text = " ".join(
                 str(segment.get("airline", ""))
                 for segment in flight.get("segments", [])
@@ -6990,6 +7281,43 @@ def _flight_baggage_score(flight: dict) -> float:
     return 40
 
 
+def _flight_refund_score(flight: dict) -> float:
+    if _has_refund_change_flexibility(flight, required=True):
+        return 100
+    if _has_refund_change_flexibility(flight):
+        return 80
+    fare_rules = flight.get("fare_rules") or flight.get("fare_verification") or {}
+    refund = (fare_rules or {}).get("refund") or {}
+    if refund:
+        level = str(refund.get("level") or refund.get("label") or "")
+        if level in {"高", "中", "friendly", "medium"}:
+            return 70
+        return 50
+    return 40
+
+
+def _profile_score_weights(profile: dict | None) -> dict:
+    profile = profile or {}
+    explicit = profile.get("score_weights") or ((profile.get("passenger_rules") or {}).get("weights"))
+    if explicit:
+        return {
+            "price": float(explicit.get("price", explicit.get("w_price", 0.2)) or 0),
+            "time": float(explicit.get("time", explicit.get("w_time", 0.2)) or 0),
+            "comfort": float(explicit.get("comfort", explicit.get("w_comfort", 0.2)) or 0),
+            "risk": float(explicit.get("execution_risk", explicit.get("risk", explicit.get("w_execution_risk", 0.2))) or 0),
+            "baggage": float(explicit.get("baggage", explicit.get("w_baggage", 0.1)) or 0),
+            "refund": float(explicit.get("refund", explicit.get("w_refund", 0.05)) or 0),
+        }
+    return {
+        "price": _profile_weight(profile.get("price", "medium")),
+        "time": _profile_weight(profile.get("time", "medium")),
+        "comfort": _profile_weight(profile.get("comfort", "medium")),
+        "risk": _profile_weight(profile.get("risk_averse", "medium")),
+        "baggage": _profile_weight(profile.get("baggage", "medium")),
+        "refund": 0.05,
+    }
+
+
 def calc_final_score(flight: dict, target_price=None, profile: dict | None = None) -> float:
     profile = profile or build_travel_profile({})
     price_score = _flight_price_score(flight, target_price)
@@ -7005,13 +7333,8 @@ def calc_final_score(flight: dict, target_price=None, profile: dict | None = Non
     time_score = _flight_time_score(flight)
     comfort_score = _flight_comfort_score(flight)
     baggage_score = _flight_baggage_score(flight)
-    weights = {
-        "price": _profile_weight(profile.get("price", "medium")),
-        "time": _profile_weight(profile.get("time", "medium")),
-        "comfort": _profile_weight(profile.get("comfort", "medium")),
-        "risk": _profile_weight(profile.get("risk_averse", "medium")),
-        "baggage": _profile_weight(profile.get("baggage", "medium")),
-    }
+    refund_score = _flight_refund_score(flight)
+    weights = _profile_score_weights(profile)
     total_w = sum(weights.values()) or 1
 
     final_score = (
@@ -7020,6 +7343,7 @@ def calc_final_score(flight: dict, target_price=None, profile: dict | None = Non
         + comfort_score * weights["comfort"]
         + reliability_score * weights["risk"]
         + baggage_score * weights["baggage"]
+        + refund_score * weights["refund"]
     ) / total_w
     final_score = final_score * 0.85 + _bounded_score(preference_score) * 0.15
     flight["score_components"] = {
@@ -7028,6 +7352,7 @@ def calc_final_score(flight: dict, target_price=None, profile: dict | None = Non
         "comfort": round(comfort_score, 1),
         "risk": round(reliability_score, 1),
         "baggage": round(baggage_score, 1),
+        "refund": round(refund_score, 1),
         "preference": round(_bounded_score(preference_score), 1),
         "weights": weights,
     }
@@ -7450,6 +7775,8 @@ def analyze_all_flights(
         "buy_vs_wait_risk": buy_vs_wait_risk,
         "confidence_breakdown": confidence_breakdown,
         "travel_profile": travel_profile,
+        "passenger_profile": travel_profile.get("passenger_profile"),
+        "passenger_rules": travel_profile.get("passenger_rules"),
         "travel_profile_explanation": travel_profile_explanation(travel_profile),
         "recommendation_basis": build_recommendation_basis(travel_profile),
         "alert_policy": alert_policy,
@@ -8679,6 +9006,8 @@ def analyze_round_trip(
         "decision_summary": decision_summary,
         "confidence_breakdown": confidence_breakdown,
         "travel_profile": travel_profile,
+        "passenger_profile": travel_profile.get("passenger_profile"),
+        "passenger_rules": travel_profile.get("passenger_rules"),
         "travel_profile_explanation": travel_profile_explanation(travel_profile),
         "recommendation_basis": build_recommendation_basis(travel_profile),
         "alert_policy": build_alert_policy(travel_profile),

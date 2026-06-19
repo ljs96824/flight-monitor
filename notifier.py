@@ -4844,6 +4844,101 @@ def _plan_feasibility_rank(plan: dict) -> int:
     return 0
 
 
+def _plan_leg_flights(plan: dict) -> list[dict]:
+    flights = []
+    if plan.get("is_roundtrip"):
+        for key in ("outbound_flight", "return_flight"):
+            flight = plan.get(key)
+            if isinstance(flight, dict) and flight:
+                flights.append(flight)
+    else:
+        flight = plan.get("main_flight") or plan.get("flight")
+        if isinstance(flight, dict) and flight:
+            flights.append(flight)
+    return flights
+
+
+def _hour_from_flight_time(value) -> int | None:
+    text = _time_only(value)
+    if not text or ":" not in text:
+        return None
+    try:
+        return int(text.split(":", 1)[0])
+    except (TypeError, ValueError):
+        return None
+
+
+def _flight_has_baggage_clarity(flight: dict) -> bool:
+    fare_rules = flight.get("fare_rules") or flight.get("fare_verification") or {}
+    baggage = (fare_rules or {}).get("baggage") or {}
+    if baggage:
+        return baggage.get("included") is not None or bool(baggage.get("note"))
+    return bool(flight.get("baggage") or flight.get("baggage_line"))
+
+
+def _flight_has_refund_clarity(flight: dict) -> bool:
+    fare_rules = flight.get("fare_rules") or flight.get("fare_verification") or {}
+    return bool((fare_rules or {}).get("refund") or (fare_rules or {}).get("change"))
+
+
+def _flight_is_direct_enough(flight: dict) -> bool:
+    try:
+        return int(flight.get("stops") or 0) == 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _flight_is_daytime_enough(flight: dict) -> bool:
+    dep_hour = _hour_from_flight_time(flight.get("departure_time") or flight.get("dep_time"))
+    arr_hour = _hour_from_flight_time(flight.get("arrival_time") or flight.get("arr_time"))
+    dep_ok = dep_hour is None or 8 <= dep_hour <= 20
+    arr_ok = arr_hour is None or 9 <= arr_hour <= 21
+    return dep_ok and arr_ok
+
+
+def _append_unique_tags(existing: str, tags: list[str]) -> str:
+    parts = [part.strip() for part in re.split(r"[|·]", str(existing or "")) if part.strip()]
+    for tag in tags:
+        if tag and tag not in parts:
+            parts.append(tag)
+    return " | ".join(parts)
+
+
+def _apply_passenger_friendly_to_plans(plans: list[dict], passenger_profile: dict | None) -> list[dict]:
+    profile = passenger_profile or {}
+    if not (profile.get("has_child") or profile.get("has_elderly")):
+        return plans
+    result = []
+    for plan in plans:
+        item = dict(plan)
+        flights = _plan_leg_flights(item)
+        direct = bool(flights) and all(_flight_is_direct_enough(flight) for flight in flights)
+        daytime = bool(flights) and all(_flight_is_daytime_enough(flight) for flight in flights)
+        baggage_clear = bool(flights) and all(_flight_has_baggage_clarity(flight) for flight in flights)
+        refund_clear = bool(flights) and all(_flight_has_refund_clarity(flight) for flight in flights)
+        tags = []
+        if profile.get("has_child") and direct and baggage_clear:
+            tags.append("亲子友好")
+        if profile.get("has_elderly") and direct and daytime:
+            tags.append("老人友好")
+        if direct and daytime:
+            tags.append("亲子/老人友好")
+            tags.append("白天直飞")
+        if baggage_clear:
+            tags.append("行李明确")
+        if refund_clear:
+            tags.append("退改清晰")
+        if direct:
+            tags.append("低折腾")
+        item["tags"] = _append_unique_tags(item.get("tags"), tags[:5])
+        if tags:
+            item["friendly_reason"] = (
+                "白天直飞、行李和退改信息更清楚，适合老人/小孩同行；"
+                "系统已降低纯价格权重，优先执行稳定性。"
+            )
+        result.append(item)
+    return result
+
 def _apply_departure_feasibility_to_plans(
     plans: list[dict],
     constraints: dict,
@@ -5198,7 +5293,10 @@ def _payload_plan_chart_description(plan: dict) -> str:
         parts.append(f"购票方式:{purchase_mode}")
 
     reason = str(plan.get("tier_reason") or "").strip()
+    friendly_reason = str(plan.get("friendly_reason") or "").strip()
     parts.append(tier)
+    if friendly_reason:
+        parts.append("老人/儿童友好")
     if reason and reason not in parts:
         parts.append(reason)
     return " · ".join(parts)
@@ -5656,6 +5754,10 @@ def _payload_travel_profile(analysis_result: dict, subscription: dict) -> tuple[
     profile["passenger_count"] = total_passengers
     if passenger_breakdown:
         profile["passengers"] = passenger_breakdown
+    refreshed_profile = build_travel_profile(profile)
+    profile["passenger_profile"] = refreshed_profile.get("passenger_profile") or profile.get("passenger_profile")
+    profile["passenger_rules"] = refreshed_profile.get("passenger_rules") or profile.get("passenger_rules")
+    profile["score_weights"] = refreshed_profile.get("score_weights") or profile.get("score_weights")
     explanation = (
         round_trip.get("travel_profile_explanation")
         or (analysis_result or {}).get("travel_profile_explanation")
@@ -5791,11 +5893,22 @@ def build_notification_payload(
             for index, flight in enumerate(flights[:5])
         ]
     all_items = _apply_plan_tiers(all_items)
+    passenger_profile = (
+        (analysis_result or {}).get("passenger_profile")
+        or travel_profile.get("passenger_profile")
+        or {}
+    )
+    passenger_rules = (
+        (analysis_result or {}).get("passenger_rules")
+        or travel_profile.get("passenger_rules")
+        or {}
+    )
     all_items = _apply_passenger_pricing_to_plans(
         all_items,
         passenger_pricing_breakdown,
         payload_route_type,
     )
+    all_items = _apply_passenger_friendly_to_plans(all_items, passenger_profile)
     constraints_for_cabin = {
         **(subscription.get("hard_constraints") or {}),
         **(subscription.get("constraints") or {}),
@@ -6095,6 +6208,8 @@ def build_notification_payload(
         "confidence_dimensions": confidence.get("dimensions") or {},
         "confidence_details": confidence.get("details") or {},
         "travel_profile": travel_profile,
+        "passenger_profile": passenger_profile,
+        "passenger_rules": passenger_rules,
         "passenger_pricing": primary_plan.get("passenger_pricing") or {},
         "travel_profile_explanation": profile_explanation,
         "travel_scenarios": travel_profile.get("scenarios") or [],
@@ -7512,6 +7627,9 @@ def _plan_tradeoff_summary(plan: dict, primary_plan: dict | None = None) -> str:
     label = str(plan.get("label") or "方案")
     tier = str(plan.get("tier") or "").strip()
     reason = str(plan.get("tier_reason") or "").strip()
+    friendly_reason = str(plan.get("friendly_reason") or "").strip()
+    if friendly_reason:
+        return f"{label}:{friendly_reason}"
     if "低价" in tier:
         diff = None
         primary_price = _to_float((primary_plan or {}).get("price"))

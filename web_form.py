@@ -1106,6 +1106,22 @@ FORM_TEMPLATE = """
             <label><input type="checkbox" name="companion_constraints" value="limited_mobility"> 有行动不便，不适合长时间步行/换乘</label>
           </div>
         </div>
+        <div class="sub-options passenger-profile-extra">
+          <label>老人情况（选填）</label>
+          <div class="choice">
+            <label><input type="radio" name="elderly_condition" value="normal" checked> 普通</label>
+            <label><input type="radio" name="elderly_condition" value="limited_walk_transfer"> 不适合长时间步行/换乘</label>
+            <label><input type="radio" name="elderly_condition" value="no_redeye_early"> 不适合红眼/过早航班</label>
+          </div>
+          <label>儿童类型（选填）</label>
+          <div class="choice">
+            <label><input type="radio" name="child_type" value="" checked> 未填写</label>
+            <label><input type="radio" name="child_type" value="infant"> 婴儿</label>
+            <label><input type="radio" name="child_type" value="preschool"> 学龄前</label>
+            <label><input type="radio" name="child_type" value="school_age"> 学龄</label>
+          </div>
+          <p class="hint">只用于调整直飞、白天、行李和执行风险权重；不收集性别或精确年龄。</p>
+        </div>
         <p class="hint" data-show-if="companions=group">多人同行：低价库存可能不足，系统会提高最终支付价校验和库存可购买性权重。</p>
         <label>其他实际需求（可选）</label>
         <div class="choice">
@@ -3588,6 +3604,8 @@ FORM_TEMPLATE = """
           : {adult: quickPassengerCount, child: 0, elderly: 0, infant: 0},
         companions: precise ? checkedValue('companions') : 'solo',
         companion_constraints: precise ? checkedValues('companion_constraints') : [],
+        elderly_condition: precise ? checkedValue('elderly_condition') : '',
+        child_type: precise ? checkedValue('child_type') : '',
         solo_travel: precise && Boolean(document.querySelector('input[name="solo_travel"]')?.checked),
         no_late_arrival: precise && Boolean(document.querySelector('input[name="no_late_arrival"]')?.checked),
         prefer_daytime_arrival: precise && Boolean(document.querySelector('input[name="prefer_daytime_arrival"]')?.checked),
@@ -3905,7 +3923,7 @@ FORM_TEMPLATE = """
       updateConditionalFields();
       refreshSummaryIfFinalStep();
     }));
-    ['companions', 'adult_count', 'child_count', 'elderly_count', 'infant_count', 'passenger_count', 'budget_scope', 'day_trip_period', 'trip_natures', 'team_passenger_count', 'cabin_arrangement', 'business_start', 'business_end', 'outbound_set_off', 'return_set_off', 'user_transport_min', 'transport_margin_mode', 'redundancy_min', 'meeting_start', 'meeting_end', 'team_date_flexibility', 'same_flight_required', 'cabin_policy', 'user_level', 'business_seats', 'economy_seats', 'reimburse_per_person', 'invoice_context', 'invoice_needed', 'invoice_special_vat', 'invoice_cabin_limit', 'time_preference', 'refund_flexibility', 'airline_policy', 'accept_self_transfer', 'companion_constraints', 'solo_travel', 'no_late_arrival', 'prefer_daytime_arrival'].forEach(name => {
+    ['companions', 'adult_count', 'child_count', 'elderly_count', 'infant_count', 'passenger_count', 'budget_scope', 'day_trip_period', 'trip_natures', 'team_passenger_count', 'cabin_arrangement', 'business_start', 'business_end', 'outbound_set_off', 'return_set_off', 'user_transport_min', 'transport_margin_mode', 'redundancy_min', 'meeting_start', 'meeting_end', 'team_date_flexibility', 'same_flight_required', 'cabin_policy', 'user_level', 'business_seats', 'economy_seats', 'reimburse_per_person', 'invoice_context', 'invoice_needed', 'invoice_special_vat', 'invoice_cabin_limit', 'time_preference', 'refund_flexibility', 'airline_policy', 'accept_self_transfer', 'companion_constraints', 'elderly_condition', 'child_type', 'solo_travel', 'no_late_arrival', 'prefer_daytime_arrival'].forEach(name => {
       document.querySelectorAll(`input[name="${name}"]`).forEach(input => {
         input.addEventListener('change', () => {
           syncPrefCards();
@@ -5070,6 +5088,8 @@ def build_subscription(form) -> dict:
     else:
         companions = form.get("companions", "solo")
     companion_constraints = form.getlist("companion_constraints")
+    elderly_condition = form.get("elderly_condition", "normal").strip()
+    child_type = form.get("child_type", "").strip()
     solo_travel = parse_bool(form.get("solo_travel", "false"))
     no_late_arrival = parse_bool(form.get("no_late_arrival", "false"))
     prefer_daytime_arrival = parse_bool(form.get("prefer_daytime_arrival", "false"))
@@ -5082,6 +5102,8 @@ def build_subscription(form) -> dict:
     price_sensitivity = form.get("price_sensitivity", "low")
     if monitor_mode != "precise":
         companion_constraints = []
+        elderly_condition = ""
+        child_type = ""
         solo_travel = False
         no_late_arrival = False
         prefer_daytime_arrival = False
@@ -5222,6 +5244,9 @@ def build_subscription(form) -> dict:
             "travel_scenario": travel_scenario,
             "travel_scenarios": travel_scenarios,
             "companion_constraints": companion_constraints,
+            "elderly_condition": elderly_condition,
+            "child_type": child_type,
+            "mobility_limited": "limited_mobility" in companion_constraints,
             "solo_travel": solo_travel,
             "no_late_arrival": no_late_arrival,
             "prefer_daytime_arrival": prefer_daytime_arrival,
@@ -5352,6 +5377,9 @@ def build_subscription(form) -> dict:
             "travelers": companions,
             "companions": companions,
             "companion_constraints": companion_constraints,
+            "elderly_condition": elderly_condition,
+            "child_type": child_type,
+            "mobility_limited": "limited_mobility" in companion_constraints,
             "solo_travel": solo_travel,
             "no_late_arrival": no_late_arrival,
             "prefer_daytime_arrival": prefer_daytime_arrival,
