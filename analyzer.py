@@ -13,7 +13,7 @@ from airport_logistics import (
     route_type_buffer_label,
 )
 from on_time_data import estimate_punctuality
-from price_estimator import calc_transaction_price
+from price_estimator import build_passenger_price_breakdown, build_price_tiers, calc_transaction_price
 from price_calendar import (
     analyze_date_savings as _calendar_date_savings,
     analyze_row_savings as _calendar_row_savings,
@@ -386,6 +386,70 @@ def get_total_passengers(subscription: dict | None) -> tuple[int, dict | None]:
     if legacy_passengers:
         return sum(legacy_passengers.values()), legacy_passengers
     return max(1, count), None
+
+
+def normalize_budget_scope(value) -> str:
+    scope = str(value or "total").strip().lower()
+    if scope in {"per_person", "person", "per-passenger", "per_passenger", "single"}:
+        return "per_person"
+    return "total"
+
+
+def passenger_budget_limits(max_budget=None, ideal_price=None, budget_scope="total", total_passengers=1) -> dict:
+    scope = normalize_budget_scope(budget_scope)
+    passenger_count = max(1, _to_non_negative_int(total_passengers, 1))
+    multiplier = passenger_count if scope == "per_person" else 1
+    max_value = _to_float(max_budget)
+    ideal_value = _to_float(ideal_price)
+    return {
+        "budget_scope": scope,
+        "passenger_count": passenger_count,
+        "multiplier": multiplier,
+        "input_max_budget": max_value,
+        "input_ideal_price": ideal_value,
+        "max_budget_total": max_value * multiplier if max_value is not None else None,
+        "ideal_price_total": ideal_value * multiplier if ideal_value is not None else None,
+    }
+
+
+def build_passenger_roundtrip_pricing(
+    outbound_price,
+    return_price=None,
+    passengers: dict | None = None,
+    route_type: str | None = None,
+    cabin: str | None = "economy",
+) -> dict:
+    passengers = _normalize_passengers(passengers) or {"adult": 1, "child": 0, "elderly": 0, "infant": 0}
+    outbound_breakdown = build_passenger_price_breakdown(outbound_price, passengers, cabin, route_type)
+    return_breakdown = (
+        build_passenger_price_breakdown(return_price, passengers, cabin, route_type)
+        if return_price is not None
+        else None
+    )
+    single_adult_total = (_to_float(outbound_price) or 0) + (_to_float(return_price) or 0)
+    total = outbound_breakdown["total"] + (return_breakdown["total"] if return_breakdown else 0)
+    factor = outbound_breakdown.get("factor") or 1
+    price_tiers = build_price_tiers(
+        outbound_price,
+        return_price,
+        passengers,
+        route_type,
+        purchase_type="roundtrip" if return_breakdown else "oneway",
+        cabin=cabin,
+    )
+    return {
+        "applies": bool(factor != 1 or sum(passengers.values()) > 1),
+        "scope": "roundtrip" if return_breakdown else "oneway",
+        "passengers": passengers,
+        "passenger_label": outbound_breakdown.get("passenger_label") or "",
+        "factor": factor,
+        "outbound": outbound_breakdown,
+        "return": return_breakdown,
+        "total_price": total,
+        "single_adult_price": single_adult_total,
+        "price_tiers": price_tiers,
+        "note": outbound_breakdown.get("note") or "",
+    }
 
 
 def determine_cabins(constraints: dict | None) -> list[str]:
@@ -5761,6 +5825,39 @@ def build_budget_gap(display_price, max_price=None, ideal_price=None) -> dict:
     }
 
 
+def build_passenger_budget_gap(
+    display_price,
+    max_price=None,
+    ideal_price=None,
+    budget_scope="total",
+    total_passengers=1,
+) -> dict:
+    """Return budget gaps using the same all-passenger price scope as display."""
+    current = _to_float(display_price)
+    limits = passenger_budget_limits(max_price, ideal_price, budget_scope, total_passengers)
+    max_p = limits.get("max_budget_total")
+    ideal = limits.get("ideal_price_total")
+    items = []
+    over_max = None
+    over_ideal = None
+    if current is not None and max_p is not None and current > max_p:
+        over_max = current - max_p
+        label = "每人预算折算总上限" if limits["budget_scope"] == "per_person" else "最高价"
+        items.append(f"高于{label}¥{over_max:,.0f}")
+    if current is not None and ideal is not None and current > ideal:
+        over_ideal = current - ideal
+        label = "每人理想价折算总价" if limits["budget_scope"] == "per_person" else "理想价"
+        items.append(f"高于{label}¥{over_ideal:,.0f}")
+    return {
+        "over_max": over_max,
+        "over_ideal": over_ideal,
+        "items": items,
+        "text": " | ".join(items),
+        "is_over_budget": over_max is not None,
+        **limits,
+    }
+
+
 def build_next_step_guidance(
     push_type=None,
     display_price=None,
@@ -8270,6 +8367,21 @@ def analyze_round_trip(
     ):
         if isinstance(source, dict):
             combined_preferences.update(source)
+    pricing_passengers = _normalize_passengers(combined_preferences.get("passengers"))
+    if not pricing_passengers:
+        pricing_passengers = {
+            "adult": max(1, _to_non_negative_int(combined_preferences.get("passenger_count"), 1)),
+            "child": 0,
+            "elderly": 0,
+            "infant": 0,
+        }
+    pricing_route_type = (
+        combined_preferences.get("route_type")
+        or outbound_analysis.get("route_type")
+        or return_analysis.get("route_type")
+        or ""
+    )
+    budget_scope = normalize_budget_scope(combined_preferences.get("budget_scope"))
     same_day_round_trip = bool(
         combined_preferences.get("same_day_round_trip")
         or outbound_analysis.get("same_day_round_trip")
@@ -8433,6 +8545,18 @@ def analyze_round_trip(
                 )
 
     for combo in combinations:
+        if combo.get("outbound") and combo.get("return"):
+            passenger_pricing = build_passenger_roundtrip_pricing(
+                combo.get("outbound_price") or (combo.get("outbound") or {}).get("price"),
+                combo.get("return_price") or (combo.get("return") or {}).get("price"),
+                pricing_passengers,
+                pricing_route_type,
+            )
+            combo["passenger_pricing"] = passenger_pricing
+            combo["passenger_total_price"] = passenger_pricing.get("total_price")
+            combo["single_adult_price"] = passenger_pricing.get("single_adult_price")
+            combo["price_tiers"] = passenger_pricing.get("price_tiers") or {}
+            combo["budget_scope"] = budget_scope
         if combo.get("outbound") and combo.get("return") and not combo.get("effective_cost"):
             combo["effective_cost"] = calc_roundtrip_effective_cost(
                 combo.get("outbound") or {},
@@ -8532,6 +8656,10 @@ def analyze_round_trip(
         "outbound_min": outbound_min,
         "return_min": return_min,
         "total_min": total_min,
+        "passenger_total_min": (best_combo.get("passenger_total_price") if best_combo else None),
+        "passenger_pricing": (best_combo.get("passenger_pricing") if best_combo else {}),
+        "price_tiers": (best_combo.get("price_tiers") if best_combo else {}),
+        "budget_scope": budget_scope,
         "max_combination": combinations[-1] if combinations else None,
         "top_combinations": combinations[:3],
         "same_day_round_trip": same_day_round_trip,

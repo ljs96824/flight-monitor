@@ -25,6 +25,7 @@ sys.modules.setdefault(
     "flask",
     types.SimpleNamespace(
         Flask=_DummyFlask,
+        jsonify=lambda *a, **k: {},
         redirect=lambda *a, **k: None,
         render_template_string=lambda *a, **k: "",
         request=types.SimpleNamespace(form={}),

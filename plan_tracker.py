@@ -93,6 +93,10 @@ def _leg_price(plan: dict | None, direction: str, flight: dict | None) -> float 
 
 def _roundtrip_price(plan: dict | None, outbound: dict | None, return_flight: dict | None) -> float | None:
     plan = plan or {}
+    tiers = plan.get("price_tiers") if isinstance(plan.get("price_tiers"), dict) else {}
+    tier_price = _to_float(tiers.get("total_roundtrip_ref"))
+    if tier_price is not None:
+        return tier_price
     for key in ("roundtrip_price", "total_price", "roundtrip_total", "price"):
         value = _to_float(plan.get(key))
         if value is not None:
@@ -117,6 +121,7 @@ def _plan_record(plan: dict, index: int) -> dict | None:
         outbound_price = _leg_price(plan, "outbound", outbound)
         return_price = _leg_price(plan, "return", return_flight)
         total = _roundtrip_price(plan, outbound, return_flight)
+        price_tiers = plan.get("price_tiers") if isinstance(plan.get("price_tiers"), dict) else {}
         return {
             "flight_no": f"{outbound_no}+{return_no}".strip("+"),
             "is_roundtrip": True,
@@ -127,6 +132,8 @@ def _plan_record(plan: dict, index: int) -> dict | None:
             "price": total,
             "outbound_price": outbound_price,
             "return_price": return_price,
+            "price_tiers": price_tiers,
+            "estimated_roundtrip_price": _to_float(price_tiers.get("total_estimated")),
             "date": plan.get("date") or outbound.get("departure_date"),
             "return_date": plan.get("return_date") or return_flight.get("departure_date"),
             "label": label,

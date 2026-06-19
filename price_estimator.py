@@ -34,6 +34,188 @@ def _to_float(value):
         return None
 
 
+def _to_count(value, default=0):
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def normalize_passengers_for_pricing(passengers):
+    """Return a canonical passenger count dict for price estimation."""
+    passengers = passengers if isinstance(passengers, dict) else {}
+    normalized = {
+        "adult": _to_count(passengers.get("adult")),
+        "child": _to_count(passengers.get("child")),
+        "elderly": _to_count(passengers.get("elderly")),
+        "infant": _to_count(passengers.get("infant")),
+    }
+    if not any(normalized.values()):
+        normalized["adult"] = 1
+    return normalized
+
+
+def _passenger_ratios(route_type=None):
+    route = str(route_type or "").lower()
+    if route in {"international", "intl"}:
+        return {
+            "child": 0.75,
+            "infant": 0.10,
+            "note": "儿童票按国际航线常见接近成人价估算(约85折),婴儿票按约1折估算,实际以支付页为准",
+        }
+    return {
+        "child": 0.50,
+        "infant": 0.10,
+        "note": "儿童票按国内常规5折估算,婴儿票按国内常规1折估算,实际以支付页为准",
+    }
+
+
+def passenger_price_factor(passengers, route_type=None):
+    passengers = normalize_passengers_for_pricing(passengers)
+    ratios = _passenger_ratios(route_type)
+    return (
+        passengers.get("adult", 0)
+        + passengers.get("elderly", 0)
+        + passengers.get("child", 0) * ratios["child"]
+        + passengers.get("infant", 0) * ratios["infant"]
+    )
+
+
+def _passenger_label(passengers):
+    parts = []
+    for key, label in (("adult", "成人"), ("child", "儿童"), ("elderly", "老人"), ("infant", "婴儿")):
+        count = _to_count((passengers or {}).get(key))
+        if count:
+            parts.append(f"{count}{label}")
+    return "+".join(parts) or "1成人"
+
+
+def build_passenger_price_breakdown(unit_price, passengers, cabin=None, route_type=None):
+    """Build a passenger-aware total from one adult reference price.
+
+    The returned total is an estimate when child/infant fares are not provided
+    by the data source. Adult and elderly passengers use the adult reference
+    fare; child/infant ratios depend on route type.
+    """
+    price = _to_float(unit_price) or 0
+    passengers = normalize_passengers_for_pricing(passengers)
+    ratios = _passenger_ratios(route_type)
+    parts = []
+    total = 0.0
+    for key, label, ratio in (
+        ("adult", "成人", 1.0),
+        ("elderly", "老人", 1.0),
+        ("child", "儿童", ratios["child"]),
+        ("infant", "婴儿", ratios["infant"]),
+    ):
+        count = passengers.get(key, 0)
+        if not count:
+            continue
+        unit = price * ratio
+        subtotal = unit * count
+        total += subtotal
+        parts.append(
+            {
+                "type": key,
+                "label": label,
+                "count": count,
+                "ratio": ratio,
+                "unit_price": round(unit),
+                "total": round(subtotal),
+            }
+        )
+    return {
+        "unit_price": price,
+        "total": round(total),
+        "factor": round(passenger_price_factor(passengers, route_type), 2),
+        "passengers": passengers,
+        "passenger_label": _passenger_label(passengers),
+        "parts": parts,
+        "cabin": cabin or "economy",
+        "route_type": route_type or "",
+        "note": ratios["note"],
+    }
+
+
+def calc_total_price_for_passengers(unit_price, passengers, cabin=None, route_type=None):
+    """Return the estimated total fare for all passengers from one adult price."""
+    return build_passenger_price_breakdown(unit_price, passengers, cabin, route_type)["total"]
+
+
+def calc_total_for_passengers(unit_price, passengers, route_type=None, cabin=None):
+    """Return all-passenger total with route type before cabin for callers."""
+    return calc_total_price_for_passengers(unit_price, passengers, cabin, route_type)
+
+
+def _round_price(value):
+    number = _to_float(value)
+    return round(number) if number is not None else None
+
+
+def build_price_tiers(
+    outbound_unit_price,
+    return_unit_price=None,
+    passengers=None,
+    route_type=None,
+    purchase_type=None,
+    estimated_outbound=None,
+    estimated_return=None,
+    total_estimated=None,
+    cabin=None,
+):
+    """Build the five public price scopes for one plan."""
+    normalized = normalize_passengers_for_pricing(passengers)
+    passenger_count = sum(normalized.values()) or 1
+    outbound = _to_float(outbound_unit_price) or 0
+    ret = _to_float(return_unit_price)
+    is_roundtrip = ret is not None
+
+    outbound_breakdown = build_passenger_price_breakdown(outbound, normalized, cabin, route_type)
+    return_breakdown = build_passenger_price_breakdown(ret, normalized, cabin, route_type) if is_roundtrip else None
+    unit_roundtrip = outbound + (ret or 0)
+    total_ref = outbound_breakdown["total"] + (return_breakdown["total"] if return_breakdown else 0)
+
+    explicit_estimated = _round_price(total_estimated)
+    if explicit_estimated is not None:
+        estimated_total = explicit_estimated
+    else:
+        est_outbound = _to_float(estimated_outbound)
+        est_return = _to_float(estimated_return)
+        if est_outbound is None:
+            est_outbound = outbound
+        if is_roundtrip and est_return is None:
+            est_return = ret
+        estimated_unit_total = est_outbound + (est_return or 0)
+        estimated_total = calc_total_price_for_passengers(estimated_unit_total, normalized, cabin, route_type)
+
+    per_person = round(estimated_total / passenger_count) if passenger_count else estimated_total
+    note = outbound_breakdown.get("note") or ""
+    if passenger_count > 1:
+        note = (
+            f"{note}；多人价格按单人参考价估算，低价舱库存不足时多人下单可能重新定价，"
+            "请以支付页选择实际乘机人数后的总价为准"
+        )
+    return {
+        "unit_oneway": {
+            "outbound": _round_price(outbound),
+            "return": _round_price(ret) if is_roundtrip else None,
+            "scope": "single_person_oneway",
+        },
+        "unit_roundtrip": _round_price(unit_roundtrip) if is_roundtrip else None,
+        "total_roundtrip_ref": _round_price(total_ref),
+        "total_estimated": _round_price(estimated_total),
+        "per_person_estimated": _round_price(per_person),
+        "passenger_count": passenger_count,
+        "passengers": normalized,
+        "passenger_label": outbound_breakdown.get("passenger_label") or _passenger_label(normalized),
+        "factor": outbound_breakdown.get("factor"),
+        "is_roundtrip": is_roundtrip,
+        "purchase_type": purchase_type or ("roundtrip" if is_roundtrip else "oneway"),
+        "route_type": route_type or "",
+        "note": note,
+    }
+
+
 def _airline_text(flight: dict) -> str:
     parts = []
     for key in ("airline", "airline_summary"):

@@ -941,6 +941,7 @@ FORM_TEMPLATE = """
       <div id="budget-amount-fields" data-show-if="price_strategy=explicit">
       <label>最高可接受价格（超过这个价通常不考虑）</label>
       <input id="max_budget" name="max_budget" type="number" min="1" step="1" placeholder="例如 8000">
+      <p class="hint quick-only">快速模式预算按全部人这趟整单总额计算；需要按每人预算判断请切换精准模式。</p>
       <p class="hint">超过这个价通常不作为主推荐</p>
       <p id="max-budget-error" class="field-error"></p>
       <input type="hidden" name="max_budget_mode" value="fixed">
@@ -951,6 +952,14 @@ FORM_TEMPLATE = """
       <p id="price-validation-error" class="field-error">理想入手价应低于最高可接受价，请确认是否填反了</p>
       <p id="price-hint" class="hint"></p>
       <input type="hidden" name="target_price_mode" value="fixed">
+      <div class="precise-only">
+        <label>最高可接受价的口径</label>
+        <div class="choice">
+          <label><input type="radio" name="budget_scope" value="total" checked> 全部人总预算(这趟一共的预算)</label>
+          <label><input type="radio" name="budget_scope" value="per_person"> 每人预算(系统按人数折算总额)</label>
+        </div>
+        <p class="hint">多人出行时用于判断全员往返总价是否超出预算。</p>
+      </div>
       </div>
 
       <input type="hidden" name="price_tolerance_mode" value="100">
@@ -3408,6 +3417,11 @@ FORM_TEMPLATE = """
           targetPriceMode === 'fixed' ? money(targetPriceInput.value) : selectedLabel('target_price_mode'),
           'price_strategy'
         );
+        summaryLine(
+          '预算口径',
+          checkedValue('monitor_mode') === 'precise' ? selectedLabel('budget_scope') : '整单总额',
+          'price_strategy'
+        );
       }
       summaryLine('中转', selectedLabel('transfer_policy'), 'transfer_policy');
       summaryLine('行李', selectedLabel('baggage'), 'baggage');
@@ -3540,6 +3554,7 @@ FORM_TEMPLATE = """
         transport_margin_mode: precise ? checkedValue('transport_margin_mode') : 'standard',
         redundancy_min: precise ? checkedValue('redundancy_min') : '25',
         budget_strategy: checkedValue('price_strategy'),
+        budget_scope: precise ? checkedValue('budget_scope') : 'total',
         transfer_policy: checkedValue('transfer_policy'),
         baggage: checkedValue('baggage'),
         time_preference: precise ? checkedValue('time_preference') : 'no_redeye',
@@ -3613,6 +3628,7 @@ FORM_TEMPLATE = """
       [
         'monitor_mode',
         'price_strategy',
+        'budget_scope',
         'transfer_policy',
         'baggage',
         'time_preference',
@@ -3889,7 +3905,7 @@ FORM_TEMPLATE = """
       updateConditionalFields();
       refreshSummaryIfFinalStep();
     }));
-    ['companions', 'adult_count', 'child_count', 'elderly_count', 'infant_count', 'passenger_count', 'day_trip_period', 'trip_natures', 'team_passenger_count', 'cabin_arrangement', 'business_start', 'business_end', 'outbound_set_off', 'return_set_off', 'user_transport_min', 'transport_margin_mode', 'redundancy_min', 'meeting_start', 'meeting_end', 'team_date_flexibility', 'same_flight_required', 'cabin_policy', 'user_level', 'business_seats', 'economy_seats', 'reimburse_per_person', 'invoice_context', 'invoice_needed', 'invoice_special_vat', 'invoice_cabin_limit', 'time_preference', 'refund_flexibility', 'airline_policy', 'accept_self_transfer', 'companion_constraints', 'solo_travel', 'no_late_arrival', 'prefer_daytime_arrival'].forEach(name => {
+    ['companions', 'adult_count', 'child_count', 'elderly_count', 'infant_count', 'passenger_count', 'budget_scope', 'day_trip_period', 'trip_natures', 'team_passenger_count', 'cabin_arrangement', 'business_start', 'business_end', 'outbound_set_off', 'return_set_off', 'user_transport_min', 'transport_margin_mode', 'redundancy_min', 'meeting_start', 'meeting_end', 'team_date_flexibility', 'same_flight_required', 'cabin_policy', 'user_level', 'business_seats', 'economy_seats', 'reimburse_per_person', 'invoice_context', 'invoice_needed', 'invoice_special_vat', 'invoice_cabin_limit', 'time_preference', 'refund_flexibility', 'airline_policy', 'accept_self_transfer', 'companion_constraints', 'solo_travel', 'no_late_arrival', 'prefer_daytime_arrival'].forEach(name => {
       document.querySelectorAll(`input[name="${name}"]`).forEach(input => {
         input.addEventListener('change', () => {
           syncPrefCards();
@@ -4853,6 +4869,11 @@ def build_subscription(form) -> dict:
     max_budget = None
     if budget_strategy == "explicit" and max_budget_mode == "fixed":
         max_budget = infer_max_budget(parse_int(form.get("max_budget"), 0), target_price)
+    budget_scope = form.get("budget_scope", "total").strip() or "total"
+    if budget_scope not in {"per_person", "total"}:
+        budget_scope = "total"
+    if monitor_mode != "precise":
+        budget_scope = "total"
     day_trip_period = form.get("day_trip_period", "morning").strip() or "morning"
     if day_trip_period not in {"morning", "afternoon", "full_day"}:
         day_trip_period = "morning"
@@ -5165,6 +5186,7 @@ def build_subscription(form) -> dict:
             "budget_strategy": budget_strategy,
             "max_price": max_budget,
             "ideal_price": target_price,
+            "budget_scope": budget_scope,
             "date_flexibility_days": parse_int(form.get("date_flexibility"), 0),
             "transfer_policy": transfer_policy,
             "checked_baggage_required": form.get("baggage", "required") == "required",
@@ -5273,6 +5295,7 @@ def build_subscription(form) -> dict:
             "max_budget_mode": max_budget_mode,
             "target_price": target_price,
             "target_price_mode": target_price_mode,
+            "budget_scope": budget_scope,
             "transfer_policy": transfer_policy,
             "route_type": route_type,
             "same_day_round_trip": same_day_round_trip,
@@ -5344,6 +5367,7 @@ def build_subscription(form) -> dict:
             "target_price_mode": target_price_mode,
             "price_tolerance": price_tolerance,
             "max_budget": max_budget,
+            "budget_scope": budget_scope,
         },
         "notification_goals": {
             "primary": primary_goal,
