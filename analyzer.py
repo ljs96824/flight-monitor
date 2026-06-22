@@ -6624,13 +6624,81 @@ def build_next_step_guidance(
 
 def _no_result_reason_bucket(reason: str) -> str:
     text = str(reason or "")
-    if "直飞" in text:
+    if "直飞" in text or "direct" in text.lower() or "中转" in text:
         return "direct"
-    if "会议" in text or "窗口" in text or "时间" in text or "到达" in text or "起飞" in text:
+    if any(token in text for token in ("会议", "窗口", "时间", "到达", "起飞", "返程", "去程")):
         return "meeting"
-    if "预算" in text or "最高" in text or "超" in text or "价格" in text:
+    if any(token in text for token in ("预算", "最高", "超", "价格", "budget")):
         return "budget"
     return "other"
+
+
+def _stage_drop_counts(counts: dict) -> dict:
+    """Infer self-consistent eliminations from staged remaining counts."""
+    counts = counts or {}
+
+    def _as_int(value):
+        try:
+            if value is None or value == "":
+                return None
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    start = _as_int(counts.get("valid_price_count"))
+    if start is None:
+        start = _as_int(counts.get("total_candidates")) or 0
+    after_basic = _as_int(
+        counts.get("after_direct")
+        if counts.get("after_direct") is not None
+        else counts.get("after_basic_filter")
+    )
+    if after_basic is None:
+        after_basic = start
+    after_meeting = _as_int(
+        counts.get("after_meeting")
+        if counts.get("after_meeting") is not None
+        else counts.get("after_meeting_window")
+    )
+    if after_meeting is None:
+        after_meeting = after_basic
+    after_budget = _as_int(counts.get("after_budget"))
+    if after_budget is None:
+        after_budget = after_meeting
+
+    after_basic = max(0, min(after_basic, start))
+    after_meeting = max(0, min(after_meeting, after_basic))
+    after_budget = max(0, min(after_budget, after_meeting))
+    return {
+        "direct": max(0, start - after_basic),
+        "meeting": max(0, after_basic - after_meeting),
+        "budget": max(0, after_meeting - after_budget),
+        "remaining": after_budget,
+    }
+
+
+def _no_result_max_bottleneck(reason_counts: dict, total: int) -> dict:
+    labels = {
+        "direct": "直飞/基础筛选",
+        "meeting": "会议时间窗口",
+        "budget": "预算",
+        "other": "其他约束",
+    }
+    meaningful = {
+        key: int(value or 0)
+        for key, value in (reason_counts or {}).items()
+        if key in labels and int(value or 0) > 0
+    }
+    if not meaningful:
+        return {}
+    key, count = max(meaningful.items(), key=lambda item: item[1])
+    denominator = max(int(total or 0), 1)
+    return {
+        "key": key,
+        "label": labels[key],
+        "count": count,
+        "ratio": round(count / denominator * 100, 1),
+    }
 
 
 def diagnose_no_result(counts: dict, constraints: dict | None = None) -> str:
@@ -6640,24 +6708,36 @@ def diagnose_no_result(counts: dict, constraints: dict | None = None) -> str:
     valid = int(counts.get("valid_price_count") or 0)
     if total and valid == 0:
         return "采集到航班但暂无有效报价,可能数据源未返回价格,建议稍后重试"
+
     reason_counts = counts.get("reason_counts") or {}
-    parts = []
+    max_budget = _to_float(constraints.get("max_budget") or constraints.get("budget"))
+    remaining = counts.get("after_budget")
+    if remaining is None:
+        remaining = max(0, valid - sum(int(reason_counts.get(key) or 0) for key in ("direct", "meeting", "budget", "other")))
+    remaining = max(0, int(remaining or 0))
+
+    stages = [f"采集到{total}个航班"]
     if reason_counts.get("direct"):
-        parts.append(f"必须直飞筛除了{int(reason_counts['direct'])}个中转方案")
+        stages.append(f"直飞/基础筛选排除{int(reason_counts['direct'])}个")
     if reason_counts.get("meeting"):
-        parts.append(f"会议/时间窗口筛除了{int(reason_counts['meeting'])}个时间不符的方案")
+        stages.append(f"会议时间窗口排除{int(reason_counts['meeting'])}个")
     if reason_counts.get("budget"):
-        max_budget = _to_float(constraints.get("max_budget") or constraints.get("budget"))
         if max_budget:
-            parts.append(f"最高可接受价¥{max_budget:,.0f}筛除了{int(reason_counts['budget'])}个超预算方案")
+            stages.append(f"预算¥{max_budget:,.0f}排除{int(reason_counts['budget'])}个")
         else:
-            parts.append(f"预算条件筛除了{int(reason_counts['budget'])}个方案")
-    if not parts and valid:
-        parts.append("综合约束下无完全匹配方案")
-    if not parts:
-        parts.append("当前数据源暂未返回可推荐方案")
-    prefix = f"本次采集到{total}个航班" if total else "本次暂未采集到可用航班"
-    return f"{prefix},但" + "；".join(parts)
+            stages.append(f"预算排除{int(reason_counts['budget'])}个")
+    if reason_counts.get("other"):
+        stages.append(f"其他约束排除{int(reason_counts['other'])}个")
+    stages.append(f"剩余{remaining}个完全匹配")
+
+    max_bottleneck = counts.get("max_bottleneck") or _no_result_max_bottleneck(reason_counts, valid or total)
+    suffix = ""
+    if max_bottleneck:
+        suffix = (
+            f"最大卡点:{max_bottleneck['label']}排除最多"
+            f"({max_bottleneck['count']}个,占比{max_bottleneck['ratio']}%)。"
+        )
+    return " → ".join(stages) + ("。" + suffix if suffix else "。")
 
 
 def build_no_result_diagnosis(
@@ -6670,33 +6750,53 @@ def build_no_result_diagnosis(
     flights = [flight for flight in all_flights or [] if isinstance(flight, dict)]
     excluded = [item for item in excluded_flights or [] if isinstance(item, dict)]
     stage_counts = stage_counts or {}
-    print(f"[计数诊断] diagnose_no_result收到的counts={stage_counts}")
+    print(f"[无方案理由诊断] 各阶段计数={stage_counts}")
     valid_price = [flight for flight in flights if _to_float(flight.get("price")) is not None]
+
     reason_counts = {"direct": 0, "meeting": 0, "budget": 0, "other": 0}
     for item in excluded:
         reason = item.get("reason") or item.get("exclude_reason")
         if not reason and isinstance(item.get("flight"), dict):
             reason = item["flight"].get("exclude_reason")
         reason_counts[_no_result_reason_bucket(str(reason or ""))] += 1
-    total_candidates = int(stage_counts.get("total_candidates") or stage_counts.get("valid_price_count") or len(flights))
+
+    stage_drops = _stage_drop_counts({**stage_counts, "valid_price_count": stage_counts.get("valid_price_count") or len(valid_price)})
+    for key in ("direct", "meeting", "budget"):
+        reason_counts[key] = max(int(reason_counts.get(key) or 0), int(stage_drops.get(key) or 0))
+
+    total_candidates = int(stage_counts.get("total_candidates") or len(flights))
     valid_price_count = int(stage_counts.get("valid_price_count") or len(valid_price))
     if total_candidates < valid_price_count:
         total_candidates = valid_price_count
+
     capped_reasons = {}
-    remaining = total_candidates
+    remaining = valid_price_count
     for key in ("direct", "meeting", "budget", "other"):
         value = min(int(reason_counts.get(key) or 0), max(remaining, 0))
         if value:
             capped_reasons[key] = value
             remaining -= value
+
+    after_basic = stage_counts.get("after_basic_filter")
+    after_meeting = stage_counts.get("after_meeting_window")
+    after_budget = stage_counts.get("after_budget")
+    if after_basic is None and "direct" in capped_reasons:
+        after_basic = max(0, valid_price_count - capped_reasons.get("direct", 0))
+    if after_meeting is None:
+        after_meeting = max(0, int(after_basic if after_basic is not None else valid_price_count) - capped_reasons.get("meeting", 0))
+    if after_budget is None:
+        after_budget = max(0, int(after_meeting if after_meeting is not None else valid_price_count) - capped_reasons.get("budget", 0))
+
     counts = {
         "total_candidates": total_candidates,
         "valid_price_count": valid_price_count,
-        "after_basic_filter": stage_counts.get("after_basic_filter"),
-        "after_meeting_window": stage_counts.get("after_meeting_window"),
-        "after_budget": stage_counts.get("after_budget"),
+        "after_basic_filter": after_basic,
+        "after_meeting_window": after_meeting,
+        "after_budget": after_budget,
         "reason_counts": capped_reasons,
     }
+    counts["max_bottleneck"] = _no_result_max_bottleneck(capped_reasons, valid_price_count or total_candidates)
+
     sample = [
         (flight.get("flight_no") or flight.get("flight_combo"), flight.get("price"))
         for flight in flights[:5]
@@ -6707,6 +6807,7 @@ def build_no_result_diagnosis(
     print(f"[无方案诊断] 会议窗口过滤后={counts.get('after_meeting_window')}")
     print(f"[无方案诊断] 预算过滤后={counts.get('after_budget')}")
     print(f"[无方案诊断] 各航班价格样本: {sample}")
+
     prices = sorted(_to_float(flight.get("price")) for flight in valid_price)
     prices = [price for price in prices if price is not None]
     summary = {
@@ -6724,7 +6825,11 @@ def build_no_result_diagnosis(
         if capped_reasons.get("direct"):
             reason_parts.append("不满足直飞要求")
         summary["reason"] = "、".join(reason_parts) or "不满足当前约束"
+
     counts["reason"] = diagnose_no_result(counts, constraints)
+    safe_reason = str(counts["reason"]).replace("\u00a5", "\uffe5").encode("gbk", "replace").decode("gbk")
+    print(f"[无方案理由诊断] diagnose_no_result返回={safe_reason}")
+    print(f"[无方案理由诊断] 实际展示的理由文案={safe_reason}")
     return {"counts": counts, "price_summary": summary, "reason": counts["reason"]}
 
 

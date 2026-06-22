@@ -335,6 +335,73 @@ def _price_change_status(diff: float | None, previous_price: float | None, previ
     return "stable"
 
 
+def _current_collection_count(current_items: list[dict] | None) -> int:
+    count = 0
+    for item in current_items or []:
+        if not isinstance(item, dict):
+            continue
+        if _item_leg_flight(item, "outbound") or _item_leg_flight(item, "return"):
+            count += 1
+        elif item.get("flight_no") or item.get("flight_combo"):
+            count += 1
+    return count
+
+
+def _item_from_cache(item: dict | None) -> bool:
+    if not isinstance(item, dict):
+        return False
+    if item.get("from_cache") or item.get("cache_hit") or str(item.get("source_status") or "").lower() == "cache":
+        return True
+    for key in ("outbound", "return", "return_flight"):
+        child = item.get(key)
+        if isinstance(child, dict) and _item_from_cache(child):
+            return True
+    return False
+
+
+def _current_collection_uses_cache(current_items: list[dict] | None) -> bool:
+    return any(_item_from_cache(item) for item in current_items or [] if isinstance(item, dict))
+
+
+def _missing_quote_confidence(current_items: list[dict] | None, matched_any: bool = False) -> dict:
+    collection_count = _current_collection_count(current_items)
+    cache_used = _current_collection_uses_cache(current_items)
+    if collection_count < 5:
+        note = "本次采集覆盖可能不完整,该航班状态未知,下次采集再确认。"
+        if cache_used:
+            note += "使用缓存数据,该航班最新状态需实时核实。"
+        return {
+            "confidence": "low",
+            "collection_count": collection_count,
+            "cache_used": cache_used,
+            "status": "coverage_uncertain",
+            "note": note,
+        }
+    if cache_used:
+        return {
+            "confidence": "low",
+            "collection_count": collection_count,
+            "cache_used": True,
+            "status": "cache_uncertain",
+            "note": "使用缓存数据,该航班最新状态需实时核实。",
+        }
+    if matched_any:
+        return {
+            "confidence": "medium",
+            "collection_count": collection_count,
+            "cache_used": False,
+            "status": "partial_unavailable",
+            "note": f"本次该航线采集到{collection_count}个航班,但部分航段未获取到报价,建议渠道核实。",
+        }
+    return {
+        "confidence": "medium",
+        "collection_count": collection_count,
+        "cache_used": False,
+        "status": "unavailable",
+        "note": f"本次该航线采集到{collection_count}个航班,但未出现该组合/航班;可能已售罄或停飞,建议渠道核实。",
+    }
+
+
 def _format_change(diff: float | None) -> str:
     if diff is None:
         return ""
@@ -382,6 +449,13 @@ def _track_roundtrip_plan(plan_a: dict, current_items: list[dict] | None) -> dic
         f"[方案追踪诊断] 本次价={current_price}, 本次口径=往返, "
         f"本次取到的是={json.dumps(current_source, ensure_ascii=False, default=str)}"
     )
+    matched_any = bool(combo or outbound_current or return_current)
+    collection_count = _current_collection_count(current_items)
+    print(
+        f"[追踪诊断] 上次航班={desc}, 本次采集是否包含该航班号={matched_any}, "
+        f"本次该航线总航班数={collection_count}"
+    )
+    print(f"[追踪口径] 上次={previous_price}(往返), 本次={current_price}(往返)")
     diff = current_price - previous_price if current_price is not None and previous_price is not None else None
     print(f"[方案追踪诊断] 差额={None if diff is None else previous_price - current_price}")
 
@@ -398,14 +472,16 @@ def _track_roundtrip_plan(plan_a: dict, current_items: list[dict] | None) -> dic
                 missing.append(f"返程{return_no}")
             else:
                 available.append(f"返程{return_no}仍{_format_price(return_price)}")
+        confidence = _missing_quote_confidence(current_items, matched_any=matched_any)
         if missing:
             msg = (
                 f"上次推荐:{desc},往返{_format_price(previous_price)}。"
                 f"本次:{'，'.join(available) + '，' if available else ''}"
-                f"{'、'.join(missing)}本次未获取到报价,无法计算完整往返价,建议在渠道核实。"
+                f"{'、'.join(missing)}本次未获取到报价,无法计算完整往返价。"
+                f"{confidence['note']}"
             )
             return _change_payload(
-                "partial_unavailable",
+                "partial_unavailable" if matched_any else confidence["status"],
                 desc,
                 previous_price,
                 current_price,
@@ -417,13 +493,29 @@ def _track_roundtrip_plan(plan_a: dict, current_items: list[dict] | None) -> dic
                     "return_flight": return_no,
                     "outbound_price": outbound_price,
                     "return_price": return_price,
+                    "confidence": confidence["confidence"],
+                    "collection_count": confidence["collection_count"],
+                    "cache_used": confidence["cache_used"],
                 },
             )
         msg = (
             f"上次推荐:{desc},往返{_format_price(previous_price)}。"
-            "本次未获取到该组合报价,可能是采集覆盖问题或售罄,建议在渠道核实。"
+            f"本次未获取到该组合报价。{confidence['note']}"
         )
-        return _change_payload("unavailable", desc, previous_price, None, None, msg, "roundtrip")
+        return _change_payload(
+            confidence["status"],
+            desc,
+            previous_price,
+            None,
+            None,
+            msg,
+            "roundtrip",
+            {
+                "confidence": confidence["confidence"],
+                "collection_count": confidence["collection_count"],
+                "cache_used": confidence["cache_used"],
+            },
+        )
 
     status = _price_change_status(diff, previous_price, "roundtrip", "roundtrip")
     change_text = _format_change(diff)

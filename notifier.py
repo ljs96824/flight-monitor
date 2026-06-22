@@ -6722,6 +6722,21 @@ def _no_primary_reason(payload: dict) -> str:
     return "当前约束或数据条件下没有可推荐的可执行航班"
 
 
+def _no_primary_max_bottleneck_text(payload: dict) -> str:
+    diagnosis = payload.get("no_primary_diagnosis") or {}
+    max_bottleneck = diagnosis.get("max_bottleneck") or {}
+    if not max_bottleneck:
+        return ""
+    label = str(max_bottleneck.get("label") or "当前约束").strip()
+    count = max_bottleneck.get("count")
+    ratio = max_bottleneck.get("ratio")
+    if count is None:
+        return f"最大卡点:{label}"
+    if ratio is not None:
+        return f"最大卡点:{label}排除最多({count}个,占比{ratio}%)"
+    return f"最大卡点:{label}排除最多({count}个)"
+
+
 def _no_primary_next_step_text(payload: dict) -> str:
     diagnosis = payload.get("no_primary_diagnosis") or {}
     reason_counts = diagnosis.get("reason_counts") or {}
@@ -7206,6 +7221,7 @@ def render_pushplus(payload: dict) -> str:
     if no_primary:
         route = html.escape(str(payload.get("route") or "航班监控"))
         reason = html.escape(_no_primary_reason(payload))
+        max_line = _no_primary_max_bottleneck_text(payload)
         alt_labels = _alternative_labels(alternatives)
         alt_text = f"{len(alternatives[:3])}个"
         if alt_labels:
@@ -7217,10 +7233,12 @@ def render_pushplus(payload: dict) -> str:
             f"<b>【无符合方案】{route} 提供{len(alternatives[:3])}个备选</b>",
             "",
             "当前判断:❌ 未找到完全符合条件的方案",
-            f"原因:{reason}",
+            f"【为什么】{reason}",
+            html.escape(max_line) if max_line else "",
             f"搜索参考价:{html.escape(price_hint)}" if price_hint else "",
             f"可用备选:{alt_text}",
-            html.escape(_no_primary_next_step_text(payload)),
+            f"【可选备选】{alt_text}",
+            f"【放宽预演】{html.escape(_no_primary_next_step_text(payload))}",
         ]
         lines = [line for line in lines if line != ""]
         if feedback_ack:
@@ -8433,12 +8451,15 @@ def _email_action_panel_body(
         else:
             alt_text = "暂无可展示备选"
         price_hint = _candidate_price_summary_text(payload)
+        max_line = _no_primary_max_bottleneck_text(payload)
         blocks = [
-            "<div>当前判断:❌ 未找到完全符合条件的方案</div>",
-            f"<div>原因:{html.escape(reason)}</div>",
+            "<div style='font-weight:600;color:#b91c1c;'>当前判断:❌ 未找到完全符合条件的方案</div>",
+            "<div style='margin:8px 0;border-top:1px solid #e5e7eb;'></div>",
+            f"<div><strong>【为什么】</strong>{html.escape(reason)}</div>",
+            f"<div style='color:#666;font-size:12px;'>{html.escape(max_line)}</div>" if max_line else "",
             f"<div>搜索参考价:{html.escape(price_hint)}</div>" if price_hint else "",
-            f"<div>可用备选:{html.escape(alt_text)}</div>",
-            f"<div>{html.escape(_no_primary_next_step_text(payload))}</div>",
+            f"<div style='margin-top:8px;'><strong>【可选备选】</strong>{html.escape(alt_text)}</div>",
+            f"<div style='margin-top:8px;'><strong>【放宽预演】</strong>{html.escape(_no_primary_next_step_text(payload))}</div>",
             "<div style='margin-top:8px;color:#666;font-size:12px;'>触发类型:无符合方案 | 备选参考 | 非直接购买</div>",
             _email_action_links(payload, None, interactive_channels=interactive_channels),
         ]
@@ -9640,20 +9661,28 @@ def _calendar_selected_level(rows: list[dict], selected: dict, selected_price: f
     return "中等水平"
 
 
-def _calendar_display_savings(calendar: dict) -> list[dict]:
+def _calendar_display_price(row: dict, passenger_factor: float = 1):
+    price = _calendar_row_price(row)
+    if price is None:
+        return None
+    return price * (passenger_factor or 1)
+
+
+def _calendar_display_savings(calendar: dict, passenger_factor: float = 1, unit_override: str | None = None) -> list[dict]:
     rows = [row for row in ((calendar or {}).get("rows") or []) if isinstance(row, dict)]
     selected = next((row for row in rows if row.get("selected")), None)
-    selected_price = _calendar_row_price(selected) if selected else None
+    selected_price = _calendar_display_price(selected, passenger_factor) if selected else None
     if not selected or selected_price is None:
         return (calendar or {}).get("savings") or []
     _, unit = _calendar_scope_unit(calendar or {})
+    unit = unit_override or unit
     selected_date = _calendar_short_date(selected) or str(selected.get("date") or "")
     target_dt = _calendar_parse_date(str(selected.get("date") or ""))
     savings = []
     for row in rows:
         if row is selected:
             continue
-        price = _calendar_row_price(row)
+        price = _calendar_display_price(row, passenger_factor)
         if price is None or price >= selected_price:
             continue
         save = round(selected_price - price)
@@ -9695,12 +9724,17 @@ def _email_price_calendar_body(payload: dict) -> str:
     passenger_calendar_applies = _passenger_pricing_applies(passenger_pricing)
     passenger_label = passenger_pricing.get("passenger_label") or _passenger_label_from_counts(passenger_pricing.get("passengers"))
     passenger_factor = _to_float(passenger_pricing.get("factor")) or 1
+    passenger_count = _to_float(passenger_pricing.get("passenger_count")) or _passenger_total_count(passenger_pricing.get("passengers"))
+    label_count = sum(int(n) for n in re.findall(r"(\d+)(?:成人|儿童|老人|婴儿)", str(passenger_label)))
+    if passenger_count <= 1 and label_count > 1:
+        passenger_count = label_count
+    passenger_count_text = str(int(passenger_count)) if float(passenger_count).is_integer() else f"{passenger_count:g}"
     return_date_text = str(calendar.get("return_date") or "").strip()
     return_short = return_date_text[5:10] if len(return_date_text) >= 10 else return_date_text
     if is_roundtrip_scope:
         fixed_return = f"(返程日固定{return_short})" if return_short else ""
         if passenger_calendar_applies:
-            title = f"低价日历 ｜ 往返参考价(单人，{passenger_label}约×{passenger_factor:g}){fixed_return}"
+            title = f"低价日历 ｜ {passenger_count_text}人({passenger_label})往返参考价(单人趋势×{passenger_factor:g}){fixed_return}"
         else:
             title = f"低价日历 ｜ 往返参考价{fixed_return}"
     elif is_roundtrip_monitor_with_oneway_calendar:
@@ -9729,10 +9763,9 @@ def _email_price_calendar_body(payload: dict) -> str:
         if passenger_calendar_applies and lowest_row_for_passengers:
             row_price = _calendar_row_price(lowest_row_for_passengers)
             passenger_example = (
-                f"下方为单人往返参考价;你的实际人数({html.escape(passenger_label)})"
-                f"总价约为单人价的{passenger_factor:g}倍。"
+                f"下方为单人往返参考价的全员换算展示,已按{html.escape(passenger_label)}约×{passenger_factor:g}换算。"
                 f"{html.escape(_calendar_short_date(lowest_row_for_passengers))} "
-                f"单人往返{_price_text(row_price)} → 全员约{_price_text(row_price * passenger_factor)}。"
+                f"单人往返{_price_text(row_price)}×{passenger_factor:g} → 全员约{_price_text(row_price * passenger_factor)}。"
             )
         table.append(
             "<div style='margin-bottom:8px;color:#666;font-size:12px;'>"
@@ -9772,7 +9805,11 @@ def _email_price_calendar_body(payload: dict) -> str:
         price_style = "color:#16a34a;font-weight:600;" if row.get("lowest") else "color:#333;"
         if row.get("selected"):
             price_style = "color:#2563eb;font-weight:600;"
-        price_text = _price_text(row.get("min_price"))
+        row_single_price = _calendar_row_price(row)
+        display_price = _calendar_display_price(row, passenger_factor if passenger_calendar_applies else 1)
+        if is_roundtrip_scope and passenger_calendar_applies and row_single_price is not None:
+            tags.append(f"单人往返{_price_text(row_single_price)}×{passenger_factor:g}")
+        price_text = _price_text(display_price if display_price is not None else row.get("min_price"))
         if not is_roundtrip_scope and "(单程)" not in price_text:
             price_text += "(单程)"
         table.append(
@@ -9784,7 +9821,11 @@ def _email_price_calendar_body(payload: dict) -> str:
         )
     table.append("</tbody></table>")
 
-    savings = _calendar_display_savings(calendar)
+    savings = _calendar_display_savings(
+        calendar,
+        passenger_factor if passenger_calendar_applies else 1,
+        "全员往返" if passenger_calendar_applies else None,
+    )
     if savings:
         table.append("<div style='margin-top:10px;font-weight:600;'>省钱提示</div>")
         for item in savings[:3]:
@@ -9801,7 +9842,7 @@ def _email_price_calendar_body(payload: dict) -> str:
     elif weekday and weekday.get("data_insufficient"):
         table.append("<div style='margin-top:8px;color:#888;font-size:12px;'>周几更便宜：数据积累中。</div>")
 
-    note = calendar.get("note") or "为单程最低参考价，实付以支付页为准。"
+    note = calendar.get("note") or ("为往返参考价下限，实付以支付页为准。" if is_roundtrip_scope else "为单程最低参考价，实付以支付页为准。")
     if is_roundtrip_scope:
         selected = next((row for row in rows if isinstance(row, dict) and row.get("selected")), None)
         selected_ref = _calendar_row_price(selected) if isinstance(selected, dict) else None
@@ -9828,6 +9869,11 @@ def _email_price_calendar_body(payload: dict) -> str:
         roundtrip_note += "单程趋势仅帮你发现便宜的出发日,不等于往返总价。"
         note = f"{roundtrip_note} {note}"
     table.append(f"<div style='margin-top:8px;color:#666;font-size:12px;'>注:{html.escape(str(note))}</div>")
+    print(
+        f"[日历人数诊断] passengers={passenger_pricing.get('passengers')}, "
+        f"日历单价={rows[0].get('min_price') if rows and isinstance(rows[0], dict) else None}, "
+        f"是否已×人数={passenger_calendar_applies}"
+    )
     return "".join(table)
 
 
@@ -9844,26 +9890,35 @@ def _price_calendar_insight_text(payload: dict) -> str:
     )
     if not selected or not lowest:
         return ""
-    selected_price = _calendar_row_price(selected)
-    lowest_price = _calendar_row_price(lowest)
+    is_roundtrip_scope, unit = _calendar_scope_unit(calendar)
+    primary_plan = ((payload.get("recommended_plans") or [{}]) or [{}])[0] or {}
+    passenger_pricing = payload.get("passenger_pricing") or primary_plan.get("passenger_pricing") or {}
+    passenger_calendar_applies = is_roundtrip_scope and _passenger_pricing_applies(passenger_pricing)
+    passenger_factor = _to_float(passenger_pricing.get("factor")) or 1
+    display_factor = passenger_factor if passenger_calendar_applies else 1
+    selected_price = _calendar_display_price(selected, display_factor)
+    lowest_price = _calendar_display_price(lowest, display_factor)
     if selected_price is None or lowest_price is None:
         return ""
     selected_date = _calendar_short_date(selected) or str(selected.get("date") or "你选的日期")
     lowest_date = _calendar_short_date(lowest) or str(lowest.get("date") or "低价日")
     lowest_weekday = str(lowest.get("weekday") or "").strip()
-    is_roundtrip_scope, unit = _calendar_scope_unit(calendar)
+    scope_label = "全员往返" if passenger_calendar_applies else unit
     level = _calendar_selected_level(rows, selected, selected_price)
-    lowest_text = f"{unit}最低{_price_text(lowest_price)}({lowest_date} {lowest_weekday})".strip()
+    lowest_text = f"{scope_label}最低{_price_text(lowest_price)}({lowest_date} {lowest_weekday})".strip()
     date_flex = str(payload.get("date_flexibility") or payload.get("date_flex") or "").strip()
-    base = f"你选的{selected_date}{unit}{_price_text(selected_price)},处于{level}。本航线近期{lowest_text}。"
+    base = f"你选的{selected_date}{scope_label}{_price_text(selected_price)},处于{level}。本航线近期{lowest_text}。"
+    if passenger_calendar_applies:
+        single_selected = _calendar_row_price(selected)
+        base += f"(单人往返{_price_text(single_selected)}×{passenger_factor:g})"
     if selected is lowest or selected_price <= lowest_price:
         return base
     save = round(selected_price - lowest_price)
     if date_flex in {"0", "none", "fixed", "不可调整", "不可调"}:
         return (
-            f"{base}你设了日期不可调;若未来行程灵活,低价日可省约{_price_text(save)}/{unit}。"
+            f"{base}你设了日期不可调;若未来行程灵活,低价日可省约{_price_text(save)}/{scope_label}。"
         )
-    return f"{base}如日期可调,换到低价日可省约{_price_text(save)}/{unit}。"
+    return f"{base}如日期可调,换到低价日可省约{_price_text(save)}/{scope_label}。"
 
 
 def _email_airport_cost_comparison_body(payload: dict) -> str:
