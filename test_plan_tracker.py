@@ -108,6 +108,40 @@ class PlanTrackerTest(unittest.TestCase):
         self.assertIn("同往返口径对比", status["msg"])
         self.assertNotIn("降了", status["msg"])
 
+    def test_single_tracking_does_not_use_roundtrip_combo_total(self):
+        from plan_tracker import save_pushed_plans, track_plan_status
+
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            save_pushed_plans(
+                "sub-single",
+                [
+                    {
+                        "label": "plan_a",
+                        "main_flight": {"flight_no": "MU5099", "price": 2579},
+                    }
+                ],
+                data_dir=data_dir,
+            )
+
+            status = track_plan_status(
+                "sub-single",
+                [
+                    {
+                        "is_roundtrip": True,
+                        "flight_no": "MU5099+CA1589",
+                        "outbound": {"flight_no": "MU5099"},
+                        "return": {"flight_no": "CA1589", "price": 1350},
+                        "total_price": 1414,
+                    }
+                ],
+                data_dir=data_dir,
+            )
+
+        self.assertNotEqual(status["status"], "price_down")
+        self.assertNotIn("1,165", status.get("msg", ""))
+        self.assertNotIn("1,312", status.get("msg", ""))
+
     def test_roundtrip_tracking_does_not_compare_roundtrip_to_single_leg(self):
         from plan_tracker import save_pushed_plans, track_plan_status
 

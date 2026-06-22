@@ -213,6 +213,54 @@ class PassengerPriceScopesTest(unittest.TestCase):
         self.assertTrue(tiers["is_roundtrip"])
         self.assertEqual(tiers["purchase_type"], "two_oneways")
 
+    def test_roundtrip_analysis_budget_uses_all_passenger_total_scope(self):
+        from analyzer import analyze_round_trip
+
+        outbound = {
+            "flight_no": "MU5099",
+            "price": 1410,
+            "departure_airport": "SHA",
+            "arrival_airport": "PEK",
+            "departure_time": "07:00",
+            "arrival_time": "09:15",
+        }
+        ret = {
+            "flight_no": "CA1589",
+            "price": 1350,
+            "departure_airport": "PEK",
+            "arrival_airport": "SHA",
+            "departure_time": "20:30",
+            "arrival_time": "22:40",
+        }
+        preferences = {
+            "passengers": {"adult": 2, "child": 1, "elderly": 0, "infant": 0},
+            "budget_scope": "per_person",
+            "route_type": "domestic",
+        }
+
+        result = analyze_round_trip(
+            {
+                "economy_recommendations": [outbound],
+                "all_flights": [outbound],
+                "user_preferences": preferences,
+                "route_type": "domestic",
+            },
+            {
+                "economy_recommendations": [ret],
+                "all_flights": [ret],
+                "user_preferences": preferences,
+                "route_type": "domestic",
+            },
+            target_price=1500,
+            max_budget=1600,
+        )
+
+        self.assertEqual(result["passenger_total_min"], 6900)
+        self.assertEqual(result["budget_price"], 6900)
+        self.assertEqual(result["budget_limits"]["max_budget_total"], 4800)
+        self.assertEqual(result["budget_limits"]["ideal_price_total"], 4500)
+        self.assertEqual(result["decision_summary"]["price_judgment"], "\u8d85\u51fa\u9884\u7b97")
+
     def test_payload_uses_total_estimated_tier_for_budget_and_verify_price(self):
         analysis_result = {
             "round_trip_analysis": {
@@ -266,6 +314,42 @@ class PassengerPriceScopesTest(unittest.TestCase):
         self.assertEqual(payload["transaction_price"], 7400)
         self.assertEqual(payload["verify_price"], 7245)
 
+
+
+    def test_no_primary_calendar_uses_quick_mode_passenger_count(self):
+        calendar = {
+            "scope": "roundtrip",
+            "return_date": "2026-06-30",
+            "return_min_price": 557,
+            "rows": [
+                {
+                    "date": "2026-06-23",
+                    "weekday": "\u5468\u4e8c",
+                    "outbound_min_price": 547,
+                    "return_min_price": 557,
+                    "roundtrip_ref_price": 1104,
+                    "min_price": 1104,
+                    "lowest": True,
+                }
+            ],
+        }
+        payload = build_notification_payload(
+            {"price_calendar": calendar, "round_trip_analysis": {"top_combinations": []}},
+            route_info={
+                "origin": "SHA",
+                "destination": "PEK",
+                "depart_date": "2026-06-23",
+                "return_date": "2026-06-30",
+                "price_calendar": calendar,
+            },
+            subscription={"basic": {"passenger_count": 3}, "constraints": {"route_type": "domestic"}},
+        )
+
+        body = _email_price_calendar_body(payload)
+
+        self.assertEqual(payload["passenger_pricing"]["passengers"]["adult"], 3)
+        self.assertIn("3\u6210\u4eba", body)
+        self.assertIn("\u5168\u5458\u7ea6\u00a53,312", body)
 
 if __name__ == "__main__":
     unittest.main()

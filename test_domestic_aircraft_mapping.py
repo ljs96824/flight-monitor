@@ -13,6 +13,15 @@ class DomesticAircraftMappingTest(unittest.TestCase):
         self.assertEqual(get_aircraft_name("77W"), "波音777-300ER")
         self.assertEqual(get_aircraft_name("388"), "空客A380")
         self.assertEqual(get_aircraft_name("919"), "国产C919")
+        self.assertEqual(get_aircraft_name("32H"), "\u7a7a\u5ba2A321")
+        self.assertEqual(get_aircraft_name("327"), "\u7a7a\u5ba2A321")
+        self.assertEqual(get_aircraft_name("324"), "\u7a7a\u5ba2A320")
+        self.assertEqual(get_aircraft_name("326"), "\u7a7a\u5ba2A320")
+        self.assertEqual(get_aircraft_name("322"), "\u7a7a\u5ba2A321")
+        self.assertEqual(get_aircraft_name("350"), "\u7a7a\u5ba2A350")
+        self.assertEqual(get_aircraft_name("73E"), "\u6ce2\u97f3737-800")
+        self.assertEqual(get_aircraft_name("73U"), "\u6ce2\u97f3737-800")
+        self.assertEqual(get_aircraft_name("78A"), "\u6ce2\u97f3787-8")
         self.assertEqual(get_aircraft_name("ZZZ"), "机型代码ZZZ(以航司为准)")
 
     def test_juhe_normalize_uses_shared_aircraft_mapping(self):

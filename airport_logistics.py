@@ -159,6 +159,43 @@ MEETING_IMPORTANCE_DEFAULTS = {
 }
 
 
+
+MEETING_LOCATION_TRANSPORT_ESTIMATES = {
+    "PKX": [
+        (("\u5927\u5174\u673a\u573a", "\u5927\u5174\u533a", "\u5927\u5174", "\u4ea6\u5e84"), 25, True),
+    ],
+    "PEK": [
+        (("\u9996\u90fd\u673a\u573a", "\u987a\u4e49"), 25, True),
+        (("\u5927\u5174\u533a", "\u5927\u5174", "\u4ea6\u5e84"), 60, False),
+    ],
+    "SHA": [
+        (("\u8679\u6865", "\u957f\u5b81", "\u95f5\u884c"), 25, True),
+    ],
+    "PVG": [
+        (("\u6d66\u4e1c", "\u5f20\u6c5f", "\u5ddd\u6c99"), 35, False),
+    ],
+}
+
+
+def estimate_airport_to_meeting(iata: str, meeting_location: str | None, mode: str | None = "taxi") -> dict:
+    """Estimate airport-to-meeting transport when the meeting area is known."""
+    code = str(iata or "").strip().upper()
+    location = str(meeting_location or "").strip().lower()
+    if not code or not location:
+        return {}
+    for tokens, minutes, near_airport in MEETING_LOCATION_TRANSPORT_ESTIMATES.get(code, []):
+        if any(str(token).lower() in location for token in tokens):
+            adjusted = int(minutes)
+            if str(mode or "taxi").strip().lower() == "transit":
+                adjusted += 15
+            return {
+                "minutes": adjusted,
+                "source": "meeting_location_estimate",
+                "near_airport": bool(near_airport),
+                "airport_iata": code,
+            }
+    return {}
+
 def get_meeting_importance_defaults(importance: str | None) -> dict:
     key = str(importance or "important").strip().lower()
     if key not in MEETING_IMPORTANCE_DEFAULTS:

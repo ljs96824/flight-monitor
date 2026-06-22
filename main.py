@@ -86,7 +86,10 @@ def _subscription_passengers(sub: dict):
     soft = sub.get("soft_preferences") or {}
     preferences = sub.get("preferences") or {}
     passengers = sub.get("passengers") or soft.get("passengers") or preferences.get("passengers")
-    return passengers if isinstance(passengers, dict) else None
+    if isinstance(passengers, dict) and any(passengers.values()):
+        return passengers
+    _count, normalized = get_total_passengers(sub)
+    return normalized if isinstance(normalized, dict) else None
 
 
 def _clean_airport_codes(codes) -> list[str]:

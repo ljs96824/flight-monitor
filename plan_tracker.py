@@ -241,6 +241,12 @@ def find_flight(current_flights: list[dict] | None, flight_no: str) -> dict | No
         if current == target:
             return flight
         if "+" in current and target in current.split("+"):
+            for direction in ("outbound", "return"):
+                leg = _item_leg_flight(flight, direction)
+                if _flight_no(leg).replace(" ", "").upper() == target:
+                    return leg
+            if flight.get("is_roundtrip") or str(flight.get("scope") or "").lower() == "roundtrip":
+                return None
             return flight
     return None
 
@@ -582,12 +588,12 @@ def track_plan_status(sub_id, current_flights: list[dict] | None, data_dir=None)
     print(f"[方案追踪诊断] 差额={None if diff is None else previous_price - current_price}")
     if previous_price is None or current_price is None:
         return {
-            "status": "stable",
+            "status": "coverage_uncertain",
             "flight_no": flight_no,
             "previous_price": previous_price,
             "current_price": current_price,
             "scope": "single",
-            "msg": f"上次推荐的{flight_no}仍有报价,价格需支付页确认",
+            "msg": f"\u4e0a\u6b21\u63a8\u8350\u7684{flight_no}\u672c\u6b21\u672a\u83b7\u53d6\u5230\u540c\u53e3\u5f84\u5355\u7a0b\u62a5\u4ef7\uff0c\u65e0\u6cd5\u76f4\u63a5\u5bf9\u6bd4\uff0c\u5efa\u8bae\u5728\u6e20\u9053\u6838\u5b9e\u3002",
         }
     status = _price_change_status(diff, previous_price, "single", "single")
     if status == "price_up":

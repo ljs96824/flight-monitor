@@ -10,6 +10,7 @@ from airport_logistics import (
     get_airport_logistics,
     get_arrival_buffer,
     get_departure_buffer,
+    estimate_airport_to_meeting,
     get_meeting_importance_defaults,
     route_type_buffer_label,
 )
@@ -376,7 +377,7 @@ def get_total_passengers(subscription: dict | None) -> tuple[int, dict | None]:
         1,
     )
     if count > 1:
-        return count, None
+        return count, {"adult": count, "child": 0, "elderly": 0, "infant": 0}
 
     legacy = (
         preferences.get("travelers")
@@ -386,7 +387,8 @@ def get_total_passengers(subscription: dict | None) -> tuple[int, dict | None]:
     legacy_passengers = _passengers_from_legacy_companions(legacy)
     if legacy_passengers:
         return sum(legacy_passengers.values()), legacy_passengers
-    return max(1, count), None
+    fallback_count = max(1, count)
+    return fallback_count, {"adult": fallback_count, "child": 0, "elderly": 0, "infant": 0}
 
 
 PASSENGER_RULE_DEFAULT_WEIGHTS = {
@@ -870,6 +872,7 @@ def _same_day_constraints(source: dict | None) -> dict:
     constraints = dict(source.get("constraints") or {})
     hard = source.get("hard_constraints") or {}
     for key in (
+        "same_day_round_trip",
         "day_trip_period",
         "business_start",
         "business_end",
@@ -880,6 +883,24 @@ def _same_day_constraints(source: dict | None) -> dict:
         "redundancy_min",
         "time_source",
         "route_type",
+        "meeting_importance",
+        "meeting_location",
+        "business_location",
+        "meeting_area",
+        "destination_area",
+        "destination_transport_min",
+        "airport_to_meeting_min",
+        "meeting_transport_min",
+        "origin_transport_min",
+        "airport_advance_min",
+        "departure_airport_process_min",
+        "arrival_exit_min",
+        "delay_buffer_min",
+        "pre_meeting_buffer_min",
+        "post_meeting_buffer_min",
+        "custom_redundancy_min",
+        "checked_baggage_required",
+        "need_baggage",
     ):
         if key not in constraints and hard.get(key) is not None:
             constraints[key] = hard.get(key)
@@ -1051,6 +1072,7 @@ def compute_meeting_fixed_breakdown(
     constraints = _same_day_constraints(subscription)
     airport = str(airport_iata or "").strip().upper()
     logistics = get_airport_logistics(airport)
+    importance_explicit = constraints.get("meeting_importance") not in (None, "")
     importance = normalize_meeting_importance(constraints.get("meeting_importance"))
     defaults = get_meeting_importance_defaults(importance)
     custom = _constraint_minutes(constraints, ("custom_redundancy_min", "user_custom_redundancy_min"), 0) or 0
@@ -1063,24 +1085,69 @@ def compute_meeting_fixed_breakdown(
         if constraints.get(key) not in (None, ""):
             destination_transport_raw = constraints.get(key)
             break
+    meeting_location = (
+        constraints.get("meeting_location")
+        or constraints.get("business_location")
+        or constraints.get("meeting_area")
+        or constraints.get("destination_area")
+    )
+    location_estimate = estimate_airport_to_meeting(
+        airport,
+        meeting_location,
+        constraints.get("transport_mode") or "taxi",
+    )
+    if destination_transport_raw in (None, "") and location_estimate:
+        estimated_transport = _optional_int(location_estimate.get("minutes"), estimated_transport) or estimated_transport
+    elif destination_transport_raw in (None, "") and constraints.get("same_day_round_trip"):
+        estimated_transport = min(int(estimated_transport or 45), 40)
     destination_transport = _optional_int(destination_transport_raw, estimated_transport) or estimated_transport
-    destination_transport_source = "用户填写" if destination_transport_raw not in (None, "") else "机场估算"
-    arrival_exit_base = _constraint_minutes(constraints, ("arrival_exit_min",), int(defaults["arrival_exit_min"])) or int(defaults["arrival_exit_min"])
+    if destination_transport_raw not in (None, ""):
+        destination_transport_source = "用户填写"
+    elif location_estimate:
+        destination_transport_source = "meeting_location_estimate"
+    else:
+        destination_transport_source = "机场估算"
+    near_airport_meeting = bool(location_estimate.get("near_airport")) and destination_transport_raw in (None, "")
+    arrival_exit_default = int(defaults["arrival_exit_min"]) if importance_explicit else 35
+    arrival_exit_base = _constraint_minutes(constraints, ("arrival_exit_min",), arrival_exit_default) or arrival_exit_default
     baggage_extra = int(defaults.get("checked_baggage_extra_min") or 0) if checked_baggage else 0
     arrival_exit = arrival_exit_base + baggage_extra
+    airport_advance_default = int(defaults["airport_advance_min"]) if importance_explicit else 75
     airport_advance = _constraint_minutes(
         constraints,
         ("airport_advance_min", "departure_airport_process_min", "checkin_buffer_min"),
-        int(defaults["airport_advance_min"]),
-    ) or int(defaults["airport_advance_min"])
-    delay_buffer = _constraint_minutes(constraints, ("delay_buffer_min", "flight_delay_buffer_min"), int(defaults["delay_buffer_min"])) or int(defaults["delay_buffer_min"])
-    pre_meeting = _constraint_minutes(constraints, ("pre_meeting_buffer_min",), int(defaults["pre_meeting_buffer_min"])) or int(defaults["pre_meeting_buffer_min"])
+        airport_advance_default,
+    ) or airport_advance_default
+    delay_default = int(defaults["delay_buffer_min"]) if importance_explicit else 0
+    pre_default = int(defaults["pre_meeting_buffer_min"]) if importance_explicit else 30
+    delay_buffer = _constraint_minutes(constraints, ("delay_buffer_min", "flight_delay_buffer_min"), delay_default) or delay_default
+    pre_meeting = _constraint_minutes(constraints, ("pre_meeting_buffer_min",), pre_default) or pre_default
     post_meeting = _constraint_minutes(constraints, ("post_meeting_buffer_min",), int(defaults["post_meeting_buffer_min"])) or int(defaults["post_meeting_buffer_min"])
 
     if direction == "outbound":
-        travel_hour = (business_start - destination_transport) / 60 if business_start is not None else None
-        margin, ratio, rush = calc_meeting_transport_margin(destination_transport, importance, travel_hour)
+        if importance_explicit:
+            travel_hour = (business_start - destination_transport) / 60 if business_start is not None else None
+            margin, ratio, rush = calc_meeting_transport_margin(destination_transport, importance, travel_hour)
+        else:
+            margin = max(round(destination_transport * 0.30), 15)
+            ratio = 0.30
+            rush = False
+        if near_airport_meeting:
+            margin = max(round(destination_transport * 0.30), 15)
+            ratio = 0.30
+            rush = False
         total = arrival_exit + destination_transport + margin + delay_buffer + pre_meeting + custom
+        core_window_total = arrival_exit + destination_transport + margin + pre_meeting + custom
+        if near_airport_meeting:
+            outbound_window_total = min(core_window_total, arrival_exit + destination_transport + margin + custom)
+        else:
+            outbound_window_total = core_window_total
+        window_text = _minutes_to_text(business_start - outbound_window_total) if business_start is not None else ""
+        print(
+            f"[去程到会-新] 落地离场={arrival_exit} 车程={destination_transport} "
+            f"交通冗余={margin} 会前={pre_meeting} "
+            f"总预留={outbound_window_total} 到达上限={window_text}"
+        )
         return {
             "legacy": False,
             "model": "meeting_fixed",
@@ -1101,6 +1168,9 @@ def compute_meeting_fixed_breakdown(
             "pre_meeting_buffer_min": pre_meeting,
             "custom_redundancy_min": custom,
             "total_min": total,
+            "outbound_window_total_min": outbound_window_total,
+            "near_airport_meeting": near_airport_meeting,
+            "meeting_location": meeting_location,
             "airport_buffer_min": arrival_exit,
             "buffer_label": "落地离场",
             "transport_min": destination_transport,
@@ -1326,8 +1396,13 @@ def compute_same_day_windows(
         "pre_meeting_buffer_min",
         "post_meeting_buffer_min",
         "custom_redundancy_min",
+        "meeting_location",
+        "business_location",
+        "meeting_area",
+        "destination_area",
     )
-    has_fixed_meeting_model = any(constraints.get(key) not in (None, "") for key in fixed_model_keys)
+    same_day_meeting = bool(constraints.get("same_day_round_trip"))
+    has_fixed_meeting_model = same_day_meeting or any(constraints.get(key) not in (None, "") for key in fixed_model_keys)
     if has_fixed_meeting_model:
         route_type = str(constraints.get("route_type") or "domestic").strip() or "domestic"
         outbound_breakdown = compute_meeting_fixed_breakdown(
@@ -1342,13 +1417,15 @@ def compute_same_day_windows(
             dest_airport,
             route_type,
         )
-        outbound_reserve = outbound_breakdown["total_min"]
+        outbound_planning_reserve = outbound_breakdown["total_min"]
+        outbound_reserve = outbound_breakdown.get("outbound_window_total_min") or outbound_planning_reserve
         return_reserve = return_breakdown["total_min"]
         outbound_arrive_by = business_start - outbound_reserve
         return_depart_after = business_end + return_reserve
         latest_landing_without_preparation = business_start - (
-            outbound_reserve - int(outbound_breakdown.get("pre_meeting_buffer_min") or 0)
+            outbound_planning_reserve - int(outbound_breakdown.get("pre_meeting_buffer_min") or 0)
         )
+        business_safety_arrive_by = business_start - outbound_planning_reserve
         reserve_breakdown = {
             "legacy": False,
             "model": "meeting_fixed",
@@ -1360,6 +1437,8 @@ def compute_same_day_windows(
                 "arrive_by_minutes": outbound_arrive_by,
                 "depart_after_minutes": return_depart_after,
                 "latest_landing_without_preparation": _minutes_to_text(latest_landing_without_preparation),
+                "business_safety_arrive_by": _minutes_to_text(business_safety_arrive_by),
+                "business_safety_arrive_by_minutes": business_safety_arrive_by,
             },
         }
         return {
@@ -1372,6 +1451,8 @@ def compute_same_day_windows(
             "return_depart_after": _minutes_to_text(return_depart_after),
             "latest_landing_without_preparation_minutes": latest_landing_without_preparation,
             "latest_landing_without_preparation": _minutes_to_text(latest_landing_without_preparation),
+            "business_safety_arrive_by_minutes": business_safety_arrive_by,
+            "business_safety_arrive_by": _minutes_to_text(business_safety_arrive_by),
             "business_start": _minutes_to_text(business_start),
             "business_end": _minutes_to_text(business_end),
             "transport_min": outbound_breakdown.get("destination_transport_min"),
@@ -1392,6 +1473,7 @@ def compute_same_day_windows(
             "arrival_buffer_min": outbound_breakdown.get("arrival_exit_min"),
             "checkin_buffer_min": return_breakdown.get("departure_airport_process_min"),
             "outbound_reserve_minutes": outbound_reserve,
+            "outbound_planning_reserve_minutes": outbound_planning_reserve,
             "return_reserve_minutes": return_reserve,
             "reserve_minutes": outbound_reserve,
             "reserve_h": round(outbound_reserve / 60, 2),
@@ -1623,7 +1705,9 @@ def build_same_day_combos(
                     arrive_by_minutes = active_windows.get("outbound_arrive_by_minutes")
                     return_after_minutes = active_windows.get("return_depart_after_minutes")
                     if arrive_by_minutes is not None:
-                        outbound_margin = int(round(float(arrive_by_minutes) - float(outbound_arr)))
+                        safety_arrive_by = active_windows.get("business_safety_arrive_by_minutes")
+                        margin_arrive_by = safety_arrive_by if safety_arrive_by is not None else arrive_by_minutes
+                        outbound_margin = int(round(float(margin_arrive_by) - float(outbound_arr)))
                         business_feasibility["outbound"] = classify_business_time_margin(outbound_margin)
                     if return_after_minutes is not None:
                         return_margin = int(round(float(return_dep) - float(return_after_minutes)))
@@ -9153,6 +9237,8 @@ def build_excluded_roundtrip_combos(
     max_budget=None,
     constraints: dict | None = None,
     recommended_combo: dict | None = None,
+    passengers: dict | None = None,
+    route_type: str | None = None,
 ) -> list[dict]:
     """Build same-unit excluded round-trip combos for notification explanations."""
     recommended_total = _to_float(recommended_total)
@@ -9178,12 +9264,23 @@ def build_excluded_roundtrip_combos(
             if outbound_price is None or return_price is None:
                 continue
             total = outbound_price + return_price
-            if total >= recommended_total:
+            passenger_pricing = {}
+            comparison_total = total
+            normalized_passengers = _normalize_passengers(passengers) if passengers else {}
+            if normalized_passengers:
+                passenger_pricing = build_passenger_roundtrip_pricing(
+                    outbound_price,
+                    return_price,
+                    normalized_passengers,
+                    route_type,
+                )
+                comparison_total = _to_float(passenger_pricing.get("total_price")) or total
+            if comparison_total >= recommended_total:
                 continue
-            budget_context = _roundtrip_budget_context(total, max_budget, recommended_total)
+            budget_context = _roundtrip_budget_context(comparison_total, max_budget, recommended_total)
             reasons = _roundtrip_budget_safe_reasons_v2(
                 reasons,
-                total,
+                comparison_total,
                 max_budget,
                 recommended_total,
             )
@@ -9192,7 +9289,7 @@ def build_excluded_roundtrip_combos(
                 return_item["flight"],
                 reasons,
                 constraints,
-                total,
+                comparison_total,
                 max_budget,
                 budget_context,
             )
@@ -9205,9 +9302,12 @@ def build_excluded_roundtrip_combos(
                 "return": return_item["flight"],
                 "outbound_price": outbound_price,
                 "return_price": return_price,
-                "total_price": total,
-                "roundtrip_price": total,
-                "diff": recommended_total - total,
+                "unit_roundtrip_price": total,
+                "total_price": comparison_total,
+                "roundtrip_price": comparison_total,
+                "passenger_pricing": passenger_pricing,
+                "price_tiers": passenger_pricing.get("price_tiers") if passenger_pricing else {},
+                "diff": recommended_total - comparison_total,
                 "reasons": reasons,
                 "reason": "；".join(reasons),
                 "recommended_price": recommended_total,
@@ -9503,15 +9603,35 @@ def analyze_round_trip(
 
     trend = analyze_roundtrip_trend(history)
     previous = trend.get("previous") if trend.get("available") else None
+    target_float = _to_float(target_price)
+    max_budget_float = _to_float(max_budget)
+    passenger_count_for_budget = max(1, sum((pricing_passengers or {"adult": 1}).values()))
+    budget_limits = passenger_budget_limits(
+        max_budget_float,
+        target_float,
+        budget_scope,
+        passenger_count_for_budget,
+    )
+    budget_price = _to_float(best_combo.get("passenger_total_price")) if best_combo else None
+    if budget_price is None:
+        budget_price = total_min
+    budget_outbound_min = outbound_min
+    budget_return_min = return_min
+    passenger_pricing_for_budget = best_combo.get("passenger_pricing") if isinstance(best_combo, dict) else {}
+    if isinstance(passenger_pricing_for_budget, dict):
+        outbound_pricing = passenger_pricing_for_budget.get("outbound") or {}
+        return_pricing = passenger_pricing_for_budget.get("return") or {}
+        budget_outbound_min = _to_float(outbound_pricing.get("total")) or budget_outbound_min
+        budget_return_min = _to_float(return_pricing.get("total")) or budget_return_min
     price_analysis = analyze_roundtrip_prices(
         history,
-        total_min,
-        outbound_min,
-        return_min,
-        target_price=target_price,
-        max_budget=max_budget,
+        budget_price,
+        budget_outbound_min,
+        budget_return_min,
+        target_price=budget_limits.get("ideal_price_total"),
+        max_budget=budget_limits.get("max_budget_total"),
         days_to_dept=outbound_analysis.get("days_to_dept"),
-        budget_is_roundtrip=same_day_round_trip,
+        budget_is_roundtrip=True,
     )
     combo_grades = [
         (best_combo.get("outbound") or {}).get("execution_grade"),
@@ -9533,19 +9653,17 @@ def analyze_round_trip(
         or return_analysis.get("travel_profile")
         or build_travel_profile((outbound_analysis.get("user_preferences") or {}))
     )
-    target_float = _to_float(target_price)
-    max_budget_float = _to_float(max_budget)
-    summary_target = target_float if same_day_round_trip and target_float else (target_float * 2 if target_float else None)
-    summary_budget = max_budget_float if same_day_round_trip and max_budget_float else (max_budget_float * 2 if max_budget_float else None)
+    summary_target = budget_limits.get("ideal_price_total")
+    summary_budget = budget_limits.get("max_budget_total")
     decision_summary = generate_decision_summary(
-        total_min,
+        budget_price,
         summary_target,
         summary_budget,
         confidence_breakdown,
         execution_grade,
     )
     buy_vs_wait_risk = calc_buy_vs_wait_risk(
-        total_min,
+        budget_price,
         [row.get("total") for row in (history or []) if isinstance(row, dict)],
         outbound_analysis.get("days_to_dept"),
         summary_target,
@@ -9555,11 +9673,13 @@ def analyze_round_trip(
     excluded_roundtrip_combos = build_excluded_roundtrip_combos(
         outbound_analysis,
         return_analysis,
-        combinations[0].get("total_price") if combinations else total_min,
+        budget_price,
         3,
         max_budget=combo_max_budget,
         constraints=combined_preferences,
         recommended_combo=combinations[0] if combinations else None,
+        passengers=pricing_passengers,
+        route_type=pricing_route_type,
     )
 
     return {
@@ -9570,6 +9690,8 @@ def analyze_round_trip(
         "passenger_pricing": (best_combo.get("passenger_pricing") if best_combo else {}),
         "price_tiers": (best_combo.get("price_tiers") if best_combo else {}),
         "budget_scope": budget_scope,
+        "budget_price": budget_price,
+        "budget_limits": budget_limits,
         "max_combination": combinations[-1] if combinations else None,
         "top_combinations": combinations[:3],
         "same_day_round_trip": same_day_round_trip,
@@ -9597,7 +9719,7 @@ def analyze_round_trip(
         "buy_vs_wait_risk": buy_vs_wait_risk,
         "excluded_roundtrip_combos": excluded_roundtrip_combos,
         "previous": previous,
-        "advice": _roundtrip_budget_advice(total_min, target_price, max_budget, budget_is_roundtrip=same_day_round_trip),
+        "advice": _roundtrip_budget_advice(budget_price, summary_target, summary_budget, budget_is_roundtrip=True),
     }
 
 

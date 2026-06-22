@@ -99,6 +99,59 @@ class SameDayBusinessModeTest(unittest.TestCase):
 
         self.assertEqual(combos, [])
 
+    def test_meeting_location_near_pkx_allows_normal_morning_arrival(self):
+        from analyzer import build_same_day_combos, compute_same_day_windows
+
+        constraints = {
+            "same_day_round_trip": True,
+            "business_start": "10:30",
+            "business_end": "16:30",
+            "meeting_location": "\u5317\u4eac\u5e02\u5927\u5174\u533a",
+            "meeting_importance": "normal",
+            "route_type": "domestic",
+        }
+        windows = compute_same_day_windows({"constraints": constraints}, "SHA", "PKX")
+
+        self.assertEqual(windows["buffer_model"], "meeting_fixed")
+        self.assertLessEqual(windows["destination_transport_min"], 30)
+        self.assertGreaterEqual(windows["outbound_arrive_by_minutes"], 9 * 60 + 15)
+
+        outbound = [
+            {
+                "flight_no": "MU5099",
+                "price": 795,
+                "departure_airport": "SHA",
+                "arrival_airport": "PKX",
+                "departure_time": "07:00",
+                "arrival_time": "09:15",
+                "departure_date": "2026-06-19",
+                "arrival_date": "2026-06-19",
+            }
+        ]
+        returns = [
+            {
+                "flight_no": "CA1589",
+                "price": 1350,
+                "departure_airport": "PKX",
+                "arrival_airport": "SHA",
+                "departure_time": "20:30",
+                "arrival_time": "22:40",
+                "departure_date": "2026-06-19",
+                "arrival_date": "2026-06-19",
+            }
+        ]
+        combos = build_same_day_combos(
+            outbound,
+            returns,
+            windows,
+            "2026-06-19",
+            constraints=constraints,
+        )
+
+        self.assertEqual(len(combos), 1)
+        self.assertEqual(combos[0]["outbound"]["flight_no"], "MU5099")
+        self.assertEqual(combos[0]["return"]["flight_no"], "CA1589")
+
     def test_compute_same_day_windows_uses_business_time_transport_and_buffer(self):
         from analyzer import compute_same_day_windows
 
@@ -1074,7 +1127,8 @@ class SameDayBusinessModeTest(unittest.TestCase):
         self.assertEqual(outbound["delay_buffer_min"], 45)
         self.assertEqual(outbound["pre_meeting_buffer_min"], 60)
         self.assertEqual(outbound["total_min"], 220)
-        self.assertEqual(windows["outbound_arrive_by"], "06:20")
+        self.assertEqual(windows["outbound_arrive_by"], "07:05")
+        self.assertEqual(windows["business_safety_arrive_by"], "06:20")
         self.assertEqual(windows["reserve_breakdown"]["windows"]["arrive_by"], windows["outbound_arrive_by"])
 
     def test_critical_meeting_fixed_defaults_and_checked_baggage_extra(self):
@@ -1111,6 +1165,38 @@ class SameDayBusinessModeTest(unittest.TestCase):
         self.assertEqual(classify_business_time_margin(45)["level"], "可行但偏紧")
         self.assertEqual(classify_business_time_margin(18)["level"], "高风险卡点")
         self.assertEqual(classify_business_time_margin(-1)["level"], "不可行")
+
+
+    def test_same_day_round_trip_with_meeting_time_forces_arrival_model(self):
+        from analyzer import compute_same_day_windows
+
+        windows = compute_same_day_windows(
+            {
+                "constraints": {
+                    "same_day_round_trip": True,
+                    "business_start": "10:30",
+                    "business_end": "16:30",
+                    "user_transport_min": 70,
+                    "redundancy_min": 25,
+                    "route_type": "domestic",
+                }
+            },
+            "SHA",
+            "PKX",
+        )
+
+        self.assertEqual(windows["buffer_model"], "meeting_fixed")
+        self.assertLess(windows["arrival_buffer_min"], 120)
+        self.assertNotEqual(windows["outbound_arrive_by"], "06:27")
+        self.assertGreaterEqual(windows["outbound_arrive_by_minutes"], 7 * 60 + 45)
+
+    def test_total_passengers_defaults_quick_mode_count_to_adults(self):
+        from analyzer import get_total_passengers
+
+        total, passengers = get_total_passengers({"basic": {"passenger_count": 3}})
+
+        self.assertEqual(total, 3)
+        self.assertEqual(passengers, {"adult": 3, "child": 0, "elderly": 0, "infant": 0})
 
 if __name__ == "__main__":
     unittest.main()

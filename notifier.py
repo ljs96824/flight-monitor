@@ -6157,6 +6157,15 @@ def build_notification_payload(
             payload_route_type,
             display_price,
         )
+    fallback_passenger_pricing = build_passenger_price_breakdown(
+        0,
+        passenger_pricing_breakdown,
+        "economy",
+        payload_route_type,
+    )
+    fallback_passenger_pricing["passenger_count"] = total_passengers
+    fallback_passenger_pricing["applies"] = _passenger_pricing_applies(fallback_passenger_pricing)
+    payload_passenger_pricing = primary_plan.get("passenger_pricing") or fallback_passenger_pricing
     payload = {
         "push_type": payload_push_type,
         "route": _payload_route_text(route_info),
@@ -6214,7 +6223,7 @@ def build_notification_payload(
         "travel_profile": travel_profile,
         "passenger_profile": passenger_profile,
         "passenger_rules": passenger_rules,
-        "passenger_pricing": primary_plan.get("passenger_pricing") or {},
+        "passenger_pricing": payload_passenger_pricing,
         "travel_profile_explanation": profile_explanation,
         "travel_scenarios": travel_profile.get("scenarios") or [],
         "recommendation_basis": recommendation_basis,
@@ -7233,6 +7242,7 @@ def render_pushplus(payload: dict) -> str:
             f"<b>【无符合方案】{route} 提供{len(alternatives[:3])}个备选</b>",
             "",
             "当前判断:❌ 未找到完全符合条件的方案",
+            f"\u5f53\u524d\u6700\u4f4e\u53c2\u8003:{html.escape(price_hint)}" if price_hint else "",
             f"【为什么】{reason}",
             html.escape(max_line) if max_line else "",
             f"搜索参考价:{html.escape(price_hint)}" if price_hint else "",
@@ -8454,6 +8464,7 @@ def _email_action_panel_body(
         max_line = _no_primary_max_bottleneck_text(payload)
         blocks = [
             "<div style='font-weight:600;color:#b91c1c;'>当前判断:❌ 未找到完全符合条件的方案</div>",
+            f"<div><strong>\u5f53\u524d\u6700\u4f4e\u53c2\u8003:</strong>{html.escape(price_hint)}</div>" if price_hint else "",
             "<div style='margin:8px 0;border-top:1px solid #e5e7eb;'></div>",
             f"<div><strong>【为什么】</strong>{html.escape(reason)}</div>",
             f"<div style='color:#666;font-size:12px;'>{html.escape(max_line)}</div>" if max_line else "",
@@ -9931,7 +9942,7 @@ def _email_airport_cost_comparison_body(payload: dict) -> str:
         "<table style='width:100%;font-size:13px;line-height:1.6;border-collapse:collapse;'>",
         "<thead><tr>",
         "<th style='text-align:left;color:#666;border-bottom:1px solid #eee;padding:6px 4px;'>机场组合</th>",
-        "<th style='text-align:left;color:#666;border-bottom:1px solid #eee;padding:6px 4px;'>票价</th>",
+        "<th style='text-align:left;color:#666;border-bottom:1px solid #eee;padding:6px 4px;'>票价(单人单程参考)</th>",
         "<th style='text-align:left;color:#666;border-bottom:1px solid #eee;padding:6px 4px;'>有效成本</th>",
         "<th style='text-align:left;color:#666;border-bottom:1px solid #eee;padding:6px 4px;'>说明</th>",
         "</tr></thead><tbody>",
@@ -9950,6 +9961,7 @@ def _email_airport_cost_comparison_body(payload: dict) -> str:
     parts.append("</tbody></table>")
     parts.append(
         "<div style='margin-top:8px;color:#666;font-size:12px;'>"
+        "票价为单人单程参考；多人同行请在渠道按实际人数重新确认。"
         "有效成本为参考估算，交通按打车估算，时间成本默认按¥50/小时估算。"
         "</div>"
     )
