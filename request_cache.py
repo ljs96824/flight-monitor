@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from filename_utils import sanitize_filename
+import observations_store
 
 
 DEFAULT_CACHE_DIR = Path(__file__).parent / "data" / "cache"
@@ -126,6 +127,62 @@ def _write_persistent(key: tuple, result, cache_dir: Path | None = None) -> None
         _disabled_persistent_dirs.add(disabled_key)
         print(f"[缓存] 持久化失败,本轮将跳过该目录 {disabled_key}: {exc}")
 
+
+def _positive_price_flights(result) -> list[dict]:
+    if not isinstance(result, dict):
+        return []
+    flights = result.get("flights") or []
+    priced = []
+    for flight in flights:
+        if not isinstance(flight, dict):
+            continue
+        try:
+            if float(flight.get("price")) > 0:
+                priced.append(flight)
+        except (TypeError, ValueError):
+            continue
+    return priced
+
+
+def _record_observations_after_fetch(source, key: tuple, result, cabin_class: str) -> None:
+    source_name = key[0]
+    if source_name not in {"juhe", "hasdata"}:
+        return
+    flights = _positive_price_flights(result)
+    if not flights:
+        return
+    round_id, db_path = observations_store.get_current_round()
+    if not round_id:
+        print(
+            f"[\u89c2\u6d4b\u843d\u5e93\u8df3\u8fc7] "
+            f"\u822a\u7ebf={key[1]}->{key[2]} \u65e5\u671f={key[3]} "
+            f"\u539f\u56e0=\u65e0round_id"
+        )
+        return
+    try:
+        observation_result = observations_store.append_observations(
+            flights,
+            round_id=round_id,
+            route_type=str(getattr(source, "route_type", None) or "unknown"),
+            origin_airport=key[1],
+            dest_airport=key[2],
+            depart_date=key[3],
+            cabin_class=cabin_class,
+            source=source_name,
+            observed_at=datetime.now().isoformat(timespec="seconds"),
+            db_path=db_path,
+        )
+        print(
+            f"[\u89c2\u6d4b\u843d\u5e93] round={round_id} "
+            f"\u822a\u7ebf={key[1]}->{key[2]} \u65e5\u671f={key[3]} "
+            f"\u6e90={source_name} \u5199\u5165={observation_result['written']} "
+            f"\u8df3\u8fc7\u91cd\u590d={observation_result['skipped']} "
+            f"\u53e3\u5f84=\u5355\u4eba\u5355\u7a0bCNY"
+        )
+    except Exception as exc:
+        print(f"[\u89c2\u6d4b\u843d\u5e93\u5931\u8d25] round={round_id} \u6e90={source_name} \u539f\u56e0={exc}")
+
+
 def cached_fetch(
     source,
     origin: str,
@@ -181,6 +238,7 @@ def cached_fetch(
         f"\u65e5\u671f={key[3]} \u6e90={source_name} \u7b2c{trigger_count}\u6b21"
     )
     result = source.fetch(origin, dest, date_str, cabin_class)
+    _record_observations_after_fetch(source, key, result, cabin_class)
     stored = copy.deepcopy(result)
     _request_cache[key] = {
         "fetched_at": datetime.now().isoformat(timespec="seconds"),

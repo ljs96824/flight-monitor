@@ -3,6 +3,8 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from contextlib import redirect_stdout
+from io import StringIO
 
 
 class ObservationSource:
@@ -96,13 +98,15 @@ class ObservationsStoreTest(unittest.TestCase):
                 route_type="greater_china",
             )
 
+            from observations_store import clear_current_round, set_current_round
+
+            set_current_round("round-gc", db_path=db_path)
+            self.addCleanup(clear_current_round)
             result = aggregator.collect(
                 "PVG",
                 "HKG",
                 "2099-12-28",
                 route_type="greater_china",
-                round_id="round-gc",
-                observations_db_path=db_path,
             )
 
             self.assertEqual(result["source_stats"]["after_dedup"], 1)
@@ -119,17 +123,54 @@ class ObservationsStoreTest(unittest.TestCase):
         reset_request_cache()
         aggregator = FlightAggregator([ObservationSource("juhe", 1200)], [], route_type="domestic")
 
-        with patch("sources.aggregator.append_observations", side_effect=sqlite3.OperationalError("locked")):
+        from observations_store import clear_current_round, set_current_round
+
+        set_current_round("round-fail")
+        self.addCleanup(clear_current_round)
+        with patch("observations_store.append_observations", side_effect=sqlite3.OperationalError("locked")):
             result = aggregator.collect(
                 "SHA",
                 "PEK",
                 "2099-12-28",
                 route_type="domestic",
-                round_id="round-fail",
             )
 
         self.assertIsNotNone(result)
         self.assertEqual(result["source_stats"]["after_dedup"], 1)
+
+    def test_cached_fetch_writes_observations_for_calendar_path(self):
+        from observations_store import clear_current_round, count_observations, set_current_round
+        from price_calendar import _source_fetch
+        from request_cache import reset_request_cache
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            db_path = Path(tmp) / "observations.sqlite3"
+            reset_request_cache()
+            source = ObservationSource("juhe", 831)
+            source.route_type = "domestic"
+            set_current_round("round-calendar", db_path=db_path)
+            self.addCleanup(clear_current_round)
+
+            flights = _source_fetch(source, "SHA", "PEK", "2099-12-28", "economy", {"adult": 1}, ttl_seconds=0)
+
+            self.assertEqual(len(flights), 1)
+            self.assertEqual(count_observations(db_path), 1)
+
+    def test_cached_fetch_without_round_logs_skip_instead_of_silent_gap(self):
+        from observations_store import clear_current_round
+        from request_cache import cached_fetch, reset_request_cache
+
+        clear_current_round()
+        reset_request_cache()
+        source = ObservationSource("juhe", 831)
+        source.route_type = "domestic"
+        output = StringIO()
+
+        with redirect_stdout(output):
+            cached_fetch(source, "SHA", "PEK", "2099-12-28", {"adult": 1}, "economy", ttl_seconds=0, persist=False)
+
+        self.assertIn("[\u89c2\u6d4b\u843d\u5e93\u8df3\u8fc7]", output.getvalue())
+        self.assertIn("\u539f\u56e0=\u65e0round_id", output.getvalue())
 
 
 if __name__ == "__main__":

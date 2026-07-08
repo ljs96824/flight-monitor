@@ -38,6 +38,7 @@ from collector import _normalize_detail_flight, save_raw_response
 from email_notifier import render_email, send_email
 from filename_utils import sanitize_filename
 from health_check import system_health_check
+from observations_store import clear_current_round, set_current_round
 from notifier import (
     build_notification_payload,
     persist_notification_payload,
@@ -962,15 +963,13 @@ def _dedupe_flights(flights: list[dict]) -> list[dict]:
 
 
 
-def _aggregator_collect(aggregator, origin, destination, date_str, passengers=None, round_id=None, **kwargs):
+def _aggregator_collect(aggregator, origin, destination, date_str, passengers=None, **kwargs):
     try:
         params = inspect.signature(aggregator.collect).parameters
     except (TypeError, ValueError):
         params = {}
     if "passengers" in params:
         kwargs["passengers"] = passengers
-    if round_id and "round_id" in params:
-        kwargs["round_id"] = round_id
     return aggregator.collect(origin, destination, date_str, **kwargs)
 
 def collect_for_airport_matrix(
@@ -981,7 +980,6 @@ def collect_for_airport_matrix(
     cabin_classes=None,
     route_type: str | None = None,
     passengers=None,
-    round_id: str | None = None,
 ) -> dict | None:
     origins = _clean_airport_codes(origins)
     destinations = _clean_airport_codes(destinations)
@@ -992,7 +990,7 @@ def collect_for_airport_matrix(
         collect_kwargs = {"cabin_classes": cabin_classes}
         if route_type:
             collect_kwargs["route_type"] = route_type
-        data = _aggregator_collect(aggregator, origins[0], destinations[0], date_str, passengers=passengers, round_id=round_id, **collect_kwargs)
+        data = _aggregator_collect(aggregator, origins[0], destinations[0], date_str, passengers=passengers, **collect_kwargs)
         if data:
             for flight in data.get("flights", []) or []:
                 flight["search_origin"] = flight.get("search_origin") or origins[0]
@@ -1032,7 +1030,7 @@ def collect_for_airport_matrix(
         collect_kwargs = {"cabin_classes": cabin_classes}
         if route_type:
             collect_kwargs["route_type"] = route_type
-        data = _aggregator_collect(aggregator, origin, destination, date_str, passengers=passengers, round_id=round_id, **collect_kwargs)
+        data = _aggregator_collect(aggregator, origin, destination, date_str, passengers=passengers, **collect_kwargs)
         if not data:
             continue
         for flight in data.get("flights", []):
@@ -1064,7 +1062,6 @@ def collect_nearby_dates(
     sub: dict,
     cabin_classes=None,
     target_min_price=None,
-    round_id: str | None = None,
 ) -> list[dict]:
     try:
         days_range = int(sub.get("date_flexibility") or 0)
@@ -1119,7 +1116,6 @@ def collect_nearby_dates(
                     cabin_classes=cabin_classes,
                     route_type=route_type,
                     passengers=_subscription_passengers(sub),
-                    round_id=round_id,
                 )
                 flights = data.get("flights", []) if data else []
                 prices = [
@@ -1164,6 +1160,7 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
 
     round_id = _make_round_id(sub)
     print(f"[\u89c2\u6d4b\u8f6e\u6b21] round_id={round_id}")
+    set_current_round(round_id)
     route = f"{sub['origin']}-{sub['destination']}"
     logging.info(f"开始处理 {route}")
 
@@ -1195,7 +1192,6 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
             cabin_classes=sub.get("cabin_classes"),
             route_type=route_type,
             passengers=request_passengers,
-            round_id=round_id,
         )
 
         if data is None or not data.get("flights"):
@@ -1292,7 +1288,6 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
             sub,
             cabin_classes=sub.get("cabin_classes"),
             target_min_price=current_min_price,
-            round_id=round_id,
         )
         price_history = (data.get("price_insights") or {}).get("price_history")
         analysis["days_to_dept"] = days_to_dept
@@ -1337,7 +1332,6 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
                 cabin_classes=sub.get("cabin_classes"),
                 route_type=route_type,
                 passengers=request_passengers,
-                round_id=round_id,
             )
             return_collected_at = (return_data or {}).get("collected_at") or datetime.now().isoformat(timespec="seconds")
             normalized_return_flights = [
@@ -1625,6 +1619,7 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
 
 
     finally:
+        clear_current_round()
         print_request_cache_stats()
 
 def run(sync_remote: bool = True):

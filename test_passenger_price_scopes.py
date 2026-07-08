@@ -41,6 +41,8 @@ from price_estimator import (
     build_price_tiers,
     calc_total_for_passengers,
     calc_total_price_for_passengers,
+    passenger_price_factor,
+    reset_passenger_factor_log_cache,
 )
 from web_form import build_subscription
 from notifier import (
@@ -247,6 +249,29 @@ class PassengerPriceScopesTest(unittest.TestCase):
         quick_html = _email_channel_picker(plan, context_label="快速验证首选方案A")
         self.assertIn("4.75", quick_html)
         self.assertNotIn("4.5", quick_html)
+
+    def test_passenger_factor_log_prints_once_per_round_and_passenger_mix(self):
+        from observations_store import clear_current_round, set_current_round
+
+        passengers = {"adult": 3, "child": 0, "elderly": 0, "infant": 0}
+        reset_passenger_factor_log_cache()
+        set_current_round("round-a")
+        self.addCleanup(clear_current_round)
+        self.addCleanup(reset_passenger_factor_log_cache)
+
+        output = io.StringIO()
+        with redirect_stdout(output):
+            passenger_price_factor(passengers, "domestic")
+            passenger_price_factor(passengers, "domestic")
+
+        self.assertEqual(output.getvalue().count("[\u7968\u4ef7\u7cfb\u6570]"), 1)
+
+        output = io.StringIO()
+        with redirect_stdout(output):
+            set_current_round("round-b")
+            passenger_price_factor(passengers, "domestic")
+
+        self.assertEqual(output.getvalue().count("[\u7968\u4ef7\u7cfb\u6570]"), 1)
 
     def test_price_tiers_capture_five_price_scopes(self):
         tiers = build_price_tiers(

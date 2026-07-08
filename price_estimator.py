@@ -56,6 +56,39 @@ def normalize_passengers_for_pricing(passengers):
 
 
 PASSENGER_FARE_RATE_SOURCE = "PASSENGER_FARE_RATES"
+_logged_passenger_factor_keys = set()
+
+
+def reset_passenger_factor_log_cache():
+    """Clear passenger fare factor log de-duplication state for tests or new processes."""
+    _logged_passenger_factor_keys.clear()
+
+
+def _current_round_id_for_fare_log():
+    try:
+        from observations_store import get_current_round
+
+        round_id, _ = get_current_round()
+        return round_id
+    except Exception:
+        return None
+
+
+def _should_log_passenger_factor(route_key, passengers):
+    key = (
+        _current_round_id_for_fare_log(),
+        route_key,
+        passengers.get("adult", 0),
+        passengers.get("child", 0),
+        passengers.get("elderly", 0),
+        passengers.get("infant", 0),
+    )
+    if key in _logged_passenger_factor_keys:
+        return False
+    _logged_passenger_factor_keys.add(key)
+    return True
+
+
 PASSENGER_FARE_RATES = {
     "domestic": {
         "adult": 1.0,
@@ -106,14 +139,15 @@ def passenger_price_factor(passengers, route_type=None):
         + passengers.get("infant", 0) * rates["infant"]
     )
     factor = round(factor, 2)
-    print(
-        f"[票价系数] route={route_key} "
-        f"成人{passengers.get('adult', 0)}×{rates['adult']} "
-        f"儿童{passengers.get('child', 0)}×{rates['child']} "
-        f"老人{passengers.get('elderly', 0)}×{rates['elderly']} "
-        f"婴儿{passengers.get('infant', 0)}×{rates['infant']} "
-        f"合计={factor} 来源={PASSENGER_FARE_RATE_SOURCE}[{route_key}]"
-    )
+    if _should_log_passenger_factor(route_key, passengers):
+        print(
+            f"[票价系数] route={route_key} "
+            f"成人{passengers.get('adult', 0)}×{rates['adult']} "
+            f"儿童{passengers.get('child', 0)}×{rates['child']} "
+            f"老人{passengers.get('elderly', 0)}×{rates['elderly']} "
+            f"婴儿{passengers.get('infant', 0)}×{rates['infant']} "
+            f"合计={factor} 来源={PASSENGER_FARE_RATE_SOURCE}[{route_key}]"
+        )
     return factor
 
 

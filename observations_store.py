@@ -12,6 +12,26 @@ BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_DB_PATH = BASE_DIR / "data" / "observations.sqlite3"
 METHOD_VERSION = "v1"
 
+_current_round_id: str | None = None
+_current_db_path: Path = DEFAULT_DB_PATH
+
+
+def set_current_round(round_id: str, db_path: str | Path | None = None) -> None:
+    global _current_round_id, _current_db_path
+    _current_round_id = str(round_id) if round_id else None
+    if db_path is not None:
+        _current_db_path = Path(db_path)
+
+
+def clear_current_round() -> None:
+    global _current_round_id, _current_db_path
+    _current_round_id = None
+    _current_db_path = DEFAULT_DB_PATH
+
+
+def get_current_round() -> tuple[str | None, Path]:
+    return _current_round_id, _current_db_path
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS observations (

@@ -8,7 +8,6 @@ from datetime import datetime
 
 from source_profiles import get_source_profile, normalize_route_type
 from request_cache import cached_fetch
-from observations_store import DEFAULT_DB_PATH as OBSERVATIONS_DB_PATH, append_observations
 from sources.base import FlightSource
 
 OPTIONAL_SOURCE_THRESHOLD = 8
@@ -509,8 +508,6 @@ class FlightAggregator:
         cabin_classes=None,
         route_type: str | None = None,
         passengers: dict | None = None,
-        round_id: str | None = None,
-        observations_db_path=None,
     ) -> dict | None:
         cabin_classes = _normalize_cabin_classes(cabin_classes)
         run_collected_at = datetime.now().isoformat(timespec="seconds")
@@ -566,30 +563,6 @@ class FlightAggregator:
                         f"[价格检查] {source_name} {cabin_class} 有效价格航班: "
                         f"{len(flights)}/{len(raw_flights)}"
                     )
-
-                    if round_id and flights:
-                        try:
-                            observation_result = append_observations(
-                                flights,
-                                round_id=round_id,
-                                route_type=resolved_route_type,
-                                origin_airport=origin,
-                                dest_airport=dest,
-                                depart_date=date_str,
-                                cabin_class=cabin_class,
-                                source=source_name,
-                                observed_at=run_collected_at,
-                                db_path=observations_db_path or OBSERVATIONS_DB_PATH,
-                            )
-                            print(
-                                f"[\u89c2\u6d4b\u843d\u5e93] round={round_id} "
-                                f"\u822a\u7ebf={origin}->{dest} \u65e5\u671f={date_str} "
-                                f"\u6e90={source_name} \u5199\u5165={observation_result['written']} "
-                                f"\u8df3\u8fc7\u91cd\u590d={observation_result['skipped']} "
-                                f"\u53e3\u5f84=\u5355\u4eba\u5355\u7a0bCNY"
-                            )
-                        except Exception as exc:
-                            print(f"[\u89c2\u6d4b\u843d\u5e93\u5931\u8d25] round={round_id} \u6e90={source_name} \u539f\u56e0={exc}")
 
                     if source_status in {"not_configured", "skipped"}:
                         cabin_counts[cabin_class] = 0
