@@ -19,3 +19,5 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+# Append-only observation database
+data/observations.sqlite3

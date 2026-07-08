@@ -6,11 +6,12 @@ from review import load_signals
 
 
 def _safe_print(text):
-    try:
-        print(text)
-    except UnicodeEncodeError:
-        encoding = sys.stdout.encoding or "utf-8"
-        print(str(text).encode(encoding, errors="replace").decode(encoding))
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="strict")
+        except Exception:
+            pass
+    print(str(text))
 
 
 def system_health_check():

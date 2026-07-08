@@ -47,6 +47,25 @@ class _Form(dict):
 
 
 class WebFormTravelScenarioTest(unittest.TestCase):
+    def test_build_subscription_unknown_destination_has_field_specific_error(self):
+        with self.assertRaisesRegex(ValueError, "无法识别目的地 不存在城市"):
+            build_subscription(
+                _Form(
+                    {
+                        "origin_select": "上海",
+                        "destination": "不存在城市",
+                        "round_trip": "false",
+                        "depart_date": "2026-10-01",
+                        "price_strategy": "auto_judge",
+                        "transfer_policy": "reasonable",
+                        "baggage": "required",
+                        "primary_goal": "buy_timing",
+                        "notification_method": "pushplus",
+                        "notification_frequency": "important_only",
+                    }
+                )
+            )
+
     def test_build_subscription_stores_travel_scenario_and_companion_details(self):
         sub = build_subscription(
             _Form(

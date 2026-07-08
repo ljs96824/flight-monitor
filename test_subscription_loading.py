@@ -81,6 +81,35 @@ class SubscriptionLoadingTest(unittest.TestCase):
         self.assertEqual(loaded[0]["destination"], "大阪")
         self.assertEqual(loaded[0]["destination_airports"], ["KIX", "ITM"])
 
+    def test_unknown_city_inside_basic_is_reported_and_skipped(self):
+        records = [
+            {
+                "id": "bad-basic-location",
+                "basic": {
+                    "origin": "上海",
+                    "destination": "不存在城市",
+                    "depart_date": "2026-10-01",
+                },
+                "status": "active",
+            }
+        ]
+
+        original_path = main.SUBSCRIPTIONS_PATH
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "subscriptions.json"
+            path.write_text(json.dumps(records, ensure_ascii=False), encoding="utf-8")
+            main.SUBSCRIPTIONS_PATH = path
+            try:
+                with patch("builtins.print") as fake_print:
+                    loaded = main.load_file_subscriptions()
+            finally:
+                main.SUBSCRIPTIONS_PATH = original_path
+
+        self.assertEqual(loaded, [])
+        printed = "\n".join(str(call.args[0]) for call in fake_print.call_args_list if call.args)
+        self.assertIn("bad-basic-location", printed)
+        self.assertIn("无法识别目的地 不存在城市", printed)
+
 
     def test_paused_subscription_is_skipped_with_log(self):
         records = [

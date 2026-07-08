@@ -12,6 +12,7 @@ from notifier import (
     _email_excluded_compact_body,
     _email_action_panel_body,
     _email_price_calendar_body,
+    _same_day_alternatives_body,
     _plan_effective_cost_line,
     _plan_feasibility_line,
     build_notification_payload,
@@ -84,6 +85,157 @@ class NotificationNumericScopesTest(unittest.TestCase):
         self.assertIn("\u8c03\u6574\u9884\u7b97\u6216\u65e5\u671f", body)
         self.assertIn("\u521a\u9700\u5fc5\u987b\u51fa\u884c", body)
         self.assertIn("\u5546\u52a1\u4f1a\u8bae", body)
+
+    def test_action_panel_budget_reason_uses_budget_compare_price_scope(self):
+        plan = {
+            "label": "\u65b9\u6848A",
+            "tier": "\u9996\u9009\u63a8\u8350",
+            "is_roundtrip": True,
+            "price": 2111,
+            "outbound_push_line": "\u53bb\u7a0b MU5099 SHA07:00\u2192PKX09:15",
+            "return_push_line": "\u8fd4\u7a0b MU5128 PKX21:00\u2192SHA23:10",
+        }
+        payload = {
+            "recommendation": "\u53ef\u9a8c\u8bc1",
+            "is_roundtrip": True,
+            "display_price": 6333,
+            "current_price": 6333,
+            "budget_compare_price": 2111,
+            "budget_compare_scope": "per_person_roundtrip",
+            "max_price": 4000,
+            "max_budget_scope": "per_person",
+            "recommended_plans": [plan],
+            "trigger_reason": ["\u641c\u7d22\u53c2\u8003\u4ef7\u5728\u9884\u7b97\u5185"],
+            "detail_url": "https://example.com/detail",
+            "form_url": "https://example.com/form",
+            "feedback_url": "https://example.com/feedback",
+        }
+
+        body = _email_action_panel_body(payload, plan, "\u652f\u4ed8\u9875\u2264\u00a54,000", "")
+
+        self.assertIn("\u00a52,111", body)
+        self.assertIn("\u00a54,000", body)
+        self.assertIn("\u672a\u8d85\u9884\u7b97", body)
+        self.assertNotIn("\u00a56,333", body)
+        self.assertNotIn("\u9ad8\u4e8e\u4f60\u7684\u6700\u9ad8\u53ef\u63a5\u53d7\u4ef7", body)
+
+        pushplus = render_pushplus(payload)
+        self.assertIn("\u00a52,111", pushplus)
+        self.assertIn("\u00a54,000", pushplus)
+        self.assertIn("\u672a\u8d85\u9884\u7b97", pushplus)
+        self.assertNotIn("\u00a56,333", pushplus)
+        self.assertNotIn("\u9ad8\u4e8e\u4f60\u7684\u6700\u9ad8\u53ef\u63a5\u53d7\u4ef7", pushplus)
+    def test_same_day_alternative_card_marks_single_adult_roundtrip_budget_overage(self):
+        payload = {
+            "same_day_alternatives": [
+                {
+                    "title": "备选C·当天最早班",
+                    "category": "same_day_earliest",
+                    "outbound": {
+                        "flight_combo": "MU5099",
+                        "departure_airport": "SHA",
+                        "arrival_airport": "PKX",
+                        "departure_date": "2026-06-26",
+                        "arrival_date": "2026-06-26",
+                        "departure_time": "07:00",
+                        "arrival_time": "09:15",
+                        "price": 831,
+                    },
+                    "return": {
+                        "flight_combo": "MU5170",
+                        "departure_airport": "PKX",
+                        "arrival_airport": "SHA",
+                        "departure_date": "2026-06-26",
+                        "arrival_date": "2026-06-26",
+                        "departure_time": "21:00",
+                        "arrival_time": "23:10",
+                        "price": 1720,
+                    },
+                    "outbound_price": 831,
+                    "return_price": 1720,
+                    "roundtrip_price": 2551,
+                    "over_budget": True,
+                    "budget_overage": 951,
+                    "budget_scope_label": "单人往返 vs 上限1600",
+                }
+            ],
+            "depart_date": "2026-06-26",
+            "return_date": "2026-06-26",
+            "route_info": {"depart_date": "2026-06-26", "return_date": "2026-06-26"},
+        }
+
+        body = _same_day_alternatives_body(payload)
+
+        self.assertIn("MU5170", body)
+        self.assertNotIn("MU5128", body)
+        self.assertIn("¥1,720", body)
+        self.assertNotIn("¥1,921", body)
+        self.assertIn("验证此备选", body)
+        self.assertIn("去程", body)
+        self.assertIn("返程", body)
+        self.assertIn("超出预算", body)
+        self.assertIn("¥951", body)
+        self.assertIn("单人往返 vs 上限1600", body)
+
+    def test_same_day_alternative_card_separates_total_and_single_adult_scope(self):
+        payload = {
+            "same_day_alternatives": [
+                {
+                    "title": "备选C·当天最早班",
+                    "category": "same_day_earliest",
+                    "outbound": {
+                        "flight_combo": "MU5099",
+                        "departure_airport": "SHA",
+                        "arrival_airport": "PKX",
+                        "departure_date": "2026-06-26",
+                        "arrival_date": "2026-06-26",
+                        "departure_time": "07:00",
+                        "arrival_time": "09:15",
+                        "price": 831,
+                    },
+                    "return": {
+                        "flight_combo": "MU5170",
+                        "departure_airport": "PKX",
+                        "arrival_airport": "SHA",
+                        "departure_date": "2026-06-26",
+                        "arrival_date": "2026-06-26",
+                        "departure_time": "21:00",
+                        "arrival_time": "23:10",
+                        "price": 1720,
+                    },
+                    "outbound_price": 831,
+                    "return_price": 1720,
+                    "single_adult_price": 2551,
+                    "roundtrip_price": 7653,
+                    "price": 7653,
+                    "passenger_pricing": {
+                        "applies": True,
+                        "factor": 3,
+                        "passenger_label": "3成人",
+                        "total_price": 7653,
+                        "single_adult_price": 2551,
+                    },
+                    "over_budget": True,
+                    "budget_overage": 6053,
+                    "budget_scope_label": "全员往返 vs 总上限1600",
+                }
+            ],
+            "depart_date": "2026-06-26",
+            "return_date": "2026-06-26",
+            "route_info": {"depart_date": "2026-06-26", "return_date": "2026-06-26"},
+        }
+
+        body = _same_day_alternatives_body(payload)
+
+        self.assertIn("全员往返总价", body)
+        self.assertIn("¥7,653", body)
+        self.assertIn("单人往返参考", body)
+        self.assertIn("¥2,551", body)
+        self.assertIn("去程¥831 + 返程¥1,720", body)
+        self.assertIn("超出预算", body)
+        self.assertIn("¥6,053", body)
+        self.assertIn("全员往返 vs 总上限1600", body)
+
 
     def test_calendar_body_starts_with_selected_date_comparison(self):
         payload = self._over_budget_payload()
@@ -725,6 +877,24 @@ class NotificationNumericScopesTest(unittest.TestCase):
         self.assertIn("\u5f53\u5929\u5f80\u8fd4", basis)
         self.assertIn("\u4f1a\u8bae13:00-17:00", basis)
 
+    def test_roundtrip_comparison_points_uses_combo_flight_context_without_nameerror(self):
+        from analyzer import _roundtrip_comparison_points
+
+        points = _roundtrip_comparison_points(
+            {
+                "total_price": 2386,
+                "outbound": {"flight_combo": "MU5107", "arrival_time": "13:15"},
+                "return": {"flight_combo": "CA1507", "departure_time": "07:30"},
+                "reason": "返程时间不符",
+            },
+            {"return": {"flight_combo": "CA1589", "departure_time": "20:30"}},
+            2760,
+        )
+
+        joined = "\n".join(points)
+        self.assertIn("MU5107", joined)
+        self.assertIn("13:15", joined)
+        self.assertIn("比推荐便宜¥374", joined)
     def test_email_excluded_body_renders_full_roundtrip_cards_with_basis_and_comparison(self):
         payload = {
             "is_roundtrip": True,
@@ -795,3 +965,4 @@ class NotificationNumericScopesTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

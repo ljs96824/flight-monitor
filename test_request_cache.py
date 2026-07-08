@@ -82,6 +82,21 @@ class RequestCacheTest(unittest.TestCase):
 
 
 
+    def test_stats_requested_counts_real_fetch_not_cache_hits(self):
+        from request_cache import cached_fetch, get_request_cache_stats, reset_request_cache
+
+        reset_request_cache()
+        source = CountingSource()
+        passengers = {"adult": 1}
+
+        cached_fetch(source, "SHA", "PEK", "2026-06-20", passengers, "economy")
+        cached_fetch(source, "SHA", "PEK", "2026-06-20", passengers, "economy")
+
+        fake_stats = get_request_cache_stats()["by_source"]["fake"]
+        self.assertEqual(fake_stats["actual"], 1)
+        self.assertEqual(fake_stats["requested"], 1)
+        self.assertEqual(fake_stats["hits"], 1)
+
     def test_aggregator_collect_reuses_cached_source_result(self):
         from request_cache import reset_request_cache
         from sources.aggregator import FlightAggregator

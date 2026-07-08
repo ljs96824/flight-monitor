@@ -21,6 +21,7 @@ DEFAULT_TTL_SECONDS = 15 * 60
 
 _request_cache: dict[tuple, dict] = {}
 _disabled_persistent_dirs: set[str] = set()
+_fetch_trigger_counts: dict[tuple, int] = {}
 _stats = {
     "total": 0,
     "hits": 0,
@@ -73,26 +74,27 @@ def _fresh(fetched_at: str | None, ttl_seconds: int) -> bool:
     return datetime.now() - dt < timedelta(seconds=ttl_seconds)
 
 
+def _source_stats_bucket(source_name: str) -> dict:
+    return _stats.setdefault("by_source", {}).setdefault(
+        source_name, {"requested": 0, "actual": 0, "hits": 0, "calls": 0}
+    )
+
+
 def _record_request(source_name: str) -> None:
     _stats["total"] += 1
-    by_source = _stats.setdefault("by_source", {})
-    source_stats = by_source.setdefault(source_name, {"requested": 0, "actual": 0, "hits": 0})
-    source_stats["requested"] += 1
+    _source_stats_bucket(source_name)["calls"] += 1
 
 
 def _record_hit(source_name: str) -> None:
     _stats["hits"] += 1
-    _stats.setdefault("by_source", {}).setdefault(
-        source_name, {"requested": 0, "actual": 0, "hits": 0}
-    )["hits"] += 1
+    _source_stats_bucket(source_name)["hits"] += 1
 
 
 def _record_actual(source_name: str) -> None:
     _stats["actual"] += 1
-    _stats.setdefault("by_source", {}).setdefault(
-        source_name, {"requested": 0, "actual": 0, "hits": 0}
-    )["actual"] += 1
-
+    source_stats = _source_stats_bucket(source_name)
+    source_stats["actual"] += 1
+    source_stats["requested"] += 1
 
 def _read_persistent(key: tuple, ttl_seconds: int, cache_dir: Path | None = None):
     path = _cache_path(key, cache_dir)
@@ -166,10 +168,18 @@ def cached_fetch(
             return copy.deepcopy(persisted)
 
     print(
-        f"[API调用] 源={source_name} 航线={key[1]}->{key[2]} 日期={key[3]} "
-        f"乘客={key[4]} 时间={time.time()}"
+        f"[API\u8c03\u7528] \u6e90={source_name} \u822a\u7ebf={key[1]}->{key[2]} \u65e5\u671f={key[3]} "
+        f"\u4e58\u5ba2={key[4]} \u65f6\u95f4={time.time()}"
     )
     _record_actual(source_name)
+    route_type = str(getattr(source, "route_type", None) or "unknown")
+    trigger_key = (route_type, source_name, key[1], key[2], key[3])
+    trigger_count = _fetch_trigger_counts.get(trigger_key, 0) + 1
+    _fetch_trigger_counts[trigger_key] = trigger_count
+    print(
+        f"[\u91c7\u96c6\u89e6\u53d1] route_type={route_type} \u822a\u7ebf={key[1]}->{key[2]} "
+        f"\u65e5\u671f={key[3]} \u6e90={source_name} \u7b2c{trigger_count}\u6b21"
+    )
     result = source.fetch(origin, dest, date_str, cabin_class)
     stored = copy.deepcopy(result)
     _request_cache[key] = {
@@ -199,6 +209,7 @@ def reset_request_cache(*, clear_memory: bool = True, reset_stats: bool = True) 
     if clear_memory:
         _request_cache.clear()
         _disabled_persistent_dirs.clear()
+        _fetch_trigger_counts.clear()
     if reset_stats:
         _stats["total"] = 0
         _stats["hits"] = 0

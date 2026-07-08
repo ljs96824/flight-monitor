@@ -1,0 +1,1133 @@
+{
+  "airport_transport_to_meeting": {
+    "PEK": 60,
+    "PKX": 25
+  },
+  "analysis": {
+    "budget_limits": {
+      "budget_scope": "total",
+      "ideal_price_total": 1200.0,
+      "input_ideal_price": 1200.0,
+      "input_max_budget": 1600.0,
+      "max_budget_total": 1600.0,
+      "multiplier": 1,
+      "passenger_count": 3
+    },
+    "same_day_no_feasible_note": "按你的会议安排(10:30开始,重要会议模型,去程总预留约205分钟,需07:05前落地),当天往返时间较紧；最早去程约08:50到，要求不晚于07:05；最晚返程约21:30走，要求不早于20:45；建议会议重要程度改为普通商务(到达上限08:05，有0个航班可选)；FM9101 08:50到，比要求晚105分钟；或考虑前一晚到达。；最接近去程:FM9101 08:50到，比要求晚1小时45分钟；建议:前一晚到达、缩短预留时间或调整会议开始时间。",
+    "same_day_time_conflict": true,
+    "top_combinations": []
+  },
+  "collection": {
+    "calls": [
+      {
+        "count": 1,
+        "date": "2026-06-26",
+        "dest": "PEK",
+        "origin": "PVG",
+        "source": "snapshot_fixture"
+      },
+      {
+        "count": 1,
+        "date": "2026-06-26",
+        "dest": "PKX",
+        "origin": "PVG",
+        "source": "snapshot_fixture"
+      },
+      {
+        "count": 1,
+        "date": "2026-06-26",
+        "dest": "PEK",
+        "origin": "SHA",
+        "source": "snapshot_fixture"
+      },
+      {
+        "count": 2,
+        "date": "2026-06-26",
+        "dest": "PKX",
+        "origin": "SHA",
+        "source": "snapshot_fixture"
+      },
+      {
+        "count": 1,
+        "date": "2026-06-26",
+        "dest": "PVG",
+        "origin": "PEK",
+        "source": "snapshot_fixture"
+      },
+      {
+        "count": 1,
+        "date": "2026-06-26",
+        "dest": "SHA",
+        "origin": "PEK",
+        "source": "snapshot_fixture"
+      },
+      {
+        "count": 1,
+        "date": "2026-06-26",
+        "dest": "PVG",
+        "origin": "PKX",
+        "source": "snapshot_fixture"
+      },
+      {
+        "count": 2,
+        "date": "2026-06-26",
+        "dest": "SHA",
+        "origin": "PKX",
+        "source": "snapshot_fixture"
+      }
+    ],
+    "outbound_count": 5,
+    "return_count": 5,
+    "source": "snapshot_fixture"
+  },
+  "notification": {
+    "email_html_chars": 20984,
+    "email_subject": "【无符合方案】上海 → 北京｜提供1个备选",
+    "pushplus_chars": 2205
+  },
+  "price_calendar": {
+    "after_passenger_first3": [
+      3585.0,
+      3654.0,
+      4224.0
+    ],
+    "after_passenger_prices": [
+      3585.0,
+      3654.0,
+      4224.0,
+      4437.0,
+      3981.0
+    ],
+    "before_unit_first3": [
+      1195.0,
+      1218.0,
+      1408.0
+    ],
+    "before_unit_prices": [
+      1195.0,
+      1218.0,
+      1408.0,
+      1479.0,
+      1327.0
+    ],
+    "note": "每行=该出发日单人单程最低+固定返程日单人单程最低，再按3名成人换算。",
+    "passenger_factor": 3.0,
+    "return_date": "2026-06-26",
+    "return_low_unit": 648,
+    "route": "SHA-PKX + PKX-SHA",
+    "rows": [
+      {
+        "airline": "MU",
+        "breakdown": "去¥547+返¥648",
+        "date": "2026-06-23",
+        "label": "06-23 周二",
+        "lowest": true,
+        "min_price": 3585.0,
+        "outbound_min_price": 547.0,
+        "passenger_factor": 3.0,
+        "price_scope": "3人往返参考价",
+        "return_date": "2026-06-26",
+        "return_min_price": 648.0,
+        "scope": "passenger_roundtrip",
+        "selected": false,
+        "unit_roundtrip_price": 1195.0,
+        "value": 3585.0,
+        "weekday": "周二"
+      },
+      {
+        "airline": "MU",
+        "breakdown": "去¥570+返¥648",
+        "date": "2026-06-24",
+        "label": "06-24 周三",
+        "lowest": false,
+        "min_price": 3654.0,
+        "outbound_min_price": 570.0,
+        "passenger_factor": 3.0,
+        "price_scope": "3人往返参考价",
+        "return_date": "2026-06-26",
+        "return_min_price": 648.0,
+        "scope": "passenger_roundtrip",
+        "selected": false,
+        "unit_roundtrip_price": 1218.0,
+        "value": 3654.0,
+        "weekday": "周三"
+      },
+      {
+        "airline": "CA",
+        "breakdown": "去¥760+返¥648",
+        "date": "2026-06-25",
+        "label": "06-25 周四",
+        "lowest": false,
+        "min_price": 4224.0,
+        "outbound_min_price": 760.0,
+        "passenger_factor": 3.0,
+        "price_scope": "3人往返参考价",
+        "return_date": "2026-06-26",
+        "return_min_price": 648.0,
+        "scope": "passenger_roundtrip",
+        "selected": false,
+        "unit_roundtrip_price": 1408.0,
+        "value": 4224.0,
+        "weekday": "周四"
+      },
+      {
+        "airline": "MU",
+        "breakdown": "去¥831+返¥648",
+        "date": "2026-06-26",
+        "label": "06-26 周五",
+        "lowest": false,
+        "min_price": 4437.0,
+        "outbound_min_price": 831.0,
+        "passenger_factor": 3.0,
+        "price_scope": "3人往返参考价",
+        "return_date": "2026-06-26",
+        "return_min_price": 648.0,
+        "scope": "passenger_roundtrip",
+        "selected": true,
+        "unit_roundtrip_price": 1479.0,
+        "value": 4437.0,
+        "weekday": "周五"
+      },
+      {
+        "airline": "MU",
+        "breakdown": "去¥679+返¥648",
+        "date": "2026-06-27",
+        "label": "06-27 周六",
+        "lowest": false,
+        "min_price": 3981.0,
+        "outbound_min_price": 679.0,
+        "passenger_factor": 3.0,
+        "price_scope": "3人往返参考价",
+        "return_date": "2026-06-26",
+        "return_min_price": 648.0,
+        "scope": "passenger_roundtrip",
+        "selected": false,
+        "unit_roundtrip_price": 1327.0,
+        "value": 3981.0,
+        "weekday": "周六"
+      }
+    ],
+    "savings": [
+      {
+        "date": "2026-06-23",
+        "offset": -3,
+        "price": 3585.0,
+        "save": 852,
+        "tip": "鎻愬墠3天(2026-06-23 周二)出发，省¥852/单程",
+        "weekday": "周二"
+      },
+      {
+        "date": "2026-06-24",
+        "offset": -2,
+        "price": 3654.0,
+        "save": 783,
+        "tip": "鎻愬墠2天(2026-06-24 周三)出发，省¥783/单程",
+        "weekday": "周三"
+      },
+      {
+        "date": "2026-06-27",
+        "offset": 1,
+        "price": 3981.0,
+        "save": 456,
+        "tip": "鎺ㄨ繜1天(2026-06-27 周六)出发，省¥456/单程",
+        "weekday": "周六"
+      }
+    ],
+    "scope": "3人往返参考价",
+    "selected_date": "2026-06-26",
+    "selected_passenger_price": 4437.0,
+    "selected_price_scope": "3人往返参考价",
+    "selected_unit_price": 1479.0
+  },
+  "same_day": {
+    "analysis_filter_counts": {
+      "after_meeting_outbound": 0,
+      "after_meeting_return": 2,
+      "after_meeting_window": 2,
+      "outbound_collected": 5,
+      "return_collected": 5,
+      "same_day_combos": 0,
+      "total_candidates": 10,
+      "valid_price_count": 10
+    },
+    "budget_filter": {
+      "after_budget_count": 0,
+      "budget_limit": 1600,
+      "budget_scope": "total",
+      "cheapest_window_combo": {
+        "outbound": "FM9101",
+        "passenger_roundtrip": 8310.0,
+        "return": "MU5170",
+        "single_adult_roundtrip": 2770.0,
+        "within_budget": false
+      },
+      "combos": [
+        {
+          "outbound": "FM9101",
+          "passenger_roundtrip": 8310.0,
+          "return": "MU5170",
+          "single_adult_roundtrip": 2770.0,
+          "within_budget": false
+        },
+        {
+          "outbound": "FM9101",
+          "passenger_roundtrip": 8610.0,
+          "return": "CA1589",
+          "single_adult_roundtrip": 2870.0,
+          "within_budget": false
+        },
+        {
+          "outbound": "FM9101",
+          "passenger_roundtrip": 8790.0,
+          "return": "CA1511",
+          "single_adult_roundtrip": 2930.0,
+          "within_budget": false
+        },
+        {
+          "outbound": "FM9101",
+          "passenger_roundtrip": 8913.0,
+          "return": "MU5128",
+          "single_adult_roundtrip": 2971.0,
+          "within_budget": false
+        }
+      ],
+      "no_result_reason": "会议窗口内共有4个往返组合，按3人整单预算¥1,600过滤后=0；最低组合FM9101+MU5170为3人往返¥8,310，超出预算¥6,710。",
+      "price_scope": "3人往返总价",
+      "window_combo_count": 4
+    },
+    "no_result_reason": "会议窗口内共有4个往返组合，按3人整单预算¥1,600过滤后=0；最低组合FM9101+MU5170为3人往返¥8,310，超出预算¥6,710。",
+    "outbound_window_match_count": 1,
+    "outbound_window_matches": [
+      {
+        "arrival_airport": "PKX",
+        "arrival_datetime": "2026-06-26 08:50:00",
+        "flight_no": "FM9101",
+        "price": 1050,
+        "price_scope": "单人单程参考价",
+        "window_arrive_by": "2026-06-26 08:55"
+      }
+    ],
+    "return_recommendation": {
+      "departure_airport": "PKX",
+      "departure_datetime": "2026-06-26 21:00:00",
+      "flight_no": "MU5170",
+      "price": 1720,
+      "price_scope": "单人单程参考价",
+      "selection_rule": "满足返程时间窗口后按单人单程价升序",
+      "window_depart_after": "2026-06-26 20:10"
+    },
+    "return_window_match_count": 4,
+    "return_window_matches": [
+      {
+        "departure_airport": "PKX",
+        "departure_datetime": "2026-06-26 21:00:00",
+        "flight_no": "MU5170",
+        "price": 1720,
+        "price_scope": "单人单程参考价",
+        "window_depart_after": "2026-06-26 20:10"
+      },
+      {
+        "departure_airport": "PKX",
+        "departure_datetime": "2026-06-26 20:30:00",
+        "flight_no": "CA1589",
+        "price": 1820,
+        "price_scope": "单人单程参考价",
+        "window_depart_after": "2026-06-26 20:10"
+      },
+      {
+        "departure_airport": "PEK",
+        "departure_datetime": "2026-06-26 21:30:00",
+        "flight_no": "CA1511",
+        "price": 1880,
+        "price_scope": "单人单程参考价",
+        "window_depart_after": "2026-06-26 20:45"
+      },
+      {
+        "departure_airport": "PKX",
+        "departure_datetime": "2026-06-26 20:10:00",
+        "flight_no": "MU5128",
+        "price": 1921,
+        "price_scope": "单人单程参考价",
+        "window_depart_after": "2026-06-26 20:10"
+      }
+    ],
+    "same_day_alternatives": [
+      {
+        "adult_roundtrip_price": 2770.0,
+        "budget_overage": 6710,
+        "budget_scope_label": "全员往返 vs 总上限1600",
+        "category": "same_day_earliest",
+        "date": "2026-06-26",
+        "flight": {
+          "aircraft": "32N",
+          "airline": "上海航空",
+          "arrival_airport": "PKX",
+          "arrival_date": "2026-06-26",
+          "arrival_time": "08:50",
+          "buyability": {
+            "label": "需支付页确认"
+          },
+          "departure_airport": "PVG",
+          "departure_date": "2026-06-26",
+          "departure_time": "06:30",
+          "fare_rules": {
+            "baggage": {
+              "checked_kg": 20,
+              "included": true,
+              "note": "含20kg托运"
+            },
+            "refund": {
+              "label": "退改适中"
+            }
+          },
+          "flight_combo": "FM9101",
+          "flight_no": "FM9101",
+          "meeting_arrival_delay_minutes": 105,
+          "meeting_arrival_note": "比要求晚1小时45分钟",
+          "price": 1050,
+          "stops": 0,
+          "total_duration_min": 135
+        },
+        "is_roundtrip": true,
+        "late_minutes": 0,
+        "max_budget": 1600.0,
+        "meeting_arrival_time": "09:50",
+        "note": "比要求晚1小时45分钟",
+        "outbound": {
+          "aircraft": "32N",
+          "airline": "上海航空",
+          "arrival_airport": "PKX",
+          "arrival_date": "2026-06-26",
+          "arrival_time": "08:50",
+          "buyability": {
+            "label": "需支付页确认"
+          },
+          "departure_airport": "PVG",
+          "departure_date": "2026-06-26",
+          "departure_time": "06:30",
+          "fare_rules": {
+            "baggage": {
+              "checked_kg": 20,
+              "included": true,
+              "note": "含20kg托运"
+            },
+            "refund": {
+              "label": "退改适中"
+            }
+          },
+          "flight_combo": "FM9101",
+          "flight_no": "FM9101",
+          "meeting_arrival_delay_minutes": 105,
+          "meeting_arrival_note": "比要求晚1小时45分钟",
+          "price": 1050,
+          "stops": 0,
+          "total_duration_min": 135
+        },
+        "outbound_price": 1050.0,
+        "over_budget": true,
+        "passenger_pricing": {
+          "applies": true,
+          "factor": 3.0,
+          "note": "儿童票按国内常规5折估算,婴儿票按国内常规1折估算,实际以支付页为准",
+          "outbound": {
+            "cabin": "economy",
+            "factor": 3.0,
+            "note": "儿童票按国内常规5折估算,婴儿票按国内常规1折估算,实际以支付页为准",
+            "parts": [
+              {
+                "count": 3,
+                "label": "成人",
+                "ratio": 1.0,
+                "total": 3150,
+                "type": "adult",
+                "unit_price": 1050
+              }
+            ],
+            "passenger_label": "3成人",
+            "passengers": {
+              "adult": 3,
+              "child": 0,
+              "elderly": 0,
+              "infant": 0
+            },
+            "route_type": "domestic",
+            "total": 3150,
+            "unit_price": 1050.0
+          },
+          "passenger_label": "3成人",
+          "passengers": {
+            "adult": 3,
+            "child": 0,
+            "elderly": 0,
+            "infant": 0
+          },
+          "price_tiers": {
+            "factor": 3.0,
+            "is_roundtrip": true,
+            "note": "儿童票按国内常规5折估算,婴儿票按国内常规1折估算,实际以支付页为准；多人价格按单人参考价估算，低价舱库存不足时多人下单可能重新定价，请以支付页选择实际乘机人数后的总价为准",
+            "passenger_count": 3,
+            "passenger_label": "3成人",
+            "passengers": {
+              "adult": 3,
+              "child": 0,
+              "elderly": 0,
+              "infant": 0
+            },
+            "per_person_estimated": 2770,
+            "purchase_type": "roundtrip",
+            "route_type": "domestic",
+            "total_estimated": 8310,
+            "total_roundtrip_ref": 8310,
+            "unit_oneway": {
+              "outbound": 1050,
+              "return": 1720,
+              "scope": "single_person_oneway"
+            },
+            "unit_roundtrip": 2770
+          },
+          "return": {
+            "cabin": "economy",
+            "factor": 3.0,
+            "note": "儿童票按国内常规5折估算,婴儿票按国内常规1折估算,实际以支付页为准",
+            "parts": [
+              {
+                "count": 3,
+                "label": "成人",
+                "ratio": 1.0,
+                "total": 5160,
+                "type": "adult",
+                "unit_price": 1720
+              }
+            ],
+            "passenger_label": "3成人",
+            "passengers": {
+              "adult": 3,
+              "child": 0,
+              "elderly": 0,
+              "infant": 0
+            },
+            "route_type": "domestic",
+            "total": 5160,
+            "unit_price": 1720.0
+          },
+          "scope": "roundtrip",
+          "single_adult_price": 2770.0,
+          "total_price": 8310
+        },
+        "price": 8310.0,
+        "price_tiers": {
+          "factor": 3.0,
+          "is_roundtrip": true,
+          "note": "儿童票按国内常规5折估算,婴儿票按国内常规1折估算,实际以支付页为准；多人价格按单人参考价估算，低价舱库存不足时多人下单可能重新定价，请以支付页选择实际乘机人数后的总价为准",
+          "passenger_count": 3,
+          "passenger_label": "3成人",
+          "passengers": {
+            "adult": 3,
+            "child": 0,
+            "elderly": 0,
+            "infant": 0
+          },
+          "per_person_estimated": 2770,
+          "purchase_type": "roundtrip",
+          "route_type": "domestic",
+          "total_estimated": 8310,
+          "total_roundtrip_ref": 8310,
+          "unit_oneway": {
+            "outbound": 1050,
+            "return": 1720,
+            "scope": "single_person_oneway"
+          },
+          "unit_roundtrip": 2770
+        },
+        "purchase_type": "两个单程拼接",
+        "return": {
+          "aircraft": "32A",
+          "airline": "东方航空",
+          "arrival_airport": "SHA",
+          "arrival_date": "2026-06-26",
+          "arrival_time": "23:10",
+          "buyability": {
+            "label": "需支付页确认"
+          },
+          "departure_airport": "PKX",
+          "departure_date": "2026-06-26",
+          "departure_time": "21:00",
+          "fare_rules": {
+            "baggage": {
+              "checked_kg": 20,
+              "included": true,
+              "note": "含20kg托运"
+            },
+            "refund": {
+              "label": "退改适中"
+            }
+          },
+          "flight_combo": "MU5170",
+          "flight_no": "MU5170",
+          "price": 1720,
+          "stops": 0,
+          "total_duration_min": 135
+        },
+        "return_price": 1720.0,
+        "roundtrip_price": 8310.0,
+        "single_adult_price": 2770.0,
+        "time": "06:30->08:50 / 21:00->23:10",
+        "title": "备选A·当天最早班",
+        "total_price": 8310.0,
+        "tradeoff": "有迟到风险，仅在会议可弹性时考虑"
+      }
+    ],
+    "windows_by_arrival_airport": {
+      "PEK": {
+        "airport_advance_min": 105,
+        "airport_size": "mega",
+        "arrival_buffer_min": 55,
+        "arrival_exit_min": 55,
+        "buffer_h": 3.42,
+        "buffer_model": "meeting_fixed",
+        "business_end": "17:00",
+        "business_safety_arrive_by": "06:20",
+        "business_safety_arrive_by_minutes": 380,
+        "business_start": "10:30",
+        "checkin_buffer_min": 105,
+        "delay_buffer_min": 45,
+        "destination_transport_min": 60,
+        "estimated_transport_min": 50,
+        "latest_landing_without_preparation": "07:20",
+        "latest_landing_without_preparation_minutes": 440,
+        "meeting_importance": "important",
+        "meeting_importance_label": "重要会议",
+        "outbound_arrive_by": "07:05",
+        "outbound_arrive_by_minutes": 425,
+        "outbound_planning_reserve_minutes": 250,
+        "outbound_reserve_minutes": 205,
+        "outbound_transport_margin_min": 30,
+        "outbound_transport_margin_ratio": 0.3,
+        "outbound_transport_rush": false,
+        "post_meeting_buffer_min": 30,
+        "pre_meeting_buffer_min": 60,
+        "reserve_breakdown": {
+          "legacy": false,
+          "model": "meeting_fixed",
+          "outbound": {
+            "airport_buffer_min": 55,
+            "airport_iata": "PEK",
+            "airport_size": "mega",
+            "arrival_exit_base_min": 35,
+            "arrival_exit_min": 55,
+            "buffer_label": "落地离场",
+            "checked_baggage_extra_min": 20,
+            "custom_redundancy_min": 0,
+            "delay_buffer_min": 45,
+            "destination_transport_margin_min": 30,
+            "destination_transport_margin_ratio": 0.3,
+            "destination_transport_min": 60,
+            "destination_transport_rush": false,
+            "destination_transport_source": "meeting_location_estimate",
+            "direction": "outbound",
+            "importance": "important",
+            "importance_label": "重要会议",
+            "legacy": false,
+            "margin_min": 30,
+            "margin_ratio": 0.3,
+            "meeting_location": "大兴区",
+            "model": "meeting_fixed",
+            "near_airport_meeting": false,
+            "outbound_window_total_min": 205,
+            "pre_meeting_buffer_min": 60,
+            "route_type": "domestic",
+            "rush_hour": false,
+            "safety_min": 0,
+            "total_min": 250,
+            "transport_min": 60,
+            "transport_source": "meeting_location_estimate"
+          },
+          "return": {
+            "airport_buffer_min": 105,
+            "airport_iata": "PEK",
+            "airport_size": "mega",
+            "buffer_label": "机场提前量",
+            "custom_redundancy_min": 0,
+            "departure_airport_process_min": 105,
+            "direction": "return",
+            "importance": "important",
+            "importance_label": "重要会议",
+            "legacy": false,
+            "margin_min": 30,
+            "margin_ratio": 0.4,
+            "meeting_to_airport_margin_min": 30,
+            "meeting_to_airport_margin_ratio": 0.4,
+            "meeting_to_airport_min": 60,
+            "meeting_to_airport_rush": true,
+            "meeting_to_airport_source": "meeting_location_estimate",
+            "model": "meeting_fixed",
+            "post_meeting_buffer_min": 30,
+            "route_type": "domestic",
+            "rush_hour": true,
+            "safety_min": 0,
+            "total_min": 225,
+            "transport_min": 60,
+            "transport_source": "meeting_location_estimate"
+          },
+          "windows": {
+            "arrive_by": "07:05",
+            "arrive_by_minutes": 425,
+            "business_safety_arrive_by": "06:20",
+            "business_safety_arrive_by_minutes": 380,
+            "depart_after": "20:45",
+            "depart_after_minutes": 1245,
+            "latest_landing_without_preparation": "07:20"
+          }
+        },
+        "reserve_h": 3.42,
+        "reserve_minutes": 205,
+        "return_depart_after": "20:45",
+        "return_depart_after_minutes": 1245,
+        "return_reserve_minutes": 225,
+        "return_transport_margin_min": 30,
+        "return_transport_margin_ratio": 0.4,
+        "return_transport_rush": true,
+        "route_type": "domestic",
+        "transport_min": 60,
+        "transport_mode": "taxi",
+        "user_transport_min": null
+      },
+      "PKX": {
+        "airport_advance_min": 105,
+        "airport_size": "mega",
+        "arrival_buffer_min": 55,
+        "arrival_exit_min": 55,
+        "buffer_h": 1.58,
+        "buffer_model": "meeting_fixed",
+        "business_end": "17:00",
+        "business_safety_arrive_by": "07:10",
+        "business_safety_arrive_by_minutes": 430,
+        "business_start": "10:30",
+        "checkin_buffer_min": 105,
+        "delay_buffer_min": 45,
+        "destination_transport_min": 25,
+        "estimated_transport_min": 70,
+        "latest_landing_without_preparation": "08:10",
+        "latest_landing_without_preparation_minutes": 490,
+        "meeting_importance": "important",
+        "meeting_importance_label": "重要会议",
+        "outbound_arrive_by": "08:55",
+        "outbound_arrive_by_minutes": 535,
+        "outbound_planning_reserve_minutes": 200,
+        "outbound_reserve_minutes": 95,
+        "outbound_transport_margin_min": 15,
+        "outbound_transport_margin_ratio": 0.3,
+        "outbound_transport_rush": false,
+        "post_meeting_buffer_min": 30,
+        "pre_meeting_buffer_min": 60,
+        "reserve_breakdown": {
+          "legacy": false,
+          "model": "meeting_fixed",
+          "outbound": {
+            "airport_buffer_min": 55,
+            "airport_iata": "PKX",
+            "airport_size": "mega",
+            "arrival_exit_base_min": 35,
+            "arrival_exit_min": 55,
+            "buffer_label": "落地离场",
+            "checked_baggage_extra_min": 20,
+            "custom_redundancy_min": 0,
+            "delay_buffer_min": 45,
+            "destination_transport_margin_min": 15,
+            "destination_transport_margin_ratio": 0.3,
+            "destination_transport_min": 25,
+            "destination_transport_rush": false,
+            "destination_transport_source": "meeting_location_estimate",
+            "direction": "outbound",
+            "importance": "important",
+            "importance_label": "重要会议",
+            "legacy": false,
+            "margin_min": 15,
+            "margin_ratio": 0.3,
+            "meeting_location": "大兴区",
+            "model": "meeting_fixed",
+            "near_airport_meeting": true,
+            "outbound_window_total_min": 95,
+            "pre_meeting_buffer_min": 60,
+            "route_type": "domestic",
+            "rush_hour": false,
+            "safety_min": 0,
+            "total_min": 200,
+            "transport_min": 25,
+            "transport_source": "meeting_location_estimate"
+          },
+          "return": {
+            "airport_buffer_min": 105,
+            "airport_iata": "PKX",
+            "airport_size": "mega",
+            "buffer_label": "机场提前量",
+            "custom_redundancy_min": 0,
+            "departure_airport_process_min": 105,
+            "direction": "return",
+            "importance": "important",
+            "importance_label": "重要会议",
+            "legacy": false,
+            "margin_min": 30,
+            "margin_ratio": 0.4,
+            "meeting_to_airport_margin_min": 30,
+            "meeting_to_airport_margin_ratio": 0.4,
+            "meeting_to_airport_min": 25,
+            "meeting_to_airport_rush": true,
+            "meeting_to_airport_source": "meeting_location_estimate",
+            "model": "meeting_fixed",
+            "post_meeting_buffer_min": 30,
+            "route_type": "domestic",
+            "rush_hour": true,
+            "safety_min": 0,
+            "total_min": 190,
+            "transport_min": 25,
+            "transport_source": "meeting_location_estimate"
+          },
+          "windows": {
+            "arrive_by": "08:55",
+            "arrive_by_minutes": 535,
+            "business_safety_arrive_by": "07:10",
+            "business_safety_arrive_by_minutes": 430,
+            "depart_after": "20:10",
+            "depart_after_minutes": 1210,
+            "latest_landing_without_preparation": "08:10"
+          }
+        },
+        "reserve_h": 1.58,
+        "reserve_minutes": 95,
+        "return_depart_after": "20:10",
+        "return_depart_after_minutes": 1210,
+        "return_reserve_minutes": 190,
+        "return_transport_margin_min": 30,
+        "return_transport_margin_ratio": 0.4,
+        "return_transport_rush": true,
+        "route_type": "domestic",
+        "transport_min": 25,
+        "transport_mode": "taxi",
+        "user_transport_min": null
+      }
+    },
+    "windows_by_return_airport": {
+      "PEK": {
+        "airport_advance_min": 105,
+        "airport_size": "mega",
+        "arrival_buffer_min": 55,
+        "arrival_exit_min": 55,
+        "buffer_h": 3.42,
+        "buffer_model": "meeting_fixed",
+        "business_end": "17:00",
+        "business_safety_arrive_by": "06:20",
+        "business_safety_arrive_by_minutes": 380,
+        "business_start": "10:30",
+        "checkin_buffer_min": 105,
+        "delay_buffer_min": 45,
+        "destination_transport_min": 60,
+        "estimated_transport_min": 50,
+        "latest_landing_without_preparation": "07:20",
+        "latest_landing_without_preparation_minutes": 440,
+        "meeting_importance": "important",
+        "meeting_importance_label": "重要会议",
+        "outbound_arrive_by": "07:05",
+        "outbound_arrive_by_minutes": 425,
+        "outbound_planning_reserve_minutes": 250,
+        "outbound_reserve_minutes": 205,
+        "outbound_transport_margin_min": 30,
+        "outbound_transport_margin_ratio": 0.3,
+        "outbound_transport_rush": false,
+        "post_meeting_buffer_min": 30,
+        "pre_meeting_buffer_min": 60,
+        "reserve_breakdown": {
+          "legacy": false,
+          "model": "meeting_fixed",
+          "outbound": {
+            "airport_buffer_min": 55,
+            "airport_iata": "PEK",
+            "airport_size": "mega",
+            "arrival_exit_base_min": 35,
+            "arrival_exit_min": 55,
+            "buffer_label": "落地离场",
+            "checked_baggage_extra_min": 20,
+            "custom_redundancy_min": 0,
+            "delay_buffer_min": 45,
+            "destination_transport_margin_min": 30,
+            "destination_transport_margin_ratio": 0.3,
+            "destination_transport_min": 60,
+            "destination_transport_rush": false,
+            "destination_transport_source": "meeting_location_estimate",
+            "direction": "outbound",
+            "importance": "important",
+            "importance_label": "重要会议",
+            "legacy": false,
+            "margin_min": 30,
+            "margin_ratio": 0.3,
+            "meeting_location": "大兴区",
+            "model": "meeting_fixed",
+            "near_airport_meeting": false,
+            "outbound_window_total_min": 205,
+            "pre_meeting_buffer_min": 60,
+            "route_type": "domestic",
+            "rush_hour": false,
+            "safety_min": 0,
+            "total_min": 250,
+            "transport_min": 60,
+            "transport_source": "meeting_location_estimate"
+          },
+          "return": {
+            "airport_buffer_min": 105,
+            "airport_iata": "PEK",
+            "airport_size": "mega",
+            "buffer_label": "机场提前量",
+            "custom_redundancy_min": 0,
+            "departure_airport_process_min": 105,
+            "direction": "return",
+            "importance": "important",
+            "importance_label": "重要会议",
+            "legacy": false,
+            "margin_min": 30,
+            "margin_ratio": 0.4,
+            "meeting_to_airport_margin_min": 30,
+            "meeting_to_airport_margin_ratio": 0.4,
+            "meeting_to_airport_min": 60,
+            "meeting_to_airport_rush": true,
+            "meeting_to_airport_source": "meeting_location_estimate",
+            "model": "meeting_fixed",
+            "post_meeting_buffer_min": 30,
+            "route_type": "domestic",
+            "rush_hour": true,
+            "safety_min": 0,
+            "total_min": 225,
+            "transport_min": 60,
+            "transport_source": "meeting_location_estimate"
+          },
+          "windows": {
+            "arrive_by": "07:05",
+            "arrive_by_minutes": 425,
+            "business_safety_arrive_by": "06:20",
+            "business_safety_arrive_by_minutes": 380,
+            "depart_after": "20:45",
+            "depart_after_minutes": 1245,
+            "latest_landing_without_preparation": "07:20"
+          }
+        },
+        "reserve_h": 3.42,
+        "reserve_minutes": 205,
+        "return_depart_after": "20:45",
+        "return_depart_after_minutes": 1245,
+        "return_reserve_minutes": 225,
+        "return_transport_margin_min": 30,
+        "return_transport_margin_ratio": 0.4,
+        "return_transport_rush": true,
+        "route_type": "domestic",
+        "transport_min": 60,
+        "transport_mode": "taxi",
+        "user_transport_min": null
+      },
+      "PKX": {
+        "airport_advance_min": 105,
+        "airport_size": "mega",
+        "arrival_buffer_min": 55,
+        "arrival_exit_min": 55,
+        "buffer_h": 1.58,
+        "buffer_model": "meeting_fixed",
+        "business_end": "17:00",
+        "business_safety_arrive_by": "07:10",
+        "business_safety_arrive_by_minutes": 430,
+        "business_start": "10:30",
+        "checkin_buffer_min": 105,
+        "delay_buffer_min": 45,
+        "destination_transport_min": 25,
+        "estimated_transport_min": 70,
+        "latest_landing_without_preparation": "08:10",
+        "latest_landing_without_preparation_minutes": 490,
+        "meeting_importance": "important",
+        "meeting_importance_label": "重要会议",
+        "outbound_arrive_by": "08:55",
+        "outbound_arrive_by_minutes": 535,
+        "outbound_planning_reserve_minutes": 200,
+        "outbound_reserve_minutes": 95,
+        "outbound_transport_margin_min": 15,
+        "outbound_transport_margin_ratio": 0.3,
+        "outbound_transport_rush": false,
+        "post_meeting_buffer_min": 30,
+        "pre_meeting_buffer_min": 60,
+        "reserve_breakdown": {
+          "legacy": false,
+          "model": "meeting_fixed",
+          "outbound": {
+            "airport_buffer_min": 55,
+            "airport_iata": "PKX",
+            "airport_size": "mega",
+            "arrival_exit_base_min": 35,
+            "arrival_exit_min": 55,
+            "buffer_label": "落地离场",
+            "checked_baggage_extra_min": 20,
+            "custom_redundancy_min": 0,
+            "delay_buffer_min": 45,
+            "destination_transport_margin_min": 15,
+            "destination_transport_margin_ratio": 0.3,
+            "destination_transport_min": 25,
+            "destination_transport_rush": false,
+            "destination_transport_source": "meeting_location_estimate",
+            "direction": "outbound",
+            "importance": "important",
+            "importance_label": "重要会议",
+            "legacy": false,
+            "margin_min": 15,
+            "margin_ratio": 0.3,
+            "meeting_location": "大兴区",
+            "model": "meeting_fixed",
+            "near_airport_meeting": true,
+            "outbound_window_total_min": 95,
+            "pre_meeting_buffer_min": 60,
+            "route_type": "domestic",
+            "rush_hour": false,
+            "safety_min": 0,
+            "total_min": 200,
+            "transport_min": 25,
+            "transport_source": "meeting_location_estimate"
+          },
+          "return": {
+            "airport_buffer_min": 105,
+            "airport_iata": "PKX",
+            "airport_size": "mega",
+            "buffer_label": "机场提前量",
+            "custom_redundancy_min": 0,
+            "departure_airport_process_min": 105,
+            "direction": "return",
+            "importance": "important",
+            "importance_label": "重要会议",
+            "legacy": false,
+            "margin_min": 30,
+            "margin_ratio": 0.4,
+            "meeting_to_airport_margin_min": 30,
+            "meeting_to_airport_margin_ratio": 0.4,
+            "meeting_to_airport_min": 25,
+            "meeting_to_airport_rush": true,
+            "meeting_to_airport_source": "meeting_location_estimate",
+            "model": "meeting_fixed",
+            "post_meeting_buffer_min": 30,
+            "route_type": "domestic",
+            "rush_hour": true,
+            "safety_min": 0,
+            "total_min": 190,
+            "transport_min": 25,
+            "transport_source": "meeting_location_estimate"
+          },
+          "windows": {
+            "arrive_by": "08:55",
+            "arrive_by_minutes": 535,
+            "business_safety_arrive_by": "07:10",
+            "business_safety_arrive_by_minutes": 430,
+            "depart_after": "20:10",
+            "depart_after_minutes": 1210,
+            "latest_landing_without_preparation": "08:10"
+          }
+        },
+        "reserve_h": 1.58,
+        "reserve_minutes": 95,
+        "return_depart_after": "20:10",
+        "return_depart_after_minutes": 1210,
+        "return_reserve_minutes": 190,
+        "return_transport_margin_min": 30,
+        "return_transport_margin_ratio": 0.4,
+        "return_transport_rush": true,
+        "route_type": "domestic",
+        "transport_min": 25,
+        "transport_mode": "taxi",
+        "user_transport_min": null
+      }
+    }
+  },
+  "scenario": "standard_same_day_business_shanghai_beijing",
+  "snapshot_version": 1,
+  "subscription": {
+    "basic": {
+      "depart_date": "2026-06-26",
+      "destination": "北京",
+      "destination_airports_active": [
+        "PEK",
+        "PKX"
+      ],
+      "origin": "上海",
+      "origin_airports_active": [
+        "PVG",
+        "SHA"
+      ],
+      "passenger_count": 3,
+      "return_date": "2026-06-26",
+      "round_trip": true,
+      "route_type": "domestic"
+    },
+    "constraints": {
+      "baggage": "required",
+      "budget_scope": "total",
+      "business_end": "17:00",
+      "business_start": "10:30",
+      "checked_baggage_required": true,
+      "direct_only": true,
+      "meeting_importance": "important",
+      "meeting_location": "大兴区",
+      "need_baggage": "required",
+      "passenger_count": 3,
+      "passengers": {
+        "adult": 3,
+        "child": 0,
+        "elderly": 0,
+        "infant": 0
+      },
+      "route_type": "domestic",
+      "same_day_round_trip": true,
+      "transfer_policy": "direct_only",
+      "transport_mode": "taxi"
+    },
+    "hard_constraints": {
+      "baggage": "required",
+      "budget_scope": "total",
+      "business_end": "17:00",
+      "business_start": "10:30",
+      "checked_baggage_required": true,
+      "direct_only": true,
+      "meeting_importance": "important",
+      "meeting_location": "大兴区",
+      "need_baggage": "required",
+      "passenger_count": 3,
+      "passengers": {
+        "adult": 3,
+        "child": 0,
+        "elderly": 0,
+        "infant": 0
+      },
+      "route_type": "domestic",
+      "same_day_round_trip": true,
+      "transfer_policy": "direct_only",
+      "transport_mode": "taxi"
+    },
+    "id": "snapshot-standard-shanghai-beijing-20260626",
+    "notification_goals": {
+      "frequency": "important_only",
+      "main_goal": "suitable_price"
+    },
+    "preferences": {
+      "budget_scope": "total",
+      "max_budget": 1600,
+      "passengers": {
+        "adult": 3,
+        "child": 0,
+        "elderly": 0,
+        "infant": 0
+      },
+      "target_price": 1200
+    },
+    "soft_preferences": {
+      "travel_scenarios": [
+        "business",
+        "meeting"
+      ],
+      "trip_natures": [
+        "business",
+        "meeting"
+      ]
+    },
+    "status": "active"
+  }
+}

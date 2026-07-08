@@ -5,6 +5,7 @@ import unittest
 sys.modules.setdefault("httpx", types.SimpleNamespace())
 
 from notifier import (
+    _candidate_price_summary_text,
     _payload_combo_plan,
     _render_payload_plan_card,
     _round_trip_combinations,
@@ -181,9 +182,10 @@ class PushPlusRenderingTest(unittest.TestCase):
         self.assertIn("¥720", rendered)
         self.assertIn("━━ 合计 ━━", rendered)
         self.assertIn("往返总价", rendered)
-        self.assertIn("去程¥680 + 返程¥720", rendered)
+        self.assertIn("去程¥680 单人单程 + 返程¥720 单人单程", rendered)
 
     def test_pushplus_surfaces_same_day_no_feasible_note_near_top(self):
+        note = "本次无方案主因是【时间窗口】：会议要求 08:55 前落地，最早去程 MU5099 09:15 到，晚20分钟。"
         msg = render_pushplus(
             {
                 "push_type": "商务会议时间提示",
@@ -193,16 +195,43 @@ class PushPlusRenderingTest(unittest.TestCase):
                 "verify_price": None,
                 "recommendation": "时间窗口太紧",
                 "buy_condition": "建议调整会议缓冲或前一晚到达",
-                "same_day_no_feasible_note": "按你的会议安排(10:00开始，2.5h预留)，去程需07:30前到达，当天无符合的早班直飞。",
+                "same_day_no_feasible_note": note,
+                "candidate_price_summary": {"lowest": 831, "count": 5, "reason": "时间不符合会议窗口"},
                 "recommended_plans": [],
                 "detail_url": "https://example.com/detail",
             }
         )
 
-        self.assertIn("当天往返提示", msg)
-        self.assertLess(msg.index("当前判断:"), msg.index("当天往返提示"))
+        self.assertIn("主因:" + note, msg)
+        self.assertIn("价格:候选中最低", msg)
+        self.assertLess(msg.index("主因:"), msg.index("价格:"))
+        self.assertNotIn("????", msg)
+        self.assertNotIn("返程当天无符合航班", msg)
 
 
+    def test_no_primary_headline_prefers_diagnose_reason_over_stale_same_day_note(self):
+        payload = {
+            "push_type": "无符合方案·备选参考",
+            "route": "上海 → 北京",
+            "recommended_plans": [],
+            "no_primary_reason": "本次无方案主因是【去程时间】:最早MU5099 09:15到,需08:00前落地,晚1h15m;返程有4个可选,非阻塞。",
+            "no_primary_diagnosis": {
+                "reason": "本次无方案主因是【去程时间】:最早MU5099 09:15到,需08:00前落地,晚1h15m;返程有4个可选,非阻塞。",
+                "primary_cause": "outbound_time",
+            },
+            "same_day_no_feasible_note": "本次无方案主因是【返程时间】:去程可赶到，但返程需20:45后出发，当天没有符合返程窗口的航班。",
+            "same_day_alternatives": [],
+        }
+
+        push_msg = render_pushplus(payload)
+        _subject, email_html = render_email(payload)
+
+        self.assertIn("本次无方案主因是【去程时间】", push_msg)
+        self.assertIn("本次无方案主因是【去程时间】", email_html)
+        self.assertNotIn("去程可赶到", push_msg)
+        self.assertNotIn("去程可赶到", email_html)
+        self.assertNotIn("本次无方案主因是【返程时间】", push_msg)
+        self.assertNotIn("本次无方案主因是【返程时间】", email_html)
     def test_pushplus_surfaces_same_day_alternatives(self):
         msg = render_pushplus(
             {
@@ -563,5 +592,84 @@ class PushPlusRenderingTest(unittest.TestCase):
         self.assertEqual(combos, [])
 
 
+
+    def test_candidate_price_summary_raises_when_budget_primary_price_is_below_budget(self):
+        from notifier import _candidate_price_summary_text
+
+        payload = {
+            "candidate_price_summary": {
+                "lowest": 1200,
+                "count": 2,
+                "reason": "\u8d85\u51fa\u9884\u7b97",
+                "price_scope": "per_person_roundtrip",
+                "max_budget": 1700,
+                "max_budget_scope": "per_person_roundtrip",
+                "primary_cause": "budget",
+            }
+        }
+
+        with self.assertRaises(AssertionError):
+            _candidate_price_summary_text(payload)
+
+    def test_candidate_price_summary_labels_budget_scope_price(self):
+        from notifier import _candidate_price_summary_text
+
+        text = _candidate_price_summary_text(
+            {
+                "candidate_price_summary": {
+                    "lowest": 2551,
+                    "count": 2,
+                "reason": "\u8d85\u51fa\u9884\u7b97",
+                    "price_scope": "per_person_roundtrip",
+                    "max_budget": 1700,
+                    "max_budget_scope": "per_person_roundtrip",
+                    "primary_cause": "budget",
+                }
+            }
+        )
+
+        self.assertIn("\u5019\u9009\u4e2d\u6700\u4f4e\u00a52,551 \u5355\u4eba\u5f80\u8fd4(\u4f46\u8d85\u51fa\u9884\u7b97)", text)
+        self.assertNotIn("?", text)
+
+
+    def test_candidate_price_summary_defaults_to_readable_reason_without_question_marks(self):
+        from notifier import _candidate_price_summary_text
+
+        text = _candidate_price_summary_text(
+            {
+                "candidate_price_summary": {
+                    "lowest": 2551,
+                    "count": 1,
+                    "price_scope": "per_person_roundtrip",
+                    "max_budget": 1700,
+                    "max_budget_scope": "per_person_roundtrip",
+                }
+            }
+        )
+
+        self.assertIn("\u5019\u9009\u4e2d\u6700\u4f4e\u00a52,551 \u5355\u4eba\u5f80\u8fd4(\u4f46\u4e0d\u6ee1\u8db3\u5f53\u524d\u7ea6\u675f)", text)
+        self.assertNotIn("?", text)
+
+    def test_candidate_price_summary_repairs_legacy_question_mark_budget_reason(self):
+        from notifier import _candidate_price_summary_text
+
+        text = _candidate_price_summary_text(
+            {
+                "candidate_price_summary": {
+                    "lowest": 2551,
+                    "count": 2,
+                    "reason": "????",
+                    "price_scope": "per_person_roundtrip",
+                    "max_budget": 1700,
+                    "max_budget_scope": "per_person_roundtrip",
+                    "primary_cause": "budget",
+                }
+            }
+        )
+
+        self.assertIn("\u5019\u9009\u4e2d\u6700\u4f4e\u00a52,551 \u5355\u4eba\u5f80\u8fd4(\u4f46\u8d85\u51fa\u9884\u7b97)", text)
+        self.assertNotIn("?", text)
+
 if __name__ == "__main__":
     unittest.main()
+

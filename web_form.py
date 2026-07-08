@@ -14,7 +14,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from flask import Flask, jsonify, redirect, render_template_string, request, url_for
 
-from airports import AIRPORT_SHORT_NAMES, CITY_AIRPORTS, CITY_ALIASES, format_airport, resolve_location
+from airports import AIRPORT_SHORT_NAMES, CITY_AIRPORTS, CITY_ALIASES, format_airport, location_error_message, resolve_location
 from analyzer import apply_default_rules, build_price_hint_from_calendar
 from filename_utils import sanitize_filename
 from price_calendar import load_calendar
@@ -941,27 +941,27 @@ FORM_TEMPLATE = """
       </div>
 
       <div id="budget-amount-fields" data-show-if="price_strategy=explicit">
-      <label>最高可接受价格（超过这个价通常不考虑）</label>
-      <input id="max_budget" name="max_budget" type="number" min="1" step="1" placeholder="例如 8000">
-      <p class="hint quick-only">快速模式预算按全部人这趟整单总额计算；需要按每人预算判断请切换精准模式。</p>
-      <p class="hint">超过这个价通常不作为主推荐</p>
+      <label>最高可接受价</label>
+      <input id="max_budget" name="max_budget" type="number" min="1" step="1" placeholder="如 8000">
+      <div class="choice compact-choice price-scope-choice" aria-label="最高可接受价口径">
+        <label><input type="radio" name="max_budget_scope" value="per_person" checked> <span data-scope-label="per_person">单人往返</span></label>
+        <label><input type="radio" name="max_budget_scope" value="all"> <span data-scope-label="all">全员往返</span></label>
+      </div>
+      <p class="hint">默认按单人预算理解；选择全员时，系统按整单总额判断。</p>
       <p id="max-budget-error" class="field-error"></p>
       <input type="hidden" name="max_budget_mode" value="fixed">
+      <input id="budget_scope_legacy" type="hidden" name="budget_scope" value="per_person">
 
-      <label>理想入手价格（可选，到这个价格就值得买）</label>
-      <input id="target_price" name="target_price" type="number" min="1" step="1" placeholder="例如 6000（选填）">
-      <p class="hint">到这个价附近就提醒你，不等于最高预算</p>
-      <p id="price-validation-error" class="field-error">理想入手价应低于最高可接受价，请确认是否填反了</p>
+      <label>理想入手价</label>
+      <input id="target_price" name="target_price" type="number" min="1" step="1" placeholder="如 6000，可选">
+      <div class="choice compact-choice price-scope-choice" aria-label="理想入手价口径">
+        <label><input type="radio" name="target_price_scope" value="per_person" checked> <span data-scope-label="per_person">单人往返</span></label>
+        <label><input type="radio" name="target_price_scope" value="all"> <span data-scope-label="all">全员往返</span></label>
+      </div>
+      <p class="hint">到这个价附近就提醒你，不等于最高预算。</p>
+      <p id="price-validation-error" class="field-error">理想价通常应低于最高可接受价。</p>
       <p id="price-hint" class="hint"></p>
       <input type="hidden" name="target_price_mode" value="fixed">
-      <div class="precise-only">
-        <label>最高可接受价的口径</label>
-        <div class="choice">
-          <label><input type="radio" name="budget_scope" value="total" checked> 全部人总预算(这趟一共的预算)</label>
-          <label><input type="radio" name="budget_scope" value="per_person"> 每人预算(系统按人数折算总额)</label>
-        </div>
-        <p class="hint">多人出行时用于判断全员往返总价是否超出预算。</p>
-      </div>
       </div>
 
       <input type="hidden" name="price_tolerance_mode" value="100">
@@ -1597,6 +1597,8 @@ FORM_TEMPLATE = """
     const priceValidationError = document.getElementById('price-validation-error');
     const maxBudgetError = document.getElementById('max-budget-error');
     const priceHint = document.getElementById('price-hint');
+    const budgetScopeLegacy = document.getElementById(\'budget_scope_legacy\');
+    const priceScopeRadios = document.querySelectorAll(\'input[name="max_budget_scope"], input[name="target_price_scope"]\');
     const advanced = document.getElementById('advanced-preferences');
     const advancedToggle = document.getElementById('advanced-toggle');
     const advancedRules = document.getElementById('advanced-rules');
@@ -2895,6 +2897,24 @@ FORM_TEMPLATE = """
       });
     }
 
+    function normalizePriceScopeForForm(value) {
+      const raw = String(value || '').toLowerCase();
+      return ['all', 'total', 'all_passengers', 'all_passenger'].includes(raw) ? 'all' : 'per_person';
+    }
+
+    function updateBudgetScopeLabels() {
+      const isRoundTrip = checkedValue('round_trip') === 'true' || Boolean(sameDayRoundTrip?.checked);
+      document.querySelectorAll('[data-scope-label="per_person"]').forEach(node => {
+        node.textContent = isRoundTrip ? '单人往返' : '单人单程';
+      });
+      document.querySelectorAll('[data-scope-label="all"]').forEach(node => {
+        node.textContent = isRoundTrip ? '全员往返' : '全员单程';
+      });
+      if (budgetScopeLegacy) {
+        budgetScopeLegacy.value = checkedValue('max_budget_scope') || 'per_person';
+      }
+    }
+
     function validatePriceInputs() {
       const maxBudgetMode = checkedValue('max_budget_mode');
       const targetPriceMode = checkedValue('target_price_mode');
@@ -3072,6 +3092,8 @@ FORM_TEMPLATE = """
       if (hard.budget_strategy) setRadio('price_strategy', hard.budget_strategy);
       if (hard.max_budget) maxBudgetInput.value = hard.max_budget;
       if (hard.target_price || soft.target_price) targetPriceInput.value = hard.target_price || soft.target_price;
+      setRadio('max_budget_scope', normalizePriceScopeForForm(hard.max_budget_scope || hard.budget_scope || data.max_budget_scope || data.budget_scope || 'per_person'));
+      setRadio('target_price_scope', normalizePriceScopeForForm(hard.target_price_scope || soft.target_price_scope || hard.budget_scope || data.target_price_scope || 'per_person'));
       if (hard.transfer_policy) setRadio('transfer_policy', hard.transfer_policy);
       if (hard.baggage) setRadio('baggage', hard.baggage);
       const savedScenarios = Array.isArray(soft.travel_scenarios)
@@ -3431,12 +3453,12 @@ FORM_TEMPLATE = """
       if (checkedValue('price_strategy') === 'explicit') {
         summaryLine(
           '最高可接受价',
-          maxBudgetMode === 'fixed' ? money(maxBudgetInput.value) : selectedLabel('max_budget_mode'),
+          maxBudgetMode === 'fixed' ? `${money(maxBudgetInput.value)}（${selectedLabel('max_budget_scope')}）` : selectedLabel('max_budget_mode'),
           'price_strategy'
         );
         summaryLine(
           '理想入手价',
-          targetPriceMode === 'fixed' ? money(targetPriceInput.value) : selectedLabel('target_price_mode'),
+          targetPriceMode === 'fixed' ? `${money(targetPriceInput.value)}（${selectedLabel('target_price_scope')}）` : selectedLabel('target_price_mode'),
           'price_strategy'
         );
         summaryLine(
@@ -3586,7 +3608,9 @@ FORM_TEMPLATE = """
         post_meeting_buffer_min: precise ? enabledFieldValue('post_meeting_buffer_min') : '',
         custom_redundancy_min: precise ? enabledFieldValue('custom_redundancy_min') : '',
         budget_strategy: checkedValue('price_strategy'),
-        budget_scope: precise ? checkedValue('budget_scope') : 'total',
+        budget_scope: checkedValue('max_budget_scope') || 'per_person',
+        max_budget_scope: checkedValue('max_budget_scope') || 'per_person',
+        target_price_scope: checkedValue('target_price_scope') || 'per_person',
         transfer_policy: checkedValue('transfer_policy'),
         baggage: checkedValue('baggage'),
         time_preference: precise ? checkedValue('time_preference') : 'no_redeye',
@@ -3662,6 +3686,8 @@ FORM_TEMPLATE = """
       [
         'monitor_mode',
         'price_strategy',
+        'max_budget_scope',
+        'target_price_scope',
         'budget_scope',
         'transfer_policy',
         'baggage',
@@ -3884,6 +3910,7 @@ FORM_TEMPLATE = """
       }
       updateMeetingTimeHandoff();
       toggleReturnDate();
+      updateBudgetScopeLabels();
       updateConditionalFields();
       updateStepper();
       updateRequiredProgress();
@@ -3997,6 +4024,7 @@ FORM_TEMPLATE = """
     secondaryGoalChecks.forEach(check => check.addEventListener('change', updateDateFlexHint));
     primaryGoalRadios.forEach(radio => radio.addEventListener('change', () => {
       applyDefaultSecondaryGoals();
+    updateBudgetScopeLabels();
       if (isMobileStepper() && currentStep === stepTitles.length) {
         buildSummary();
       }
@@ -4326,6 +4354,61 @@ FEEDBACK_TEMPLATE = """
 """
 
 
+def _subscription_route_label(sub: dict) -> str:
+    basic = sub.get("basic") if isinstance(sub.get("basic"), dict) else {}
+    return f"{basic.get('origin') or sub.get('origin') or ''}->{basic.get('destination') or sub.get('destination') or ''}"
+
+
+def migrate_budget_scopes(subscriptions: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Fill explicit price-scope fields for legacy subscriptions.
+
+    Missing scope is intentionally migrated to per_person because historical
+    budget_scope semantics were inconsistent across quick and precise modes.
+    """
+    migrated = []
+    for index, sub in enumerate(subscriptions):
+        if not isinstance(sub, dict):
+            continue
+        containers = [sub]
+        for key in ("constraints", "hard_constraints", "soft_preferences", "preferences"):
+            section = sub.get(key)
+            if isinstance(section, dict):
+                containers.append(section)
+        existing = next(
+            (
+                container.get("max_budget_scope")
+                for container in containers
+                if container.get("max_budget_scope")
+            ),
+            None,
+        )
+        if existing:
+            normalized_max = normalize_price_scope(existing)
+            normalized_target = normalize_price_scope(
+                next(
+                    (
+                        container.get("target_price_scope")
+                        for container in containers
+                        if container.get("target_price_scope")
+                    ),
+                    normalized_max,
+                )
+            )
+        else:
+            normalized_max = "per_person"
+            normalized_target = "per_person"
+            migrated.append({
+                "index": index,
+                "id": sub.get("id") or sub.get("subscription_id") or "",
+                "route": _subscription_route_label(sub),
+            })
+        for container in containers:
+            container["budget_scope"] = normalized_max
+            container["max_budget_scope"] = normalized_max
+            container["target_price_scope"] = normalized_target
+    return subscriptions, migrated
+
+
 def load_subscriptions() -> list[dict]:
     if not SUBSCRIPTIONS_PATH.exists():
         return []
@@ -4333,7 +4416,16 @@ def load_subscriptions() -> list[dict]:
         data = json.loads(SUBSCRIPTIONS_PATH.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return []
-    return data if isinstance(data, list) else []
+    if not isinstance(data, list):
+        return []
+    data, migrated = migrate_budget_scopes(data)
+    if migrated:
+        SUBSCRIPTIONS_PATH.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        print(f"[预算口径迁移] 已为{len(migrated)}条旧订阅补默认scope=per_person: {migrated}")
+    return data
 
 
 def save_subscription(subscription: dict, index: int | None = None) -> int:
@@ -4703,6 +4795,13 @@ def parse_int(value: str | None, default: int = 0) -> int:
         return default
 
 
+def normalize_price_scope(value: str | None) -> str:
+    text = str(value or "per_person").strip().lower()
+    if text in {"all", "total", "all_passengers", "all_passenger", "??", "??"}:
+        return "all"
+    return "per_person"
+
+
 def parse_float(value: str | None, default: float = 0.0) -> float:
     try:
         return float(value) if value not in (None, "") else default
@@ -4877,13 +4976,9 @@ def build_subscription(form) -> dict:
     origin_info = resolve_location(origin_input)
     destination_info = resolve_location(normalize_destination(form.get("destination", "")))
     if origin_info.get("type") == "unknown":
-        raise ValueError(
-            f"无法识别地点 {origin_info.get('value')},请输入机场三字码或已支持的城市"
-        )
+        raise ValueError(location_error_message("origin", origin_info))
     if destination_info.get("type") == "unknown":
-        raise ValueError(
-            f"无法识别地点 {destination_info.get('value')},请输入机场三字码或已支持的城市"
-        )
+        raise ValueError(location_error_message("destination", destination_info))
     origin_airports_active = parse_active_airports(
         form.get("origin_airports_active"), origin_info["airports"]
     )
@@ -4919,11 +5014,9 @@ def build_subscription(form) -> dict:
     max_budget = None
     if budget_strategy == "explicit" and max_budget_mode == "fixed":
         max_budget = infer_max_budget(parse_int(form.get("max_budget"), 0), target_price)
-    budget_scope = form.get("budget_scope", "total").strip() or "total"
-    if budget_scope not in {"per_person", "total"}:
-        budget_scope = "total"
-    if monitor_mode != "precise":
-        budget_scope = "total"
+    max_budget_scope = normalize_price_scope(form.get("max_budget_scope") or form.get("budget_scope") or "per_person")
+    target_price_scope = normalize_price_scope(form.get("target_price_scope") or max_budget_scope)
+    budget_scope = max_budget_scope
     day_trip_period = form.get("day_trip_period", "morning").strip() or "morning"
     if day_trip_period not in {"morning", "afternoon", "full_day"}:
         day_trip_period = "morning"
@@ -5265,6 +5358,8 @@ def build_subscription(form) -> dict:
             "max_price": max_budget,
             "ideal_price": target_price,
             "budget_scope": budget_scope,
+            "max_budget_scope": max_budget_scope,
+            "target_price_scope": target_price_scope,
             "date_flexibility_days": parse_int(form.get("date_flexibility"), 0),
             "transfer_policy": transfer_policy,
             "checked_baggage_required": form.get("baggage", "required") == "required",
@@ -5387,6 +5482,8 @@ def build_subscription(form) -> dict:
             "target_price": target_price,
             "target_price_mode": target_price_mode,
             "budget_scope": budget_scope,
+            "max_budget_scope": max_budget_scope,
+            "target_price_scope": target_price_scope,
             "transfer_policy": transfer_policy,
             "route_type": route_type,
             "same_day_round_trip": same_day_round_trip,
@@ -5472,6 +5569,8 @@ def build_subscription(form) -> dict:
             "price_tolerance": price_tolerance,
             "max_budget": max_budget,
             "budget_scope": budget_scope,
+            "max_budget_scope": max_budget_scope,
+            "target_price_scope": target_price_scope,
         },
         "notification_goals": {
             "primary": primary_goal,

@@ -8,6 +8,7 @@ from datetime import datetime
 
 from source_profiles import get_source_profile, normalize_route_type
 from request_cache import cached_fetch
+from observations_store import DEFAULT_DB_PATH as OBSERVATIONS_DB_PATH, append_observations
 from sources.base import FlightSource
 
 OPTIONAL_SOURCE_THRESHOLD = 8
@@ -186,6 +187,56 @@ def _valid_price(value) -> bool:
         return False
 
 
+def _source_price_map(flight: dict) -> dict[str, float]:
+    prices = {}
+    for entry in flight.get("source_price_details") or []:
+        if not isinstance(entry, dict):
+            continue
+        source = str(entry.get("source") or "").lower()
+        try:
+            price = float(entry.get("price"))
+        except (TypeError, ValueError):
+            continue
+        if source and price > 0:
+            prices[source] = price
+    return prices
+
+
+def _log_dual_source_price_checks(flights: list[dict]) -> list[dict]:
+    anomalies = []
+    for flight in flights:
+        sources = _source_names(flight.get("data_source") or flight.get("source"))
+        if not {"hasdata", "juhe"}.issubset(set(sources)):
+            continue
+        combo = flight.get("flight_combo") or _flight_key(flight)
+        print(f"[\u53bb\u91cd\u6838\u5bf9] combo={combo} \u6765\u6e90={'+'.join(sources)}")
+        prices = _source_price_map(flight)
+        hasdata_price = prices.get("hasdata")
+        juhe_price = prices.get("juhe")
+        if not hasdata_price or not juhe_price:
+            continue
+        min_price = min(hasdata_price, juhe_price)
+        diff_pct = abs(hasdata_price - juhe_price) / min_price * 100 if min_price else 0
+        print(
+            f"[\u6e90\u4ef7\u5bf9\u6bd4] combo={combo} hasdata=\u00a5{hasdata_price:g} "
+            f"juhe=\u00a5{juhe_price:g} \u5dee\u5f02%={diff_pct:.1f}"
+        )
+        if diff_pct > 15:
+            anomalies.append(
+                {
+                    "flight_combo": combo,
+                    "min_price": min_price,
+                    "max_price": max(hasdata_price, juhe_price),
+                    "diff_pct": round(diff_pct, 1),
+                    "sources": [
+                        {"source": "hasdata", "flight_combo": combo, "price": hasdata_price},
+                        {"source": "juhe", "flight_combo": combo, "price": juhe_price},
+                    ],
+                }
+            )
+    return anomalies
+
+
 def _normalize_cabin_classes(cabin_classes) -> list[str]:
     if not cabin_classes:
         return ["economy"]
@@ -204,7 +255,7 @@ def is_domestic_route(origin: str, dest: str) -> bool:
     return str(origin or "").upper() in CN_AIRPORTS and str(dest or "").upper() in CN_AIRPORTS
 
 
-def classify_route(origin: str, dest: str) -> str:
+def classify_route_with_rule(origin: str, dest: str) -> tuple[str, str]:
     origin_code = str(origin or "").upper()
     dest_code = str(dest or "").upper()
     origin_cn = origin_code in CN_AIRPORTS
@@ -212,16 +263,30 @@ def classify_route(origin: str, dest: str) -> str:
     origin_gc = origin_code in GREATER_CHINA_AIRPORTS
     dest_gc = dest_code in GREATER_CHINA_AIRPORTS
     if origin_cn and dest_cn:
-        return "domestic"
+        return "domestic", "both_mainland_cn"
     if (origin_cn or dest_cn) and (origin_gc or dest_gc):
-        return "greater_china"
+        return "greater_china", "mainland_to_hk_mo_tw"
     if origin_gc and dest_gc:
-        return "greater_china"
-    return "international"
+        return "greater_china", "hk_mo_tw_internal"
+    return "international", "default_international"
+
+
+def classify_route(origin: str, dest: str) -> str:
+    return classify_route_with_rule(origin, dest)[0]
+
+
+def route_type_for_with_rule(origin: str, dest: str, route_type: str | None = None) -> tuple[str, str]:
+    explicit = normalize_route_type(route_type)
+    if explicit:
+        inferred_type, inferred_rule = classify_route_with_rule(origin, dest)
+        if inferred_type == explicit:
+            return explicit, f"explicit/{inferred_rule}"
+        return explicit, f"explicit/overrides_{inferred_type}_{inferred_rule}"
+    return classify_route_with_rule(origin, dest)
 
 
 def route_type_for(origin: str, dest: str, route_type: str | None = None) -> str:
-    return normalize_route_type(route_type) or classify_route(origin, dest)
+    return route_type_for_with_rule(origin, dest, route_type)[0]
 
 
 def _source_name(source) -> str:
@@ -343,7 +408,7 @@ def _primary_source_for_sources(sources: list[str], is_domestic: bool) -> str:
     normalized = [str(source or "").lower() for source in sources if source]
     if is_domestic and "juhe" in normalized:
         return "juhe"
-    for source in ("serpapi", "hasdata", "searchapi"):
+    for source in ("hasdata", "serpapi", "searchapi", "juhe"):
         if source in normalized:
             return source
     return normalized[0] if normalized else ""
@@ -357,11 +422,17 @@ def build_default_sources(
     """Build search sources and enrichment sources separately."""
     search_sources = []
     enrichment_sources = []
-    resolved_route_type = normalize_route_type(route_type)
-    if not resolved_route_type and origin and dest:
-        resolved_route_type = classify_route(origin, dest)
+    resolved_route_type = None
+    route_rule = "fallback"
+    if origin and dest:
+        resolved_route_type, route_rule = route_type_for_with_rule(origin, dest, route_type)
+    else:
+        resolved_route_type = normalize_route_type(route_type)
+        route_rule = "explicit" if resolved_route_type else "fallback"
 
     if resolved_route_type:
+        if origin and dest:
+            print(f"[\u8def\u7531\u5206\u7c7b] origin={origin} dest={dest} route_type={resolved_route_type} \u547d\u4e2d\u89c4\u5219={route_rule}")
         profile = get_source_profile(resolved_route_type)
         specs = list(profile.get("sources") or [])
         for spec in specs:
@@ -438,6 +509,8 @@ class FlightAggregator:
         cabin_classes=None,
         route_type: str | None = None,
         passengers: dict | None = None,
+        round_id: str | None = None,
+        observations_db_path=None,
     ) -> dict | None:
         cabin_classes = _normalize_cabin_classes(cabin_classes)
         run_collected_at = datetime.now().isoformat(timespec="seconds")
@@ -447,9 +520,12 @@ class FlightAggregator:
         source_errors = []
         price_insights = None
         raw_by_source = {}
-        resolved_route_type = route_type_for(origin, dest, route_type or self.route_type)
+        resolved_route_type, route_rule = route_type_for_with_rule(
+            origin, dest, route_type or self.route_type
+        )
         search_sources = self._ordered_search_sources(origin, dest, resolved_route_type)
         domestic_route = resolved_route_type == "domestic"
+        print(f"[\u8def\u7531\u5206\u7c7b] origin={origin} dest={dest} route_type={resolved_route_type} \u547d\u4e2d\u89c4\u5219={route_rule}")
         print(f"[source-route] {origin}->{dest} route_type={resolved_route_type}")
         print(
             "[source-route] enabled sources: "
@@ -490,6 +566,30 @@ class FlightAggregator:
                         f"[价格检查] {source_name} {cabin_class} 有效价格航班: "
                         f"{len(flights)}/{len(raw_flights)}"
                     )
+
+                    if round_id and flights:
+                        try:
+                            observation_result = append_observations(
+                                flights,
+                                round_id=round_id,
+                                route_type=resolved_route_type,
+                                origin_airport=origin,
+                                dest_airport=dest,
+                                depart_date=date_str,
+                                cabin_class=cabin_class,
+                                source=source_name,
+                                observed_at=run_collected_at,
+                                db_path=observations_db_path or OBSERVATIONS_DB_PATH,
+                            )
+                            print(
+                                f"[\u89c2\u6d4b\u843d\u5e93] round={round_id} "
+                                f"\u822a\u7ebf={origin}->{dest} \u65e5\u671f={date_str} "
+                                f"\u6e90={source_name} \u5199\u5165={observation_result['written']} "
+                                f"\u8df3\u8fc7\u91cd\u590d={observation_result['skipped']} "
+                                f"\u53e3\u5f84=\u5355\u4eba\u5355\u7a0bCNY"
+                            )
+                        except Exception as exc:
+                            print(f"[\u89c2\u6d4b\u843d\u5e93\u5931\u8d25] round={round_id} \u6e90={source_name} \u539f\u56e0={exc}")
 
                     if source_status in {"not_configured", "skipped"}:
                         cabin_counts[cabin_class] = 0
@@ -620,6 +720,7 @@ class FlightAggregator:
         unique_flights = sorted(
             unique_flights, key=lambda flight: float(flight.get("price") or 99999)
         )
+        dual_source_price_anomalies = _log_dual_source_price_checks(unique_flights)
 
         enrichment_data = {}
         for source in self.enrichment_sources:
@@ -719,7 +820,7 @@ class FlightAggregator:
             "source_stats": source_stats,
             "sources_used": "+".join(sources_used),
             "source_errors": source_errors,
-            "price_anomalies": self._find_price_anomalies(successful_results),
+            "price_anomalies": self._find_price_anomalies(successful_results) + dual_source_price_anomalies,
             "raw_by_source": raw_by_source,
             "collected_at": run_collected_at,
         }

@@ -26,7 +26,6 @@ from domestic_fare_rules import get_aircraft_name
 from analyzer import (
     build_execution_advice,
     build_budget_gap,
-    build_passenger_budget_gap,
     build_cabin_policy_summary,
     build_next_step_guidance,
     build_no_result_alternatives,
@@ -48,6 +47,7 @@ from analyzer import (
     waiting_risk_description,
 )
 from price_estimator import build_passenger_price_breakdown, build_price_tiers, calc_total_price_for_passengers
+from pricing import assert_same_caliber, budget_to_pp, caliber_label, itinerary_price_pp, passenger_rate_sum, price_in_scope
 from storage import (
     get_lowest_price_history,
     get_last_push_price,
@@ -64,7 +64,7 @@ BASE_DIR = Path(__file__).parent
 NOTIFICATIONS_LOG = BASE_DIR / "data" / "notifications_log.txt"
 PUSHPLUS_MAX_CHARS = 30000
 PUSHPLUS_COMPACT_CHARS = 25000
-COMPACT_NOTICE = "瀹屾暣鏂规璇︽儏鍥犵瘒骞呴檺鍒跺凡绮剧畝锛屽闇€鏌ョ湅鍏ㄩ儴鏂规璇峰洖澶?璇︽儏'"
+COMPACT_NOTICE = '完整方案详情因篇幅限制已精简，如需查看全部方案请回复“详情”'
 
 TRANSIT_VISA_RISK_AIRPORTS = {
     "JFK": ("美国", "美国转机通常需要核实签证/入境许可要求"),
@@ -201,22 +201,21 @@ def _compact_pushplus_message(content: str, level: int = 1) -> str:
 
 
 def _prepare_pushplus_content(content: str) -> str:
-    print(f"[鎺ㄩ€乚 娑堟伅闀垮害: {len(content)} 瀛楃")
+    print(f"[推送] 消息长度: {len(content)} 字符")
     if len(content) <= PUSHPLUS_COMPACT_CHARS:
         return content
 
     compacted = _compact_pushplus_message(content, level=1)
-    print(f"[鎺ㄩ€乚 娑堟伅杈冮暱锛屽凡绮剧畝: {len(compacted)} 瀛楃")
+    print(f"[推送] 消息较长，已精简: {len(compacted)} 字符")
     if len(compacted) <= PUSHPLUS_MAX_CHARS:
         return compacted
 
     compacted = _compact_pushplus_message(compacted, level=2)
-    print(f"[鎺ㄩ€乚 浜屾绮剧畝鍚庨暱搴? {len(compacted)} 瀛楃")
+    print(f"[推送] 二次精简后长度: {len(compacted)} 字符")
     if len(compacted) > PUSHPLUS_MAX_CHARS:
         compacted = _hard_limit_pushplus_message(compacted)
-        print(f"[鎺ㄩ€乚 纭埅鏂悗闀垮害: {len(compacted)} 瀛楃")
+        print(f"[推送] 硬截断后长度: {len(compacted)} 字符")
     return compacted
-
 
 def _post_pushplus(pushplus_token: str, title: str, content: str):
     resp = httpx.post(
@@ -227,15 +226,16 @@ def _post_pushplus(pushplus_token: str, title: str, content: str):
             "content": content,
             "template": "html",
         },
+        headers={"Content-Type": "application/json; charset=utf-8"},
         timeout=30,
     )
     if not resp.text:
-        print(f"[鎺ㄩ€乚 PushPlus杩斿洖绌哄搷搴旓紝娑堟伅鍙兘杩囬暱({len(content)}瀛楃)")
+        print(f"[推送] PushPlus返回空响应，消息可能过长({len(content)}字符)")
         return None
     try:
         return resp.json()
     except json.JSONDecodeError:
-        print(f"[鎺ㄩ€乚 JSON瑙ｆ瀽澶辫触锛屽搷搴斿唴瀹? {resp.text[:200]}")
+        print(f"[推送] JSON解析失败，响应内容: {resp.text[:200]}")
         print(f"[推送] 消息长度: {len(content)}字符，可能超出限制")
         return None
 
@@ -263,6 +263,118 @@ def _has_valid_price(price) -> bool:
 
 def _price_text(price) -> str:
     return format_price(price)
+
+
+def _caliber_label(scope, passengers=None, route_type=None) -> str:
+    try:
+        return caliber_label(scope, passengers, route_type)
+    except Exception:
+        return str(scope or "\u672a\u77e5\u53e3\u5f84")
+
+
+def _price_text_with_caliber(price, scope, passengers=None, route_type=None) -> str:
+    """Format an already-scoped price and append its visible caliber."""
+    text = _price_text(price)
+    if text == "\u6682\u65e0\u62a5\u4ef7":
+        return text
+    return f"{text} {_caliber_label(scope, passengers, route_type)}"
+
+
+def _scoped_price_text_from_pp(
+    per_person_oneway,
+    passengers=None,
+    scope="per_person_oneway",
+    route_type=None,
+    round_trip=False,
+    return_per_person_oneway=None,
+) -> str:
+    """Format from the only storage unit: per-person one-way price."""
+    scoped = price_in_scope(
+        per_person_oneway,
+        passengers or {"adult": 1, "child": 0, "elderly": 0, "infant": 0},
+        scope=scope,
+        route_type=route_type,
+        round_trip=round_trip,
+        return_per_person_oneway=return_per_person_oneway,
+    )
+    return _price_text_with_caliber(scoped, scope, passengers, route_type)
+
+
+
+def _pricing_passengers(pricing: dict | None, fallback_count=None) -> dict:
+    pricing = pricing if isinstance(pricing, dict) else {}
+    passengers = pricing.get("passengers")
+    if isinstance(passengers, dict) and any(_to_float(v) for v in passengers.values()):
+        return passengers
+    label = str(pricing.get("passenger_label") or "")
+    counts = {
+        "adult": sum(int(n) for n in re.findall(r"(\d+)\u6210\u4eba", label)),
+        "child": sum(int(n) for n in re.findall(r"(\d+)\u513f\u7ae5", label)),
+        "elderly": sum(int(n) for n in re.findall(r"(\d+)\u8001\u4eba", label)),
+        "infant": sum(int(n) for n in re.findall(r"(\d+)\u5a74\u513f", label)),
+    }
+    if any(counts.values()):
+        return counts
+    count = _to_float(pricing.get("passenger_count") or fallback_count)
+    if not count:
+        factor = _to_float(pricing.get("factor"))
+        if factor and float(factor).is_integer():
+            count = factor
+    if count and count > 0:
+        return {"adult": int(count), "child": 0, "elderly": 0, "infant": 0}
+    return {"adult": 1, "child": 0, "elderly": 0, "infant": 0}
+
+
+def _plan_price_context(plan: dict | None) -> tuple[dict, str]:
+    plan = plan or {}
+    pricing = plan.get("passenger_pricing") or {}
+    passengers = _pricing_passengers(pricing)
+    price_tiers = plan.get("price_tiers") if isinstance(plan.get("price_tiers"), dict) else {}
+    pricing_tiers = pricing.get("price_tiers") if isinstance(pricing.get("price_tiers"), dict) else {}
+    route_type = str(
+        plan.get("route_type")
+        or pricing.get("route_type")
+        or price_tiers.get("route_type")
+        or pricing_tiers.get("route_type")
+        or ""
+    )
+    return passengers, route_type
+
+
+def _same_day_price_context(item: dict | None, payload: dict | None = None) -> tuple[dict, str]:
+    item = item or {}
+    payload = payload or {}
+    pricing = item.get("passenger_pricing") or payload.get("passenger_pricing") or {}
+    passengers = _pricing_passengers(pricing)
+    route_type = str(item.get("route_type") or payload.get("route_type") or pricing.get("route_type") or "")
+    return passengers, route_type
+
+
+def _scoped_price_text_from_legs(outbound_price, return_price, passengers=None, route_type=None, scope="per_person_roundtrip") -> str:
+    return _scoped_price_text_from_pp(
+        outbound_price,
+        passengers=passengers,
+        scope=scope,
+        route_type=route_type,
+        round_trip=True,
+        return_per_person_oneway=return_price,
+    )
+
+
+
+def _plan_leg_price_text(plan: dict | None, price) -> str:
+    passengers, route_type = _plan_price_context(plan)
+    return _scoped_price_text_from_pp(price, passengers, "per_person_oneway", route_type)
+
+
+def _plan_roundtrip_price_text(plan: dict | None, scope: str | None = None) -> str:
+    plan = plan or {}
+    passengers, route_type = _plan_price_context(plan)
+    outbound = plan.get("outbound_price") if plan.get("outbound_price") is not None else (plan.get("outbound_flight") or {}).get("price")
+    ret = plan.get("return_price") if plan.get("return_price") is not None else (plan.get("return_flight") or {}).get("price")
+    if scope is None:
+        scope = "all_passengers_roundtrip" if _passenger_pricing_applies(plan.get("passenger_pricing")) else "per_person_roundtrip"
+    return _scoped_price_text_from_legs(outbound, ret, passengers, route_type, scope)
 
 
 def _valid_price_float(value):
@@ -2207,10 +2319,11 @@ def _append_css_bar_chart(lines: list[str], title: str, rows: list[dict]) -> Non
         if raw_note in {"A", "B", "C", "D"}:
             raw_note = ""
         note = html.escape(raw_note)
-        scope = _chart_scope_label(row)
-        price_text = _price_text(row["value"])
-        if scope:
-            price_text += f"({scope})"
+        caliber_scope = _chart_caliber_scope(row)
+        if caliber_scope:
+            price_text = _price_text_with_caliber(row["value"], caliber_scope, row.get("passengers"), row.get("route_type"))
+        else:
+            price_text = _price_text(row["value"])
         separator = ":" if label else ""
         note_text = f",{note}" if note else ""
         lines.append(
@@ -2231,6 +2344,18 @@ def _chart_scope_label(row: dict) -> str:
         return "单程"
     return ""
 
+
+
+
+def _chart_caliber_scope(row: dict) -> str | None:
+    scope = str(row.get("scope") or row.get("unit") or "").strip().lower()
+    text = " ".join(str(row.get(key) or "") for key in ("scope", "unit", "label", "note", "price_scope")).lower()
+    is_all = any(token in text for token in ("all", "total", "passenger", "\u5168\u5458", "\u591a\u4eba"))
+    if "roundtrip" in scope or "round_trip" in scope or "\u5f80\u8fd4" in scope:
+        return "all_passengers_roundtrip" if is_all else "per_person_roundtrip"
+    if scope in {"oneway", "one_way", "single", "single_leg", "outbound", "return", "\u5355\u7a0b"}:
+        return "all_passengers_oneway" if is_all else "per_person_oneway"
+    return None
 
 def _append_nearby_dates_bar_chart(lines: list[str], nearby_dates, is_round_trip: bool = False) -> None:
     items = list((nearby_dates or {}).values()) if isinstance(nearby_dates, dict) else list(nearby_dates or [])
@@ -4683,35 +4808,36 @@ def _pushplus_plan_flight_label(plan: dict, direction: str) -> str:
     return "去程" if direction in {"outbound", "main"} else "返程"
 
 
+
 def _pushplus_channel_section(payload: dict, plan: dict | None) -> list[str]:
     detail_url = str(payload.get("detail_url") or "")
     detail_link = (
         f'<a href="{html.escape(detail_url, quote=True)}" target="_blank">{html.escape(detail_url)}</a>'
         if detail_url
-        else "详情页暂未生成"
+        else "\u8be6\u60c5\u9875\u6682\u672a\u751f\u6210"
     )
     links = plan.get("links") if isinstance(plan, dict) else {}
     is_roundtrip = bool(plan.get("is_roundtrip")) if isinstance(plan, dict) else False
     purchase_mode = str(plan.get("purchase_mode") or "") if isinstance(plan, dict) else ""
-    split_ticket = is_roundtrip and "单程" in purchase_mode
+    split_ticket = is_roundtrip and "\u5355\u7a0b" in purchase_mode
     total_price = plan.get("price") if isinstance(plan, dict) else None
-    plan_label = str((plan or {}).get("label") or "方案A").strip() or "方案A"
-    lines = [f"验证首选{plan_label}{'(两段)' if split_ticket else ''}:"]
+    plan_label = str((plan or {}).get("label") or "\u65b9\u6848A").strip() or "\u65b9\u6848A"
+    lines = [f"\u9a8c\u8bc1\u9996\u9009{plan_label}{'(\u4e24\u6bb5)' if split_ticket else ''}:"]
 
     if isinstance(links, dict) and split_ticket:
         for direction in ("outbound", "return"):
             line = _pushplus_link_line(links.get(direction, ""), 6)
             if line:
                 price = plan.get(f"{direction}_price")
-                price_text = f" 约{_price_text(price)}" if price else ""
+                price_text = f" \u7ea6{_plan_leg_price_text(plan, price)}" if price else ""
                 lines.append(f"{_pushplus_plan_flight_label(plan, direction)}{price_text}:")
                 lines.append(line)
         if total_price:
-            lines.append(f"往返合计参考:{_price_text(total_price)}")
-        lines.append("注:两段独立票,需分别下单")
+            lines.append(f"\u5f80\u8fd4\u5408\u8ba1\u53c2\u8003:{_plan_roundtrip_price_text(plan)}")
+        lines.append("\u6ce8:\u4e24\u6bb5\u72ec\u7acb\u7968,\u9700\u5206\u522b\u4e0b\u5355")
     elif isinstance(links, dict) and plan.get("is_roundtrip"):
-        combo_price = f"约{_price_text(total_price)} " if total_price else ""
-        lines.append(f"整套往返验证:{combo_price}建议同一渠道选择往返搜索")
+        combo_price = f"\u7ea6{_plan_roundtrip_price_text(plan)} " if total_price else ""
+        lines.append(f"\u6574\u5957\u5f80\u8fd4\u9a8c\u8bc1:{combo_price}\u5efa\u8bae\u540c\u4e00\u6e20\u9053\u9009\u62e9\u5f80\u8fd4\u641c\u7d22")
         line = _pushplus_link_line(links.get("main") or links.get("outbound") or links.get("return"), 6)
         if line:
             lines.append(line)
@@ -4726,16 +4852,10 @@ def _pushplus_channel_section(payload: dict, plan: dict | None) -> list[str]:
 
     if len(lines) == 1:
         return [
-            "当前价格接近低价区间,但暂未发现已验证购买渠道。",
-            f"查看网页版完整分析(如未显示请稍后刷新):{detail_link}",
+            "\u9a8c\u8bc1\u9996\u9009\u65b9\u6848\u6e20\u9053:\u8be6\u60c5\u9875\u5df2\u9644\u5b8c\u6574\u94fe\u63a5",
+            f"\u7f51\u9875\u8be6\u60c5:{detail_link}",
         ]
-
-    lines.append("价格以各平台支付页为准")
-    if len(payload.get("recommended_plans") or []) > 1:
-        lines.append("方案B等详见邮件/网页")
-    lines.append(f"查看网页版完整分析(如未显示请稍后刷新):{detail_link}")
     return lines
-
 
 def _pushplus_freshness_line(payload: dict) -> str:
     age = _to_float(payload.get("freshness_minutes"))
@@ -5519,6 +5639,134 @@ def _payload_primary_price_values(current, primary_plan, max_budget=None) -> dic
     }
 
 
+
+def _normalize_payload_budget_scope(value) -> str:
+    text = str(value or "per_person").strip().lower()
+    if text in {"all", "total", "all_passengers", "all_passenger", "overall", "\u6574\u5355", "\u5168\u5458", "\u5168\u90e8\u4eba"}:
+        return "all"
+    return "per_person"
+
+
+def _payload_budget_visible_scope(scope: str, is_roundtrip: bool) -> str:
+    normalized = _normalize_payload_budget_scope(scope)
+    if normalized == "all":
+        return "all_passengers_roundtrip" if is_roundtrip else "all_passengers_oneway"
+    return "per_person_roundtrip" if is_roundtrip else "per_person_oneway"
+
+
+def _payload_budget_scopes(subscription: dict | None) -> tuple[str, str]:
+    subscription = subscription or {}
+    containers = (
+        subscription.get("constraints") or {},
+        subscription.get("hard_constraints") or {},
+        subscription.get("soft_preferences") or {},
+        subscription.get("preferences") or {},
+        subscription,
+    )
+
+    def first_value(*keys):
+        for container in containers:
+            if not isinstance(container, dict):
+                continue
+            for key in keys:
+                value = container.get(key)
+                if value not in (None, ""):
+                    return value
+        return None
+
+    max_scope = _normalize_payload_budget_scope(first_value("max_budget_scope", "budget_scope"))
+    target_scope = _normalize_payload_budget_scope(first_value("target_price_scope") or max_scope)
+    return max_scope, target_scope
+
+
+def _round_payload_price(value):
+    number = _to_float(value)
+    if number is None:
+        return None
+    rounded = round(number, 2)
+    return int(rounded) if float(rounded).is_integer() else rounded
+
+
+
+def _payload_budget_input_values(subscription, route_info, analysis_result, fallback_target=None, fallback_max=None):
+    containers = (
+        (subscription or {}).get("constraints") or {},
+        (subscription or {}).get("hard_constraints") or {},
+        (subscription or {}).get("soft_preferences") or {},
+        (subscription or {}).get("preferences") or {},
+        subscription or {},
+        route_info or {},
+        analysis_result or {},
+    )
+
+    def first_value(keys, fallback):
+        for container in containers:
+            if not isinstance(container, dict):
+                continue
+            for key in keys:
+                value = container.get(key)
+                if value not in (None, ""):
+                    return value
+        return fallback
+
+    target_input = first_value(("target_price", "ideal_price"), fallback_target)
+    max_input = first_value(("max_budget", "budget", "max_price"), fallback_max)
+    return target_input, max_input
+
+
+def _budget_value_in_scope(value, passengers, route_type, visible_scope, is_roundtrip):
+    number = _to_float(value)
+    if number is None:
+        return None, None
+    per_person_oneway = budget_to_pp(
+        number,
+        passengers,
+        scope=visible_scope,
+        route_type=route_type,
+        round_trip=is_roundtrip,
+    )
+    return _round_payload_price(number), per_person_oneway
+
+
+def _plan_price_in_budget_scope(primary_plan, fallback_price, passengers, route_type, is_roundtrip, visible_scope):
+    primary_plan = primary_plan or {}
+    tiers = primary_plan.get("price_tiers") or {}
+    unit_oneway = tiers.get("unit_oneway") if isinstance(tiers.get("unit_oneway"), dict) else {}
+    outbound = _to_float(unit_oneway.get("outbound"))
+    return_price = _to_float(unit_oneway.get("return"))
+
+    if outbound is None:
+        if is_roundtrip:
+            outbound = _to_float(primary_plan.get("outbound_price") or (primary_plan.get("outbound_flight") or {}).get("price"))
+        else:
+            outbound = _to_float(
+                primary_plan.get("single_adult_price")
+                or (primary_plan.get("main_flight") or {}).get("price")
+                or primary_plan.get("price")
+            )
+    if return_price is None and is_roundtrip:
+        return_price = _to_float(primary_plan.get("return_price") or (primary_plan.get("return_flight") or {}).get("price"))
+
+    if outbound is not None and (not is_roundtrip or return_price is not None):
+        scoped = price_in_scope(
+            outbound,
+            passengers,
+            scope=visible_scope,
+            route_type=route_type,
+            round_trip=is_roundtrip,
+            return_per_person_oneway=return_price,
+        )
+        return _round_payload_price(scoped)
+
+    unit_roundtrip = _to_float(tiers.get("unit_roundtrip") or primary_plan.get("adult_roundtrip_price"))
+    if is_roundtrip and unit_roundtrip is not None:
+        itinerary_pp = itinerary_price_pp(unit_roundtrip, round_trip=False)
+        if visible_scope.startswith("all_passengers"):
+            return _round_payload_price(itinerary_pp * passenger_rate_sum(passengers, route_type))
+        return _round_payload_price(itinerary_pp)
+
+    return _to_float(fallback_price)
+
 def _payload_dedupe_text(items) -> list[str]:
     result = []
     for item in items or []:
@@ -5947,19 +6195,34 @@ def build_notification_payload(
         primary_flight = flights[0] if flights else {}
 
     primary_plan = all_items[0] if all_items else {}
-    budget_scope = str(
-        ((subscription.get("constraints") or {}).get("budget_scope"))
-        or ((subscription.get("hard_constraints") or {}).get("budget_scope"))
-        or ((subscription.get("soft_preferences") or {}).get("budget_scope"))
-        or "total"
+    budget_scope, target_budget_scope = _payload_budget_scopes(subscription)
+    budget_compare_scope = _payload_budget_visible_scope(budget_scope, is_roundtrip)
+    target_compare_scope = _payload_budget_visible_scope(target_budget_scope, is_roundtrip)
+    assert_same_caliber(budget_compare_scope, _payload_budget_visible_scope(budget_scope, is_roundtrip))
+    assert_same_caliber(target_compare_scope, _payload_budget_visible_scope(target_budget_scope, is_roundtrip))
+    budget_input_target, budget_input_max = _payload_budget_input_values(
+        subscription,
+        route_info,
+        analysis_result,
+        fallback_target=target,
+        fallback_max=max_budget,
     )
-    if budget_scope not in {"per_person", "total"}:
-        budget_scope = "total"
-    budget_multiplier = total_passengers if budget_scope == "per_person" else 1
-    max_budget_value = _to_float(max_budget)
-    target_value = _to_float(target)
-    compare_max_budget = (max_budget_value * budget_multiplier) if max_budget_value is not None else None
-    compare_target = (target_value * budget_multiplier) if target_value is not None else None
+    max_budget_value = _to_float(budget_input_max)
+    target_value = _to_float(budget_input_target)
+    compare_max_budget, max_budget_pp_oneway = _budget_value_in_scope(
+        max_budget_value,
+        passenger_pricing_breakdown,
+        payload_route_type,
+        budget_compare_scope,
+        is_roundtrip,
+    )
+    compare_target, target_price_pp_oneway = _budget_value_in_scope(
+        target_value,
+        passenger_pricing_breakdown,
+        payload_route_type,
+        target_compare_scope,
+        is_roundtrip,
+    )
     price_tiers = (
         primary_plan.get("price_tiers")
         or ((analysis_result.get("round_trip_analysis") or {}).get("price_tiers") if is_roundtrip else {})
@@ -5968,22 +6231,30 @@ def build_notification_payload(
     price_values = _payload_primary_price_values(current, primary_plan, max_budget)
     display_price = price_values.get("display_price")
     transaction_price = price_values.get("transaction_price")
-    budget_compare_price = transaction_price if transaction_price is not None else display_price
-    verify_limit = _payload_verify_price(display_price, compare_max_budget)
+    budget_compare_price = _plan_price_in_budget_scope(
+        primary_plan,
+        transaction_price if transaction_price is not None else display_price,
+        passenger_pricing_breakdown,
+        payload_route_type,
+        is_roundtrip,
+        budget_compare_scope,
+    )
+    verify_limit = _payload_verify_price(budget_compare_price, compare_max_budget)
+    policy_compare_price = budget_compare_price
     price_policy = _payload_price_policy_decision(
-        display_price,
-        transaction_price,
+        policy_compare_price,
+        policy_compare_price,
         verify_limit,
         compare_target,
         compare_max_budget,
-        decision.get("conclusion") or "可以观察",
+        decision.get("conclusion") or "\u53ef\u4ee5\u89c2\u5bdf",
     )
     price_signal = build_price_signal(
-        display_price,
+        policy_compare_price,
         compare_target,
         _price_history_for_push(price_insights, analysis_result, is_roundtrip),
     )
-    execution_advice = build_execution_advice(display_price, transaction_price, verify_limit, compare_target, compare_max_budget)
+    execution_advice = build_execution_advice(policy_compare_price, policy_compare_price, verify_limit, compare_target, compare_max_budget)
     if execution_advice.get("conclusion"):
         price_policy["conclusion"] = execution_advice["conclusion"]
     if execution_advice.get("summary"):
@@ -5992,6 +6263,8 @@ def build_notification_payload(
     push_analysis["decision_prices"] = {
         "display_price": display_price,
         "transaction_price": transaction_price,
+        "budget_compare_price": budget_compare_price,
+        "budget_compare_scope": budget_compare_scope,
         "verify_price": verify_limit,
     }
     push_meta = determine_push_type(
@@ -6004,8 +6277,8 @@ def build_notification_payload(
         push_analysis,
     )
     execution_advice = build_execution_advice(
-        display_price,
-        transaction_price,
+        policy_compare_price,
+        policy_compare_price,
         verify_limit,
         compare_target,
         compare_max_budget,
@@ -6056,13 +6329,15 @@ def build_notification_payload(
     secondary_goals = goals.get("secondary") if isinstance(goals, dict) else []
     if not isinstance(secondary_goals, list):
         secondary_goals = []
-    budget_gap = build_passenger_budget_gap(
+    budget_gap = build_budget_gap(
         budget_compare_price,
-        max_budget,
-        target,
-        budget_scope,
-        total_passengers,
+        compare_max_budget,
+        compare_target,
     )
+    budget_gap["budget_scope"] = budget_scope
+    budget_gap["target_price_scope"] = target_budget_scope
+    budget_gap["budget_compare_scope"] = budget_compare_scope
+    budget_gap["target_compare_scope"] = target_compare_scope
     next_step_guidance = build_next_step_guidance(
         (push_meta or {}).get("type"),
         budget_compare_price,
@@ -6203,9 +6478,15 @@ def build_notification_payload(
         "ideal_price": compare_target,
         "max_price": compare_max_budget,
         "budget_scope": budget_scope,
-        "budget_input_ideal_price": target,
-        "budget_input_max_price": max_budget,
-        "budget_multiplier": budget_multiplier,
+        "max_budget_scope": budget_scope,
+        "target_price_scope": target_budget_scope,
+        "budget_compare_scope": budget_compare_scope,
+        "target_compare_scope": target_compare_scope,
+        "budget_compare_price": budget_compare_price,
+        "budget_input_ideal_price": budget_input_target,
+        "budget_input_max_price": budget_input_max,
+        "max_budget_pp_oneway": max_budget_pp_oneway,
+        "target_price_pp_oneway": target_price_pp_oneway,
         "price_tiers": price_tiers,
         "last_push_price": (last_push or {}).get("price"),
         "recommendation": price_policy.get("conclusion") or decision.get("conclusion") or "可以观察",
@@ -6254,18 +6535,18 @@ def build_notification_payload(
         "buy_condition_explanation": (
             (
                 f"本次验证价{_price_text(verify_limit)}受你的最高可接受价{_price_text(compare_max_budget)}封顶，"
-                f"当前搜索参考价{_price_text(display_price)}已超过该上限，不满足购买条件。"
-                if compare_max_budget and verify_limit and display_price and verify_limit <= compare_max_budget and display_price > compare_max_budget
+                f"当前搜索参考价{_price_text(budget_compare_price)}已超过该上限，不满足购买条件。"
+                if compare_max_budget and verify_limit and budget_compare_price and verify_limit <= compare_max_budget and budget_compare_price > compare_max_budget
                 else (
-                    f"本次验证价{_price_text(verify_limit)} = 当前搜索参考价{_price_text(display_price)} "
+                    f"本次验证价{_price_text(verify_limit)} = 当前搜索参考价{_price_text(budget_compare_price)} "
                     f"+ 可接受浮动和费用容忍区间，用于判断该方案在当前价位是否仍值得买，"
                     f"与你的理想入手价{_price_text(compare_target)}是不同概念。"
                 )
             )
-            if verify_limit and display_price
+            if verify_limit and budget_compare_price
             else ""
         ),
-        "action_range": _payload_action_range(display_price, target, max_budget),
+        "action_range": _payload_action_range(budget_compare_price, compare_target, compare_max_budget),
         "trigger_reason": (push_meta or {}).get("reasons") or (decision.get("reasons") or [])[:3],
         "recommended_plans": all_items[:2],
         "alternative_plans": all_items[2:5],
@@ -6717,19 +6998,56 @@ def _no_primary_plan_state(payload: dict) -> bool:
     return not _has_primary_plans(payload)
 
 
+def _no_primary_cause_key(text: str | None) -> str:
+    text = str(text or "")
+    if "【去程时间】" in text or "去程时间" in text or "outbound_time" in text:
+        return "outbound_time"
+    if "【返程时间】" in text or "返程时间" in text or "return_time" in text:
+        return "return_time"
+    if "【预算】" in text or "预算" in text or "budget" in text:
+        return "budget"
+    if "【时间窗口】" in text or "时间窗口" in text:
+        return "time_window"
+    return ""
+
+
 def _no_primary_reason(payload: dict) -> str:
-    for key in ("no_primary_reason", "risk_summary", "price_policy_reason"):
-        value = str(payload.get(key) or "").strip()
+    diagnosis = payload.get("no_primary_diagnosis") or {}
+    if not isinstance(diagnosis, dict):
+        diagnosis = {}
+    for value in (payload.get("no_primary_reason"), diagnosis.get("reason")):
+        value = str(value or "").strip()
         if value:
             return value
     note = str(payload.get("same_day_no_feasible_note") or "").strip()
     if note:
         return note
+    for key in ("risk_summary", "price_policy_reason"):
+        value = str(payload.get(key) or "").strip()
+        if value:
+            return value
     reasons = [str(item).strip() for item in (payload.get("trigger_reason") or []) if str(item or "").strip()]
     if reasons:
         return reasons[0]
     return "当前约束或数据条件下没有可推荐的可执行航班"
 
+
+def _same_day_note_for_no_primary(payload: dict, headline: str | None = None) -> str:
+    note = str(payload.get("same_day_no_feasible_note") or "").strip()
+    if not note:
+        return ""
+    headline = str(headline or _no_primary_reason(payload) or "").strip()
+    headline_cause = _no_primary_cause_key(headline)
+    note_cause = _no_primary_cause_key(note)
+    if headline_cause and note_cause and headline_cause != note_cause:
+        print(
+            "[无方案主因告警] 推送主因与当天往返提示不一致,已跳过当天往返提示: "
+            f"headline={headline_cause}, same_day_note={note_cause}"
+        )
+        return ""
+    if headline and note == headline:
+        return ""
+    return note
 
 def _no_primary_max_bottleneck_text(payload: dict) -> str:
     diagnosis = payload.get("no_primary_diagnosis") or {}
@@ -6764,14 +7082,51 @@ def _no_primary_next_step_text(payload: dict) -> str:
     )
 
 
+def _candidate_summary_reason(summary: dict) -> str:
+    raw = str(summary.get("reason") or "").strip()
+    default_reason = '不满足当前约束'
+    budget_reason = '超出预算'
+    is_budget = str(summary.get("primary_cause") or "").lower() == "budget"
+    lowest = _to_float(summary.get("lowest"))
+    max_budget = _to_float(summary.get("max_budget"))
+    if not raw:
+        return default_reason
+    if "?" in raw:
+        if is_budget or (max_budget is not None and lowest is not None and lowest > max_budget):
+            return budget_reason
+        return default_reason
+    return raw
+
+
 def _candidate_price_summary_text(payload: dict) -> str:
     summary = payload.get("candidate_price_summary") or {}
     lowest = _to_float(summary.get("lowest"))
     count = int(summary.get("count") or 0)
     if lowest is None or count <= 0:
         return ""
-    reason = str(summary.get("reason") or "不满足当前约束").strip()
-    return f"候选中最低{_price_text(lowest)}(但{reason})"
+    reason = _candidate_summary_reason(summary)
+    scope = summary.get("price_scope") or summary.get("scope")
+    max_budget = _to_float(summary.get("max_budget"))
+    max_scope = summary.get("max_budget_scope") or scope
+    if scope and max_scope:
+        assert_same_caliber(scope, max_scope)
+    if (
+        str(summary.get("primary_cause") or "").lower() == "budget"
+        or "预算" in reason
+    ) and max_budget is not None:
+        if lowest < max_budget:
+            raise AssertionError(
+                "预算主因口径矛盾: "
+                f"候选最低{_price_text(lowest)}低于预算{_price_text(max_budget)}, "
+                "但文案仍判定超预算"
+            )
+    if scope:
+        passengers = summary.get("passengers") or payload.get("passengers") or payload.get("passenger_pricing_breakdown") or {}
+        route_type = summary.get("route_type") or payload.get("route_type")
+        price_text = _price_text_with_caliber(lowest, scope, passengers, route_type)
+    else:
+        price_text = _price_text(lowest)
+    return f"候选中最低{price_text}(但{reason})"
 
 
 def _alternative_labels(alternatives: list[dict]) -> str:
@@ -6938,67 +7293,107 @@ def _same_day_leg_baggage_text(flight: dict | None) -> str:
     )
 
 
-def _same_day_roundtrip_leg_rows(label: str, flight: dict, date_str: str, price) -> list[tuple[str, str]]:
+
+def _same_day_roundtrip_leg_rows(
+    label: str,
+    flight: dict,
+    date_str: str,
+    price,
+    passengers=None,
+    route_type=None,
+) -> list[tuple[str, str]]:
     segments = _email_plan_segments(flight)
     first = segments[0] if segments else {}
     last = segments[-1] if segments else {}
     dep_airport = str(first.get("dep_airport") or "").strip().upper()
     arr_airport = str(last.get("arr_airport") or "").strip().upper()
     return [
-        ("日期", html.escape(str(date_str or "日期待确认"))),
-        ("航班", _email_plan_flight_text(flight)),
-        ("起飞", _email_plan_local_time(dep_airport, first.get("dep_time")) if segments else "时间待确认"),
-        ("到达", _email_plan_local_time(arr_airport, last.get("arr_time")) if segments else "时间待确认"),
-        ("中转", html.escape(_email_plan_transfer_text(flight))),
-        ("机型", html.escape(_email_plan_aircraft_text(flight))),
-        ("票面价", f"{_price_text(price)}(单程)"),
-        ("行李", html.escape(_same_day_leg_baggage_text(flight))),
+        ("\u65e5\u671f", html.escape(str(date_str or "\u65e5\u671f\u5f85\u786e\u8ba4"))),
+        ("\u822a\u73ed", _email_plan_flight_text(flight)),
+        ("\u8d77\u98de", _email_plan_local_time(dep_airport, first.get("dep_time")) if segments else "\u65f6\u95f4\u5f85\u786e\u8ba4"),
+        ("\u5230\u8fbe", _email_plan_local_time(arr_airport, last.get("arr_time")) if segments else "\u65f6\u95f4\u5f85\u786e\u8ba4"),
+        ("\u4e2d\u8f6c", html.escape(_email_plan_transfer_text(flight))),
+        ("\u673a\u578b", html.escape(_email_plan_aircraft_text(flight))),
+        ("\u7968\u9762\u4ef7", _scoped_price_text_from_pp(price, passengers, "per_person_oneway", route_type)),
+        ("\u884c\u674e", html.escape(_same_day_leg_baggage_text(flight))),
     ]
 
 
 def _same_day_roundtrip_alternative_card(item: dict, payload: dict) -> str:
     outbound = item.get("outbound") or {}
     return_flight = item.get("return") or {}
-    title = html.escape(str(item.get("title") or "备选方案"))
-    tradeoff = html.escape(str(item.get("tradeoff") or item.get("note") or "请根据时间、成本和疲劳风险自行取舍"))
+    title = html.escape(str(item.get("title") or "\u5907\u9009\u65b9\u6848"))
+    tradeoff = html.escape(str(item.get("tradeoff") or item.get("note") or "\u8bf7\u6839\u636e\u65f6\u95f4\u3001\u6210\u672c\u548c\u75b2\u52b3\u98ce\u9669\u81ea\u884c\u53d6\u820d"))
     outbound_date = _same_day_leg_date(item, payload, "outbound")
     return_date = _same_day_leg_date(item, payload, "return")
     outbound_price = item.get("outbound_price") if item.get("outbound_price") is not None else outbound.get("price")
     return_price = item.get("return_price") if item.get("return_price") is not None else return_flight.get("price")
-    total = item.get("roundtrip_price") or item.get("total_price") or item.get("price")
     outbound_links = _same_day_leg_links(outbound, outbound_date, 6)
     return_links = _same_day_leg_links(return_flight, return_date, 6)
+    passenger_pricing = item.get("passenger_pricing") or {}
+    passengers, route_type = _same_day_price_context(item, payload)
+    outbound_leg_text = _scoped_price_text_from_pp(outbound_price, passengers, "per_person_oneway", route_type)
+    return_leg_text = _scoped_price_text_from_pp(return_price, passengers, "per_person_oneway", route_type)
     link_block = ""
     if outbound_links or return_links:
         link_lines = [
-            "<div style='font-weight:600;margin-bottom:4px;'>验证此备选(两段需分别确认)</div>",
+            "<div style='font-weight:600;margin-bottom:4px;'>\u9a8c\u8bc1\u6b64\u5907\u9009(\u4e24\u6bb5\u9700\u5206\u522b\u786e\u8ba4)</div>",
         ]
         if outbound_links:
-            link_lines.append(f"<div>去程 {_email_plan_flight_text(outbound)}({_price_text(outbound_price)}):{outbound_links}</div>")
+            link_lines.append(f"<div>\u53bb\u7a0b {_email_plan_flight_text(outbound)}({outbound_leg_text}):{outbound_links}</div>")
         if return_links:
-            link_lines.append(f"<div>返程 {_email_plan_flight_text(return_flight)}({_price_text(return_price)}):{return_links}</div>")
-        link_lines.append("<div style='color:#b45309;margin-top:4px;'>提示:两段独立机票需分别下单,请先确认两段都有票。</div>")
+            link_lines.append(f"<div>\u8fd4\u7a0b {_email_plan_flight_text(return_flight)}({return_leg_text}):{return_links}</div>")
+        link_lines.append("<div style='color:#b45309;margin-top:4px;'>\u6ce8:\u4e24\u6bb5\u662f\u72ec\u7acb\u673a\u7968,\u9700\u5206\u522b\u4e0b\u5355\u786e\u8ba4</div>")
         link_block = (
             "<div style='margin-top:10px;padding-top:8px;border-top:1px solid #f0f0f0;'>"
             + "".join(link_lines)
             + "</div>"
         )
-    total_rows = _email_leg_table(
-        [
-            ("往返总价", f"{_price_text(total)}(去程{_price_text(outbound_price)} + 返程{_price_text(return_price)})"),
-            ("可行性", html.escape(_same_day_alternative_feasibility(item))),
+    single_adult = item.get("single_adult_price") or item.get("adult_roundtrip_price")
+    if single_adult is None and _has_valid_price(outbound_price) and _has_valid_price(return_price):
+        single_adult = float(outbound_price) + float(return_price)
+    if _passenger_pricing_applies(passenger_pricing):
+        passenger_label = passenger_pricing.get("passenger_label") or _passenger_label_from_counts(
+            passenger_pricing.get("passengers")
+        )
+        total_row_items = [
+            (
+                "\u5168\u5458\u5f80\u8fd4\u603b\u4ef7",
+                f"{_scoped_price_text_from_legs(outbound_price, return_price, passengers, route_type, 'all_passengers_roundtrip')}({html.escape(str(passenger_label or '\u5168\u5458'))})",
+            ),
+            (
+                "\u5355\u4eba\u5f80\u8fd4\u53c2\u8003",
+                f"{_scoped_price_text_from_legs(outbound_price, return_price, passengers, route_type, 'per_person_roundtrip')}(\u53bb{outbound_leg_text} + \u8fd4{return_leg_text})",
+            ),
         ]
-    )
+    else:
+        total_row_items = [
+            (
+                "\u5f80\u8fd4\u603b\u4ef7",
+                f"{_scoped_price_text_from_legs(outbound_price, return_price, passengers, route_type, 'per_person_roundtrip')}(\u53bb{outbound_leg_text} + \u8fd4{return_leg_text})",
+            ),
+        ]
+    if item.get("over_budget"):
+        overage = item.get("budget_overage")
+        scope_label = html.escape(str(item.get("budget_scope_label") or "\u9884\u7b97\u53e3\u5f84\u5f85\u786e\u8ba4"))
+        total_row_items.append(
+            (
+                "\u9884\u7b97\u72b6\u6001",
+                f"<span style='color:#b91c1c;font-weight:600;'>\u8d85\u51fa\u9884\u7b97 {_price_text(overage)}({scope_label})</span>",
+            )
+        )
+    total_row_items.append(("\u53ef\u884c\u6027", html.escape(_same_day_alternative_feasibility(item))))
+    total_rows = _email_leg_table(total_row_items)
     return (
         "<div style='border:1px solid #e5e7eb;border-radius:10px;padding:16px;margin:14px 0;background:#fff;'>"
         "<div style='font-weight:600;color:#d97706;margin-bottom:4px;'>"
         f"{title}</div>"
-        f"<div style='font-size:13px;color:#666;margin-bottom:10px;'>权衡:{tradeoff}</div>"
-        "<div style='font-weight:600;margin:8px 0 4px;'>去程</div>"
-        f"{_email_leg_table(_same_day_roundtrip_leg_rows('去程', outbound, outbound_date, outbound_price))}"
-        "<div style='font-weight:600;margin:12px 0 4px;'>返程</div>"
-        f"{_email_leg_table(_same_day_roundtrip_leg_rows('返程', return_flight, return_date, return_price))}"
-        "<div style='font-weight:600;margin:12px 0 4px;'>合计</div>"
+        f"<div style='font-size:13px;color:#666;margin-bottom:10px;'>\u6743\u8861:{tradeoff}</div>"
+        "<div style='font-weight:600;margin:8px 0 4px;'>\u53bb\u7a0b</div>"
+        f"{_email_leg_table(_same_day_roundtrip_leg_rows('\u53bb\u7a0b', outbound, outbound_date, outbound_price, passengers, route_type))}"
+        "<div style='font-weight:600;margin:12px 0 4px;'>\u8fd4\u7a0b</div>"
+        f"{_email_leg_table(_same_day_roundtrip_leg_rows('\u8fd4\u7a0b', return_flight, return_date, return_price, passengers, route_type))}"
+        "<div style='font-weight:600;margin:12px 0 4px;'>\u5408\u8ba1</div>"
         f"{total_rows}"
         f"{link_block}"
         "</div>"
@@ -7054,30 +7449,37 @@ def _same_day_alternative_card(item: dict, payload: dict) -> str:
     )
 
 
+
 def _pushplus_same_day_roundtrip_alternative_lines(item: dict, payload: dict) -> list[str]:
-    title = html.escape(str(item.get("title") or "备选方案"))
+    title = html.escape(str(item.get("title") or "\u5907\u9009\u65b9\u6848"))
     outbound = item.get("outbound") or {}
     return_flight = item.get("return") or {}
-    outbound_no = html.escape(str(outbound.get("flight_no") or outbound.get("flight_combo") or "去程待确认"))
-    return_no = html.escape(str(return_flight.get("flight_no") or return_flight.get("flight_combo") or "返程待确认"))
+    outbound_no = html.escape(str(outbound.get("flight_no") or outbound.get("flight_combo") or "\u53bb\u7a0b\u5f85\u786e\u8ba4"))
+    return_no = html.escape(str(return_flight.get("flight_no") or return_flight.get("flight_combo") or "\u8fd4\u7a0b\u5f85\u786e\u8ba4"))
     outbound_dep = html.escape(_time_only(outbound.get("departure_time") or outbound.get("dep_time")) or "--:--")
     outbound_arr = html.escape(_time_only(outbound.get("arrival_time") or outbound.get("arr_time")) or "--:--")
     return_dep = html.escape(_time_only(return_flight.get("departure_time") or return_flight.get("dep_time")) or "--:--")
     return_arr = html.escape(_time_only(return_flight.get("arrival_time") or return_flight.get("arr_time")) or "--:--")
     outbound_links = _same_day_leg_links(outbound, _same_day_leg_date(item, payload, "outbound"), 3)
     return_links = _same_day_leg_links(return_flight, _same_day_leg_date(item, payload, "return"), 3)
+    passengers, route_type = _same_day_price_context(item, payload)
+    outbound_price = item.get("outbound_price") or outbound.get("price")
+    return_price = item.get("return_price") or return_flight.get("price")
     lines = [
         title,
-        f"去程:{outbound_no} {outbound_dep}->{outbound_arr} {_price_text(item.get('outbound_price') or outbound.get('price'))}",
-        f"返程:{return_no} {return_dep}->{return_arr} {_price_text(item.get('return_price') or return_flight.get('price'))}",
-        f"往返总价:{_price_text(item.get('roundtrip_price') or item.get('total_price') or item.get('price'))}",
+        f"\u53bb\u7a0b:{outbound_no} {outbound_dep}->{outbound_arr} {_scoped_price_text_from_pp(outbound_price, passengers, 'per_person_oneway', route_type)}",
+        f"\u8fd4\u7a0b:{return_no} {return_dep}->{return_arr} {_scoped_price_text_from_pp(return_price, passengers, 'per_person_oneway', route_type)}",
+        f"\u5f80\u8fd4\u603b\u4ef7:{_scoped_price_text_from_legs(outbound_price, return_price, passengers, route_type, 'all_passengers_roundtrip' if _passenger_pricing_applies(item.get('passenger_pricing')) else 'per_person_roundtrip')}",
     ]
+    if item.get("over_budget"):
+        scope_label = str(item.get("budget_scope_label") or "\u9884\u7b97\u53e3\u5f84\u5f85\u786e\u8ba4")
+        lines.append(f"\u9884\u7b97\u72b6\u6001:\u8d85\u51fa\u9884\u7b97{_price_text(item.get('budget_overage'))}({html.escape(scope_label)})")
     if outbound_links:
-        lines.append(f"去程验证:{outbound_links}")
+        lines.append(f"\u53bb\u7a0b\u9a8c\u8bc1:{outbound_links}")
     if return_links:
-        lines.append(f"返程验证:{return_links}")
-    lines.append("注:两段独立票,需分别下单并先确认两段都有票")
-    return lines
+        lines.append(f"\u8fd4\u7a0b\u9a8c\u8bc1:{return_links}")
+    lines.append("\u6ce8:\u4e24\u6bb5\u72ec\u7acb\u7968,\u9700\u5206\u522b\u4e0b\u5355\u5e76\u5148\u786e\u8ba4\u4e24\u6bb5\u90fd\u6709\u7968")
+    return [line for line in lines if str(line).strip()]
 
 def _pushplus_same_day_alternative_lines(payload: dict) -> list[str]:
     alternatives = payload.get("same_day_alternatives") or []
@@ -7141,45 +7543,46 @@ def _pushplus_next_step_lines(payload: dict) -> list[str]:
     return [html.escape(str(line)) for line in lines]
 
 
+
 def _pushplus_plan_brief_lines(payload: dict) -> list[str]:
     plan = (payload.get("recommended_plans") or [{}])[0] or {}
     if not plan:
         return []
     gap = _budget_gap(payload)
-    gap_suffix = (
-        f"(已超预算{_price_text(gap.get('over_max'))})"
-        if gap.get("over_max")
-        else ""
-    )
-    lines = [f"{plan.get('label') or '方案A'} | 当前最优候选{gap_suffix}"]
+    passengers, route_type = _plan_price_context(plan)
+    gap_suffix = ""
+    if gap.get("over_max"):
+        scope = payload.get("budget_compare_scope") or ("per_person_roundtrip" if plan.get("is_roundtrip") else "per_person_oneway")
+        gap_suffix = f"(\u5df2\u8d85\u9884\u7b97{_price_text_with_caliber(gap.get('over_max'), scope, passengers, route_type)})"
+    lines = [f"{plan.get('label') or '??A'} | \u5f53\u524d\u6700\u4f18\u5019\u9009{gap_suffix}"]
     if plan.get("is_roundtrip"):
         outbound = str(plan.get("outbound_push_line") or "").strip()
         ret = str(plan.get("return_push_line") or "").strip()
         if outbound:
-            lines.append(f"{outbound} {_price_text(plan.get('outbound_price'))}")
+            lines.append(f"{outbound} {_plan_leg_price_text(plan, plan.get('outbound_price'))}")
         if ret:
-            lines.append(f"{ret} {_price_text(plan.get('return_price'))}")
+            lines.append(f"{ret} {_plan_leg_price_text(plan, plan.get('return_price'))}")
         lines.append(
-            f"往返{_price_text(plan.get('price'))} | {plan.get('purchase_mode') or '购票方式待确认'} | "
-            f"{'直飞' if _plan_total_stops(plan) == 0 else '含中转'}"
+            f"\u5f80\u8fd4{_plan_roundtrip_price_text(plan)} | {plan.get('purchase_mode') or '\u8d2d\u7968\u65b9\u5f0f\u5f85\u786e\u8ba4'} | "
+            f"{'\u76f4\u98de' if _plan_total_stops(plan) == 0 else '\u542b\u4e2d\u8f6c'}"
         )
     else:
         line = str(plan.get("main_push_line") or plan.get("summary") or "").strip()
         if line:
             lines.append(line)
-        lines.append(f"价格:{_price_text(plan.get('price'))}")
+        lines.append(f"\u4ef7\u683c:{_plan_leg_price_text(plan, plan.get('price'))}")
     if plan.get("tags"):
-        lines.append(f"标签:{plan.get('tags')}")
+        lines.append(f"\u6807\u7b7e:{plan.get('tags')}")
     feasibility = _pushplus_feasibility_summary(plan)
     if feasibility:
         lines.append(feasibility)
     schedule_note = str(plan.get("schedule_note") or "").strip()
     if schedule_note:
-        lines.append(f"安排说明:{schedule_note}")
+        lines.append(f"\u5b89\u6392\u8bf4\u660e:{schedule_note}")
     baggage = str(plan.get("baggage_line") or "").strip()
     if baggage:
-        lines.append(f"行李/退改:{baggage}")
-    lines.append("完整票规/成本/可行性 → 见网页详情")
+        lines.append(f"\u884c\u674e/\u9000\u6539:{baggage}")
+    lines.append("\u5b8c\u6574\u7968\u89c4/\u6210\u672c/\u53ef\u884c\u6027 \u2192 \u89c1\u7f51\u9875\u8be6\u60c5")
     return [html.escape(str(line)) for line in lines if str(line).strip()]
 
 
@@ -7195,16 +7598,21 @@ def _pushplus_calendar_summary_lines(payload: dict) -> list[str]:
     calendar = payload.get("price_calendar") or {}
     is_roundtrip_scope, _unit = _calendar_scope_unit(calendar)
     primary_plan = ((payload.get("recommended_plans") or [{}]) or [{}])[0] or {}
+    passenger_pricing = payload.get("passenger_pricing") or primary_plan.get("passenger_pricing") or {}
+    passenger_calendar_applies = is_roundtrip_scope and _passenger_pricing_applies(passenger_pricing)
+    passengers = _pricing_passengers(passenger_pricing)
+    route_type = payload.get("route_type")
+    row_scope = "all_passengers_roundtrip" if passenger_calendar_applies else ("per_person_roundtrip" if is_roundtrip_scope else "per_person_oneway")
     is_roundtrip_payload = bool(payload.get("is_roundtrip") or primary_plan.get("is_roundtrip"))
     if is_roundtrip_scope:
         return_date = str(calendar.get("return_date") or "").strip()
         return_short = return_date[5:10] if len(return_date) >= 10 else return_date
-        suffix = f"(返程日固定{return_short})" if return_short else ""
-        lines = [f"往返参考价摘要{suffix}:"]
+        suffix = f"(\u8fd4\u7a0b\u65e5\u56fa\u5b9a{return_short})" if return_short else ""
+        lines = [f"\u5f80\u8fd4\u53c2\u8003\u4ef7\u6458\u8981{suffix}:"]
     elif is_roundtrip_payload:
-        lines = ["单程价格趋势摘要(仅供参考出发日选择):"]
+        lines = ["\u5355\u7a0b\u4ef7\u683c\u8d8b\u52bf\u6458\u8981(\u4ec5\u4f9b\u53c2\u8003\u51fa\u53d1\u65e5\u9009\u62e9):"]
     else:
-        lines = ["低价日历摘要:"]
+        lines = ["\u4f4e\u4ef7\u65e5\u5386\u6458\u8981:"]
     if insight:
         lines.append(insight)
     for row in sorted(rows, key=lambda item: _to_float(item.get("min_price")) or float("inf"))[:3]:
@@ -7214,12 +7622,14 @@ def _pushplus_calendar_summary_lines(payload: dict) -> list[str]:
             return_price = _to_float(row.get("return_min_price") or calendar.get("return_min_price"))
             breakdown = ""
             if outbound_price is not None and return_price is not None:
-                breakdown = f" (去{_price_text(outbound_price)}+返{_price_text(return_price)})"
-            lines.append(f"{date_text} {_price_text(row.get('min_price'))}(往返){breakdown}")
+                breakdown = (
+                    f" (\u53bb{_price_text_with_caliber(outbound_price, 'per_person_oneway', passengers, route_type)}"
+                    f"+\u8fd4{_price_text_with_caliber(return_price, 'per_person_oneway', passengers, route_type)})"
+                )
+            lines.append(f"{date_text} {_price_text_with_caliber(row.get('min_price'), row_scope, passengers, route_type)}{breakdown}")
         else:
-            lines.append(f"{date_text} {_price_text(row.get('min_price'))}(单程)")
+            lines.append(f"{date_text} {_price_text_with_caliber(row.get('min_price'), 'per_person_oneway', passengers, route_type)}")
     return [html.escape(str(line)) for line in lines if str(line).strip()]
-
 
 def render_pushplus(payload: dict) -> str:
     """Render the strictly short PushPlus message from the unified payload."""
@@ -7229,7 +7639,8 @@ def render_pushplus(payload: dict) -> str:
     alternatives = payload.get("same_day_alternatives") or []
     if no_primary:
         route = html.escape(str(payload.get("route") or "航班监控"))
-        reason = html.escape(_no_primary_reason(payload))
+        reason_text = _no_primary_reason(payload)
+        reason = html.escape(reason_text)
         max_line = _no_primary_max_bottleneck_text(payload)
         alt_labels = _alternative_labels(alternatives)
         alt_text = f"{len(alternatives[:3])}个"
@@ -7242,10 +7653,9 @@ def render_pushplus(payload: dict) -> str:
             f"<b>【无符合方案】{route} 提供{len(alternatives[:3])}个备选</b>",
             "",
             "当前判断:❌ 未找到完全符合条件的方案",
-            f"\u5f53\u524d\u6700\u4f4e\u53c2\u8003:{html.escape(price_hint)}" if price_hint else "",
-            f"【为什么】{reason}",
+            f"主因:{reason}",
+            f"价格:{html.escape(price_hint)}" if price_hint else "",
             html.escape(max_line) if max_line else "",
-            f"搜索参考价:{html.escape(price_hint)}" if price_hint else "",
             f"可用备选:{alt_text}",
             f"【可选备选】{alt_text}",
             f"【放宽预演】{html.escape(_no_primary_next_step_text(payload))}",
@@ -7253,7 +7663,7 @@ def render_pushplus(payload: dict) -> str:
         lines = [line for line in lines if line != ""]
         if feedback_ack:
             lines.insert(2, html.escape(feedback_ack))
-        same_day_note = str(payload.get("same_day_no_feasible_note") or "").strip()
+        same_day_note = _same_day_note_for_no_primary(payload, reason_text)
         if same_day_note:
             lines.append("当天往返提示:" + html.escape(same_day_note))
         time_filter_note = str(payload.get("time_filter_note") or "").strip()
@@ -7291,11 +7701,7 @@ def render_pushplus(payload: dict) -> str:
     if current is not None and ideal and current <= ideal * 1.05:
         reasons.append(f"接近理想价{_price_text(ideal)}")
     reason_text = "，".join(dict.fromkeys(reasons[:2])) or "当前价格触发监控条件"
-    if max_price is not None and display_price is not None and display_price > max_price:
-        reason_line = f"原因:搜索参考价{_price_text(display_price)}高于最高可接受价{_price_text(max_price)}"
-    else:
-        reason_line = f"原因:{html.escape(reason_text)}"
-
+    reason_line = _budget_reason_line(payload, reason_text)
     lines = [
         f"<b>【{push_type}】{route}</b>",
         "",
@@ -7318,7 +7724,7 @@ def render_pushplus(payload: dict) -> str:
     )
     if feedback_ack:
         lines[2:2] = [html.escape(feedback_ack), ""]
-    same_day_note = str(payload.get("same_day_no_feasible_note") or "").strip()
+    same_day_note = _same_day_note_for_no_primary(payload, reason_text)
     if same_day_note:
         lines.append("当天往返提示:" + html.escape(same_day_note))
         lines.extend(_pushplus_same_day_alternative_lines(payload))
@@ -7334,7 +7740,7 @@ def render_pushplus(payload: dict) -> str:
             "",
             _pushplus_freshness_line(payload),
             "更多完整分析见网页详情。",
-            "提示:最终价、库存、行李、退改签和机型以下单页为准",
+            "提示:最终价、库存、行李、退改签和机型以下单页为准；价格以各平台支付页为准",
         ]
     )
     return "<br>".join(lines)
@@ -7477,7 +7883,7 @@ def _split_ticket_leg_verification_html(plan: dict, direction: str) -> str:
     flight = plan.get(f"{direction}_flight") or {}
     links = (plan.get("links") or {}).get(direction) or ""
     label = _pushplus_plan_flight_label(plan, direction)
-    price = _price_text(plan.get(f"{direction}_price") or flight.get("price"))
+    price = _plan_leg_price_text(plan, plan.get(f"{direction}_price") or flight.get("price"))
     availability = _status_availability_label(flight) or "需支付页确认"
     baggage = _pushplus_baggage_line_for_flight(flight)
     refund = _verification_refund_line_for_flight(flight)
@@ -7503,7 +7909,7 @@ def _split_ticket_verification_html(plan: dict) -> str:
             parts.append(_split_ticket_leg_verification_html(plan, direction))
     if plan.get("price"):
         parts.append(
-            f"<div style='margin-top:8px;font-weight:600;'>往返合计参考:{_price_text(plan.get('price'))}(两段分别购买)</div>"
+            f"<div style='margin-top:8px;font-weight:600;'>往返合计参考:{_plan_roundtrip_price_text(plan)}(两段分别购买)</div>"
         )
     passenger_pricing = plan.get("passenger_pricing") or {}
     if _passenger_pricing_applies(passenger_pricing):
@@ -7554,16 +7960,16 @@ def _render_payload_plan_card(plan: dict, compact: bool = False, primary_plan: d
             _email_plan_leg_group("━━ 去程 ━━", plan.get("outbound_flight"), str(plan.get("outbound_line") or ""))
         )
         body_parts.append(
-            _email_plan_price_group([("去程票价", _price_text(plan.get("outbound_price")))])
+            _email_plan_price_group([("去程票价", _plan_leg_price_text(plan, plan.get("outbound_price")))])
         )
         body_parts.append(
             _email_plan_leg_group("━━ 返程 ━━", plan.get("return_flight"), str(plan.get("return_line") or ""))
         )
         body_parts.append(
-            _email_plan_price_group([("返程票价", _price_text(plan.get("return_price")))])
+            _email_plan_price_group([("返程票价", _plan_leg_price_text(plan, plan.get("return_price")))])
         )
-        outbound_price_text = _price_text(plan.get("outbound_price"))
-        return_price_text = _price_text(plan.get("return_price"))
+        outbound_price_text = _plan_leg_price_text(plan, plan.get("outbound_price"))
+        return_price_text = _plan_leg_price_text(plan, plan.get("return_price"))
         body_parts.append(
             '<div style="font-weight:600;color:#111;margin:12px 0 6px;'
             'background:#f5f7fa;padding:4px 8px;border-radius:4px;">━━ 合计 ━━</div>'
@@ -7573,7 +7979,7 @@ def _render_payload_plan_card(plan: dict, compact: bool = False, primary_plan: d
             or [
                 (
                     "往返总价",
-                    f"{_price_text(plan.get('price'))}(去程{outbound_price_text} + 返程{return_price_text})",
+                    f"{_plan_roundtrip_price_text(plan)}(去程{outbound_price_text} + 返程{return_price_text})",
                 )
             ]
         )
@@ -7581,7 +7987,7 @@ def _render_payload_plan_card(plan: dict, compact: bool = False, primary_plan: d
             rows.append(("单人单段参考", f"去程{outbound_price_text} + 返程{return_price_text}"))
         rows.extend(
             [
-                ("预估实付价", _price_text(plan.get("estimated_price"))),
+                ("预估实付价", _price_text_with_caliber(plan.get("estimated_price"), "all_passengers_roundtrip" if _passenger_pricing_applies(plan.get("passenger_pricing")) and plan.get("is_roundtrip") else ("all_passengers_oneway" if _passenger_pricing_applies(plan.get("passenger_pricing")) else ("per_person_roundtrip" if plan.get("is_roundtrip") else "per_person_oneway")), *_plan_price_context(plan))),
                 ("购票方式", html.escape(str(plan.get("purchase_mode") or "待确认"))),
                 ("行李状态", f'<span style="color:#d97706;">{html.escape(str(plan.get("baggage_line") or "支付页需确认"))}</span>'),
             ]
@@ -7620,7 +8026,7 @@ def _render_payload_plan_card(plan: dict, compact: bool = False, primary_plan: d
             if link_lines:
                 verify_intro = "验证此方案(往返一张票):"
                 if plan.get("price"):
-                    verify_intro += f"{html.escape(str(plan.get('outbound_push_line') or '去程'))} / {html.escape(str(plan.get('return_push_line') or '返程'))},往返{_price_text(plan.get('price'))}。"
+                    verify_intro += f"{html.escape(str(plan.get('outbound_push_line') or '去程'))} / {html.escape(str(plan.get('return_push_line') or '返程'))},往返{_plan_roundtrip_price_text(plan)}。"
                 verify_intro += "建议在同一渠道选择往返搜索。"
                 rows.append(("验证此方案", verify_intro + "<br>" + "<br>".join(link_lines)))
     else:
@@ -7631,7 +8037,7 @@ def _render_payload_plan_card(plan: dict, compact: bool = False, primary_plan: d
         rows.extend(
             [
                 ("搜索参考价", _price_text(plan.get("price"))),
-                ("预估实付价", _price_text(plan.get("estimated_price"))),
+                ("预估实付价", _price_text_with_caliber(plan.get("estimated_price"), "all_passengers_roundtrip" if _passenger_pricing_applies(plan.get("passenger_pricing")) and plan.get("is_roundtrip") else ("all_passengers_oneway" if _passenger_pricing_applies(plan.get("passenger_pricing")) else ("per_person_roundtrip" if plan.get("is_roundtrip") else "per_person_oneway")), *_plan_price_context(plan))),
                 ("行李状态", f'<span style="color:#d97706;">{html.escape(str(plan.get("baggage_line") or "支付页需确认"))}</span>'),
             ]
         )
@@ -8260,6 +8666,8 @@ def _apply_passenger_pricing_to_plans(
         if not isinstance(plan, dict):
             continue
         route = plan.get("route_type") or route_type or ""
+        if route:
+            plan["route_type"] = route
         if plan.get("is_roundtrip"):
             outbound_unit = _to_float(plan.get("outbound_price") or (plan.get("outbound_flight") or {}).get("price"))
             return_unit = _to_float(plan.get("return_price") or (plan.get("return_flight") or {}).get("price"))
@@ -8276,6 +8684,7 @@ def _apply_passenger_pricing_to_plans(
                 "passengers": outbound_breakdown.get("passengers"),
                 "passenger_label": outbound_breakdown.get("passenger_label"),
                 "factor": outbound_breakdown.get("factor"),
+                "route_type": route,
                 "outbound": outbound_breakdown,
                 "return": return_breakdown,
                 "total_price": total,
@@ -8311,6 +8720,7 @@ def _apply_passenger_pricing_to_plans(
             "passengers": breakdown.get("passengers"),
             "passenger_label": breakdown.get("passenger_label"),
             "factor": breakdown.get("factor"),
+            "route_type": route,
             "main": breakdown,
             "total_price": breakdown.get("total"),
             "single_adult_price": unit,
@@ -8357,6 +8767,8 @@ def _apply_passenger_pricing_to_excluded(
         return_unit = _to_float(item.get("return_price") or ret.get("price"))
         if outbound_unit is None or return_unit is None:
             continue
+        if route_type:
+            item["route_type"] = route_type
         outbound_breakdown = build_passenger_price_breakdown(outbound_unit, passengers, "economy", route_type)
         return_breakdown = build_passenger_price_breakdown(return_unit, passengers, "economy", route_type)
         single_adult = outbound_unit + return_unit
@@ -8367,6 +8779,7 @@ def _apply_passenger_pricing_to_excluded(
             "passengers": outbound_breakdown.get("passengers"),
             "passenger_label": outbound_breakdown.get("passenger_label"),
             "factor": outbound_breakdown.get("factor"),
+            "route_type": route_type or "",
             "outbound": outbound_breakdown,
             "return": return_breakdown,
             "total_price": total,
@@ -8396,53 +8809,60 @@ def _apply_passenger_pricing_to_excluded(
     return excluded_items
 
 
+
 def _passenger_pricing_rows(plan: dict) -> list[tuple[str, str]]:
     pricing = plan.get("passenger_pricing") or {}
     if not _passenger_pricing_applies(pricing):
         return []
     label = pricing.get("passenger_label") or _passenger_label_from_counts(pricing.get("passengers"))
     note = str(pricing.get("note") or "").strip()
+    passengers, route_type = _plan_price_context(plan)
     if plan.get("is_roundtrip"):
         outbound = pricing.get("outbound") or {}
         ret = pricing.get("return") or {}
         tiers = plan.get("price_tiers") or pricing.get("price_tiers") or {}
-        outbound_text = f"去程全员{_price_text(outbound.get('total'))}"
+        outbound_unit = _to_float(outbound.get("unit_price") or plan.get("outbound_price"))
+        return_unit = _to_float(ret.get("unit_price") or plan.get("return_price"))
+        outbound_text = f"\u53bb\u7a0b\u5168\u5458{_scoped_price_text_from_pp(outbound_unit, passengers, 'all_passengers_oneway', route_type)}"
         outbound_parts = _passenger_part_text(outbound)
         if outbound_parts:
             outbound_text += f"({outbound_parts})"
-        return_text = f"返程全员{_price_text(ret.get('total'))}"
+        return_text = f"\u8fd4\u7a0b\u5168\u5458{_scoped_price_text_from_pp(return_unit, passengers, 'all_passengers_oneway', route_type)}"
         return_parts = _passenger_part_text(ret)
         if return_parts:
             return_text += f"({return_parts})"
         rows = [
-            (f"往返总价({label})", _price_text(pricing.get("total_price"))),
-            ("人数价格拆解", f"{outbound_text} + {return_text}"),
+            (
+                f"\u5f80\u8fd4\u603b\u4ef7({label})",
+                _scoped_price_text_from_legs(outbound_unit, return_unit, passengers, route_type, "all_passengers_roundtrip"),
+            ),
+            ("\u4eba\u6570\u4ef7\u683c\u62c6\u89e3", f"{outbound_text} + {return_text}"),
         ]
         if tiers.get("total_estimated") is not None:
-            rows.append(("多人往返预估实付总价", f"约{_price_text(tiers.get('total_estimated'))}"))
+            rows.append(("\u591a\u4eba\u5f80\u8fd4\u9884\u4f30\u5b9e\u4ed8\u603b\u4ef7", f"\u7ea6{_price_text_with_caliber(tiers.get('total_estimated'), 'all_passengers_roundtrip', passengers, route_type)}"))
         if tiers.get("per_person_estimated") is not None:
-            rows.append(("人均预估实付", f"约{_price_text(tiers.get('per_person_estimated'))}"))
+            rows.append(("\u4eba\u5747\u9884\u4f30\u5b9e\u4ed8", f"\u7ea6{_price_text_with_caliber(tiers.get('per_person_estimated'), 'per_person_roundtrip', passengers, route_type)}"))
         if pricing.get("single_adult_price"):
-            rows.append(("单人往返参考", f"约{_price_text(pricing.get('single_adult_price'))}/成人"))
+            rows.append(("\u5355\u4eba\u5f80\u8fd4\u53c2\u8003", f"\u7ea6{_price_text_with_caliber(pricing.get('single_adult_price'), 'per_person_roundtrip', passengers, route_type)}/\u6210\u4eba"))
     else:
         main = pricing.get("main") or {}
         tiers = plan.get("price_tiers") or pricing.get("price_tiers") or {}
+        unit = _to_float(main.get("unit_price") or pricing.get("single_adult_price") or plan.get("price"))
         rows = [
-            (f"全员参考价({label})", _price_text(pricing.get("total_price"))),
+            (f"\u5168\u5458\u53c2\u8003\u4ef7({label})", _scoped_price_text_from_pp(unit, passengers, "all_passengers_oneway", route_type)),
         ]
         parts = _passenger_part_text(main)
         if parts:
-            rows.append(("人数价格拆解", parts))
+            rows.append(("\u4eba\u6570\u4ef7\u683c\u62c6\u89e3", parts))
         if tiers.get("total_estimated") is not None:
-            rows.append(("全员预估实付", f"约{_price_text(tiers.get('total_estimated'))}"))
+            rows.append(("\u5168\u5458\u9884\u4f30\u5b9e\u4ed8", f"\u7ea6{_price_text_with_caliber(tiers.get('total_estimated'), 'all_passengers_oneway', passengers, route_type)}"))
         if tiers.get("per_person_estimated") is not None:
-            rows.append(("人均预估实付", f"约{_price_text(tiers.get('per_person_estimated'))}"))
+            rows.append(("\u4eba\u5747\u9884\u4f30\u5b9e\u4ed8", f"\u7ea6{_price_text_with_caliber(tiers.get('per_person_estimated'), 'per_person_oneway', passengers, route_type)}"))
         if pricing.get("single_adult_price"):
-            rows.append(("单人参考", f"约{_price_text(pricing.get('single_adult_price'))}/成人"))
+            rows.append(("\u5355\u4eba\u53c2\u8003", f"\u7ea6{_price_text_with_caliber(pricing.get('single_adult_price'), 'per_person_oneway', passengers, route_type)}/\u6210\u4eba"))
     if note:
-        rows.append(("人数票价口径", html.escape(note)))
+        rows.append(("\u4eba\u6570\u7968\u4ef7\u53e3\u5f84", html.escape(note)))
     return rows
-
 
 def _email_action_panel_body(
     payload: dict,
@@ -8464,11 +8884,10 @@ def _email_action_panel_body(
         max_line = _no_primary_max_bottleneck_text(payload)
         blocks = [
             "<div style='font-weight:600;color:#b91c1c;'>当前判断:❌ 未找到完全符合条件的方案</div>",
-            f"<div><strong>\u5f53\u524d\u6700\u4f4e\u53c2\u8003:</strong>{html.escape(price_hint)}</div>" if price_hint else "",
+            f"<div><strong>主因:</strong>{html.escape(reason)}</div>",
+            f"<div><strong>价格:</strong>{html.escape(price_hint)}</div>" if price_hint else "",
             "<div style='margin:8px 0;border-top:1px solid #e5e7eb;'></div>",
-            f"<div><strong>【为什么】</strong>{html.escape(reason)}</div>",
             f"<div style='color:#666;font-size:12px;'>{html.escape(max_line)}</div>" if max_line else "",
-            f"<div>搜索参考价:{html.escape(price_hint)}</div>" if price_hint else "",
             f"<div style='margin-top:8px;'><strong>【可选备选】</strong>{html.escape(alt_text)}</div>",
             f"<div style='margin-top:8px;'><strong>【放宽预演】</strong>{html.escape(_no_primary_next_step_text(payload))}</div>",
             "<div style='margin-top:8px;color:#666;font-size:12px;'>触发类型:无符合方案 | 备选参考 | 非直接购买</div>",
@@ -8482,16 +8901,7 @@ def _email_action_panel_body(
     trigger_type = _email_trigger_type(payload)
     trigger_reason = str(price_reason or _email_trigger_reason_text(payload) or "请查看下方原因")
     gap_line = _budget_gap_line(payload)
-    max_price = _to_float(payload.get("max_price"))
-    display_price = _to_float(payload.get("display_price") or payload.get("current_price"))
-    if max_price is not None and display_price is not None and display_price > max_price:
-        route_scope = "往返搜索参考价" if payload.get("is_roundtrip") else "搜索参考价"
-        reason_line = (
-            f"原因:{route_scope}{_price_text(display_price)},"
-            f"高于你的最高可接受价{_price_text(max_price)}"
-        )
-    else:
-        reason_line = f"原因:{html.escape(trigger_reason)}"
+    reason_line = _budget_reason_line(payload, trigger_reason)
     blocks = [
         f"<div>当前判断:{html.escape(conclusion)}</div>",
         f"<div>首选方案:{html.escape(primary_line)}</div>",
@@ -8519,6 +8929,7 @@ def _email_primary_plan_line(payload: dict, primary_plan: dict) -> str:
     return f"{label},{route_kind},搜索参考价{price}"
 
 
+
 def _action_panel_price_tier_lines(payload: dict, primary_plan: dict) -> list[str]:
     tiers = payload.get("price_tiers") or (primary_plan or {}).get("price_tiers") or {}
     passenger_count = _to_float(tiers.get("passenger_count"))
@@ -8528,15 +8939,16 @@ def _action_panel_price_tier_lines(payload: dict, primary_plan: dict) -> list[st
     lines = []
     label = str(tiers.get("passenger_label") or "").strip()
     if label:
-        lines.append(f"出行人数:{html.escape(label)}")
+        lines.append(f"\u4e58\u673a\u4eba:{html.escape(label)}")
+    passengers = _pricing_passengers(tiers, passenger_count)
+    route_type = tiers.get("route_type") or payload.get("route_type")
     if tiers.get("total_roundtrip_ref") is not None:
-        lines.append(f"多人往返参考价:{_price_text(tiers.get('total_roundtrip_ref'))}")
+        lines.append(f"\u591a\u4eba\u5f80\u8fd4\u53c2\u8003\u4ef7:{_price_text_with_caliber(tiers.get('total_roundtrip_ref'), 'all_passengers_roundtrip', passengers, route_type)}")
     if tiers.get("total_estimated") is not None:
-        lines.append(f"预估实付总价:约{_price_text(tiers.get('total_estimated'))}")
+        lines.append(f"\u9884\u4f30\u5b9e\u4ed8\u603b\u4ef7:\u7ea6{_price_text_with_caliber(tiers.get('total_estimated'), 'all_passengers_roundtrip', passengers, route_type)}")
     if tiers.get("per_person_estimated") is not None:
-        lines.append(f"人均预估实付:约{_price_text(tiers.get('per_person_estimated'))}")
+        lines.append(f"\u4eba\u5747\u9884\u4f30\u5b9e\u4ed8:\u7ea6{_price_text_with_caliber(tiers.get('per_person_estimated'), 'per_person_roundtrip', passengers, route_type)}")
     return lines
-
 
 def _email_trigger_type(payload: dict) -> str:
     push_type = str(payload.get("push_type") or "")
@@ -8553,16 +8965,40 @@ def _email_trigger_reason_text(payload: dict) -> str:
     return ",".join(reasons[:2])
 
 
+def _budget_compare_price_value(payload: dict):
+    """Return the reference price in the same visible scope as max_price."""
+    value = _to_float((payload or {}).get("budget_compare_price"))
+    if value is not None:
+        return value
+    return _to_float((payload or {}).get("display_price") or (payload or {}).get("current_price"))
+
+
+def _budget_reason_line(payload: dict, fallback_reason: str) -> str:
+    max_price = _to_float((payload or {}).get("max_price"))
+    compare_price = _budget_compare_price_value(payload or {})
+    if max_price is not None and compare_price is not None:
+        route_scope = "往返搜索参考价" if (payload or {}).get("is_roundtrip") else "搜索参考价"
+        if compare_price > max_price:
+            return (
+                f"原因:{route_scope}{_price_text(compare_price)},"
+                f"高于你的最高可接受价{_price_text(max_price)}"
+            )
+        return (
+            f"原因:{route_scope}{_price_text(compare_price)}≤"
+            f"最高可接受价{_price_text(max_price)}，未超预算"
+        )
+    return f"原因:{fallback_reason}"
+
+
 def _budget_gap(payload: dict) -> dict:
     gap = payload.get("budget_gap")
     if isinstance(gap, dict):
         return gap
     return build_budget_gap(
-        payload.get("display_price") or payload.get("current_price"),
+        _budget_compare_price_value(payload),
         payload.get("max_price"),
         payload.get("ideal_price"),
     )
-
 
 def _budget_gap_line(payload: dict) -> str:
     text = str((_budget_gap(payload) or {}).get("text") or "").strip()
@@ -8696,68 +9132,67 @@ def _email_action_links(
     )
 
 
+
 def _email_channel_picker(plan: dict, interactive: bool = False, context_label: str = "") -> str:
     price = plan.get("price") or plan.get("display_price") or plan.get("estimated_price")
     sections = _email_channel_sections(plan)
     is_roundtrip = bool((plan or {}).get("is_roundtrip"))
     purchase_mode = str((plan or {}).get("purchase_mode") or "")
-    split_ticket = is_roundtrip and "单程" in purchase_mode
+    split_ticket = is_roundtrip and "\u5355\u7a0b" in purchase_mode
     if not sections:
         verify_url = _email_primary_booking_url(plan or {})
         if not verify_url:
             return ""
-        sections = [("", [("去验证价格", verify_url)])]
+        sections = [("", [("\u53bb\u9a8c\u8bc1\u4ef7\u683c", verify_url)])]
     if split_ticket:
         def section_price(title: str):
-            if "去程" in title:
+            if "\u53bb\u7a0b" in title:
                 return plan.get("outbound_price")
-            if "返程" in title:
+            if "\u8fd4\u7a0b" in title:
                 return plan.get("return_price")
             return None
 
         body = (
             "<div style='font-weight:600;margin-bottom:4px;'>"
-            f"{html.escape(context_label or '去验证价格')}(两个单程拼接,需分别验证):</div>"
+            f"{html.escape(context_label or '\u53bb\u9a8c\u8bc1\u4ef7\u683c')}(\u4e24\u4e2a\u5355\u7a0b\u62fc\u63a5,\u9700\u5206\u522b\u9a8c\u8bc1):</div>"
         )
         for title, links in sections:
             leg_price = section_price(title)
-            priced_title = f"{title}(约{_price_text(leg_price)})" if leg_price else title
+            priced_title = f"{title}(\u7ea6{_plan_leg_price_text(plan, leg_price)})" if leg_price else title
             body += _email_channel_section_html(priced_title, links)
         if price:
             body += (
                 "<div style='margin-top:6px;color:#666;font-size:12px;'>"
-                f"往返合计参考:{_price_text(price)}</div>"
+                f"\u5f80\u8fd4\u5408\u8ba1\u53c2\u8003:{_plan_roundtrip_price_text(plan)}</div>"
             )
         return body
     if is_roundtrip:
-        heading = context_label or "去验证价格(选择渠道)"
+        heading = context_label or "\u53bb\u9a8c\u8bc1\u4ef7\u683c(\u9009\u62e9\u6e20\u9053)"
+        price_text = f"\u7ea6{_plan_roundtrip_price_text(plan)}" if price else ""
         body = (
             "<div style='font-weight:600;margin-bottom:4px;'>"
-            f"{html.escape(heading)}:整套往返验证:{'约' + _price_text(price) if price else ''}</div>"
+            f"{html.escape(heading)}:\u6574\u5957\u5f80\u8fd4\u9a8c\u8bc1:{price_text}</div>"
         )
-        body += "".join(_email_channel_section_html(title, links, price) for title, links in sections)
+        body += "".join(_email_channel_section_html(title, links) for title, links in sections)
         if interactive:
             return (
                 "<details style='margin:8px 0;'>"
-                "<summary style='cursor:pointer;color:#2563eb;font-weight:600;'>去验证价格 ▾</summary>"
+                "<summary style='cursor:pointer;color:#2563eb;font-weight:600;'>\u53bb\u9a8c\u8bc1\u4ef7\u683c \u25be</summary>"
                 f"<div style='margin-top:6px;'>{body}</div>"
                 "</details>"
             )
         return body
     if interactive:
-        body = "".join(_email_channel_section_html(title, links, price) for title, links in sections)
+        body = "".join(_email_channel_section_html(title, links) for title, links in sections)
         return (
             "<details style='margin:8px 0;'>"
-            "<summary style='cursor:pointer;color:#2563eb;font-weight:600;'>去验证价格 ▾</summary>"
+            "<summary style='cursor:pointer;color:#2563eb;font-weight:600;'>\u53bb\u9a8c\u8bc1\u4ef7\u683c \u25be</summary>"
             f"<div style='margin-top:6px;'>{body}</div>"
             "</details>"
         )
-    body = "<div style='font-weight:600;margin-bottom:4px;'>去验证价格(选择渠道):</div>"
-    if context_label:
-        body = f"<div style='font-weight:600;margin-bottom:4px;'>{html.escape(context_label)}:</div>"
-    body += "".join(_email_channel_section_html(title, links, price) for title, links in sections)
+    body = "<div style='font-weight:600;margin-bottom:4px;'>" + html.escape(context_label or "\u53bb\u9a8c\u8bc1\u4ef7\u683c") + ":</div>"
+    body += "".join(_email_channel_section_html(title, links) for title, links in sections)
     return body
-
 
 def _email_channel_sections(plan: dict) -> list[tuple[str, list[tuple[str, str]]]]:
     links = (plan or {}).get("links") or {}
@@ -9032,13 +9467,13 @@ def _render_domestic_payload_plan_card(plan: dict, compact: bool = False, primar
             _email_plan_leg_group("━━ 去程 ━━", plan.get("outbound_flight"), str(plan.get("outbound_line") or ""))
         )
         body_parts.append(
-            _email_plan_price_group([("去程票价", _price_text(plan.get("outbound_price")))])
+            _email_plan_price_group([("去程票价", _plan_leg_price_text(plan, plan.get("outbound_price")))])
         )
         body_parts.append(
             _email_plan_leg_group("━━ 返程 ━━", plan.get("return_flight"), str(plan.get("return_line") or ""))
         )
         body_parts.append(
-            _email_plan_price_group([("返程票价", _price_text(plan.get("return_price")))])
+            _email_plan_price_group([("返程票价", _plan_leg_price_text(plan, plan.get("return_price")))])
         )
     else:
         main_flight = plan.get("main_flight") or plan.get("outbound_flight") or plan.get("flight")
@@ -9059,9 +9494,9 @@ def _render_domestic_payload_plan_card(plan: dict, compact: bool = False, primar
             or [
                 (
                     "往返总价",
-                    f"{_price_text(plan.get('price'))}"
-                    f"(去程{_price_text(plan.get('outbound_price'))} + "
-                    f"返程{_price_text(plan.get('return_price'))})",
+                    f"{_plan_roundtrip_price_text(plan)}"
+                    f"(去程{_plan_leg_price_text(plan, plan.get('outbound_price'))} + "
+                    f"返程{_plan_leg_price_text(plan, plan.get('return_price'))})",
                 )
             ]
         )
@@ -9069,12 +9504,12 @@ def _render_domestic_payload_plan_card(plan: dict, compact: bool = False, primar
             rows.append(
                 (
                     "单人单段参考",
-                    f"去程{_price_text(plan.get('outbound_price'))} + 返程{_price_text(plan.get('return_price'))}",
+                    f"去程{_plan_leg_price_text(plan, plan.get('outbound_price'))} + 返程{_plan_leg_price_text(plan, plan.get('return_price'))}",
                 )
             )
         rows.extend(
             [
-                ("预估实付", _price_text(plan.get("estimated_price"))),
+                ("预估实付", _price_text_with_caliber(plan.get("estimated_price"), "all_passengers_roundtrip" if _passenger_pricing_applies(plan.get("passenger_pricing")) and plan.get("is_roundtrip") else ("all_passengers_oneway" if _passenger_pricing_applies(plan.get("passenger_pricing")) else ("per_person_roundtrip" if plan.get("is_roundtrip") else "per_person_oneway")), *_plan_price_context(plan))),
                 ("购票方式", html.escape(str(plan.get("purchase_mode") or "待确认"))),
             ]
         )
@@ -9633,10 +10068,53 @@ def _calendar_row_price(row: dict):
     return _to_float(row.get("min_price") or row.get("value") or row.get("price"))
 
 
+def _calendar_unit_row_price(row: dict):
+    if not isinstance(row, dict):
+        return None
+    return _to_float(
+        row.get("unit_roundtrip_price")
+        or row.get("unit_price")
+        or row.get("single_person_price")
+        or row.get("single_adult_roundtrip")
+        or row.get("roundtrip_ref_price")
+        or row.get("unit_oneway_price")
+    )
+
+
+def _calendar_row_is_passenger_scoped(row: dict, passenger_factor: float = 1) -> bool:
+    if not isinstance(row, dict):
+        return False
+    scope_text = " ".join(
+        str(row.get(key) or "")
+        for key in ("scope", "price_scope", "label", "note")
+    ).lower()
+    if "passenger" in scope_text or "\u5168\u5458" in scope_text:
+        return True
+    if "\u4eba" in scope_text and ("\u5168\u5458" in scope_text or "\u5f80\u8fd4" in scope_text):
+        return True
+    row_factor = _to_float(row.get("passenger_factor"))
+    factor = _to_float(passenger_factor) or row_factor or 1
+    unit_price = _calendar_unit_row_price(row)
+    row_price = _calendar_row_price(row)
+    if unit_price is None or row_price is None or factor <= 1:
+        return False
+    return abs(row_price - unit_price * factor) <= max(1, row_price * 0.01)
+
+
+def _calendar_row_unit_or_price(row: dict):
+    unit_price = _calendar_unit_row_price(row)
+    return unit_price if unit_price is not None else _calendar_row_price(row)
+
+
 def _calendar_scope_unit(calendar: dict) -> tuple[bool, str]:
     scope = str((calendar or {}).get("scope") or "oneway").lower()
-    is_roundtrip_scope = scope in {"roundtrip", "往返"}
-    return is_roundtrip_scope, "往返" if is_roundtrip_scope else "单程"
+    is_roundtrip_scope = (
+        scope in {"roundtrip", "\u5f80\u8fd4"}
+        or "roundtrip" in scope
+        or "passenger_roundtrip" in scope
+        or "\u5f80\u8fd4" in scope
+    )
+    return is_roundtrip_scope, "\u5f80\u8fd4" if is_roundtrip_scope else "\u5355\u7a0b"
 
 
 def _calendar_short_date(row: dict) -> str:
@@ -9651,18 +10129,79 @@ def _calendar_parse_date(value: str):
         return None
 
 
-def _calendar_selected_level(rows: list[dict], selected: dict, selected_price: float) -> str:
-    prices = sorted(
-        price
-        for price in (_calendar_row_price(row) for row in rows)
-        if price is not None and price > 0
+def _calendar_price_pairs_same_scope(
+    rows: list[dict],
+    selected: dict,
+    selected_price: float,
+    passenger_factor: float = 1,
+):
+    factor = _to_float(passenger_factor) or 1
+    selected_number = _to_float(selected_price)
+    selected_display = _calendar_display_price(selected, factor) if isinstance(selected, dict) else None
+    if selected_number is not None and selected_display is not None:
+        tolerance = max(1, abs(selected_display) * 0.01)
+        if abs(selected_number - selected_display) > tolerance:
+            raise AssertionError(
+                f"低价日历选中价与数组人数口径不一致: "
+                f"selected_price={selected_number:g}, expected={selected_display:g}, "
+                f"passenger_factor={factor:g}"
+            )
+
+    price_pairs = []
+    any_passenger_scoped = False
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        display_price = _calendar_display_price(row, factor)
+        unit_price = _calendar_row_unit_or_price(row)
+        row_price = _calendar_row_price(row)
+        if display_price is None or display_price <= 0:
+            continue
+        if factor > 1 and row_price is not None and not _calendar_row_is_passenger_scoped(row, factor):
+            expected = row_price * factor
+            tolerance = max(1, abs(expected) * 0.01)
+            if abs(display_price - expected) > tolerance:
+                raise AssertionError(
+                    f"低价日历数组人数口径不一致: date={row.get('date')!r}, "
+                    f"display_price={display_price:g}, expected={expected:g}, "
+                    f"passenger_factor={factor:g}"
+                )
+        price_pairs.append((round(unit_price if unit_price is not None else display_price, 2), round(display_price, 2)))
+        any_passenger_scoped = any_passenger_scoped or _calendar_row_is_passenger_scoped(row, factor)
+    return price_pairs, any_passenger_scoped
+
+
+def _calendar_selected_level(
+    rows: list[dict],
+    selected: dict,
+    selected_price: float,
+    passenger_factor: float = 1,
+) -> str:
+    price_pairs, any_passenger_scoped = _calendar_price_pairs_same_scope(
+        rows,
+        selected,
+        selected_price,
+        passenger_factor,
     )
-    if not prices:
+    if not price_pairs:
         return "价格位置待确认"
-    more_expensive = sum(1 for price in prices if price > selected_price)
+    raw_prices = sorted(unit for unit, _display in price_pairs)
+    prices = sorted(display for _unit, display in price_pairs)
+    selected_number = _to_float(selected_price)
+    if selected_number is None:
+        return "价格位置待确认"
+    price_array_multiplied = bool(
+        any_passenger_scoped
+        or any(abs(display - unit) > 0.01 for unit, display in price_pairs)
+    )
+    more_expensive = sum(1 for price in prices if price > selected_number)
     percentile = more_expensive / len(prices)
     print(
-        f"[日历对比] 你选日期价={selected_price:g}, 全部价格={prices}, "
+        f"[日历对比] 数组前3(before单人)={raw_prices[:3]}, "
+        f"after={prices[:3]}, 是否已×人数={price_array_multiplied}"
+    )
+    print(
+        f"[日历对比] 你选日期价={selected_number:g}, 全部价格={prices}, "
         f"比你选贵的天数={more_expensive}, 分位={percentile:.2f}"
     )
     if percentile >= 0.75:
@@ -9676,7 +10215,10 @@ def _calendar_display_price(row: dict, passenger_factor: float = 1):
     price = _calendar_row_price(row)
     if price is None:
         return None
-    return price * (passenger_factor or 1)
+    factor = _to_float(passenger_factor) or 1
+    if _calendar_row_is_passenger_scoped(row, factor):
+        return price
+    return price * factor
 
 
 def _calendar_display_savings(calendar: dict, passenger_factor: float = 1, unit_override: str | None = None) -> list[dict]:
@@ -9740,6 +10282,12 @@ def _email_price_calendar_body(payload: dict) -> str:
     if passenger_count <= 1 and label_count > 1:
         passenger_count = label_count
     passenger_count_text = str(int(passenger_count)) if float(passenger_count).is_integer() else f"{passenger_count:g}"
+    calendar_passengers = _pricing_passengers(passenger_pricing)
+    calendar_price_scope = (
+        "all_passengers_roundtrip"
+        if is_roundtrip_scope and passenger_calendar_applies
+        else ("per_person_roundtrip" if is_roundtrip_scope else "per_person_oneway")
+    )
     return_date_text = str(calendar.get("return_date") or "").strip()
     return_short = return_date_text[5:10] if len(return_date_text) >= 10 else return_date_text
     if is_roundtrip_scope:
@@ -9880,12 +10428,17 @@ def _email_price_calendar_body(payload: dict) -> str:
         roundtrip_note += "单程趋势仅帮你发现便宜的出发日,不等于往返总价。"
         note = f"{roundtrip_note} {note}"
     table.append(f"<div style='margin-top:8px;color:#666;font-size:12px;'>注:{html.escape(str(note))}</div>")
+    calendar_prices_multiplied = bool(
+        any(_calendar_row_is_passenger_scoped(row, passenger_factor) for row in rows if isinstance(row, dict))
+        or (passenger_calendar_applies and (passenger_factor or 1) != 1)
+    )
     print(
-        f"[日历人数诊断] passengers={passenger_pricing.get('passengers')}, "
-        f"日历单价={rows[0].get('min_price') if rows and isinstance(rows[0], dict) else None}, "
-        f"是否已×人数={passenger_calendar_applies}"
+        f"[\u65e5\u5386\u4eba\u6570\u8bca\u65ad] passengers={passenger_pricing.get('passengers')}, "
+        f"\u65e5\u5386\u5355\u4ef7={rows[0].get('min_price') if rows and isinstance(rows[0], dict) else None}, "
+        f"\u662f\u5426\u5df2\u00d7\u4eba\u6570={calendar_prices_multiplied}"
     )
     return "".join(table)
+
 
 
 def _price_calendar_insight_text(payload: dict) -> str:
@@ -9911,26 +10464,27 @@ def _price_calendar_insight_text(payload: dict) -> str:
     lowest_price = _calendar_display_price(lowest, display_factor)
     if selected_price is None or lowest_price is None:
         return ""
-    selected_date = _calendar_short_date(selected) or str(selected.get("date") or "你选的日期")
-    lowest_date = _calendar_short_date(lowest) or str(lowest.get("date") or "低价日")
+    selected_date = _calendar_short_date(selected) or str(selected.get("date") or "\u4f60\u9009\u65e5\u671f")
+    lowest_date = _calendar_short_date(lowest) or str(lowest.get("date") or "\u6700\u4f4e\u65e5")
     lowest_weekday = str(lowest.get("weekday") or "").strip()
-    scope_label = "全员往返" if passenger_calendar_applies else unit
-    level = _calendar_selected_level(rows, selected, selected_price)
-    lowest_text = f"{scope_label}最低{_price_text(lowest_price)}({lowest_date} {lowest_weekday})".strip()
+    scope_label = "\u5168\u5458\u5f80\u8fd4" if passenger_calendar_applies else unit
+    scope_key = "all_passengers_roundtrip" if passenger_calendar_applies else ("per_person_roundtrip" if is_roundtrip_scope else "per_person_oneway")
+    passengers = _pricing_passengers(passenger_pricing)
+    route_type = payload.get("route_type")
+    level = _calendar_selected_level(rows, selected, selected_price, display_factor)
+    lowest_text = f"{scope_label}\u6700\u4f4e{_price_text_with_caliber(lowest_price, scope_key, passengers, route_type)}({lowest_date} {lowest_weekday})".strip()
     date_flex = str(payload.get("date_flexibility") or payload.get("date_flex") or "").strip()
-    base = f"你选的{selected_date}{scope_label}{_price_text(selected_price)},处于{level}。本航线近期{lowest_text}。"
+    base = f"\u4f60\u9009\u7684{selected_date}{scope_label}{_price_text_with_caliber(selected_price, scope_key, passengers, route_type)},\u5904\u4e8e{level};{lowest_text}"
     if passenger_calendar_applies:
         single_selected = _calendar_row_price(selected)
-        base += f"(单人往返{_price_text(single_selected)}×{passenger_factor:g})"
+        base += f"(\u5355\u4eba\u5f80\u8fd4{_price_text_with_caliber(single_selected, 'per_person_roundtrip', passengers, route_type)}\u00d7{passenger_factor:g})"
     if selected is lowest or selected_price <= lowest_price:
         return base
     save = round(selected_price - lowest_price)
-    if date_flex in {"0", "none", "fixed", "不可调整", "不可调"}:
-        return (
-            f"{base}你设了日期不可调;若未来行程灵活,低价日可省约{_price_text(save)}/{scope_label}。"
-        )
-    return f"{base}如日期可调,换到低价日可省约{_price_text(save)}/{scope_label}。"
-
+    save_text = _price_text_with_caliber(save, scope_key, passengers, route_type)
+    if date_flex in {"0", "none", "fixed", "\u4e0d\u53ef\u8c03", "\u56fa\u5b9a"}:
+        return f"{base};\u4f60\u8bbe\u4e86\u65e5\u671f\u4e0d\u53ef\u8c03,\u4ec5\u4f5c\u8d8b\u52bf\u53c2\u8003,\u5dee\u989d\u7ea6{save_text}/{scope_label}"
+    return f"{base};\u82e5\u65e5\u671f\u53ef\u8c03,\u7406\u8bba\u53ef\u7701\u7ea6{save_text}/{scope_label}"
 
 def _email_airport_cost_comparison_body(payload: dict) -> str:
     rows = payload.get("airport_cost_comparison") or []
@@ -10009,7 +10563,7 @@ def render_email(payload: dict) -> tuple[str, str]:
                         "搜索参考价",
                         html.escape(no_primary_price_hint)
                         if no_primary_price_hint
-                        else _email_price_span(payload.get("display_price") or payload.get("current_price"), "#2563eb"),
+                        else _email_price_span(payload.get("budget_compare_price") or payload.get("display_price") or payload.get("current_price"), "#2563eb"),
                     ),
                     ("预估实付价", _email_price_span(payload.get("transaction_price"), "#111")),
                     ("本次验证价", html.escape(verify_text)),
@@ -10040,12 +10594,13 @@ def render_email(payload: dict) -> tuple[str, str]:
         if same_day_alternatives_body:
             cards.insert(insert_at, _email_card("可选备选方案", same_day_alternatives_body))
             insert_at += 1
-        if payload.get("same_day_no_feasible_note"):
+        same_day_note = _same_day_note_for_no_primary(payload, _no_primary_reason(payload))
+        if same_day_note:
             cards.insert(
                 insert_at,
                 _email_card(
                     "为什么没有符合方案",
-                    html.escape(str(payload.get("same_day_no_feasible_note"))),
+                    html.escape(same_day_note),
                 ),
             )
     cards.append(_render_payload_plan_cards(payload, payload.get("recommended_plans") or [], primary_plan))
@@ -10236,12 +10791,13 @@ def render_detail_html(payload: dict) -> str:
         if same_day_alternatives_body:
             cards.insert(insert_at, _email_card("可选备选方案", same_day_alternatives_body))
             insert_at += 1
-        if payload.get("same_day_no_feasible_note"):
+        same_day_note = _same_day_note_for_no_primary(payload, _no_primary_reason(payload))
+        if same_day_note:
             cards.insert(
                 insert_at,
                 _email_card(
                     "为什么没有符合方案",
-                    html.escape(str(payload.get("same_day_no_feasible_note"))),
+                    html.escape(same_day_note),
                 ),
             )
     status_text = _plan_status_change_text(payload)

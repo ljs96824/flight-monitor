@@ -357,7 +357,7 @@ AIRPORTS = {
         "short": "阿尔伯克基",
         "city": "阿尔伯克基",
         "city_en": "Albuquerque",
-        "tz": "美山",
+        "tz": "美西",
     },
     "DFW": {
         "name": "达拉斯沃斯堡",
@@ -503,6 +503,16 @@ def resolve_location(value):
     if 2 <= len(upper) <= 4 and upper.isascii() and upper.isalpha():
         return {"value": upper, "type": "airport", "airports": [upper]}
     return {"value": resolved_text, "type": "unknown", "airports": []}
+
+
+def location_error_message(field, info):
+    """Return a user-facing error for an unresolved origin/destination."""
+    labels = {"origin": "出发地", "destination": "目的地"}
+    label = labels.get(str(field or "").strip(), "地点")
+    value = str((info or {}).get("value") or "").strip()
+    if value:
+        return f"无法识别{label} {value},请输入机场三字码或已支持的城市"
+    return f"{label}不能为空,请输入机场三字码或已支持的城市"
 
 
 def get_airport_timezone(iata_code):

@@ -12,7 +12,7 @@ try:
 except ModuleNotFoundError:  # Optional: only needed for PythonAnywhere payload sync.
     httpx = None
 from dotenv import load_dotenv
-from airports import resolve_location
+from airports import location_error_message, resolve_location
 
 
 BASE_DIR = Path(__file__).parent
@@ -76,9 +76,23 @@ PAGE_PAYLOADS_DIR = DATA_DIR / "payloads"
 PYTHONANYWHERE_PAYLOAD_PATH = "/home/{user}/flight-monitor/data/payloads/{filename}"
 
 
+
+def _make_round_id(sub: dict) -> str:
+    stamp = datetime.now().strftime("%Y%m%dT%H%M%S%f")
+    raw_suffix = sub.get("_index") or sub.get("index") or sub.get("id") or "sub"
+    suffix = re.sub(r"[^0-9A-Za-z_-]+", "_", str(raw_suffix)).strip("_")[:80]
+    return f"{stamp}_{suffix or 'sub'}"
+
 def _first_airport(codes, fallback):
     values = [str(code).strip().upper() for code in (codes or []) if str(code or "").strip()]
     return values[0] if values else str(fallback or "").strip().upper()
+
+def _normalize_price_scope(value) -> str:
+    text = str(value or "per_person").strip().lower()
+    if text in {"all", "total", "all_passengers", "all_passenger", "overall", "??", "??", "???"}:
+        return "all"
+    return "per_person"
+
 
 def _subscription_passengers(sub: dict):
     if not isinstance(sub, dict):
@@ -319,16 +333,19 @@ def _normalize_subscription(item: dict) -> dict:
     if same_day_round_trip and not return_date:
         return_date = item.get("depart_date", "")
     round_trip = _as_bool(item.get("round_trip", hard_constraints.get("round_trip", False))) or same_day_round_trip
-    origin_info = resolve_location(item.get("origin", ""))
-    destination_info = resolve_location(item.get("destination", ""))
+    origin_value = item.get("origin") or basic.get("origin") or ""
+    destination_value = (
+        item.get("destination")
+        or basic.get("destination")
+        or basic.get("dest")
+        or ""
+    )
+    origin_info = resolve_location(origin_value)
+    destination_info = resolve_location(destination_value)
     if origin_info.get("type") == "unknown":
-        raise ValueError(
-            f"无法识别地点 {origin_info.get('value')},请输入机场三字码或已支持的城市"
-        )
+        raise ValueError(location_error_message("origin", origin_info))
     if destination_info.get("type") == "unknown":
-        raise ValueError(
-            f"无法识别地点 {destination_info.get('value')},请输入机场三字码或已支持的城市"
-        )
+        raise ValueError(location_error_message("destination", destination_info))
     origin_airports = (
         item.get("origin_airports")
         or basic.get("origin_airports")
@@ -342,6 +359,10 @@ def _normalize_subscription(item: dict) -> dict:
     )
     origin_airports = _clean_airport_codes(origin_airports)
     destination_airports = _clean_airport_codes(destination_airports)
+    if not origin_airports:
+        raise ValueError(location_error_message("origin", origin_info))
+    if not destination_airports:
+        raise ValueError(location_error_message("destination", destination_info))
     origin_airports_active = _clean_airport_codes(
         item.get("origin_airports_active")
         or basic.get("origin_airports_active")
@@ -381,6 +402,22 @@ def _normalize_subscription(item: dict) -> dict:
     target_price_mode = soft_preferences.get(
         "target_price_mode",
         item.get("target_price_mode", "fixed" if target_price else "auto"),
+    )
+    max_budget_scope = _normalize_price_scope(
+        hard_constraints.get("max_budget_scope")
+        or constraints.get("max_budget_scope")
+        or preferences.get("max_budget_scope")
+        or soft_preferences.get("max_budget_scope")
+        or item.get("max_budget_scope")
+        or item.get("budget_scope")
+    )
+    target_price_scope = _normalize_price_scope(
+        hard_constraints.get("target_price_scope")
+        or constraints.get("target_price_scope")
+        or preferences.get("target_price_scope")
+        or soft_preferences.get("target_price_scope")
+        or item.get("target_price_scope")
+        or max_budget_scope
     )
     transfer_policy = hard_constraints.get(
         "transfer_policy", item.get("transfer_policy", item.get("direct_only"))
@@ -461,6 +498,9 @@ def _normalize_subscription(item: dict) -> dict:
         "max_budget_mode": max_budget_mode,
         "target_price": target_price,
         "target_price_mode": target_price_mode,
+        "budget_scope": max_budget_scope,
+        "max_budget_scope": max_budget_scope,
+        "target_price_scope": target_price_scope,
         "return_date": return_date,
         "round_trip": round_trip,
         "date_flexibility": item.get("date_flexibility", 0),
@@ -850,6 +890,9 @@ def subscription_preferences(sub: dict) -> dict:
         "max_budget_mode": sub.get("max_budget_mode", "none"),
         "target_price": sub.get("target_price"),
         "target_price_mode": sub.get("target_price_mode", "auto"),
+        "budget_scope": sub.get("budget_scope", "per_person"),
+        "max_budget_scope": sub.get("max_budget_scope", sub.get("budget_scope", "per_person")),
+        "target_price_scope": sub.get("target_price_scope", sub.get("budget_scope", "per_person")),
         "date_flexibility": sub.get("date_flexibility", 0),
         "round_trip": sub.get("round_trip", False),
         "return_date": sub.get("return_date"),
@@ -919,13 +962,15 @@ def _dedupe_flights(flights: list[dict]) -> list[dict]:
 
 
 
-def _aggregator_collect(aggregator, origin, destination, date_str, passengers=None, **kwargs):
+def _aggregator_collect(aggregator, origin, destination, date_str, passengers=None, round_id=None, **kwargs):
     try:
         params = inspect.signature(aggregator.collect).parameters
     except (TypeError, ValueError):
         params = {}
     if "passengers" in params:
         kwargs["passengers"] = passengers
+    if round_id and "round_id" in params:
+        kwargs["round_id"] = round_id
     return aggregator.collect(origin, destination, date_str, **kwargs)
 
 def collect_for_airport_matrix(
@@ -936,6 +981,7 @@ def collect_for_airport_matrix(
     cabin_classes=None,
     route_type: str | None = None,
     passengers=None,
+    round_id: str | None = None,
 ) -> dict | None:
     origins = _clean_airport_codes(origins)
     destinations = _clean_airport_codes(destinations)
@@ -946,7 +992,7 @@ def collect_for_airport_matrix(
         collect_kwargs = {"cabin_classes": cabin_classes}
         if route_type:
             collect_kwargs["route_type"] = route_type
-        data = _aggregator_collect(aggregator, origins[0], destinations[0], date_str, passengers=passengers, **collect_kwargs)
+        data = _aggregator_collect(aggregator, origins[0], destinations[0], date_str, passengers=passengers, round_id=round_id, **collect_kwargs)
         if data:
             for flight in data.get("flights", []) or []:
                 flight["search_origin"] = flight.get("search_origin") or origins[0]
@@ -986,7 +1032,7 @@ def collect_for_airport_matrix(
         collect_kwargs = {"cabin_classes": cabin_classes}
         if route_type:
             collect_kwargs["route_type"] = route_type
-        data = _aggregator_collect(aggregator, origin, destination, date_str, passengers=passengers, **collect_kwargs)
+        data = _aggregator_collect(aggregator, origin, destination, date_str, passengers=passengers, round_id=round_id, **collect_kwargs)
         if not data:
             continue
         for flight in data.get("flights", []):
@@ -1018,6 +1064,7 @@ def collect_nearby_dates(
     sub: dict,
     cabin_classes=None,
     target_min_price=None,
+    round_id: str | None = None,
 ) -> list[dict]:
     try:
         days_range = int(sub.get("date_flexibility") or 0)
@@ -1072,6 +1119,7 @@ def collect_nearby_dates(
                     cabin_classes=cabin_classes,
                     route_type=route_type,
                     passengers=_subscription_passengers(sub),
+                    round_id=round_id,
                 )
                 flights = data.get("flights", []) if data else []
                 prices = [
@@ -1114,6 +1162,8 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
     if ensure_db:
         init_db()
 
+    round_id = _make_round_id(sub)
+    print(f"[\u89c2\u6d4b\u8f6e\u6b21] round_id={round_id}")
     route = f"{sub['origin']}-{sub['destination']}"
     logging.info(f"开始处理 {route}")
 
@@ -1145,6 +1195,7 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
             cabin_classes=sub.get("cabin_classes"),
             route_type=route_type,
             passengers=request_passengers,
+            round_id=round_id,
         )
 
         if data is None or not data.get("flights"):
@@ -1241,6 +1292,7 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
             sub,
             cabin_classes=sub.get("cabin_classes"),
             target_min_price=current_min_price,
+            round_id=round_id,
         )
         price_history = (data.get("price_insights") or {}).get("price_history")
         analysis["days_to_dept"] = days_to_dept
@@ -1285,6 +1337,7 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
                 cabin_classes=sub.get("cabin_classes"),
                 route_type=route_type,
                 passengers=request_passengers,
+                round_id=round_id,
             )
             return_collected_at = (return_data or {}).get("collected_at") or datetime.now().isoformat(timespec="seconds")
             normalized_return_flights = [
@@ -1541,6 +1594,9 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
                 "max_budget_mode": sub.get("max_budget_mode"),
                 "target_price": sub.get("target_price"),
                 "target_price_mode": sub.get("target_price_mode"),
+                "budget_scope": sub.get("budget_scope"),
+                "max_budget_scope": sub.get("max_budget_scope", sub.get("budget_scope", "per_person")),
+                "target_price_scope": sub.get("target_price_scope", sub.get("budget_scope", "per_person")),
                 "hard_constraints": sub.get("hard_constraints", {}),
                 "soft_preferences": sub.get("soft_preferences", {}),
                 "notification_goals": sub.get("notification_goals", {}),

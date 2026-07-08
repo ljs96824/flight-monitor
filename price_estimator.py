@@ -55,30 +55,66 @@ def normalize_passengers_for_pricing(passengers):
     return normalized
 
 
-def _passenger_ratios(route_type=None):
-    route = str(route_type or "").lower()
-    if route in {"international", "intl"}:
-        return {
-            "child": 0.75,
-            "infant": 0.10,
-            "note": "儿童票按国际航线常见接近成人价估算(约85折),婴儿票按约1折估算,实际以支付页为准",
-        }
-    return {
+PASSENGER_FARE_RATE_SOURCE = "PASSENGER_FARE_RATES"
+PASSENGER_FARE_RATES = {
+    "domestic": {
+        "adult": 1.0,
+        "elderly": 1.0,
         "child": 0.50,
         "infant": 0.10,
         "note": "儿童票按国内常规5折估算,婴儿票按国内常规1折估算,实际以支付页为准",
+    },
+    "international": {
+        "adult": 1.0,
+        "elderly": 1.0,
+        "child": 0.75,
+        "infant": 0.10,
+        "note": "儿童票按国际航线常见约75折估算,婴儿票按约1折估算,实际以支付页为准",
+    },
+}
+
+
+def _route_rate_key(route_type=None):
+    route = str(route_type or "").lower()
+    if route in {"international", "intl"}:
+        return "international"
+    return "domestic"
+
+
+def passenger_fare_rates(route_type=None):
+    """Return the single source of truth for passenger fare ratios."""
+    key = _route_rate_key(route_type)
+    return key, PASSENGER_FARE_RATES[key]
+
+
+def _passenger_ratios(route_type=None):
+    _, rates = passenger_fare_rates(route_type)
+    return {
+        "child": rates["child"],
+        "infant": rates["infant"],
+        "note": rates["note"],
     }
 
 
 def passenger_price_factor(passengers, route_type=None):
     passengers = normalize_passengers_for_pricing(passengers)
-    ratios = _passenger_ratios(route_type)
-    return (
-        passengers.get("adult", 0)
-        + passengers.get("elderly", 0)
-        + passengers.get("child", 0) * ratios["child"]
-        + passengers.get("infant", 0) * ratios["infant"]
+    route_key, rates = passenger_fare_rates(route_type)
+    factor = (
+        passengers.get("adult", 0) * rates["adult"]
+        + passengers.get("elderly", 0) * rates["elderly"]
+        + passengers.get("child", 0) * rates["child"]
+        + passengers.get("infant", 0) * rates["infant"]
     )
+    factor = round(factor, 2)
+    print(
+        f"[票价系数] route={route_key} "
+        f"成人{passengers.get('adult', 0)}×{rates['adult']} "
+        f"儿童{passengers.get('child', 0)}×{rates['child']} "
+        f"老人{passengers.get('elderly', 0)}×{rates['elderly']} "
+        f"婴儿{passengers.get('infant', 0)}×{rates['infant']} "
+        f"合计={factor} 来源={PASSENGER_FARE_RATE_SOURCE}[{route_key}]"
+    )
+    return factor
 
 
 def _passenger_label(passengers):

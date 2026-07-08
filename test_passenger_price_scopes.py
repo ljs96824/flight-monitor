@@ -1,6 +1,8 @@
 import sys
 import types
 import unittest
+import io
+from contextlib import redirect_stdout
 
 
 class _DummyFlask:
@@ -43,7 +45,9 @@ from price_estimator import (
 from web_form import build_subscription
 from notifier import (
     _apply_passenger_pricing_to_plans,
+    _email_channel_picker,
     _email_price_calendar_body,
+    _plan_roundtrip_price_text,
     _render_payload_plan_card,
     build_notification_payload,
 )
@@ -98,7 +102,8 @@ class PassengerPriceScopesTest(unittest.TestCase):
         sub = build_subscription(
             _base_form(
                 monitor_mode="precise",
-                budget_scope="per_person",
+                max_budget_scope="per_person",
+                target_price_scope="all",
                 adult_count="2",
                 child_count="1",
                 elderly_count="0",
@@ -107,9 +112,31 @@ class PassengerPriceScopesTest(unittest.TestCase):
         )
 
         self.assertEqual(sub["constraints"]["budget_scope"], "per_person")
+        self.assertEqual(sub["constraints"]["max_budget_scope"], "per_person")
+        self.assertEqual(sub["constraints"]["target_price_scope"], "all")
         self.assertEqual(sub["hard_constraints"]["budget_scope"], "per_person")
+        self.assertEqual(sub["hard_constraints"]["max_budget_scope"], "per_person")
+        self.assertEqual(sub["hard_constraints"]["target_price_scope"], "all")
         self.assertEqual(sub["soft_preferences"]["budget_scope"], "per_person")
+        self.assertEqual(sub["soft_preferences"]["max_budget_scope"], "per_person")
+        self.assertEqual(sub["soft_preferences"]["target_price_scope"], "all")
 
+    def test_quick_form_defaults_budget_scopes_to_per_person(self):
+        sub = build_subscription(
+            _base_form(
+                monitor_mode="quick",
+                max_budget="1700",
+                target_price="1200",
+                adult_count="3",
+                passenger_count="3",
+            )
+        )
+
+        self.assertEqual(sub["constraints"]["budget_scope"], "per_person")
+        self.assertEqual(sub["constraints"]["max_budget_scope"], "per_person")
+        self.assertEqual(sub["constraints"]["target_price_scope"], "per_person")
+        self.assertEqual(sub["hard_constraints"]["budget_scope"], "per_person")
+        self.assertEqual(sub["soft_preferences"]["target_price_scope"], "per_person")
     def test_roundtrip_plan_card_shows_all_passenger_total_and_unit_reference(self):
         plan = {
             "label": "方案A",
@@ -140,7 +167,7 @@ class PassengerPriceScopesTest(unittest.TestCase):
         self.assertIn("儿童¥705", html)
         self.assertIn("返程全员¥3,375", html)
         self.assertIn("单人往返参考", html)
-        self.assertIn("约¥2,760/成人", html)
+        self.assertIn("约¥2,760 单人往返/成人", html)
         self.assertIn("儿童票按国内常规5折估算", html)
 
     def test_roundtrip_calendar_mentions_single_person_and_all_passenger_conversion(self):
@@ -192,6 +219,34 @@ class PassengerPriceScopesTest(unittest.TestCase):
 
         self.assertEqual(total, 2750)
         self.assertEqual(breakdown["factor"], 2.75)
+
+    def test_international_factor_survives_fast_verification_rendering(self):
+        plan = {
+            "label": "方案A",
+            "is_roundtrip": True,
+            "price": 6503,
+            "estimated_price": 6503,
+            "outbound_price": 3000,
+            "return_price": 3503,
+            "purchase_mode": "两个单程拼接",
+            "outbound_flight": {"flight_no": "MU515", "price": 3000},
+            "return_flight": {"flight_no": "MU516", "price": 3503},
+            "links": {
+                "outbound": '<a href="https://example.com/out">携程</a>',
+                "return": '<a href="https://example.com/ret">携程</a>',
+            },
+        }
+        passengers = {"adult": 2, "child": 1, "elderly": 2, "infant": 0}
+
+        _apply_passenger_pricing_to_plans([plan], passengers, "international")
+
+        self.assertEqual(plan["passenger_pricing"]["factor"], 4.75)
+        text = _plan_roundtrip_price_text(plan)
+        self.assertIn("4.75", text)
+        self.assertNotIn("4.5", text)
+        quick_html = _email_channel_picker(plan, context_label="快速验证首选方案A")
+        self.assertIn("4.75", quick_html)
+        self.assertNotIn("4.5", quick_html)
 
     def test_price_tiers_capture_five_price_scopes(self):
         tiers = build_price_tiers(
@@ -257,9 +312,118 @@ class PassengerPriceScopesTest(unittest.TestCase):
 
         self.assertEqual(result["passenger_total_min"], 6900)
         self.assertEqual(result["budget_price"], 6900)
-        self.assertEqual(result["budget_limits"]["max_budget_total"], 4800)
-        self.assertEqual(result["budget_limits"]["ideal_price_total"], 4500)
+        self.assertEqual(result["budget_limits"]["max_budget_total"], 4000)
+        self.assertEqual(result["budget_limits"]["ideal_price_total"], 3750)
         self.assertEqual(result["decision_summary"]["price_judgment"], "\u8d85\u51fa\u9884\u7b97")
+
+    def test_roundtrip_budget_scope_switches_between_per_person_and_all_passengers(self):
+        from analyzer import analyze_round_trip
+
+        outbound = {
+            "flight_no": "MU5099",
+            "price": 699,
+            "departure_airport": "SHA",
+            "arrival_airport": "PKX",
+            "departure_time": "07:00",
+            "arrival_time": "09:15",
+        }
+        ret = {
+            "flight_no": "MU5170",
+            "price": 699,
+            "departure_airport": "PKX",
+            "arrival_airport": "SHA",
+            "departure_time": "21:00",
+            "arrival_time": "23:05",
+        }
+
+        def run(scope):
+            preferences = {
+                "passengers": {"adult": 3, "child": 0, "elderly": 0, "infant": 0},
+                "budget_scope": scope,
+                "max_budget_scope": scope,
+                "target_price_scope": scope,
+                "route_type": "domestic",
+            }
+            return analyze_round_trip(
+                {
+                    "economy_recommendations": [outbound],
+                    "all_flights": [outbound],
+                    "user_preferences": preferences,
+                    "route_type": "domestic",
+                },
+                {
+                    "economy_recommendations": [ret],
+                    "all_flights": [ret],
+                    "user_preferences": preferences,
+                    "route_type": "domestic",
+                },
+                target_price=1200,
+                max_budget=1700,
+            )
+
+        per_person = run("per_person")
+        all_passengers = run("all")
+
+        self.assertEqual(per_person["budget_limits"]["max_budget_compare"], 1700)
+        self.assertEqual(per_person["budget_limits"]["max_budget_compare_scope"], "per_person_roundtrip")
+        self.assertEqual(per_person["budget_price_compare"], 1398)
+        self.assertIn("\u9884\u7b97\u5185", per_person["decision_summary"]["price_judgment"])
+
+        self.assertEqual(all_passengers["budget_limits"]["max_budget_compare"], 1700)
+        self.assertEqual(all_passengers["budget_limits"]["max_budget_compare_scope"], "all_passengers_roundtrip")
+        self.assertEqual(all_passengers["budget_price_compare"], 4194)
+        self.assertEqual(all_passengers["decision_summary"]["price_judgment"], "\u8d85\u51fa\u9884\u7b97")
+    def test_payload_budget_scope_switches_compare_price(self):
+        analysis_result = {
+            "round_trip_analysis": {
+                "top_combinations": [
+                    {
+                        "outbound": {"flight_no": "MU5099", "price": 699},
+                        "return": {"flight_no": "MU5170", "price": 699},
+                        "outbound_price": 699,
+                        "return_price": 699,
+                        "total_price": 1398,
+                    }
+                ]
+            },
+            "decision": {"conclusion": "can_watch", "confidence": "medium"},
+        }
+        route_info = {
+            "round_trip": True,
+            "depart_date": "2026-06-26",
+            "return_date": "2026-06-26",
+            "target_price": 1200,
+            "max_budget": 1700,
+            "route_type": "domestic",
+        }
+
+        def payload(scope):
+            return build_notification_payload(
+                analysis_result,
+                route_info=route_info,
+                subscription={
+                    "basic": {"route_type": "domestic", "passenger_count": 3},
+                    "preferences": {"passengers": {"adult": 3, "child": 0, "elderly": 0, "infant": 0}},
+                    "constraints": {
+                        "budget_scope": scope,
+                        "max_budget_scope": scope,
+                        "target_price_scope": scope,
+                    },
+                },
+            )
+
+        per_person = payload("per_person")
+        all_passengers = payload("all")
+
+        self.assertEqual(per_person["budget_compare_scope"], "per_person_roundtrip")
+        self.assertEqual(per_person["budget_compare_price"], 1398)
+        self.assertEqual(per_person["max_price"], 1700)
+        self.assertFalse(per_person["budget_gap"]["is_over_budget"])
+
+        self.assertEqual(all_passengers["budget_compare_scope"], "all_passengers_roundtrip")
+        self.assertEqual(all_passengers["budget_compare_price"], 4194)
+        self.assertEqual(all_passengers["max_price"], 1700)
+        self.assertTrue(all_passengers["budget_gap"]["is_over_budget"])
 
     def test_payload_uses_total_estimated_tier_for_budget_and_verify_price(self):
         analysis_result = {
@@ -351,5 +515,114 @@ class PassengerPriceScopesTest(unittest.TestCase):
         self.assertIn("3\u6210\u4eba", body)
         self.assertIn("\u5168\u5458\u7ea6\u00a53,312", body)
 
+    def test_calendar_percentile_uses_all_passenger_price_array(self):
+        payload = {
+            "is_roundtrip": True,
+            "display_price": 3708,
+            "passenger_pricing": {
+                "applies": True,
+                "factor": 3,
+                "passenger_count": 3,
+                "passenger_label": "3\u6210\u4eba",
+                "passengers": {"adult": 3, "child": 0, "elderly": 0, "infant": 0},
+            },
+            "price_calendar": {
+                "scope": "roundtrip",
+                "return_date": "2026-06-30",
+                "rows": [
+                    {
+                        "date": "2026-06-23",
+                        "weekday": "\u5468\u4e8c",
+                        "min_price": 1104,
+                        "lowest": True,
+                    },
+                    {
+                        "date": "2026-06-26",
+                        "weekday": "\u5468\u4e94",
+                        "min_price": 1236,
+                        "selected": True,
+                    },
+                    {
+                        "date": "2026-06-29",
+                        "weekday": "\u5468\u4e00",
+                        "min_price": 1300,
+                    },
+                ],
+            },
+        }
+        output = io.StringIO()
+
+        with redirect_stdout(output):
+            _email_price_calendar_body(payload)
+
+        log = output.getvalue()
+        self.assertIn("\u4f60\u9009\u65e5\u671f\u4ef7=3708", log)
+        self.assertIn("\u5168\u90e8\u4ef7\u683c=[3312.0, 3708.0, 3900.0]", log)
+        self.assertIn("\u662f\u5426\u5df2\u00d7\u4eba\u6570=True", log)
+
+    def test_calendar_percentile_respects_pre_multiplied_passenger_rows(self):
+        payload = {
+            "is_roundtrip": True,
+            "display_price": 4437,
+            "passenger_pricing": {
+                "applies": True,
+                "factor": 3,
+                "passenger_count": 3,
+                "passenger_label": "3\u6210\u4eba",
+                "passengers": {"adult": 3, "child": 0, "elderly": 0, "infant": 0},
+            },
+            "price_calendar": {
+                "scope": "passenger_roundtrip",
+                "return_date": "2026-06-26",
+                "rows": [
+                    {
+                        "date": "2026-06-23",
+                        "weekday": "\u5468\u4e8c",
+                        "unit_roundtrip_price": 1195,
+                        "min_price": 3585,
+                        "scope": "passenger_roundtrip",
+                        "passenger_factor": 3,
+                        "lowest": True,
+                    },
+                    {
+                        "date": "2026-06-24",
+                        "weekday": "\u5468\u4e09",
+                        "unit_roundtrip_price": 1218,
+                        "min_price": 3654,
+                        "scope": "passenger_roundtrip",
+                        "passenger_factor": 3,
+                    },
+                    {
+                        "date": "2026-06-27",
+                        "weekday": "\u5468\u516d",
+                        "unit_roundtrip_price": 1408,
+                        "min_price": 4224,
+                        "scope": "passenger_roundtrip",
+                        "passenger_factor": 3,
+                    },
+                    {
+                        "date": "2026-06-26",
+                        "weekday": "\u5468\u4e94",
+                        "unit_roundtrip_price": 1479,
+                        "min_price": 4437,
+                        "scope": "passenger_roundtrip",
+                        "passenger_factor": 3,
+                        "selected": True,
+                    },
+                ],
+            },
+        }
+        output = io.StringIO()
+
+        with redirect_stdout(output):
+            _email_price_calendar_body(payload)
+
+        log = output.getvalue()
+        self.assertIn("\u4f60\u9009\u65e5\u671f\u4ef7=4437", log)
+        self.assertIn("\u5168\u90e8\u4ef7\u683c=[3585.0, 3654.0, 4224.0, 4437.0]", log)
+        self.assertIn("[\u65e5\u5386\u5bf9\u6bd4] \u6570\u7ec4\u524d3(before\u5355\u4eba)=[1195.0, 1218.0, 1408.0], after=[3585.0, 3654.0, 4224.0], \u662f\u5426\u5df2\u00d7\u4eba\u6570=True", log)
+        self.assertNotIn("10755", log)
+
 if __name__ == "__main__":
     unittest.main()
+

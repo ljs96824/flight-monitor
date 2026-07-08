@@ -18,14 +18,20 @@ def _is_valid_price(value) -> bool:
         return False
 
 
-def get_aggregator() -> FlightAggregator:
-    search_sources, enrichment_sources = build_default_sources()
-    return FlightAggregator(search_sources, enrichment_sources)
+def get_aggregator(
+    origin: str | None = None,
+    dest: str | None = None,
+    route_type: str | None = None,
+) -> FlightAggregator:
+    search_sources, enrichment_sources = build_default_sources(
+        origin, dest, route_type=route_type
+    )
+    return FlightAggregator(search_sources, enrichment_sources, route_type=route_type)
 
 
 def fetch_flights(origin: str, dest: str, date_str: str, passengers: dict | None = None) -> dict:
     """Fetch raw Google Flights response from the first available source."""
-    aggregator = get_aggregator()
+    aggregator = get_aggregator(origin, dest)
     if not aggregator.search_sources:
         raise RuntimeError("请在.env文件中设置SERPAPI_KEY或SEARCHAPI_KEY")
 
@@ -360,7 +366,7 @@ def _merge_detail_flights(flights: list[dict]) -> list[dict]:
 
 def collect_all_flights(origin, dest, date_str, cabin_classes=None, passengers=None) -> dict:
     """采集所有航班并返回详细解析结果"""
-    aggregator = get_aggregator()
+    aggregator = get_aggregator(origin, dest)
     if not aggregator.search_sources:
         raise RuntimeError("请在.env文件中设置SERPAPI_KEY或SEARCHAPI_KEY")
 
@@ -412,7 +418,7 @@ def collect_and_classify(
     采集并分类：目标航班 vs 替代方案。
     内部通过聚合器支持多个Google Flights数据源。
     """
-    aggregator = get_aggregator()
+    aggregator = get_aggregator(origin, dest)
     if not aggregator.search_sources:
         print("采集失败: 请在.env文件中设置SERPAPI_KEY或SEARCHAPI_KEY")
         return None

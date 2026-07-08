@@ -1,6 +1,6 @@
 import unittest
 
-from airports import resolve_location
+from airports import get_airport_timezone, resolve_location
 
 
 class ResolveLocationTest(unittest.TestCase):
@@ -43,6 +43,10 @@ class ResolveLocationTest(unittest.TestCase):
                 "airports": [],
             },
         )
+
+    def test_abq_timezone_uses_existing_us_label(self):
+        self.assertEqual(get_airport_timezone("ABQ"), "美西")
+        self.assertNotEqual(get_airport_timezone("ABQ"), "美山")
 
 
 if __name__ == "__main__":
