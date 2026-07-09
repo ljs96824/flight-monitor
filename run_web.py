@@ -1,5 +1,9 @@
 """Run the minimal subscription form service."""
 
+from log_utils import configure_stdio_utf8
+
+configure_stdio_utf8()
+
 from web_form import app
 
 

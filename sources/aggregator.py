@@ -7,6 +7,7 @@ import os
 from datetime import datetime
 
 from flight_combo_utils import normalize_combo
+from log_utils import safe_log
 from source_profiles import get_source_profile, normalize_route_type
 from request_cache import cached_fetch
 from sources.base import FlightSource
@@ -197,7 +198,7 @@ def _log_combo_normalization_once(
     if "+" not in normalized_combo or raw_compact == normalized_combo:
         return
     logged_sources.add(source_name)
-    print(f"[\u53bb\u91cd\u6838\u5bf9] raw={raw_text} norm={normalized_combo} \u6e90={source_name}")
+    safe_log(f"[\u53bb\u91cd\u6838\u5bf9] raw={raw_text} norm={normalized_combo} \u6e90={source_name}")
 
 
 def _source_price_map(flight: dict) -> dict[str, float]:
@@ -222,7 +223,7 @@ def _log_dual_source_price_checks(flights: list[dict]) -> list[dict]:
         if not {"hasdata", "juhe"}.issubset(set(sources)):
             continue
         combo = flight.get("flight_combo") or _flight_key(flight)
-        print(f"[\u53bb\u91cd\u6838\u5bf9] combo={combo} \u6765\u6e90={'+'.join(sources)}")
+        safe_log(f"[\u53bb\u91cd\u6838\u5bf9] combo={combo} \u6765\u6e90={'+'.join(sources)}")
         prices = _source_price_map(flight)
         hasdata_price = prices.get("hasdata")
         juhe_price = prices.get("juhe")
@@ -230,9 +231,9 @@ def _log_dual_source_price_checks(flights: list[dict]) -> list[dict]:
             continue
         min_price = min(hasdata_price, juhe_price)
         diff_pct = abs(hasdata_price - juhe_price) / min_price * 100 if min_price else 0
-        print(
-            f"[\u6e90\u4ef7\u5bf9\u6bd4] combo={combo} hasdata=\u00a5{hasdata_price:g} "
-            f"juhe=\u00a5{juhe_price:g} \u5dee\u5f02%={diff_pct:.1f}"
+        safe_log(
+            f"[\u6e90\u4ef7\u5bf9\u6bd4] combo={combo} hasdata=CNY{hasdata_price:g} "
+            f"juhe=CNY{juhe_price:g} \u5dee\u5f02%={diff_pct:.1f}"
         )
         if diff_pct > 15:
             anomalies.append(

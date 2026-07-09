@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Iterable
 
 from flight_combo_utils import normalize_combo
+from log_utils import safe_log
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -146,7 +147,7 @@ def _flight_duration_min(flight: dict, source: str) -> int | None:
     source_name = str(source or "unknown").lower()
     if source_name not in _duration_missing_logged:
         _duration_missing_logged.add(source_name)
-        print(f"[\u65f6\u957f\u7f3a\u5931] \u6e90={source_name} \u5b57\u6bb5\u4e0d\u53ef\u5f97")
+        safe_log(f"[\u65f6\u957f\u7f3a\u5931] \u6e90={source_name} \u5b57\u6bb5\u4e0d\u53ef\u5f97")
     return None
 
 
@@ -254,7 +255,7 @@ def migrate_normalized_combos(db_path: str | Path = DEFAULT_DB_PATH) -> dict[str
             "SELECT COUNT(*) FROM observations WHERE instr(flight_combo, char(124)) > 0"
         ).fetchone()[0]
         conn.commit()
-    print(f"[\u5f52\u4e00\u8fc1\u79fb] \u5408\u5e76{merged}\u884c \u66f4\u65b0{updated}\u884c \u5269\u4f59\u542b\u7ad6\u7ebf={remaining}")
+    safe_log(f"[\u5f52\u4e00\u8fc1\u79fb] \u5408\u5e76{merged}\u884c \u66f4\u65b0{updated}\u884c \u5269\u4f59\u542b\u7ad6\u7ebf={remaining}")
     return {"merged": merged, "updated": updated, "remaining_pipe": int(remaining)}
 
 

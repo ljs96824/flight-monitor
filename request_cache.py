@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from filename_utils import sanitize_filename
+from log_utils import safe_log
 import observations_store
 
 
@@ -125,7 +126,7 @@ def _write_persistent(key: tuple, result, cache_dir: Path | None = None) -> None
         path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     except (TypeError, OSError) as exc:
         _disabled_persistent_dirs.add(disabled_key)
-        print(f"[缓存] 持久化失败,本轮将跳过该目录 {disabled_key}: {exc}")
+        safe_log(f"[缓存] 持久化失败,本轮将跳过该目录 {disabled_key}: {exc}")
 
 
 def _positive_price_flights(result) -> list[dict]:
@@ -154,7 +155,7 @@ def _record_observations_after_fetch(source, key: tuple, result, cabin_class: st
     fetch_depart_date = str(key[3])
     round_id, db_path = observations_store.get_current_round()
     if not round_id:
-        print(
+        safe_log(
             f"[\u89c2\u6d4b\u843d\u5e93\u8df3\u8fc7] "
             f"\u822a\u7ebf={key[1]}->{key[2]} \u65e5\u671f={fetch_depart_date} "
             f"\u539f\u56e0=\u65e0round_id"
@@ -173,7 +174,7 @@ def _record_observations_after_fetch(source, key: tuple, result, cabin_class: st
             observed_at=datetime.now().isoformat(timespec="seconds"),
             db_path=db_path,
         )
-        print(
+        safe_log(
             f"[\u89c2\u6d4b\u843d\u5e93] round={round_id} "
             f"\u822a\u7ebf={key[1]}->{key[2]} \u65e5\u671f={fetch_depart_date} "
             f"\u6e90={source_name} \u5199\u5165={observation_result['written']} "
@@ -181,7 +182,7 @@ def _record_observations_after_fetch(source, key: tuple, result, cabin_class: st
             f"\u53e3\u5f84=\u5355\u4eba\u5355\u7a0bCNY"
         )
     except Exception as exc:
-        print(f"[\u89c2\u6d4b\u843d\u5e93\u5931\u8d25] round={round_id} \u6e90={source_name} \u539f\u56e0={exc}")
+        safe_log(f"[\u89c2\u6d4b\u843d\u5e93\u5931\u8d25] round={round_id} \u6e90={source_name} \u539f\u56e0={exc}")
 
 
 def cached_fetch(
@@ -211,21 +212,21 @@ def cached_fetch(
     memory_entry = _request_cache.get(key)
     if memory_entry and _fresh(memory_entry.get("fetched_at"), ttl_seconds):
         _record_hit(source_name)
-        print(f"[缓存命中] {key[:4]} 复用已有结果,不重复调API")
+        safe_log(f"[缓存命中] {key[:4]} 复用已有结果,不重复调API")
         return copy.deepcopy(memory_entry.get("result"))
 
     if persist:
         persisted = _read_persistent(key, ttl_seconds, cache_dir)
         if persisted is not None:
             _record_hit(source_name)
-            print(f"[缓存命中] {key[:4]} 复用持久缓存,不重复调API")
+            safe_log(f"[缓存命中] {key[:4]} 复用持久缓存,不重复调API")
             _request_cache[key] = {
                 "fetched_at": datetime.now().isoformat(timespec="seconds"),
                 "result": copy.deepcopy(persisted),
             }
             return copy.deepcopy(persisted)
 
-    print(
+    safe_log(
         f"[API\u8c03\u7528] \u6e90={source_name} \u822a\u7ebf={key[1]}->{key[2]} \u65e5\u671f={key[3]} "
         f"\u4e58\u5ba2={key[4]} \u65f6\u95f4={time.time()}"
     )
@@ -234,7 +235,7 @@ def cached_fetch(
     trigger_key = (route_type, source_name, key[1], key[2], key[3])
     trigger_count = _fetch_trigger_counts.get(trigger_key, 0) + 1
     _fetch_trigger_counts[trigger_key] = trigger_count
-    print(
+    safe_log(
         f"[\u91c7\u96c6\u89e6\u53d1] route_type={route_type} \u822a\u7ebf={key[1]}->{key[2]} "
         f"\u65e5\u671f={key[3]} \u6e90={source_name} \u7b2c{trigger_count}\u6b21"
     )
@@ -255,7 +256,7 @@ def get_request_cache_stats() -> dict:
 
 
 def print_request_cache_stats() -> None:
-    print(
+    safe_log(
         "[API统计] "
         f"本轮总调用={_stats.get('total', 0)}, "
         f"缓存命中={_stats.get('hits', 0)}, "

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from log_utils import safe_log
+
 
 LCC_BAG_FEES = {
     "春秋航空": 280,
@@ -140,13 +142,13 @@ def passenger_price_factor(passengers, route_type=None):
     )
     factor = round(factor, 2)
     if _should_log_passenger_factor(route_key, passengers):
-        print(
-            f"[票价系数] route={route_key} "
-            f"成人{passengers.get('adult', 0)}×{rates['adult']} "
-            f"儿童{passengers.get('child', 0)}×{rates['child']} "
-            f"老人{passengers.get('elderly', 0)}×{rates['elderly']} "
-            f"婴儿{passengers.get('infant', 0)}×{rates['infant']} "
-            f"合计={factor} 来源={PASSENGER_FARE_RATE_SOURCE}[{route_key}]"
+        safe_log(
+            f"[\u7968\u4ef7\u7cfb\u6570] route={route_key} "
+            f"\u6210\u4eba{passengers.get('adult', 0)}x{rates['adult']} "
+            f"\u513f\u7ae5{passengers.get('child', 0)}x{rates['child']} "
+            f"\u8001\u4eba{passengers.get('elderly', 0)}x{rates['elderly']} "
+            f"\u5a74\u513f{passengers.get('infant', 0)}x{rates['infant']} "
+            f"\u5408\u8ba1={factor} \u6765\u6e90={PASSENGER_FARE_RATE_SOURCE}[{route_key}]"
         )
     return factor
 
