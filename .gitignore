@@ -21,3 +21,4 @@ Thumbs.db
 .idea/
 # Append-only observation database
 data/observations.sqlite3
+data/*.sqlite3.bak
