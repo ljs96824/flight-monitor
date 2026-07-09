@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -51,6 +52,30 @@ def _first(item: dict, *keys, default=""):
         if value not in (None, "", [], {}):
             return value
     return default
+
+
+def _duration_minutes(value) -> int | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, (int, float)):
+        minutes = int(value)
+        return minutes if minutes > 0 else None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.isdigit():
+        minutes = int(text)
+        return minutes if minutes > 0 else None
+    hours = 0
+    minutes = 0
+    hour_match = re.search(r"(\d+)\s*(?:h|hr|hour|hours|\u5c0f\u65f6|\u5c0f\u6642)", text, re.IGNORECASE)
+    minute_match = re.search(r"(\d+)\s*(?:m|min|minute|minutes|\u5206\u949f|\u5206\u9418)", text, re.IGNORECASE)
+    if hour_match:
+        hours = int(hour_match.group(1))
+    if minute_match:
+        minutes = int(minute_match.group(1))
+    total = hours * 60 + minutes
+    return total if total > 0 else None
 
 
 def _as_flight_items(raw: dict) -> list[dict]:
@@ -239,6 +264,8 @@ class JuheSource(FlightSource):
             arrival_time = _combine_date_time(
                 _first(item, "arrivalDate"), _first(item, "arrivalTime")
             )
+            duration_text = _first(item, "duration")
+            duration_min = _duration_minutes(duration_text)
             segment = {
                 "flight_no": flight_no,
                 "airline": _first(item, "airlineName", "airline"),
@@ -263,7 +290,9 @@ class JuheSource(FlightSource):
                 "arrival_date": _first(item, "arrivalDate"),
                 "departure_time": departure_time,
                 "arrival_time": arrival_time,
-                "duration_str": _first(item, "duration"),
+                "duration_str": duration_text,
+                "duration_min": duration_min,
+                "total_duration_min": duration_min,
                 "stops": stops,
                 "transfer_num": transfer_num,
                 "price": price,

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from datetime import date, datetime
 from pathlib import Path
 from typing import Iterable
+
+from flight_combo_utils import normalize_combo
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -14,6 +17,7 @@ METHOD_VERSION = "v1"
 
 _current_round_id: str | None = None
 _current_db_path: Path = DEFAULT_DB_PATH
+_duration_missing_logged: set[str] = set()
 
 
 def set_current_round(round_id: str, db_path: str | Path | None = None) -> None:
@@ -48,6 +52,7 @@ CREATE TABLE IF NOT EXISTS observations (
   flight_combo TEXT NOT NULL,
   airline TEXT,
   stops INTEGER,
+  duration_min INTEGER,
   price_cny REAL NOT NULL,
   method_version TEXT NOT NULL,
   UNIQUE(round_id, source, origin_airport, dest_airport,
@@ -56,8 +61,11 @@ CREATE TABLE IF NOT EXISTS observations (
 """
 
 
-def normalize_combo(combo: str | None) -> str:
-    return str(combo or "").replace(" ", "").upper()
+
+def _ensure_duration_column(conn: sqlite3.Connection) -> None:
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(observations)").fetchall()}
+    if "duration_min" not in columns:
+        conn.execute("ALTER TABLE observations ADD COLUMN duration_min INTEGER")
 
 
 def init_observations_db(db_path: str | Path = DEFAULT_DB_PATH) -> Path:
@@ -65,6 +73,7 @@ def init_observations_db(db_path: str | Path = DEFAULT_DB_PATH) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(path) as conn:
         conn.execute(SCHEMA)
+        _ensure_duration_column(conn)
     return path
 
 
@@ -97,6 +106,48 @@ def _to_price(value) -> float | None:
     except (TypeError, ValueError):
         return None
     return price if price > 0 else None
+
+
+def _parse_duration_minutes(value) -> int | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, (int, float)):
+        minutes = int(value)
+        return minutes if minutes > 0 else None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.isdigit():
+        minutes = int(text)
+        return minutes if minutes > 0 else None
+    colon = re.match(r"^(\d{1,2}):(\d{1,2})$", text)
+    if colon:
+        return int(colon.group(1)) * 60 + int(colon.group(2))
+    hours = 0
+    minutes = 0
+    hour_match = re.search(r"(\d+)\s*(?:h|hr|hour|hours|\u5c0f\u65f6|\u5c0f\u6642)", text, re.IGNORECASE)
+    minute_match = re.search(r"(\d+)\s*(?:m|min|minute|minutes|\u5206\u949f|\u5206\u9418)", text, re.IGNORECASE)
+    if hour_match:
+        hours = int(hour_match.group(1))
+    if minute_match:
+        minutes = int(minute_match.group(1))
+    total = hours * 60 + minutes
+    return total if total > 0 else None
+
+
+def _flight_duration_min(flight: dict, source: str) -> int | None:
+    for key in ("duration_min", "total_duration_min", "duration_minutes", "duration"):
+        minutes = _parse_duration_minutes(flight.get(key))
+        if minutes is not None:
+            return minutes
+    minutes = _parse_duration_minutes(flight.get("duration_str") or flight.get("duration_text"))
+    if minutes is not None:
+        return minutes
+    source_name = str(source or "unknown").lower()
+    if source_name not in _duration_missing_logged:
+        _duration_missing_logged.add(source_name)
+        print(f"[\u65f6\u957f\u7f3a\u5931] \u6e90={source_name} \u5b57\u6bb5\u4e0d\u53ef\u5f97")
+    return None
 
 
 def append_observations(
@@ -136,6 +187,7 @@ def append_observations(
                 combo,
                 flight.get("airline"),
                 _to_int_or_none(flight.get("stops")),
+                _flight_duration_min(flight, str(source).lower()),
                 price,
                 METHOD_VERSION,
             )
@@ -149,13 +201,61 @@ def append_observations(
                 INSERT OR IGNORE INTO observations (
                     observed_at, round_id, route_type, origin_airport, dest_airport,
                     depart_date, days_to_departure, cabin_class, source, flight_combo,
-                    airline, stops, price_cny, method_version
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    airline, stops, duration_min, price_cny, method_version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 row,
             )
             written += cursor.rowcount
     return {"written": written, "skipped": len(rows) - written}
+
+
+def migrate_normalized_combos(db_path: str | Path = DEFAULT_DB_PATH) -> dict[str, int]:
+    """Normalize historical observation combo keys and merge format twins.
+
+    If multiple rows collapse onto the same UNIQUE key, keep the lower
+    price_cny row and delete the others.
+    """
+    path = init_observations_db(db_path)
+    with sqlite3.connect(path) as conn:
+        rows = conn.execute(
+            """
+            SELECT id, round_id, source, origin_airport, dest_airport, depart_date,
+                   cabin_class, flight_combo, price_cny
+            FROM observations
+            """
+        ).fetchall()
+        groups: dict[tuple, list[dict]] = {}
+        for row in rows:
+            row_id, round_id, source, origin, dest, depart_date, cabin_class, combo, price = row
+            normalized = normalize_combo(combo)
+            if not normalized:
+                continue
+            key = (round_id, source, origin, dest, depart_date, cabin_class, normalized)
+            groups.setdefault(key, []).append(
+                {"id": row_id, "combo": combo, "price": float(price or 0), "normalized": normalized}
+            )
+
+        merged = 0
+        updated = 0
+        for key, items in groups.items():
+            normalized = key[-1]
+            keep = min(items, key=lambda item: (item["price"] if item["price"] > 0 else float("inf"), item["id"]))
+            delete_ids = [item["id"] for item in items if item["id"] != keep["id"]]
+            for row_id in delete_ids:
+                conn.execute("DELETE FROM observations WHERE id=?", (row_id,))
+            if delete_ids:
+                merged += len(delete_ids)
+            if keep["combo"] != normalized:
+                conn.execute("UPDATE observations SET flight_combo=? WHERE id=?", (normalized, keep["id"]))
+                updated += 1
+
+        remaining = conn.execute(
+            "SELECT COUNT(*) FROM observations WHERE instr(flight_combo, char(124)) > 0"
+        ).fetchone()[0]
+        conn.commit()
+    print(f"[\u5f52\u4e00\u8fc1\u79fb] \u5408\u5e76{merged}\u884c \u66f4\u65b0{updated}\u884c \u5269\u4f59\u542b\u7ad6\u7ebf={remaining}")
+    return {"merged": merged, "updated": updated, "remaining_pipe": int(remaining)}
 
 
 def count_observations(db_path: str | Path = DEFAULT_DB_PATH) -> int:

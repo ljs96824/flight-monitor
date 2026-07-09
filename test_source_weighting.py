@@ -110,6 +110,45 @@ class SourceWeightingTest(unittest.TestCase):
         self.assertEqual(prices, {"hasdata": 1000.0, "juhe": 1200.0})
         self.assertTrue(result["price_anomalies"])
 
+    def test_collect_merges_separator_and_leading_zero_combo_across_sources(self):
+        class FetchSource(DummySource):
+            def __init__(self, name, combo, price):
+                super().__init__(name)
+                self.combo = combo
+                self.price = price
+
+            def fetch(self, origin, dest, date_str, cabin_class="economy"):
+                return {
+                    "source_status": "success",
+                    "flights": [
+                        {
+                            "flight_combo": self.combo,
+                            "flight_no": self.combo,
+                            "departure_airport": origin,
+                            "arrival_airport": dest,
+                            "departure_time": f"{date_str} 09:00",
+                            "arrival_time": f"{date_str} 14:00",
+                            "price": self.price,
+                            "data_source": self.name,
+                        }
+                    ],
+                }
+
+        def direct_cached_fetch(source, origin, dest, date_str, passengers, cabin_class, **kwargs):
+            return source.fetch(origin, dest, date_str, cabin_class)
+
+        aggregator = FlightAggregator(
+            [FetchSource("hasdata", "BR705+BR182", 2000), FetchSource("juhe", "BR0705|BR0182", 2100)],
+            [],
+        )
+        with patch("sources.aggregator.cached_fetch", side_effect=direct_cached_fetch):
+            result = aggregator.collect("PVG", "KIX", "2026-07-01", route_type="international")
+
+        self.assertEqual(result["source_stats"]["after_dedup"], 1)
+        flight = result["flights"][0]
+        self.assertEqual(flight["flight_combo"], "BR705+BR182")
+        self.assertEqual(flight["data_source"], "hasdata+juhe")
+
     def test_email_source_body_shows_domestic_primary_and_google_cross_check(self):
         body = _email_source_body(
             {

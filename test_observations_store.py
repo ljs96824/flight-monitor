@@ -85,6 +85,30 @@ class ObservationsStoreTest(unittest.TestCase):
                 ).fetchone()
             self.assertEqual(row, (27, "hasdata", "MU225", 1234.0, "v1"))
 
+    def test_append_observations_normalizes_transfer_combo_before_storage(self):
+        from observations_store import append_observations, init_observations_db
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            db_path = Path(tmp) / "observations.sqlite3"
+            init_observations_db(db_path)
+            result = append_observations(
+                [{"flight_combo": "BR0705|BR0182", "price": 1888}],
+                db_path=db_path,
+                round_id="round-transfer",
+                route_type="international",
+                origin_airport="PVG",
+                dest_airport="KIX",
+                depart_date="2099-12-28",
+                cabin_class="economy",
+                source="juhe",
+                observed_at="2099-12-01T10:00:00",
+            )
+
+            self.assertEqual(result, {"written": 1, "skipped": 0})
+            with sqlite3.connect(db_path) as conn:
+                combo = conn.execute("SELECT flight_combo FROM observations").fetchone()[0]
+            self.assertEqual(combo, "BR705+BR182")
+
     def test_aggregator_writes_per_source_observations_before_dedup(self):
         from request_cache import reset_request_cache
         from sources.aggregator import FlightAggregator
@@ -156,6 +180,43 @@ class ObservationsStoreTest(unittest.TestCase):
             self.assertEqual(len(flights), 1)
             self.assertEqual(count_observations(db_path), 1)
 
+    def test_cached_fetch_records_each_fetch_argument_date_instead_of_subscription_date(self):
+        from observations_store import clear_current_round, set_current_round
+        from request_cache import cached_fetch, reset_request_cache
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            db_path = Path(tmp) / "observations.sqlite3"
+            reset_request_cache()
+            source = ObservationSource("juhe", 831)
+            source.route_type = "international"
+            set_current_round("round-multi-date", db_path=db_path)
+            self.addCleanup(clear_current_round)
+            output = StringIO()
+
+            with redirect_stdout(output):
+                cached_fetch(source, "PVG", "KIX", "2026-09-28", {"adult": 1}, "economy", ttl_seconds=0, persist=False)
+                cached_fetch(source, "PVG", "KIX", "2026-10-01", {"adult": 1}, "economy", ttl_seconds=0, persist=False)
+                cached_fetch(source, "PVG", "KIX", "2026-10-04", {"adult": 1}, "economy", ttl_seconds=0, persist=False)
+
+            with sqlite3.connect(db_path) as conn:
+                rows = conn.execute(
+                    "SELECT depart_date, COUNT(*), MIN(days_to_departure), MAX(days_to_departure) "
+                    "FROM observations GROUP BY depart_date ORDER BY depart_date"
+                ).fetchall()
+
+            self.assertEqual(
+                rows,
+                [
+                    ("2026-09-28", 1, 82, 82),
+                    ("2026-10-01", 1, 85, 85),
+                    ("2026-10-04", 1, 88, 88),
+                ],
+            )
+            log = output.getvalue()
+            self.assertIn("\u65e5\u671f=2026-09-28", log)
+            self.assertIn("\u65e5\u671f=2026-10-01", log)
+            self.assertIn("\u65e5\u671f=2026-10-04", log)
+
     def test_cached_fetch_without_round_logs_skip_instead_of_silent_gap(self):
         from observations_store import clear_current_round
         from request_cache import cached_fetch, reset_request_cache
@@ -171,6 +232,88 @@ class ObservationsStoreTest(unittest.TestCase):
 
         self.assertIn("[\u89c2\u6d4b\u843d\u5e93\u8df3\u8fc7]", output.getvalue())
         self.assertIn("\u539f\u56e0=\u65e0round_id", output.getvalue())
+
+    def test_append_observations_records_duration_min_column(self):
+        from observations_store import append_observations, init_observations_db
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            db_path = Path(tmp) / "observations.sqlite3"
+            init_observations_db(db_path)
+            append_observations(
+                [{"flight_combo": "SQ0825|SQ622", "price": 1888, "total_duration_min": 375}],
+                db_path=db_path,
+                round_id="round-duration",
+                route_type="international",
+                origin_airport="PVG",
+                dest_airport="KIX",
+                depart_date="2099-12-28",
+                cabin_class="economy",
+                source="hasdata",
+                observed_at="2099-12-01T10:00:00",
+            )
+
+            with sqlite3.connect(db_path) as conn:
+                columns = [row[1] for row in conn.execute("PRAGMA table_info(observations)").fetchall()]
+                row = conn.execute("SELECT flight_combo, duration_min FROM observations").fetchone()
+            self.assertIn("duration_min", columns)
+            self.assertEqual(row, ("SQ825+SQ622", 375))
+
+    def test_migrate_normalized_combos_merges_format_twins_and_keeps_lower_price(self):
+        from observations_store import init_observations_db, migrate_normalized_combos
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            db_path = Path(tmp) / "observations.sqlite3"
+            init_observations_db(db_path)
+            with sqlite3.connect(db_path) as conn:
+                base = (
+                    "2099-12-01T10:00:00",
+                    "round-migrate",
+                    "international",
+                    "PVG",
+                    "KIX",
+                    "2099-12-28",
+                    27,
+                    "economy",
+                    "juhe",
+                    "SQ0825|SQ622",
+                    "SQ",
+                    1,
+                    1100,
+                    None,
+                    "v1",
+                )
+                cheaper = list(base)
+                cheaper[9] = "SQ825|SQ0622"
+                cheaper[12] = 900
+                conn.execute(
+                    """
+                    INSERT INTO observations (
+                        observed_at, round_id, route_type, origin_airport, dest_airport,
+                        depart_date, days_to_departure, cabin_class, source, flight_combo,
+                        airline, stops, price_cny, duration_min, method_version
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    base,
+                )
+                conn.execute(
+                    """
+                    INSERT INTO observations (
+                        observed_at, round_id, route_type, origin_airport, dest_airport,
+                        depart_date, days_to_departure, cabin_class, source, flight_combo,
+                        airline, stops, price_cny, duration_min, method_version
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    cheaper,
+                )
+
+            result = migrate_normalized_combos(db_path)
+
+            with sqlite3.connect(db_path) as conn:
+                rows = conn.execute("SELECT flight_combo, price_cny FROM observations").fetchall()
+                pipe_count = conn.execute("SELECT COUNT(*) FROM observations WHERE instr(flight_combo, char(124)) > 0").fetchone()[0]
+            self.assertEqual(result["merged"], 1)
+            self.assertEqual(rows, [("SQ825+SQ622", 900.0)])
+            self.assertEqual(pipe_count, 0)
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ import json
 import os
 from datetime import datetime
 
+from flight_combo_utils import normalize_combo
 from source_profiles import get_source_profile, normalize_route_type
 from request_cache import cached_fetch
 from sources.base import FlightSource
@@ -55,9 +56,6 @@ GREATER_CHINA_AIRPORTS = {
     "KNH",
 }
 
-
-def normalize_combo(combo: str) -> str:
-    return combo.replace(" ", "").upper()
 
 
 def _redact_api_key(text: str) -> str:
@@ -184,6 +182,22 @@ def _valid_price(value) -> bool:
         return float(value) > 0
     except (TypeError, ValueError):
         return False
+
+
+def _log_combo_normalization_once(
+    raw_combo: str | None,
+    normalized_combo: str,
+    source_name: str,
+    logged_sources: set[str],
+) -> None:
+    if not raw_combo or not normalized_combo or source_name in logged_sources:
+        return
+    raw_text = str(raw_combo)
+    raw_compact = raw_text.replace(" ", "").upper()
+    if "+" not in normalized_combo or raw_compact == normalized_combo:
+        return
+    logged_sources.add(source_name)
+    print(f"[\u53bb\u91cd\u6838\u5bf9] raw={raw_text} norm={normalized_combo} \u6e90={source_name}")
 
 
 def _source_price_map(flight: dict) -> dict[str, float]:
@@ -528,6 +542,7 @@ class FlightAggregator:
             "[source-route] enabled sources: "
             + str([getattr(source, "name", type(source).__name__) for source in search_sources])
         )
+        combo_normalization_logged_sources: set[str] = set()
 
         for source in search_sources:
             source_name = getattr(source, "name", type(source).__name__)
@@ -580,6 +595,18 @@ class FlightAggregator:
                             flight["source"] = source_name
                         if not flight.get("data_source"):
                             flight["data_source"] = source_name
+                        raw_combo = flight.get("flight_combo") or flight.get("flight_no")
+                        normalized_combo = normalize_combo(raw_combo)
+                        if normalized_combo:
+                            if raw_combo and str(raw_combo) != normalized_combo:
+                                flight.setdefault("raw_flight_combo", str(raw_combo))
+                            _log_combo_normalization_once(
+                                str(raw_combo or ""),
+                                normalized_combo,
+                                str(source_name).lower(),
+                                combo_normalization_logged_sources,
+                            )
+                            flight["flight_combo"] = normalized_combo
                         flight["cabin_class"] = flight.get("cabin_class") or cabin_class
                         flight["source_role"] = flight.get("source_role") or source_role
                         flight["source_weight"] = flight.get("source_weight") or source_weight
@@ -823,9 +850,13 @@ class FlightAggregator:
                     continue
 
                 data_source = flight.get("data_source") or source
+                normalized_flight = {**flight, "flight_combo": combo}
+                raw_combo = flight.get("flight_combo")
+                if raw_combo and str(raw_combo) != combo:
+                    normalized_flight.setdefault("raw_flight_combo", str(raw_combo))
                 if combo not in merged_by_combo:
                     merged_by_combo[combo] = {
-                        **flight,
+                        **normalized_flight,
                         "data_source": "+".join(_source_names(data_source)),
                     }
                     source_order_by_combo[combo] = []
@@ -833,7 +864,7 @@ class FlightAggregator:
                     if _should_replace_flight(merged_by_combo[combo], flight, is_domestic):
                         previous = merged_by_combo[combo]
                         merged_by_combo[combo] = {
-                            **flight,
+                            **normalized_flight,
                             "data_source": "+".join(_source_names(data_source)),
                         }
                         _merge_flight_fields(merged_by_combo[combo], previous)

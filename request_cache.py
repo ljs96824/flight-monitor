@@ -151,11 +151,12 @@ def _record_observations_after_fetch(source, key: tuple, result, cabin_class: st
     flights = _positive_price_flights(result)
     if not flights:
         return
+    fetch_depart_date = str(key[3])
     round_id, db_path = observations_store.get_current_round()
     if not round_id:
         print(
             f"[\u89c2\u6d4b\u843d\u5e93\u8df3\u8fc7] "
-            f"\u822a\u7ebf={key[1]}->{key[2]} \u65e5\u671f={key[3]} "
+            f"\u822a\u7ebf={key[1]}->{key[2]} \u65e5\u671f={fetch_depart_date} "
             f"\u539f\u56e0=\u65e0round_id"
         )
         return
@@ -166,7 +167,7 @@ def _record_observations_after_fetch(source, key: tuple, result, cabin_class: st
             route_type=str(getattr(source, "route_type", None) or "unknown"),
             origin_airport=key[1],
             dest_airport=key[2],
-            depart_date=key[3],
+            depart_date=fetch_depart_date,
             cabin_class=cabin_class,
             source=source_name,
             observed_at=datetime.now().isoformat(timespec="seconds"),
@@ -174,7 +175,7 @@ def _record_observations_after_fetch(source, key: tuple, result, cabin_class: st
         )
         print(
             f"[\u89c2\u6d4b\u843d\u5e93] round={round_id} "
-            f"\u822a\u7ebf={key[1]}->{key[2]} \u65e5\u671f={key[3]} "
+            f"\u822a\u7ebf={key[1]}->{key[2]} \u65e5\u671f={fetch_depart_date} "
             f"\u6e90={source_name} \u5199\u5165={observation_result['written']} "
             f"\u8df3\u8fc7\u91cd\u590d={observation_result['skipped']} "
             f"\u53e3\u5f84=\u5355\u4eba\u5355\u7a0bCNY"
