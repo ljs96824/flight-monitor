@@ -106,12 +106,169 @@ class PlanTrackerTest(unittest.TestCase):
             )
 
         self.assertEqual(status["status"], "stable")
-        self.assertEqual(status["scope"], "roundtrip")
+        self.assertEqual(status["scope"], "per_person_roundtrip")
         self.assertEqual(status["previous_price"], 2760)
         self.assertEqual(status["current_price"], 2810)
         self.assertIn("MU5099去+CA1589回", status["msg"])
-        self.assertIn("同往返口径对比", status["msg"])
+        self.assertIn("同单人往返口径对比", status["msg"])
         self.assertNotIn("降了", status["msg"])
+
+    def test_roundtrip_tracking_uses_unit_price_across_passenger_changes(self):
+        from plan_tracker import save_pushed_plans, track_plan_status
+
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            save_pushed_plans(
+                "sub-pax-change",
+                [
+                    {
+                        "label": "方案A",
+                        "is_roundtrip": True,
+                        "outbound_flight": {"flight_no": "MU225", "price": 6000},
+                        "return_flight": {"flight_no": "JL891", "price": 6215},
+                        "roundtrip_price": 33591,
+                        "price_tiers": {
+                            "unit_roundtrip": 12215,
+                            "total_roundtrip_ref": 33591,
+                            "factor": 2.75,
+                            "passengers": {
+                                "adult": 1,
+                                "child": 1,
+                                "elderly": 1,
+                                "infant": 0,
+                            },
+                        },
+                    }
+                ],
+                data_dir=data_dir,
+            )
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                status = track_plan_status(
+                    "sub-pax-change",
+                    [
+                        {
+                            "is_roundtrip": True,
+                            "outbound": {"flight_no": "MU225", "price": 6000},
+                            "return": {"flight_no": "JL891", "price": 6426},
+                            "price_tiers": {
+                                "unit_roundtrip": 12426,
+                                "total_roundtrip_ref": 59024,
+                                "factor": 4.75,
+                                "passengers": {
+                                    "adult": 2,
+                                    "child": 1,
+                                    "elderly": 2,
+                                    "infant": 0,
+                                },
+                            },
+                        }
+                    ],
+                    data_dir=data_dir,
+                )
+
+        log = output.getvalue()
+        self.assertEqual(status["status"], "price_up")
+        self.assertEqual(status["scope"], "per_person_roundtrip")
+        self.assertEqual(status["previous_price"], 12215)
+        self.assertEqual(status["current_price"], 12426)
+        self.assertEqual(status["price_diff"], 211)
+        self.assertIn("[追踪口径] 上次=12215.0(单人往返), 本次=12426.0(单人往返)", log)
+        self.assertIn("构成变化=1+1+1→2+1+2(全员价不跨轮对比)", log)
+        self.assertIn("单人往返", status["msg"])
+        self.assertIn("¥211", status["msg"])
+
+    def test_legacy_roundtrip_total_uses_factor_to_restore_unit_price(self):
+        from plan_tracker import track_plan_status
+
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            (data_dir / "sub-legacy-factor.json").write_text(
+                json.dumps(
+                    {
+                        "subscription_id": "sub-legacy-factor",
+                        "last_pushed": {
+                            "plan_a": {
+                                "flight_no": "MU225+JL891",
+                                "is_roundtrip": True,
+                                "scope": "roundtrip",
+                                "outbound_flight": "MU225",
+                                "return_flight": "JL891",
+                                "roundtrip_price": 33591,
+                                "price_tiers": {"factor": 2.75},
+                            }
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            status = track_plan_status(
+                "sub-legacy-factor",
+                [
+                    {
+                        "is_roundtrip": True,
+                        "outbound": {"flight_no": "MU225", "price": 6000},
+                        "return": {"flight_no": "JL891", "price": 6426},
+                        "price_tiers": {"unit_roundtrip": 12426},
+                    }
+                ],
+                data_dir=data_dir,
+            )
+
+        self.assertEqual(status["previous_price"], 12215)
+        self.assertEqual(status["current_price"], 12426)
+        self.assertEqual(status["price_diff"], 211)
+        self.assertEqual(status["scope"], "per_person_roundtrip")
+
+    def test_legacy_roundtrip_total_without_factor_skips_comparison(self):
+        from plan_tracker import track_plan_status
+
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            (data_dir / "sub-legacy-no-factor.json").write_text(
+                json.dumps(
+                    {
+                        "subscription_id": "sub-legacy-no-factor",
+                        "last_pushed": {
+                            "plan_a": {
+                                "flight_no": "MU225+JL891",
+                                "is_roundtrip": True,
+                                "scope": "roundtrip",
+                                "outbound_flight": "MU225",
+                                "return_flight": "JL891",
+                                "roundtrip_price": 33591,
+                            }
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                status = track_plan_status(
+                    "sub-legacy-no-factor",
+                    [
+                        {
+                            "is_roundtrip": True,
+                            "outbound": {"flight_no": "MU225", "price": 6000},
+                            "return": {"flight_no": "JL891", "price": 6426},
+                            "price_tiers": {"unit_roundtrip": 12426},
+                        }
+                    ],
+                    data_dir=data_dir,
+                )
+
+        self.assertEqual(status["status"], "comparison_skipped")
+        self.assertEqual(status["scope"], "per_person_roundtrip")
+        self.assertIsNone(status["price_diff"])
+        self.assertIn("[追踪跳过] 原因=历史记录无单人口径", output.getvalue())
+        self.assertNotIn("上涨", status["msg"])
+        self.assertNotIn("下降", status["msg"])
 
 
     def test_roundtrip_tracking_normalizes_historical_combo_keys(self):
@@ -132,6 +289,7 @@ class PlanTrackerTest(unittest.TestCase):
                                 "return_flight": "KE 2118+KE 2057",
                                 "roundtrip_price": 1000,
                                 "price": 1000,
+                                "price_tiers": {"unit_roundtrip": 1000},
                             }
                         },
                     },
@@ -303,7 +461,7 @@ class PlanTrackerTest(unittest.TestCase):
             )
 
         self.assertEqual(status["status"], "partial_unavailable")
-        self.assertEqual(status["scope"], "roundtrip")
+        self.assertEqual(status["scope"], "per_person_roundtrip")
         self.assertIn("返程CA1589本次未获取到报价", status["msg"])
         self.assertIn("无法计算完整往返价", status["msg"])
         self.assertNotIn("降了", status["msg"])

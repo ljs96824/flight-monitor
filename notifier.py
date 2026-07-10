@@ -3391,15 +3391,16 @@ def _append_price_change_section(
     lines.append(f"{current_label}：{_price_text(current)}")
     change = (push_meta or {}).get("price_change") or {}
     if change:
-        lines.append(f"上次提醒：{_price_text(change.get('last'))}")
+        scope_suffix = _price_change_scope_suffix(change)
+        lines.append(f"上次提醒：{_price_text(change.get('last'))}{scope_suffix}")
         diff = _to_float(change.get("diff"))
         if diff is not None:
             if diff < 0:
-                lines.append(f"下降：{_price_text(abs(diff))}")
+                lines.append(f"下降：{_price_text(abs(diff))}{scope_suffix}")
             elif diff > 0:
-                lines.append(f"上涨：{_price_text(diff)}")
+                lines.append(f"上涨：{_price_text(diff)}{scope_suffix}")
             else:
-                lines.append("变化：持平")
+                lines.append(f"变化：持平{scope_suffix}")
     else:
         lines.append("上次提醒：暂无记录")
     if target:
@@ -4391,7 +4392,7 @@ def _format_structured_html_message(
         max_budget,
         price_history_for_push,
         analysis_result.get("days_to_dept"),
-        (last_push or {}).get("price"),
+        None if is_round_trip else (last_push or {}).get("price"),
         analysis_result,
     )
     _append_action_header_section(
@@ -5844,6 +5845,84 @@ def _payload_dedupe_text(items) -> list[str]:
     return result
 
 
+def _is_previous_price_reason(text: str) -> bool:
+    value = str(text or "")
+    return any(
+        marker in value
+        for marker in (
+            "较上次提醒",
+            "比上次提醒",
+            "与上次提醒价格",
+            "比上次涨",
+            "比上次降",
+        )
+    )
+
+
+def _apply_plan_tracking_change(
+    push_meta: dict | None,
+    plan_status_change: dict | None,
+    is_roundtrip: bool,
+) -> dict:
+    """用同组合的单人往返追踪结果统一推送涨跌口径。"""
+    result = dict(push_meta or {})
+    status_payload = plan_status_change if isinstance(plan_status_change, dict) else {}
+    if not is_roundtrip or not status_payload:
+        return result
+    if status_payload.get("scope") != "per_person_roundtrip":
+        return result
+
+    reasons = [
+        item
+        for item in (result.get("reasons") or [])
+        if not _is_previous_price_reason(str(item or ""))
+    ]
+    message = str(status_payload.get("msg") or "").strip()
+    status = str(status_payload.get("status") or "")
+    previous_price = _to_float(status_payload.get("previous_price"))
+    current_price = _to_float(status_payload.get("current_price"))
+    diff = _to_float(status_payload.get("price_diff"))
+
+    if status == "comparison_skipped":
+        result["price_change"] = None
+        if result.get("type") == "价格下降":
+            result["type"] = "价格口径变化"
+    elif previous_price is not None and current_price is not None and diff is not None:
+        result["price_change"] = {
+            "last": previous_price,
+            "current": current_price,
+            "diff": diff,
+            "direction": "down" if diff < 0 else "up" if diff > 0 else "flat",
+            "scope": "per_person_roundtrip",
+        }
+        if status == "price_up":
+            result["type"] = "涨价风险"
+        elif status == "price_down":
+            result["type"] = "价格下降"
+        elif status == "stable" and result.get("type") == "价格下降":
+            result["type"] = "价格稳定"
+    else:
+        result["price_change"] = None
+        if result.get("type") == "价格下降":
+            result["type"] = "价格状态待核实"
+
+    if message:
+        reasons.insert(0, message)
+    result["reasons"] = _payload_dedupe_text(reasons)[:4]
+    return result
+
+
+def _price_change_scope_suffix(change: dict | None) -> str:
+    change = change if isinstance(change, dict) else {}
+    scope = str(change.get("scope") or "").strip()
+    if not scope:
+        return ""
+    try:
+        return f"（{caliber_label(scope)}）"
+    except ValueError:
+        return ""
+
+
 def _email_subject(payload: dict) -> str:
     push_type = payload.get("push_type") or "价格提醒"
     route = payload.get("route") or "航班监控"
@@ -6351,7 +6430,7 @@ def build_notification_payload(
         compare_max_budget,
         _price_history_for_push(price_insights, analysis_result, is_roundtrip),
         analysis_result.get("days_to_dept"),
-        (last_push or {}).get("price"),
+        None if is_roundtrip else (last_push or {}).get("price"),
         push_analysis,
     )
     execution_advice = build_execution_advice(
@@ -6380,13 +6459,9 @@ def build_notification_payload(
         push_meta["type"] = price_policy["push_type_hint"]
     if price_policy.get("reason"):
         push_meta["reasons"] = _payload_dedupe_text([price_policy["reason"]] + (push_meta.get("reasons") or []))[:4]
-    if plan_status_change:
-        status = plan_status_change.get("status")
-        msg = str(plan_status_change.get("msg") or "").strip()
-        if status in {"price_up", "sold_out"}:
-            push_meta["type"] = "涨价风险"
-        if msg:
-            push_meta["reasons"] = _payload_dedupe_text([msg] + (push_meta.get("reasons") or []))[:4]
+    push_meta = _apply_plan_tracking_change(push_meta, plan_status_change, is_roundtrip)
+    if plan_status_change and plan_status_change.get("status") == "sold_out":
+        push_meta["type"] = "涨价风险"
 
     change = (push_meta or {}).get("price_change") or {}
     fallback_line = _trend_fallback_line(history)
@@ -6642,6 +6717,7 @@ def build_notification_payload(
         "diff_from_last": {
             "last_price": change.get("last") or (last_push or {}).get("price"),
             "diff": change.get("diff"),
+            "scope": change.get("scope"),
             "last_snapshot": last_snapshot or {},
         },
         "freshness_minutes": ((primary_flight or {}).get("availability") or {}).get("age_minutes"),
@@ -6702,11 +6778,16 @@ def _render_pushplus_legacy(payload: dict) -> str:
     if risks:
         lines.extend(["", "<b>主要风险：</b>", "，".join(str(item) for item in risks[:2])])
     fallback = payload.get("trend_fallback")
-    diff = _to_float((payload.get("diff_from_last") or {}).get("diff"))
+    diff_from_last = payload.get("diff_from_last") or {}
+    diff = _to_float(diff_from_last.get("diff"))
+    scope_suffix = _price_change_scope_suffix(diff_from_last)
     if fallback:
         trend_text = f"近期：{fallback}"
         if diff is not None:
-            trend_text += f"（{'下降' if diff < 0 else '上涨' if diff > 0 else '持平'}{_price_text(abs(diff)) if diff else ''}）"
+            trend_text += (
+                f"（{'下降' if diff < 0 else '上涨' if diff > 0 else '持平'}"
+                f"{_price_text(abs(diff)) if diff else ''}{scope_suffix}）"
+            )
         lines.extend(["", trend_text])
     links = [
         f'<a href="{payload.get("detail_url", "")}" target="_blank">查看网页版完整分析(如未显示请稍后刷新)</a>',
@@ -7771,9 +7852,13 @@ def render_pushplus(payload: dict) -> str:
     gap_line = _budget_gap_line(payload)
 
     reasons = [str(item) for item in (payload.get("trigger_reason") or []) if item]
-    diff = _to_float((payload.get("diff_from_last") or {}).get("diff"))
+    diff_from_last = payload.get("diff_from_last") or {}
+    diff = _to_float(diff_from_last.get("diff"))
     if diff is not None and diff != 0:
-        reasons.append(f"比上次{'降' if diff < 0 else '涨'}{_price_text(abs(diff))}")
+        reasons.append(
+            f"比上次{'降' if diff < 0 else '涨'}{_price_text(abs(diff))}"
+            f"{_price_change_scope_suffix(diff_from_last)}"
+        )
     current = _to_float(payload.get("current_price"))
     ideal = _to_float(payload.get("ideal_price"))
     if current is not None and ideal and current <= ideal * 1.05:
@@ -10791,17 +10876,23 @@ def render_email(payload: dict) -> tuple[str, str]:
 
     cards.append(_email_card("为什么不推荐更便宜方案", _email_excluded_compact_body(payload)))
 
-    diff = _to_float((payload.get("diff_from_last") or {}).get("diff"))
+    diff_from_last = payload.get("diff_from_last") or {}
+    diff = _to_float(diff_from_last.get("diff"))
+    scope_suffix = _price_change_scope_suffix(diff_from_last)
     trend_summary_text = str(payload.get("trend_summary") or "").strip()
     change_lines = []
     if diff is not None or trend_summary_text:
         if diff is not None:
             if diff < 0:
-                change_lines.append(f"<div>较上次提醒：下降{_price_text(abs(diff))}</div>")
+                change_lines.append(
+                    f"<div>较上次提醒：下降{_price_text(abs(diff))}{scope_suffix}</div>"
+                )
             elif diff > 0:
-                change_lines.append(f"<div>较上次提醒：上涨{_price_text(diff)}</div>")
+                change_lines.append(
+                    f"<div>较上次提醒：上涨{_price_text(diff)}{scope_suffix}</div>"
+                )
             else:
-                change_lines.append("<div>较上次提醒：价格持平</div>")
+                change_lines.append(f"<div>较上次提醒：价格持平{scope_suffix}</div>")
         if trend_summary_text:
             change_lines.append(f"<div>近14次采集趋势：{html.escape(trend_summary_text)}</div>")
         change_lines.append(f"<div>本次提醒主要由“{html.escape(str(payload.get('push_type') or '价格变化'))}”触发。</div>")

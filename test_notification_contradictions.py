@@ -10,6 +10,146 @@ from notifier import build_notification_payload, render_email
 
 
 class NotificationContradictionsTest(unittest.TestCase):
+    def test_roundtrip_payload_ignores_unscoped_last_push_without_plan_tracking(self):
+        analysis = {
+            "round_trip_analysis": {
+                "top_combinations": [
+                    {
+                        "outbound": {"flight_no": "MU225", "price": 6000, "stops": 0},
+                        "return": {"flight_no": "JL891", "price": 6426, "stops": 0},
+                        "outbound_price": 6000,
+                        "return_price": 6426,
+                        "total_price": 12426,
+                    }
+                ]
+            }
+        }
+        with patch("notifier.get_last_push_price", return_value={"price": 33591}), patch(
+            "notifier.get_last_push_snapshot", return_value=None
+        ), patch("notifier.track_plan_status", return_value=None):
+            payload = build_notification_payload(
+                analysis,
+                route_info={
+                    "round_trip": True,
+                    "origin": "PVG",
+                    "destination": "KIX",
+                    "depart_date": "2026-10-01",
+                    "return_date": "2026-10-06",
+                },
+                subscription={
+                    "id": "roundtrip-unscoped-history",
+                    "basic": {"route_type": "international"},
+                    "preferences": {
+                        "passengers": {"adult": 2, "child": 1, "elderly": 2, "infant": 0}
+                    },
+                },
+            )
+
+        self.assertIsNone(payload["diff_from_last"]["diff"])
+        self.assertFalse(
+            any("较上次提醒" in str(reason) for reason in payload["trigger_reason"])
+        )
+
+    def test_plan_tracking_change_replaces_mixed_scope_push_difference(self):
+        from notifier import _apply_plan_tracking_change
+
+        push_meta = {
+            "type": "价格下降",
+            "price_change": {
+                "last": 33591,
+                "current": 12426,
+                "diff": -21165,
+                "direction": "down",
+            },
+            "reasons": ["较上次提醒：下降¥21,165", "当前价格仍需观察"],
+        }
+        tracking = {
+            "status": "price_up",
+            "previous_price": 12215,
+            "current_price": 12426,
+            "price_diff": 211,
+            "scope": "per_person_roundtrip",
+            "msg": "同组合单人往返上涨¥211",
+        }
+
+        result = _apply_plan_tracking_change(push_meta, tracking, is_roundtrip=True)
+
+        self.assertEqual(result["type"], "涨价风险")
+        self.assertEqual(result["price_change"]["last"], 12215)
+        self.assertEqual(result["price_change"]["current"], 12426)
+        self.assertEqual(result["price_change"]["diff"], 211)
+        self.assertEqual(result["price_change"]["scope"], "per_person_roundtrip")
+        self.assertIn("同组合单人往返上涨¥211", result["reasons"])
+        self.assertNotIn("较上次提醒：下降¥21,165", result["reasons"])
+
+    def test_skipped_roundtrip_comparison_removes_mixed_scope_push_difference(self):
+        from notifier import _apply_plan_tracking_change
+
+        result = _apply_plan_tracking_change(
+            {
+                "type": "价格下降",
+                "price_change": {"last": 33591, "current": 12426, "diff": -21165},
+                "reasons": ["较上次提醒：下降¥21,165", "当前价格仍需观察"],
+            },
+            {
+                "status": "comparison_skipped",
+                "scope": "per_person_roundtrip",
+                "msg": "历史记录无单人口径，本次不展示涨跌。",
+            },
+            is_roundtrip=True,
+        )
+
+        self.assertIsNone(result.get("price_change"))
+        self.assertIn("历史记录无单人口径，本次不展示涨跌。", result["reasons"])
+        self.assertNotIn("较上次提醒：下降¥21,165", result["reasons"])
+
+    def test_stable_unit_roundtrip_change_clears_false_price_drop_type(self):
+        from notifier import _apply_plan_tracking_change
+
+        result = _apply_plan_tracking_change(
+            {
+                "type": "价格下降",
+                "price_change": {"last": 33591, "current": 12426, "diff": -21165},
+                "reasons": ["较上次提醒：下降¥21,165"],
+            },
+            {
+                "status": "stable",
+                "previous_price": 12215,
+                "current_price": 12240,
+                "price_diff": 25,
+                "scope": "per_person_roundtrip",
+                "msg": "同组合单人往返价格稳定",
+            },
+            is_roundtrip=True,
+        )
+
+        self.assertEqual(result["type"], "价格稳定")
+        self.assertEqual(result["price_change"]["diff"], 25)
+
+    def test_partial_roundtrip_quote_clears_stale_mixed_scope_difference(self):
+        from notifier import _apply_plan_tracking_change
+
+        result = _apply_plan_tracking_change(
+            {
+                "type": "价格下降",
+                "price_change": {"last": 33591, "current": 12426, "diff": -21165},
+                "reasons": ["较上次提醒：下降¥21,165"],
+            },
+            {
+                "status": "partial_unavailable",
+                "previous_price": 12215,
+                "current_price": None,
+                "price_diff": None,
+                "scope": "per_person_roundtrip",
+                "msg": "返程本次未获取到报价，无法计算完整单人往返价。",
+            },
+            is_roundtrip=True,
+        )
+
+        self.assertIsNone(result.get("price_change"))
+        self.assertNotEqual(result["type"], "价格下降")
+        self.assertIn("无法计算完整单人往返价", result["reasons"][0])
+
     def test_rising_over_budget_caps_verify_price_and_waits(self):
         analysis = {
             "recommendations": [

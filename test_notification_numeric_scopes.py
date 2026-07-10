@@ -86,6 +86,21 @@ class NotificationNumericScopesTest(unittest.TestCase):
         self.assertIn("\u521a\u9700\u5fc5\u987b\u51fa\u884c", body)
         self.assertIn("\u5546\u52a1\u4f1a\u8bae", body)
 
+    def test_roundtrip_tracking_difference_is_labeled_in_email_and_pushplus(self):
+        payload = self._over_budget_payload()
+        payload["diff_from_last"] = {
+            "last_price": 12215,
+            "diff": 211,
+            "scope": "per_person_roundtrip",
+        }
+        payload["trigger_reason"] = []
+
+        pushplus = render_pushplus(payload)
+        _, email = render_email(payload)
+
+        self.assertIn("比上次涨¥211（单人往返）", pushplus)
+        self.assertIn("较上次提醒：上涨¥211（单人往返）", email)
+
     def test_action_panel_budget_reason_uses_budget_compare_price_scope(self):
         plan = {
             "label": "\u65b9\u6848A",

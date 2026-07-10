@@ -110,6 +110,54 @@ class SourceWeightingTest(unittest.TestCase):
         self.assertEqual(prices, {"hasdata": 1000.0, "juhe": 1200.0})
         self.assertTrue(result["price_anomalies"])
 
+    def test_collect_logs_selected_price_for_each_dual_source_comparison(self):
+        class FetchSource(DummySource):
+            def __init__(self, name, price):
+                super().__init__(name)
+                self.price = price
+
+            def fetch(self, origin, dest, date_str, cabin_class="economy"):
+                return {
+                    "source_status": "success",
+                    "flights": [
+                        {
+                            "flight_combo": "MU225",
+                            "flight_no": "MU225",
+                            "departure_airport": origin,
+                            "arrival_airport": dest,
+                            "departure_time": f"{date_str} 09:00",
+                            "arrival_time": f"{date_str} 12:00",
+                            "price": self.price,
+                            "data_source": self.name,
+                        }
+                    ],
+                }
+
+        def direct_cached_fetch(source, origin, dest, date_str, passengers, cabin_class, **kwargs):
+            return source.fetch(origin, dest, date_str, cabin_class)
+
+        aggregator = FlightAggregator(
+            [FetchSource("hasdata", 1200), FetchSource("juhe", 1000)],
+            [],
+        )
+        with (
+            patch("sources.aggregator.cached_fetch", side_effect=direct_cached_fetch),
+            patch("sources.aggregator.safe_log") as log,
+        ):
+            result = aggregator.collect("PVG", "KIX", "2026-07-01", route_type="international")
+
+        self.assertEqual(result["flights"][0]["price"], 1200)
+        messages = [call.args[0] for call in log.call_args_list if call.args]
+        source_price_logs = [message for message in messages if message.startswith("[源价对比]")]
+        merge_price_logs = [message for message in messages if message.startswith("[合并选价]")]
+        self.assertEqual(len(source_price_logs), 1)
+        self.assertEqual(len(merge_price_logs), 1)
+        self.assertEqual(
+            merge_price_logs[0],
+            "[合并选价] combo=MU225 入池价=CNY1200 取自=hasdata "
+            "候选=hasdata:CNY1200/juhe:CNY1000 规则=source_priority_then_min_price",
+        )
+
     def test_collect_merges_separator_and_leading_zero_combo_across_sources(self):
         class FetchSource(DummySource):
             def __init__(self, name, combo, price):

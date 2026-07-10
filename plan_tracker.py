@@ -14,6 +14,8 @@ from log_utils import safe_log
 BASE_DIR = Path(__file__).parent
 DEFAULT_DATA_DIR = BASE_DIR / "data" / "pushed_plans"
 DEFAULT_FEEDBACK_PATH = BASE_DIR / "data" / "feedback.json"
+ROUNDTRIP_TRACKING_SCOPE = "per_person_roundtrip"
+ROUNDTRIP_TRACKING_LABEL = "单人往返"
 
 
 def _storage_dir(data_dir=None) -> Path:
@@ -118,6 +120,128 @@ def _roundtrip_price(plan: dict | None, outbound: dict | None, return_flight: di
     return None
 
 
+def _price_tiers(item: dict | None) -> dict:
+    item = item or {}
+    tiers = item.get("price_tiers")
+    return tiers if isinstance(tiers, dict) else {}
+
+
+def _passenger_factor(item: dict | None) -> float | None:
+    item = item or {}
+    passenger_pricing = item.get("passenger_pricing")
+    containers = [
+        _price_tiers(item),
+        passenger_pricing if isinstance(passenger_pricing, dict) else {},
+        item,
+    ]
+    for container in containers:
+        for key in ("factor", "passenger_factor", "passenger_rate_sum"):
+            value = _to_float(container.get(key))
+            if value is not None and value > 0:
+                return value
+    return None
+
+
+def _passengers(item: dict | None) -> dict:
+    item = item or {}
+    passenger_pricing = item.get("passenger_pricing")
+    containers = [
+        _price_tiers(item),
+        passenger_pricing if isinstance(passenger_pricing, dict) else {},
+        item,
+    ]
+    for container in containers:
+        passengers = container.get("passengers")
+        if isinstance(passengers, dict) and passengers:
+            return dict(passengers)
+    return {}
+
+
+def _passenger_signature(item: dict | None) -> str:
+    item = item or {}
+    explicit = str(item.get("passenger_signature") or "").strip()
+    if explicit:
+        return explicit
+    passengers = _passengers(item)
+    if not passengers:
+        return ""
+
+    def count(*keys: str) -> int:
+        for key in keys:
+            if key not in passengers:
+                continue
+            try:
+                return max(0, int(passengers.get(key) or 0))
+            except (TypeError, ValueError):
+                return 0
+        return 0
+
+    values = [
+        count("adult", "adults"),
+        count("child", "children"),
+        count("elderly"),
+    ]
+    infant = count("infant", "infants")
+    if infant:
+        values.append(infant)
+    return "+".join(str(value) for value in values)
+
+
+def _explicit_unit_roundtrip(item: dict | None) -> float | None:
+    item = item or {}
+    tiers = _price_tiers(item)
+    value = _to_float(tiers.get("unit_roundtrip"))
+    if value is not None:
+        return value
+    for key in ("unit_roundtrip_price", "adult_roundtrip_price"):
+        value = _to_float(item.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def _historical_unit_roundtrip(item: dict | None) -> tuple[float | None, str]:
+    item = item or {}
+    explicit = _explicit_unit_roundtrip(item)
+    if explicit is not None:
+        return explicit, "price_tiers.unit_roundtrip"
+
+    scope = str(item.get("price_scope") or item.get("tracking_scope") or "").strip().lower()
+    raw_total = None
+    for key in ("roundtrip_price", "total_price", "roundtrip_total", "price"):
+        raw_total = _to_float(item.get(key))
+        if raw_total is not None:
+            break
+    if raw_total is None:
+        return None, "missing_price"
+    if scope in {ROUNDTRIP_TRACKING_SCOPE, "single_person_roundtrip", "unit_roundtrip"}:
+        return raw_total, "explicit_per_person_scope"
+
+    factor = _passenger_factor(item)
+    if factor is None:
+        return None, "missing_factor"
+    return float(round(raw_total / factor)), "roundtrip_price/factor"
+
+
+def _current_unit_roundtrip(
+    item: dict | None,
+    outbound: dict | None,
+    return_flight: dict | None,
+) -> float | None:
+    explicit = _explicit_unit_roundtrip(item)
+    if explicit is not None:
+        return explicit
+    outbound_price = _leg_price(item, "outbound", outbound)
+    return_price = _leg_price(item, "return", return_flight)
+    if outbound_price is not None and return_price is not None:
+        return outbound_price + return_price
+    factor = _passenger_factor(item)
+    if factor is None:
+        return None
+    total = _roundtrip_price(item, outbound, return_flight)
+    return float(round(total / factor)) if total is not None else None
+
+
 def _plan_record(plan: dict, index: int) -> dict | None:
     label = plan.get("label") or f"方案{chr(65 + index)}"
     pushed_at = datetime.now().isoformat(timespec="seconds")
@@ -131,7 +255,13 @@ def _plan_record(plan: dict, index: int) -> dict | None:
         outbound_price = _leg_price(plan, "outbound", outbound)
         return_price = _leg_price(plan, "return", return_flight)
         total = _roundtrip_price(plan, outbound, return_flight)
-        price_tiers = plan.get("price_tiers") if isinstance(plan.get("price_tiers"), dict) else {}
+        unit_roundtrip = _current_unit_roundtrip(plan, outbound, return_flight)
+        price_tiers = dict(_price_tiers(plan))
+        if unit_roundtrip is not None:
+            price_tiers.setdefault("unit_roundtrip", unit_roundtrip)
+        factor = _passenger_factor(plan)
+        passengers = _passengers(plan)
+        passenger_signature = _passenger_signature(plan)
         return {
             "flight_no": f"{outbound_no}+{return_no}".strip("+"),
             "is_roundtrip": True,
@@ -140,9 +270,14 @@ def _plan_record(plan: dict, index: int) -> dict | None:
             "return_flight": return_no,
             "roundtrip_price": total,
             "price": total,
+            "unit_roundtrip_price": unit_roundtrip,
+            "price_scope": ROUNDTRIP_TRACKING_SCOPE,
             "outbound_price": outbound_price,
             "return_price": return_price,
             "price_tiers": price_tiers,
+            "passenger_factor": factor,
+            "passengers": passengers,
+            "passenger_signature": passenger_signature,
             "estimated_roundtrip_price": _to_float(price_tiers.get("total_estimated")),
             "date": plan.get("date") or outbound.get("departure_date"),
             "return_date": plan.get("return_date") or return_flight.get("departure_date"),
@@ -311,7 +446,7 @@ def _current_roundtrip_from_combo(combo: dict | None) -> tuple[float | None, flo
     return_flight = _item_leg_flight(combo, "return")
     outbound_price = _leg_price(combo, "outbound", outbound)
     return_price = _leg_price(combo, "return", return_flight)
-    total = _roundtrip_price(combo, outbound, return_flight)
+    total = _current_unit_roundtrip(combo, outbound, return_flight)
     return total, outbound_price, return_price
 
 
@@ -432,14 +567,16 @@ def _track_roundtrip_plan(plan_a: dict, current_items: list[dict] | None) -> dic
     outbound_no = str(plan_a.get("outbound_flight") or "").strip()
     return_no = str(plan_a.get("return_flight") or "").strip()
     desc = _roundtrip_desc(outbound_no, return_no)
-    previous_price = _to_float(plan_a.get("roundtrip_price") or plan_a.get("price"))
+    previous_price, previous_price_source = _historical_unit_roundtrip(plan_a)
+    previous_passengers = _passenger_signature(plan_a)
     combo = _find_roundtrip_combo(current_items, outbound_no, return_no)
     outbound_current = find_flight(current_items, outbound_no)
     return_current = find_flight(current_items, return_no)
 
     print(f"[方案追踪诊断] 航班={desc}")
     print(
-        f"[方案追踪诊断] 上次价={previous_price}, 上次口径=往返, "
+        f"[方案追踪诊断] 上次价={previous_price}, 上次口径={ROUNDTRIP_TRACKING_LABEL}, "
+        f"取数来源={previous_price_source}, "
         f"上次记录的是={json.dumps(plan_a, ensure_ascii=False, default=str)}"
     )
 
@@ -457,6 +594,7 @@ def _track_roundtrip_plan(plan_a: dict, current_items: list[dict] | None) -> dic
     if combo:
         current_price, outbound_price, return_price = _current_roundtrip_from_combo(combo)
         current_source = combo
+        current_passengers = _passenger_signature(combo)
     elif outbound_current and return_current:
         outbound_price = _to_float(outbound_current.get("price"))
         return_price = _to_float(return_current.get("price"))
@@ -466,14 +604,22 @@ def _track_roundtrip_plan(plan_a: dict, current_items: list[dict] | None) -> dic
             else None
         )
         current_source = {"outbound": outbound_current, "return": return_current}
+        current_passengers = (
+            _passenger_signature(outbound_current)
+            or _passenger_signature(return_current)
+        )
     else:
         current_price = None
         outbound_price = _to_float((outbound_current or {}).get("price")) if outbound_current else None
         return_price = _to_float((return_current or {}).get("price")) if return_current else None
         current_source = {"outbound": outbound_current, "return": return_current}
+        current_passengers = (
+            _passenger_signature(outbound_current)
+            or _passenger_signature(return_current)
+        )
 
     print(
-        f"[方案追踪诊断] 本次价={current_price}, 本次口径=往返, "
+        f"[方案追踪诊断] 本次价={current_price}, 本次口径={ROUNDTRIP_TRACKING_LABEL}, "
         f"本次取到的是={json.dumps(current_source, ensure_ascii=False, default=str)}"
     )
     matched_any = bool(combo or outbound_current or return_current)
@@ -482,9 +628,21 @@ def _track_roundtrip_plan(plan_a: dict, current_items: list[dict] | None) -> dic
         f"[追踪诊断] 上次航班={desc}, 本次采集是否包含该航班号={matched_any}, "
         f"本次该航线总航班数={collection_count}"
     )
-    print(f"[追踪口径] 上次={previous_price}(往返), 本次={current_price}(往返)")
+    composition_note = ""
+    if previous_passengers and current_passengers and previous_passengers != current_passengers:
+        composition_note = (
+            f"构成变化={previous_passengers}→{current_passengers}"
+            "(全员价不跨轮对比)"
+        )
+    previous_log = "None" if previous_price is None else f"{previous_price:.1f}"
+    current_log = "None" if current_price is None else f"{current_price:.1f}"
+    safe_log(
+        f"[追踪口径] 上次={previous_log}({ROUNDTRIP_TRACKING_LABEL}), "
+        f"本次={current_log}({ROUNDTRIP_TRACKING_LABEL})"
+        f"{' ' + composition_note if composition_note else ''}"
+    )
     diff = current_price - previous_price if current_price is not None and previous_price is not None else None
-    print(f"[方案追踪诊断] 差额={None if diff is None else previous_price - current_price}")
+    print(f"[方案追踪诊断] 差额={diff}")
 
     if current_price is None:
         missing = []
@@ -502,7 +660,7 @@ def _track_roundtrip_plan(plan_a: dict, current_items: list[dict] | None) -> dic
         confidence = _missing_quote_confidence(current_items, matched_any=matched_any)
         if missing:
             msg = (
-                f"上次推荐:{desc},往返{_format_price(previous_price)}。"
+                f"上次推荐:{desc},{ROUNDTRIP_TRACKING_LABEL}{_format_price(previous_price)}。"
                 f"本次:{'，'.join(available) + '，' if available else ''}"
                 f"{'、'.join(missing)}本次未获取到报价,无法计算完整往返价。"
                 f"{confidence['note']}"
@@ -514,7 +672,7 @@ def _track_roundtrip_plan(plan_a: dict, current_items: list[dict] | None) -> dic
                 current_price,
                 None,
                 msg,
-                "roundtrip",
+                ROUNDTRIP_TRACKING_SCOPE,
                 {
                     "outbound_flight": outbound_no,
                     "return_flight": return_no,
@@ -526,7 +684,7 @@ def _track_roundtrip_plan(plan_a: dict, current_items: list[dict] | None) -> dic
                 },
             )
         msg = (
-            f"上次推荐:{desc},往返{_format_price(previous_price)}。"
+            f"上次推荐:{desc},{ROUNDTRIP_TRACKING_LABEL}{_format_price(previous_price)}。"
             f"本次未获取到该组合报价。{confidence['note']}"
         )
         return _change_payload(
@@ -536,7 +694,7 @@ def _track_roundtrip_plan(plan_a: dict, current_items: list[dict] | None) -> dic
             None,
             None,
             msg,
-            "roundtrip",
+            ROUNDTRIP_TRACKING_SCOPE,
             {
                 "confidence": confidence["confidence"],
                 "collection_count": confidence["collection_count"],
@@ -544,7 +702,40 @@ def _track_roundtrip_plan(plan_a: dict, current_items: list[dict] | None) -> dic
             },
         )
 
-    status = _price_change_status(diff, previous_price, "roundtrip", "roundtrip")
+    if previous_price is None:
+        safe_log(
+            f"[追踪跳过] 原因=历史记录无单人口径 航班={desc} "
+            f"历史来源={previous_price_source}"
+        )
+        msg = (
+            f"上次推荐:{desc}。历史记录未保存{ROUNDTRIP_TRACKING_LABEL}价格，"
+            "且缺少可反推的乘客费率因子，本次不展示涨跌。"
+        )
+        return _change_payload(
+            "comparison_skipped",
+            desc,
+            None,
+            current_price,
+            None,
+            msg,
+            ROUNDTRIP_TRACKING_SCOPE,
+            {
+                "outbound_flight": outbound_no,
+                "return_flight": return_no,
+                "outbound_price": outbound_price,
+                "return_price": return_price,
+                "price_scope": ROUNDTRIP_TRACKING_SCOPE,
+                "previous_price_source": previous_price_source,
+                "passenger_composition_note": composition_note,
+            },
+        )
+
+    status = _price_change_status(
+        diff,
+        previous_price,
+        ROUNDTRIP_TRACKING_SCOPE,
+        ROUNDTRIP_TRACKING_SCOPE,
+    )
     change_text = _format_change(diff)
     if status == "price_up":
         verdict = f"上涨{change_text.replace('↑', '')}"
@@ -555,9 +746,10 @@ def _track_roundtrip_plan(plan_a: dict, current_items: list[dict] | None) -> dic
     else:
         verdict = f"小幅变化({change_text})"
     msg = (
-        f"上次推荐:{desc},往返{_format_price(previous_price)}。"
-        f"本次同组合:往返{_format_price(current_price)}({verdict})。"
-        "（同往返口径对比）"
+        f"上次推荐:{desc},{ROUNDTRIP_TRACKING_LABEL}{_format_price(previous_price)}。"
+        f"本次同组合:{ROUNDTRIP_TRACKING_LABEL}{_format_price(current_price)}({verdict})。"
+        f"（同{ROUNDTRIP_TRACKING_LABEL}口径对比）"
+        f"{' ' + composition_note if composition_note else ''}"
     )
     return _change_payload(
         status,
@@ -566,12 +758,17 @@ def _track_roundtrip_plan(plan_a: dict, current_items: list[dict] | None) -> dic
         current_price,
         diff,
         msg,
-        "roundtrip",
+        ROUNDTRIP_TRACKING_SCOPE,
         {
             "outbound_flight": outbound_no,
             "return_flight": return_no,
             "outbound_price": outbound_price,
             "return_price": return_price,
+            "price_scope": ROUNDTRIP_TRACKING_SCOPE,
+            "previous_price_source": previous_price_source,
+            "previous_passenger_signature": previous_passengers,
+            "current_passenger_signature": current_passengers,
+            "passenger_composition_note": composition_note,
         },
     )
 

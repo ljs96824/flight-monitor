@@ -216,6 +216,34 @@ def _source_price_map(flight: dict) -> dict[str, float]:
     return prices
 
 
+MERGE_PRICE_RULE = "source_priority_then_min_price"
+
+
+def _selected_price_source(flight: dict, prices: dict[str, float]) -> str:
+    try:
+        selected_price = float(flight.get("price"))
+    except (TypeError, ValueError):
+        return "unknown"
+
+    matching_sources = [
+        source
+        for source, price in prices.items()
+        if abs(float(price) - selected_price) < 0.01
+    ]
+    if len(matching_sources) == 1:
+        return matching_sources[0]
+
+    primary_source = str(flight.get("primary_source") or "").lower()
+    if primary_source in matching_sources:
+        return primary_source
+
+    retained_sources = _source_names(flight.get("source"))
+    for source in retained_sources:
+        if source in matching_sources:
+            return source
+    return matching_sources[0] if matching_sources else "unknown"
+
+
 def _log_dual_source_price_checks(flights: list[dict]) -> list[dict]:
     anomalies = []
     for flight in flights:
@@ -234,6 +262,16 @@ def _log_dual_source_price_checks(flights: list[dict]) -> list[dict]:
         safe_log(
             f"[\u6e90\u4ef7\u5bf9\u6bd4] combo={combo} hasdata=CNY{hasdata_price:g} "
             f"juhe=CNY{juhe_price:g} \u5dee\u5f02%={diff_pct:.1f}"
+        )
+        try:
+            selected_price_text = f"CNY{float(flight.get('price')):g}"
+        except (TypeError, ValueError):
+            selected_price_text = "unknown"
+        selected_source = _selected_price_source(flight, prices)
+        safe_log(
+            f"[\u5408\u5e76\u9009\u4ef7] combo={combo} \u5165\u6c60\u4ef7={selected_price_text} "
+            f"\u53d6\u81ea={selected_source} \u5019\u9009=hasdata:CNY{hasdata_price:g}/"
+            f"juhe:CNY{juhe_price:g} \u89c4\u5219={MERGE_PRICE_RULE}"
         )
         if diff_pct > 15:
             anomalies.append(

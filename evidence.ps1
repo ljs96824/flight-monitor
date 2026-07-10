@@ -1,1 +1,1 @@
-Select-String -Path data\run_latest.log -Pattern '票价系数|过滤前|过滤后|方案对比|排除诊断|追踪|源价对比|观测落库|API统计|采集分析推送结束|Traceback' | Select-Object -ExpandProperty Line
+锘縂et-Content data\run_latest.log -Encoding UTF8 | Select-String -Pattern '绁ㄤ环绯绘暟|杩囨护鍓峾杩囨护鍚巪鏂规瀵规瘮|鎺掗櫎璇婃柇|杩借釜|婧愪环瀵规瘮|瑙傛祴钀藉簱|API缁熻|閲囬泦鍒嗘瀽鎺ㄩ�佺粨鏉焲Traceback|鍚堝苟閫変环' | Select-Object -ExpandProperty Line
