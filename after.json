@@ -97,7 +97,7 @@
     "source": "snapshot_fixture"
   },
   "notification": {
-    "email_html_chars": 21071,
+    "email_html_chars": 21089,
     "email_subject": "【无符合方案】上海 → 北京｜提供1个备选",
     "pushplus_chars": 2051
   },

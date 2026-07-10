@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import datetime
 
 from flight_combo_utils import normalize_combo
@@ -13,6 +14,13 @@ from request_cache import cached_fetch
 from sources.base import FlightSource
 
 OPTIONAL_SOURCE_THRESHOLD = 8
+TIME_FORMAT_CHECK_SAMPLE_LIMIT = 5
+
+_time_format_check_state = {
+    "scope": None,
+    "count": 0,
+    "seen_combos": set(),
+}
 
 CN_AIRPORTS = {
     "PVG",
@@ -144,6 +152,7 @@ def _merge_flight_fields(target: dict, source: dict) -> dict:
             "price",
             "source",
             "data_source",
+            "_source_raw_departure_time",
             "source_price_details",
             "booking_options",
             "reference_only",
@@ -183,6 +192,99 @@ def _valid_price(value) -> bool:
         return float(value) > 0
     except (TypeError, ValueError):
         return False
+
+
+def _source_raw_departure_time(flight: dict, source_name: str) -> str:
+    traced = flight.get("_source_raw_departure_time")
+    if traced not in (None, ""):
+        return str(traced)
+
+    if str(source_name or "").lower() == "juhe":
+        raw = flight.get("raw") or {}
+        if isinstance(raw, dict):
+            value = raw.get("departureTime") or raw.get("departure_time")
+            if value not in (None, ""):
+                return str(value)
+
+    segments = flight.get("segments") or []
+    if segments and isinstance(segments[0], dict):
+        value = segments[0].get("raw_dep_time") or segments[0].get("dep_time")
+        if value not in (None, ""):
+            return str(value)
+    return str(flight.get("departure_time") or "")
+
+
+def _flight_departure_time(flight: dict) -> str:
+    segments = flight.get("segments") or []
+    if segments and isinstance(segments[0], dict):
+        value = segments[0].get("dep_time") or segments[0].get("departure_time")
+        if value not in (None, ""):
+            return str(value)
+    return str(flight.get("departure_time") or "")
+
+
+def _clock_for_time_trace(value) -> tuple[str, int | None]:
+    text = str(value or "").strip()
+    match = re.search(r"(?<!\d)(\d{1,2}):(\d{2})(?:\s*([AP]M))?", text, re.IGNORECASE)
+    if not match:
+        return text or "-", None
+
+    hour = int(match.group(1))
+    minute = int(match.group(2))
+    suffix = str(match.group(3) or "").upper()
+    if suffix:
+        hour_24 = hour % 12 + (12 if suffix == "PM" else 0)
+        return f"{hour:02d}:{minute:02d} {suffix}", hour_24
+    if hour > 23:
+        return f"{hour:02d}:{minute:02d}", None
+    return f"{hour:02d}:{minute:02d}", hour
+
+
+def _time_format_trace_scope(owner) -> str:
+    try:
+        from observations_store import get_current_round
+
+        round_id, _ = get_current_round()
+    except Exception:
+        round_id = None
+    return str(round_id or f"aggregator-{id(owner)}")
+
+
+def _log_time_format_checks(
+    flights: list[dict],
+    source_times_by_combo: dict[str, dict[str, str]],
+    scope: str,
+) -> None:
+    if _time_format_check_state["scope"] != scope:
+        _time_format_check_state["scope"] = scope
+        _time_format_check_state["count"] = 0
+        _time_format_check_state["seen_combos"] = set()
+
+    candidates = []
+    for flight in flights:
+        key = _flight_key(flight)
+        source_times = source_times_by_combo.get(key) or {}
+        if not {"juhe", "hasdata"}.issubset(source_times):
+            continue
+        display_clock, display_hour = _clock_for_time_trace(_flight_departure_time(flight))
+        if display_hour is None or not (display_hour < 6 or display_hour > 22):
+            continue
+        combo = normalize_combo(flight.get("flight_combo") or "")
+        candidates.append((display_hour, combo, display_clock, source_times))
+
+    for _, combo, display_clock, source_times in sorted(candidates):
+        if _time_format_check_state["count"] >= TIME_FORMAT_CHECK_SAMPLE_LIMIT:
+            break
+        if combo in _time_format_check_state["seen_combos"]:
+            continue
+        juhe_clock, _ = _clock_for_time_trace(source_times.get("juhe"))
+        hasdata_clock, _ = _clock_for_time_trace(source_times.get("hasdata"))
+        safe_log(
+            f"[时刻核对] combo={combo} juhe原始={juhe_clock} "
+            f"hasdata原始={hasdata_clock} 入池显示={display_clock}"
+        )
+        _time_format_check_state["seen_combos"].add(combo)
+        _time_format_check_state["count"] += 1
 
 
 def _log_combo_normalization_once(
@@ -728,6 +830,7 @@ class FlightAggregator:
         total_raw = len(all_flights)
         seen = {}
         sources_by_combo = {}
+        source_times_by_combo = {}
         for flight in all_flights:
             if not _valid_price(flight.get("price")):
                 continue
@@ -738,6 +841,12 @@ class FlightAggregator:
             normalized_combo = _flight_key(flight)
             source_name = flight.get("data_source") or flight.get("source")
             new_sources = _source_names(source_name)
+            raw_departure_time = _source_raw_departure_time(flight, str(source_name or ""))
+            if raw_departure_time:
+                time_sources = source_times_by_combo.setdefault(normalized_combo, {})
+                for source in new_sources:
+                    if source in {"juhe", "hasdata"}:
+                        time_sources[source] = raw_departure_time
             candidate_price_source = (
                 str(flight.get("price_source") or "").lower()
                 or (new_sources[0] if new_sources else "unknown")
@@ -773,6 +882,14 @@ class FlightAggregator:
                 flight["primary_source"] = flight.get("primary_source") or _primary_source_for_sources(
                     sources, domestic_route
                 )
+
+        _log_time_format_checks(
+            unique_flights,
+            source_times_by_combo,
+            _time_format_trace_scope(self),
+        )
+        for flight in unique_flights:
+            flight.pop("_source_raw_departure_time", None)
 
         unique_flights = sorted(
             unique_flights, key=lambda flight: float(flight.get("price") or 99999)

@@ -373,6 +373,9 @@ def parse_google_flights(
             route_dest = cities[-1] if cities else ""
             parsed = {
                 "price": price,
+                "_source_raw_departure_time": (
+                    ((segments[0].get("departure_airport") or {}).get("time", ""))
+                ),
                 "flight_nos": flight_nos,
                 "flight_combo": "+".join(flight_nos),
                 "airlines": list(dict.fromkeys(airlines)),

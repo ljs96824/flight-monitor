@@ -164,7 +164,9 @@ class PassengerFriendlyRulesTest(unittest.TestCase):
         plan = payload["recommended_plans"][0]
         self.assertTrue(payload["passenger_profile"]["has_child"])
         self.assertTrue(payload["passenger_profile"]["has_elderly"])
-        self.assertIn("亲子/老人友好", plan["tags"])
+        self.assertIn("亲子·老人友好", plan["tags"])
+        self.assertNotIn("亲子/老人友好", plan["tags"])
+        self.assertNotIn("亲子友好 | 老人友好", plan["tags"])
         self.assertIn("白天直飞", plan["friendly_reason"])
 
 

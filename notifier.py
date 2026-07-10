@@ -7,6 +7,7 @@ import re
 import json
 import time
 import html
+from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote, quote_plus
@@ -244,6 +245,15 @@ def _post_pushplus(pushplus_token: str, title: str, content: str):
 
 
 DISCLAIMER = "以上内容基于历史价格数据分析，仅供参考。\n实际购买请以航司或OTA官网价格为准。"
+PUSH_PRICE_ROUNDING = "half_even"
+
+
+def _round_push_price(value):
+    """统一推送内的整数金额舍入，避免同一整单价相差一元。"""
+    try:
+        return int(Decimal(str(value)).quantize(Decimal("1"), rounding=ROUND_HALF_EVEN))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
 
 
 def format_price(price) -> str:
@@ -254,7 +264,8 @@ def format_price(price) -> str:
         return "暂无报价"
     if value <= 0:
         return "暂无报价"
-    return f"¥{value:,.0f}"
+    rounded = _round_push_price(value)
+    return f"¥{rounded:,}" if rounded is not None else "暂无报价"
 
 
 def _has_valid_price(price) -> bool:
@@ -281,6 +292,41 @@ def _price_text_with_caliber(price, scope, passengers=None, route_type=None) -> 
     if text == "\u6682\u65e0\u62a5\u4ef7":
         return text
     return f"{text} {_caliber_label(scope, passengers, route_type)}"
+
+
+_SHORT_CALIBER_LABELS = {
+    "per_person_oneway": "单人单程",
+    "per_person_roundtrip": "单人往返",
+    "all_passengers_oneway": "全员单程",
+    "all_passengers_roundtrip": "全员往返",
+}
+
+
+def _short_caliber_label(scope) -> str:
+    return _SHORT_CALIBER_LABELS.get(str(scope or "").strip().lower(), "")
+
+
+def _price_text_with_parenthesized_caliber(price, scope) -> str:
+    text = _price_text(price)
+    label = _short_caliber_label(scope)
+    return f"{text}({label})" if label and text != "暂无报价" else text
+
+
+def _estimated_price_subject(price, scope) -> str:
+    price_text = _price_text_with_parenthesized_caliber(price, scope)
+    label = _short_caliber_label(scope)
+    if label.startswith("单人"):
+        return f"人均预估实付约{price_text}"
+    if label.startswith("全员"):
+        return f"当前预估实付总价{price_text}"
+    return f"当前预估实付价{price_text}"
+
+
+def _budget_purchase_condition(limit, scope) -> str:
+    price_text = _price_text_with_parenthesized_caliber(limit, scope)
+    if _short_caliber_label(scope).startswith("单人"):
+        return f"支付页单人价≤{price_text}，且含托运行李"
+    return f"支付页总价≤{price_text}，且含托运行李"
 
 
 def _scoped_price_text_from_pp(
@@ -5109,8 +5155,18 @@ def _flight_is_daytime_enough(flight: dict) -> bool:
     return dep_ok and arr_ok
 
 
+_PASSENGER_FRIENDLY_TAGS = {"亲子友好", "老人友好", "亲子/老人友好", "亲子·老人友好"}
+_COMBINED_FRIENDLY_TAG_TOKEN = "__PASSENGER_FRIENDLY_COMBINED__"
+
+
+def _tag_parts(existing: str) -> list[str]:
+    protected = str(existing or "").replace("亲子·老人友好", _COMBINED_FRIENDLY_TAG_TOKEN)
+    parts = [part.strip() for part in re.split(r"[|·]", protected) if part.strip()]
+    return ["亲子·老人友好" if part == _COMBINED_FRIENDLY_TAG_TOKEN else part for part in parts]
+
+
 def _append_unique_tags(existing: str, tags: list[str]) -> str:
-    parts = [part.strip() for part in re.split(r"[|·]", str(existing or "")) if part.strip()]
+    parts = _tag_parts(existing)
     for tag in tags:
         if tag and tag not in parts:
             parts.append(tag)
@@ -5130,12 +5186,18 @@ def _apply_passenger_friendly_to_plans(plans: list[dict], passenger_profile: dic
         baggage_clear = bool(flights) and all(_flight_has_baggage_clarity(flight) for flight in flights)
         refund_clear = bool(flights) and all(_flight_has_refund_clarity(flight) for flight in flights)
         tags = []
-        if profile.get("has_child") and direct and baggage_clear:
-            tags.append("亲子友好")
-        if profile.get("has_elderly") and direct and daytime:
-            tags.append("老人友好")
+        has_child = bool(profile.get("has_child"))
+        has_elderly = bool(profile.get("has_elderly"))
+        friendly_tag = ""
+        if has_child and has_elderly and direct and (daytime or baggage_clear):
+            friendly_tag = "亲子·老人友好"
+        elif has_child and direct and baggage_clear:
+            friendly_tag = "亲子友好"
+        elif has_elderly and direct and daytime:
+            friendly_tag = "老人友好"
+        if friendly_tag:
+            tags.append(friendly_tag)
         if direct and daytime:
-            tags.append("亲子/老人友好")
             tags.append("白天直飞")
         if baggage_clear:
             tags.append("行李明确")
@@ -5143,7 +5205,8 @@ def _apply_passenger_friendly_to_plans(plans: list[dict], passenger_profile: dic
             tags.append("退改清晰")
         if direct:
             tags.append("低折腾")
-        item["tags"] = _append_unique_tags(item.get("tags"), tags[:5])
+        retained_tags = [part for part in _tag_parts(item.get("tags")) if part not in _PASSENGER_FRIENDLY_TAGS]
+        item["tags"] = _append_unique_tags(" | ".join(retained_tags), tags[:5])
         if tags:
             item["friendly_reason"] = (
                 "白天直飞、行李和退改信息更清楚，适合老人/小孩同行；"
@@ -5722,6 +5785,7 @@ def _payload_price_policy_decision(
     target_price,
     max_price=None,
     fallback="可以观察",
+    price_scope=None,
 ) -> dict:
     display = _to_float(display_price)
     transaction = _to_float(transaction_price)
@@ -5730,12 +5794,18 @@ def _payload_price_policy_decision(
     max_p = _to_float(max_price)
 
     if transaction is not None and max_p is not None and transaction > max_p:
+        transaction_text = _estimated_price_subject(transaction, price_scope)
+        max_text = _price_text_with_parenthesized_caliber(max_p, price_scope)
         return {
             "conclusion": (
-                f"当前预估实付总价{_price_text(transaction)}已超过你的最高可接受价{_price_text(max_p)}，"
+                f"{transaction_text}已超过你的最高可接受价{max_text}，"
                 "不满足购买条件，建议保持监控本条航线"
             ),
-            "reason": "预估实付总价已超过最高可接受价，不建议按当前价买入",
+            "reason": (
+                "人均预估实付已超过最高可接受价，不建议按当前价买入"
+                if _short_caliber_label(price_scope).startswith("单人")
+                else "预估实付总价已超过最高可接受价，不建议按当前价买入"
+            ),
             "push_type_hint": None,
         }
 
@@ -6502,6 +6572,7 @@ def build_notification_payload(
         compare_target,
         compare_max_budget,
         decision.get("conclusion") or "\u53ef\u4ee5\u89c2\u5bdf",
+        price_scope=budget_compare_scope,
     )
     price_signal = build_price_signal(
         policy_compare_price,
@@ -6539,14 +6610,17 @@ def build_notification_payload(
         (push_meta or {}).get("type"),
     )
     if compare_max_budget is not None and budget_compare_price is not None and budget_compare_price > compare_max_budget:
+        compare_subject = _estimated_price_subject(budget_compare_price, budget_compare_scope)
+        compare_max_text = _price_text_with_parenthesized_caliber(compare_max_budget, budget_compare_scope)
+        compare_is_per_person = _short_caliber_label(budget_compare_scope).startswith("单人")
         execution_advice = {
             "label": "保持监控本条航线",
             "conclusion": (
-                f"当前预估实付总价{_price_text(budget_compare_price)}已超过你的最高可接受价"
-                f"{_price_text(compare_max_budget)}，不满足购买条件，建议继续保持监控本条航线"
+                f"{compare_subject}已超过你的最高可接受价{compare_max_text}，"
+                "不满足购买条件，建议继续保持监控本条航线"
             ),
-            "summary": "预估实付总价已超过最高可接受价",
-            "condition": f"支付页总价≤{_price_text(compare_max_budget)}，且含托运行李",
+            "summary": "人均预估实付已超过最高可接受价" if compare_is_per_person else "预估实付总价已超过最高可接受价",
+            "condition": _budget_purchase_condition(compare_max_budget, budget_compare_scope),
         }
     if execution_advice.get("conclusion"):
         price_policy["conclusion"] = execution_advice["conclusion"]
@@ -6779,7 +6853,7 @@ def build_notification_payload(
         ),
         "buy_condition": (
             (
-                f"支付页总价≤{_price_text(verify_limit)}，且含托运行李"
+                _budget_purchase_condition(verify_limit, budget_compare_scope)
                 if price_tiers and verify_limit
                 else ""
             )
@@ -7084,6 +7158,7 @@ def _pushplus_feasibility_summary(plan: dict) -> str:
     feasibility = plan.get("feasibility") or {}
     if not isinstance(feasibility, dict) or not feasibility:
         return ""
+    meeting_context = _plan_has_meeting_context(plan)
     parts = []
     for label, key in (("去程", "outbound"), ("返程", "return")):
         item = feasibility.get(key)
@@ -7093,7 +7168,7 @@ def _pushplus_feasibility_summary(plan: dict) -> str:
         if level == "不可行":
             parts.append(f"{label}不可行(差{item.get('short_min')}分钟,需{item.get('need_set_off')}前动身)")
         elif level:
-            parts.append(f"{label}{level}({_humanize_margin(item.get('margin_min'))})")
+            parts.append(f"{label}{level}({_humanize_margin(item.get('margin_min'), meeting_context)})")
     return "可行性:" + "；".join(parts) if parts else ""
 
 
@@ -7809,7 +7884,7 @@ def _pushplus_next_step_lines(payload: dict) -> list[str]:
 
 
 def _pushplus_plan_brief_lines(payload: dict) -> list[str]:
-    plan = (payload.get("recommended_plans") or [{}])[0] or {}
+    plan = _plan_for_render((payload.get("recommended_plans") or [{}])[0] or {}, payload)
     if not plan:
         return []
     gap = _budget_gap(payload)
@@ -8373,7 +8448,7 @@ def _plan_feedback_link(plan: dict) -> str:
     )
 
 
-def _feasibility_item_text(label: str, item: dict) -> str:
+def _feasibility_item_text(label: str, item: dict, meeting_context: bool = False) -> str:
     level = str(item.get("level") or "").strip()
     if not level:
         return ""
@@ -8381,7 +8456,7 @@ def _feasibility_item_text(label: str, item: dict) -> str:
     if level == "不可行":
         status = f"{prefix} {label}{level}(差{item.get('short_min')}分钟,需{item.get('need_set_off')}前动身)"
     else:
-        status = f"{prefix} {label}{level}({_humanize_margin(item.get('margin_min'))})"
+        status = f"{prefix} {label}{level}({_humanize_margin(item.get('margin_min'), meeting_context)})"
     parts = [
         f"车程{item.get('transport_min')}",
         f"路途冗余{item.get('transport_margin_min')}",
@@ -8391,30 +8466,52 @@ def _feasibility_item_text(label: str, item: dict) -> str:
     return f"{status}; " + "+".join(str(part) + "分钟" for part in parts if part and not str(part).endswith("None"))
 
 
-def _humanize_margin(minutes) -> str:
+def _humanize_margin(minutes, meeting_context: bool = False) -> str:
     value = _to_float(minutes)
     if value is None:
         return "时间余量待确认"
     value = int(round(value))
+    prefix = "距会议开始还有约" if meeting_context else "时间余量约"
     if value >= 600:
-        return f"距会议开始还有约{value // 60}小时,时间充足"
+        return f"{prefix}{value // 60}小时,时间充足"
     if value >= 60:
         hours, mins = divmod(value, 60)
-        return f"距会议开始还有约{hours}小时{mins}分钟"
+        return f"{prefix}{hours}小时{mins}分钟"
     if value >= 0:
-        return f"距会议开始还有约{value}分钟,较紧凑"
+        return f"{prefix}{value}分钟,较紧凑"
     return f"赶不上,差约{-value}分钟"
 
 
-def _plan_feasibility_line(plan: dict) -> str:
+def _plan_has_meeting_context(plan: dict | None) -> bool:
+    plan = plan or {}
+    if plan.get("_meeting_context"):
+        return True
+    windows = plan.get("same_day_windows") or {}
+    business = plan.get("business_feasibility") or {}
+    return any(
+        str(value or "").strip()
+        for value in (
+            plan.get("meeting_start"),
+            plan.get("business_start"),
+            windows.get("meeting_start"),
+            windows.get("business_start"),
+            business.get("meeting_start"),
+            business.get("business_start"),
+        )
+    )
+
+
+def _plan_feasibility_line(plan: dict, meeting_context: bool | None = None) -> str:
     feasibility = plan.get("feasibility") or {}
     if not isinstance(feasibility, dict) or not feasibility:
         return ""
+    if meeting_context is None:
+        meeting_context = _plan_has_meeting_context(plan)
     lines = []
     if feasibility.get("outbound"):
-        lines.append(_feasibility_item_text("去程", feasibility["outbound"]))
+        lines.append(_feasibility_item_text("去程", feasibility["outbound"], meeting_context))
     if feasibility.get("return"):
-        lines.append(_feasibility_item_text("返程", feasibility["return"]))
+        lines.append(_feasibility_item_text("返程", feasibility["return"], meeting_context))
     return "<br>".join(html.escape(line) for line in lines if line)
 
 
@@ -8929,6 +9026,15 @@ def _passenger_pricing_applies(passenger_pricing: dict | None) -> bool:
     return _passenger_total_count(passenger_pricing.get("passengers")) > 1
 
 
+def _canonical_roundtrip_passenger_totals(outbound_unit, return_unit, factor) -> tuple[int, int, int]:
+    """一次舍入整单价，再把一元尾差归到返程，保证分腿之和等于整单。"""
+    total = _round_push_price((float(outbound_unit) + float(return_unit)) * float(factor))
+    outbound_total = _round_push_price(float(outbound_unit) * float(factor))
+    if total is None or outbound_total is None:
+        raise ValueError("无法计算统一舍入后的往返总价")
+    return outbound_total, total - outbound_total, total
+
+
 def _apply_passenger_pricing_to_plans(
     plans: list[dict],
     passengers: dict | None,
@@ -8949,19 +9055,27 @@ def _apply_passenger_pricing_to_plans(
             outbound_breakdown = build_passenger_price_breakdown(outbound_unit, passengers, "economy", route)
             return_breakdown = build_passenger_price_breakdown(return_unit, passengers, "economy", route)
             single_adult = outbound_unit + return_unit
-            total = outbound_breakdown["total"] + return_breakdown["total"]
+            factor = _to_float(outbound_breakdown.get("factor")) or 1.0
+            outbound_total, return_total, total = _canonical_roundtrip_passenger_totals(
+                outbound_unit,
+                return_unit,
+                factor,
+            )
+            outbound_breakdown["total"] = outbound_total
+            return_breakdown["total"] = return_total
             estimated_unit = _to_float(plan.get("estimated_price")) or single_adult
+            estimated_total = _round_push_price(estimated_unit * factor)
             pricing = {
                 "applies": bool(outbound_breakdown.get("factor") != 1 or _passenger_total_count(passengers) > 1),
                 "scope": "roundtrip",
                 "passengers": outbound_breakdown.get("passengers"),
                 "passenger_label": outbound_breakdown.get("passenger_label"),
-                "factor": outbound_breakdown.get("factor"),
+                "factor": factor,
                 "route_type": route,
                 "outbound": outbound_breakdown,
                 "return": return_breakdown,
                 "total_price": total,
-                "estimated_total": calc_total_price_for_passengers(estimated_unit, passengers, "economy", route),
+                "estimated_total": estimated_total,
                 "single_adult_price": single_adult,
                 "note": outbound_breakdown.get("note") or "",
             }
@@ -8973,6 +9087,8 @@ def _apply_passenger_pricing_to_plans(
                 purchase_type=plan.get("purchase_mode") or plan.get("purchase_type"),
                 total_estimated=pricing["estimated_total"],
             )
+            price_tiers["total_roundtrip_ref"] = total
+            price_tiers["total_estimated"] = estimated_total
             pricing["price_tiers"] = price_tiers
             plan["passenger_pricing"] = pricing
             plan["price_tiers"] = price_tiers
@@ -9045,13 +9161,20 @@ def _apply_passenger_pricing_to_excluded(
         outbound_breakdown = build_passenger_price_breakdown(outbound_unit, passengers, "economy", route_type)
         return_breakdown = build_passenger_price_breakdown(return_unit, passengers, "economy", route_type)
         single_adult = outbound_unit + return_unit
-        total = outbound_breakdown["total"] + return_breakdown["total"]
+        factor = _to_float(outbound_breakdown.get("factor")) or 1.0
+        outbound_total, return_total, total = _canonical_roundtrip_passenger_totals(
+            outbound_unit,
+            return_unit,
+            factor,
+        )
+        outbound_breakdown["total"] = outbound_total
+        return_breakdown["total"] = return_total
         pricing = {
             "applies": bool(outbound_breakdown.get("factor") != 1 or _passenger_total_count(passengers) > 1),
             "scope": "roundtrip",
             "passengers": outbound_breakdown.get("passengers"),
             "passenger_label": outbound_breakdown.get("passenger_label"),
-            "factor": outbound_breakdown.get("factor"),
+            "factor": factor,
             "route_type": route_type or "",
             "outbound": outbound_breakdown,
             "return": return_breakdown,
@@ -9067,6 +9190,8 @@ def _apply_passenger_pricing_to_excluded(
             purchase_type=item.get("purchase_mode") or item.get("purchase_type") or "roundtrip",
             total_estimated=total,
         )
+        price_tiers["total_roundtrip_ref"] = total
+        price_tiers["total_estimated"] = total
         pricing["price_tiers"] = price_tiers
         item["passenger_pricing"] = pricing
         item["price_tiers"] = price_tiers
@@ -9096,11 +9221,23 @@ def _passenger_pricing_rows(plan: dict) -> list[tuple[str, str]]:
         tiers = plan.get("price_tiers") or pricing.get("price_tiers") or {}
         outbound_unit = _to_float(outbound.get("unit_price") or plan.get("outbound_price"))
         return_unit = _to_float(ret.get("unit_price") or plan.get("return_price"))
-        outbound_text = f"\u53bb\u7a0b\u5168\u5458{_scoped_price_text_from_pp(outbound_unit, passengers, 'all_passengers_oneway', route_type)}"
+        outbound_total = _to_float(outbound.get("total"))
+        return_total = _to_float(ret.get("total"))
+        outbound_price_text = (
+            _price_text_with_caliber(outbound_total, "all_passengers_oneway", passengers, route_type)
+            if outbound_total is not None
+            else _scoped_price_text_from_pp(outbound_unit, passengers, "all_passengers_oneway", route_type)
+        )
+        return_price_text = (
+            _price_text_with_caliber(return_total, "all_passengers_oneway", passengers, route_type)
+            if return_total is not None
+            else _scoped_price_text_from_pp(return_unit, passengers, "all_passengers_oneway", route_type)
+        )
+        outbound_text = f"\u53bb\u7a0b\u5168\u5458{outbound_price_text}"
         outbound_parts = _passenger_part_text(outbound)
         if outbound_parts:
             outbound_text += f"({outbound_parts})"
-        return_text = f"\u8fd4\u7a0b\u5168\u5458{_scoped_price_text_from_pp(return_unit, passengers, 'all_passengers_oneway', route_type)}"
+        return_text = f"\u8fd4\u7a0b\u5168\u5458{return_price_text}"
         return_parts = _passenger_part_text(ret)
         if return_parts:
             return_text += f"({return_parts})"
@@ -9251,14 +9388,17 @@ def _budget_reason_line(payload: dict, fallback_reason: str) -> str:
     compare_price = _budget_compare_price_value(payload or {})
     if max_price is not None and compare_price is not None:
         route_scope = "往返搜索参考价" if (payload or {}).get("is_roundtrip") else "搜索参考价"
+        price_scope = (payload or {}).get("budget_compare_scope")
+        compare_text = _price_text_with_parenthesized_caliber(compare_price, price_scope)
+        max_text = _price_text_with_parenthesized_caliber(max_price, price_scope)
         if compare_price > max_price:
             return (
-                f"原因:{route_scope}{_price_text(compare_price)},"
-                f"高于你的最高可接受价{_price_text(max_price)}"
+                f"原因:{route_scope}{compare_text},"
+                f"高于你的最高可接受价{max_text}"
             )
         return (
-            f"原因:{route_scope}{_price_text(compare_price)}≤"
-            f"最高可接受价{_price_text(max_price)}，未超预算"
+            f"原因:{route_scope}{compare_text}≤"
+            f"最高可接受价{max_text}，未超预算"
         )
     return f"原因:{fallback_reason}"
 
@@ -9631,6 +9771,24 @@ def _first_anchor_href(link_html: str) -> str:
     return html.unescape(match.group(1)) if match else ""
 
 
+def _payload_has_meeting_context(payload: dict | None) -> bool:
+    payload = payload or {}
+    nested_sources = [
+        payload,
+        payload.get("constraints") or {},
+        payload.get("subscription") or {},
+        payload.get("snapshot") or {},
+    ]
+    for source in nested_sources:
+        if not isinstance(source, dict):
+            continue
+        constraints = source.get("constraints") if isinstance(source.get("constraints"), dict) else {}
+        for values in (source, constraints):
+            if any(str(values.get(key) or "").strip() for key in ("meeting_start", "business_start")):
+                return True
+    return "按会议安排" in str(payload.get("time_filter_note") or "")
+
+
 def _plan_for_render(plan: dict, payload: dict) -> dict:
     if not isinstance(plan, dict):
         return {}
@@ -9641,6 +9799,7 @@ def _plan_for_render(plan: dict, payload: dict) -> dict:
         rendered["route_type"] = payload.get("route_type")
     if payload.get("invoice_preferences") and not rendered.get("invoice_preferences"):
         rendered["invoice_preferences"] = payload.get("invoice_preferences")
+    rendered["_meeting_context"] = _plan_has_meeting_context(rendered) or _payload_has_meeting_context(payload)
     return rendered
 
 

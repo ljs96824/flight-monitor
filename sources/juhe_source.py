@@ -289,6 +289,7 @@ class JuheSource(FlightSource):
                 "arrival_name": _first(item, "arrivalName"),
                 "departure_date": _first(item, "departureDate"),
                 "arrival_date": _first(item, "arrivalDate"),
+                "_source_raw_departure_time": _first(item, "departureTime"),
                 "departure_time": departure_time,
                 "arrival_time": arrival_time,
                 "duration_str": duration_text,
