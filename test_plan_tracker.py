@@ -1,7 +1,12 @@
+import io
 import json
+import sys
 import tempfile
+import types
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 
 class PlanTrackerTest(unittest.TestCase):
@@ -107,6 +112,136 @@ class PlanTrackerTest(unittest.TestCase):
         self.assertIn("MU5099去+CA1589回", status["msg"])
         self.assertIn("同往返口径对比", status["msg"])
         self.assertNotIn("降了", status["msg"])
+
+
+    def test_roundtrip_tracking_normalizes_historical_combo_keys(self):
+        from plan_tracker import track_plan_status
+
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            (data_dir / "sub-rt.json").write_text(
+                json.dumps(
+                    {
+                        "subscription_id": "sub-rt",
+                        "last_pushed": {
+                            "plan_a": {
+                                "flight_no": "NH0970 | NH0041?+KE 2118+KE 2057?",
+                                "is_roundtrip": True,
+                                "scope": "roundtrip",
+                                "outbound_flight": "NH0970 | NH0041",
+                                "return_flight": "KE 2118+KE 2057",
+                                "roundtrip_price": 1000,
+                                "price": 1000,
+                            }
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            status = track_plan_status(
+                "sub-rt",
+                [
+                    {
+                        "is_roundtrip": True,
+                        "outbound": {"flight_no": "NH970+NH41", "price": 600},
+                        "return": {"flight_no": "KE2118+KE2057", "price": 500},
+                        "total_price": 1100,
+                    }
+                ],
+                data_dir=data_dir,
+            )
+
+        self.assertEqual(status["status"], "price_up")
+        self.assertEqual(status["current_price"], 1100)
+        self.assertEqual(status["price_diff"], 100)
+
+    def test_saved_roundtrip_payload_stores_normalized_combo_keys(self):
+        from plan_tracker import save_pushed_plans
+
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            payload = save_pushed_plans(
+                "sub-rt",
+                [
+                    {
+                        "label": "plan_a",
+                        "is_roundtrip": True,
+                        "outbound_flight": {"flight_no": "NH0970 | NH0041", "price": 600},
+                        "return_flight": {"flight_no": "KE 2118+KE 2057", "price": 500},
+                        "roundtrip_price": 1100,
+                    }
+                ],
+                data_dir=data_dir,
+            )
+
+        plan_a = payload["last_pushed"]["plan_a"]
+        self.assertEqual(plan_a["outbound_flight"], "NH970+NH41")
+        self.assertEqual(plan_a["return_flight"], "KE2118+KE2057")
+        self.assertEqual(plan_a["flight_no"], "NH970+NH41+KE2118+KE2057")
+
+    def test_roundtrip_tracking_pool_includes_full_outbound_and_return_candidates(self):
+        from plan_tracker import save_pushed_plans, track_plan_status
+
+        try:
+            from notifier import _tracking_current_items
+        except ModuleNotFoundError as exc:
+            if exc.name != "httpx":
+                raise
+            with patch.dict(sys.modules, {"httpx": types.ModuleType("httpx")}):
+                from notifier import _tracking_current_items
+
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            save_pushed_plans(
+                "sub-pool",
+                [
+                    {
+                        "label": "plan_a",
+                        "is_roundtrip": True,
+                        "outbound_flight": {"flight_no": "MU 0225", "price": 900},
+                        "return_flight": {"flight_no": "JL0891", "price": 600},
+                        "roundtrip_price": 1500,
+                    }
+                ],
+                data_dir=data_dir,
+            )
+            analysis = {
+                "same_day_base_flights": [
+                    {"flight_no": "MU225", "price": 900, "departure_date": "2026-10-01"}
+                ],
+                "return_analysis": {
+                    "same_day_base_flights": [
+                        {"flight_no": "JL891", "price": 700, "departure_date": "2026-10-06"}
+                    ]
+                },
+                "round_trip_analysis": {"top_combinations": []},
+            }
+            terminal_items = [
+                {
+                    "is_roundtrip": True,
+                    "outbound_flight": {"flight_no": "NH970", "price": 1000},
+                    "return_flight": {"flight_no": "KE2118", "price": 1000},
+                    "price": 2000,
+                }
+            ]
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                pool = _tracking_current_items(analysis, terminal_items, True)
+                status = track_plan_status("sub-pool", pool, data_dir=data_dir)
+
+        log = output.getvalue()
+        self.assertEqual(status["status"], "price_up")
+        self.assertEqual(status["current_price"], 1600)
+        self.assertIn("[追踪池]", log)
+        self.assertIn("池来源=", log)
+        self.assertIn("same_day_base_flights", log)
+        self.assertIn("MU225", log)
+        self.assertIn("JL891", log)
+        self.assertIn("目标去程=MU225 在池中=True", log)
+        self.assertIn("目标返程=JL891 在池中=True", log)
 
     def test_single_tracking_does_not_use_roundtrip_combo_total(self):
         from plan_tracker import save_pushed_plans, track_plan_status

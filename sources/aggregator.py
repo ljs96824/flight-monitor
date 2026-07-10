@@ -385,7 +385,7 @@ def _instantiate_source(source_name: str):
 
             return SkyscannerSource()
     except Exception as exc:
-        print(f"[source-profile] skip {source_name}: {exc}")
+        safe_log(f"[source-profile] skip {source_name}: {exc}")
     return None
 
 
@@ -446,7 +446,7 @@ def build_default_sources(
 
     if resolved_route_type:
         if origin and dest:
-            print(f"[\u8def\u7531\u5206\u7c7b] origin={origin} dest={dest} route_type={resolved_route_type} \u547d\u4e2d\u89c4\u5219={route_rule}")
+            safe_log(f"[\u8def\u7531\u5206\u7c7b] origin={origin} dest={dest} route_type={resolved_route_type} \u547d\u4e2d\u89c4\u5219={route_rule}")
         profile = get_source_profile(resolved_route_type)
         specs = list(profile.get("sources") or [])
         for spec in specs:
@@ -458,7 +458,7 @@ def build_default_sources(
                 enrichment_sources.append(source)
             else:
                 search_sources.append(source)
-        print(
+        safe_log(
             f"[源策略] {resolved_route_type} 启用: "
             f"{[(source.name, source.role) for source in search_sources + enrichment_sources]}"
         )
@@ -523,6 +523,7 @@ class FlightAggregator:
         cabin_classes=None,
         route_type: str | None = None,
         passengers: dict | None = None,
+        force_fresh: bool = False,
     ) -> dict | None:
         cabin_classes = _normalize_cabin_classes(cabin_classes)
         run_collected_at = datetime.now().isoformat(timespec="seconds")
@@ -537,9 +538,9 @@ class FlightAggregator:
         )
         search_sources = self._ordered_search_sources(origin, dest, resolved_route_type)
         domestic_route = resolved_route_type == "domestic"
-        print(f"[\u8def\u7531\u5206\u7c7b] origin={origin} dest={dest} route_type={resolved_route_type} \u547d\u4e2d\u89c4\u5219={route_rule}")
-        print(f"[source-route] {origin}->{dest} route_type={resolved_route_type}")
-        print(
+        safe_log(f"[\u8def\u7531\u5206\u7c7b] origin={origin} dest={dest} route_type={resolved_route_type} \u547d\u4e2d\u89c4\u5219={route_rule}")
+        safe_log(f"[source-route] {origin}->{dest} route_type={resolved_route_type}")
+        safe_log(
             "[source-route] enabled sources: "
             + str([getattr(source, "name", type(source).__name__) for source in search_sources])
         )
@@ -567,6 +568,7 @@ class FlightAggregator:
                         passengers,
                         cabin_class,
                         ttl_seconds=15 * 60,
+                        force_fresh=force_fresh,
                     )
                     source_status = result.get("source_status")
                     if source_status:
@@ -575,7 +577,7 @@ class FlightAggregator:
                     flights = [
                         flight for flight in raw_flights if _valid_price(flight.get("price"))
                     ]
-                    print(
+                    safe_log(
                         f"[价格检查] {source_name} {cabin_class} 有效价格航班: "
                         f"{len(flights)}/{len(raw_flights)}"
                     )
@@ -583,7 +585,7 @@ class FlightAggregator:
                     if source_status in {"not_configured", "skipped"}:
                         cabin_counts[cabin_class] = 0
                         raw_by_source[f"{source_name}:{cabin_class}"] = result.get("raw")
-                        print(f"[{source_name}] {cabin_class} skipped: {source_status}")
+                        safe_log(f"[{source_name}] {cabin_class} skipped: {source_status}")
                         continue
 
                     for flight in flights:
@@ -633,7 +635,7 @@ class FlightAggregator:
                         }
                     )
                     raw_by_source[f"{source_name}:{cabin_class}"] = result.get("raw")
-                    print(
+                    safe_log(
                         f"[{source_name}] {cabin_class} 成功，返回 {len(flights)} 个方案"
                     )
 
@@ -651,7 +653,7 @@ class FlightAggregator:
                             }
                         )
                     status_label = "可选失败" if source_optional else "失败"
-                    print(f"[{source_name}] {cabin_class} {status_label}：{error}")
+                    safe_log(f"[{source_name}] {cabin_class} {status_label}：{error}")
 
             if source_succeeded:
                 status = "成功"
@@ -740,12 +742,13 @@ class FlightAggregator:
                         passengers,
                         cabin_class,
                         ttl_seconds=15 * 60,
+                        force_fresh=force_fresh,
                     )
                     enrichment_flights = result.get("flights", []) or []
                     enrichment_count += len(enrichment_flights)
                     cabin_counts[cabin_class] = len(enrichment_flights)
                     enrichment_succeeded = True
-                    print(
+                    safe_log(
                         f"[{source_name}] {cabin_class} 成功，返回 "
                         f"{len(enrichment_flights)} 个行李退改候选"
                     )
@@ -761,7 +764,7 @@ class FlightAggregator:
                     source_errors.append(
                         {"source": source_name, "cabin_class": cabin_class, "error": error}
                     )
-                    print(f"[{source_name}] {cabin_class} 失败：{error}")
+                    safe_log(f"[{source_name}] {cabin_class} 失败：{error}")
 
             source_stats[source_name] = {
                 "count": enrichment_count,
@@ -800,7 +803,7 @@ class FlightAggregator:
         }
         source_stats["enriched_count"] = enriched_count
 
-        print(
+        safe_log(
             "source_stats: "
             + json.dumps(source_stats, ensure_ascii=False, indent=2)
         )

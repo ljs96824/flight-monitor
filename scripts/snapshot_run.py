@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import types
 from copy import deepcopy
+from datetime import date, timedelta
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="strict")
@@ -31,6 +33,7 @@ from analyzer import (
     analyze_round_trip,
     compute_same_day_windows,
 )
+from log_utils import safe_log
 from price_calendar import analyze_row_savings, roundtrip_calendar_rows
 from price_estimator import passenger_price_factor
 from pricing import budget_to_pp, itinerary_price_pp, price_in_scope
@@ -51,8 +54,28 @@ except ModuleNotFoundError:
 
 import notifier
 
-DEPART_DATE = "2026-06-26"
-RETURN_DATE = "2026-06-26"
+
+def resolve_snapshot_dates(
+    *,
+    today: date | None = None,
+    depart_date: str | None = None,
+    return_date: str | None = None,
+) -> tuple[str, str]:
+    """解析快照日期；默认使用今天后第21天，也允许环境变量显式覆盖。"""
+    today = today or date.today()
+    depart_text = depart_date or os.getenv("SNAPSHOT_DEPART_DATE")
+    if not depart_text:
+        depart_text = (today + timedelta(days=21)).isoformat()
+    parsed_depart = date.fromisoformat(str(depart_text))
+
+    return_text = return_date or os.getenv("SNAPSHOT_RETURN_DATE") or parsed_depart.isoformat()
+    parsed_return = date.fromisoformat(str(return_text))
+    if parsed_return < parsed_depart:
+        raise ValueError("快照返程日期不能早于去程日期")
+    return parsed_depart.isoformat(), parsed_return.isoformat()
+
+
+DEPART_DATE, RETURN_DATE = resolve_snapshot_dates()
 MEETING_LOCATION = "大兴区"
 ROUTE_TYPE = "domestic"
 PASSENGERS = {"adult": 3, "child": 0, "elderly": 0, "infant": 0}
@@ -96,7 +119,7 @@ def standard_subscription() -> dict:
         "route_type": ROUTE_TYPE,
     }
     return {
-        "id": "snapshot-standard-shanghai-beijing-20260626",
+        "id": f"snapshot-standard-shanghai-beijing-{DEPART_DATE.replace('-', '')}",
         "status": "active",
         "basic": {
             "route_type": ROUTE_TYPE,
@@ -164,14 +187,34 @@ def _flight(
 
 FIXTURE_FLIGHTS: dict[tuple[str, str, str], list[dict]] = {
     ("PVG", "PKX", DEPART_DATE): [
-        _flight("MU5185", "\u4e1c\u65b9\u822a\u7a7a", "PVG", "PKX", "22:30", "00:05", 1050, "32N", arr_date="2026-06-27"),
+        _flight(
+            "MU5185",
+            "\u4e1c\u65b9\u822a\u7a7a",
+            "PVG",
+            "PKX",
+            "22:30",
+            "00:05",
+            1050,
+            "32N",
+            arr_date=(date.fromisoformat(DEPART_DATE) + timedelta(days=1)).isoformat(),
+        ),
     ],
     ("SHA", "PKX", DEPART_DATE): [
         _flight("MU5099", "东方航空", "SHA", "PKX", "07:00", "09:15", 831, "333"),
         _flight("MU5121", "东方航空", "SHA", "PKX", "08:10", "10:25", 980, "32A"),
     ],
     ("PVG", "PEK", DEPART_DATE): [
-        _flight("CA1566", "\u4e2d\u56fd\u56fd\u9645\u822a\u7a7a", "PVG", "PEK", "22:50", "00:55", 980, "78A", arr_date="2026-06-27"),
+        _flight(
+            "CA1566",
+            "\u4e2d\u56fd\u56fd\u9645\u822a\u7a7a",
+            "PVG",
+            "PEK",
+            "22:50",
+            "00:55",
+            980,
+            "78A",
+            arr_date=(date.fromisoformat(DEPART_DATE) + timedelta(days=1)).isoformat(),
+        ),
     ],
     ("SHA", "PEK", DEPART_DATE): [
         _flight("MU5107", "东方航空", "SHA", "PEK", "11:00", "13:15", 1036, "333"),
@@ -290,14 +333,24 @@ def return_window_snapshot(subscription: dict, return_flights: list[dict]) -> tu
 
 
 def calendar_snapshot(passenger_factor: float) -> dict:
+    selected_date = date.fromisoformat(DEPART_DATE)
+    updated_at = (selected_date - timedelta(days=4)).isoformat() + "T00:00:00+08:00"
+    calendar_values = (
+        (-3, 547, "MU"),
+        (-2, 570, "MU"),
+        (-1, 760, "CA"),
+        (0, 831, "MU"),
+        (1, 679, "MU"),
+    )
     outbound_calendar = {
         "route": "SHA-PKX",
         "dates": {
-            "2026-06-23": {"min_price": 547, "airline": "MU", "updated_at": "2026-06-22T00:00:00+08:00"},
-            "2026-06-24": {"min_price": 570, "airline": "MU", "updated_at": "2026-06-22T00:00:00+08:00"},
-            "2026-06-25": {"min_price": 760, "airline": "CA", "updated_at": "2026-06-22T00:00:00+08:00"},
-            "2026-06-26": {"min_price": 831, "airline": "MU", "updated_at": "2026-06-22T00:00:00+08:00"},
-            "2026-06-27": {"min_price": 679, "airline": "MU", "updated_at": "2026-06-22T00:00:00+08:00"},
+            (selected_date + timedelta(days=offset)).isoformat(): {
+                "min_price": min_price,
+                "airline": airline,
+                "updated_at": updated_at,
+            }
+            for offset, min_price, airline in calendar_values
         },
     }
     return_low = 648
@@ -734,28 +787,129 @@ def _build_payload(subscription: dict, outbound_analysis: dict, return_analysis:
         notifier.get_last_push_snapshot = original_last_snapshot
 
 
-def build_snapshot() -> dict:
-    subscription = standard_subscription()
-    outbound, returns, calls = collect_standard_data(subscription)
-    outbound_analysis, return_analysis = _analysis_inputs(subscription, outbound, returns)
-    round_trip = analyze_round_trip(outbound_analysis, return_analysis, target_price=TARGET_PRICE, max_budget=MAX_BUDGET)
+def _empty_calendar_snapshot(passenger_factor: float) -> dict:
+    return {
+        "route": "SHA-PKX + PKX-SHA",
+        "scope": PRICE_SCOPE_PASSENGER_ROUNDTRIP_REF,
+        "return_date": RETURN_DATE,
+        "return_low_unit": None,
+        "passenger_factor": passenger_factor,
+        "before_unit_prices": [],
+        "after_passenger_prices": [],
+        "before_unit_first3": [],
+        "after_passenger_first3": [],
+        "selected_date": DEPART_DATE,
+        "selected_unit_price": None,
+        "selected_passenger_price": None,
+        "selected_price_scope": PRICE_SCOPE_PASSENGER_ROUNDTRIP_REF,
+        "rows": [],
+        "savings": [],
+        "note": "价格日历快照不可用。",
+    }
 
-    passenger_factor = passenger_price_factor(PASSENGERS, ROUTE_TYPE)
-    calendar = calendar_snapshot(passenger_factor)
-    outbound_matches, outbound_windows = outbound_window_snapshot(subscription, outbound)
-    return_matches, return_windows = return_window_snapshot(subscription, returns)
-    budget = budget_snapshot(outbound_matches, return_matches, passenger_factor, MAX_BUDGET)
+
+def _capture_snapshot_item(
+    item: str,
+    build: Callable[[], object],
+    fallback: object | Callable[[], object],
+    skipped_items: list[dict],
+):
+    try:
+        return build()
+    except Exception as exc:
+        reason = str(exc) or type(exc).__name__
+        skipped_items.append({"item": item, "reason": reason})
+        safe_log(f"[快照跳过] 项={item} 原因={reason}")
+        value = fallback() if callable(fallback) else fallback
+        return deepcopy(value)
+
+
+def build_snapshot() -> dict:
+    skipped_items: list[dict] = []
+    subscription = standard_subscription()
+    outbound, returns, calls = _capture_snapshot_item(
+        "collection",
+        lambda: collect_standard_data(subscription),
+        ([], [], []),
+        skipped_items,
+    )
+    outbound_analysis, return_analysis = _analysis_inputs(subscription, outbound, returns)
+    round_trip = _capture_snapshot_item(
+        "round_trip_analysis",
+        lambda: analyze_round_trip(
+            outbound_analysis,
+            return_analysis,
+            target_price=TARGET_PRICE,
+            max_budget=MAX_BUDGET,
+        ),
+        {},
+        skipped_items,
+    )
+
+    passenger_factor = _capture_snapshot_item(
+        "passenger_factor",
+        lambda: passenger_price_factor(PASSENGERS, ROUTE_TYPE),
+        1.0,
+        skipped_items,
+    )
+    calendar = _capture_snapshot_item(
+        "price_calendar",
+        lambda: calendar_snapshot(passenger_factor),
+        lambda: _empty_calendar_snapshot(passenger_factor),
+        skipped_items,
+    )
+    outbound_matches, outbound_windows = _capture_snapshot_item(
+        "outbound_window",
+        lambda: outbound_window_snapshot(subscription, outbound),
+        ([], {}),
+        skipped_items,
+    )
+    return_matches, return_windows = _capture_snapshot_item(
+        "return_window",
+        lambda: return_window_snapshot(subscription, returns),
+        ([], {}),
+        skipped_items,
+    )
+    budget = _capture_snapshot_item(
+        "budget_filter",
+        lambda: budget_snapshot(outbound_matches, return_matches, passenger_factor, MAX_BUDGET),
+        {
+            "window_combo_count": 0,
+            "after_budget_count": 0,
+            "cheapest_window_combo": None,
+            "no_result_reason": "预算快照不可用。",
+            "combos": [],
+        },
+        skipped_items,
+    )
     return_recommendation = return_matches[0] if return_matches else {}
     no_result_reason = round_trip.get("same_day_no_feasible_note") if not outbound_matches else budget["no_result_reason"]
     if not no_result_reason:
         no_result_reason = budget["no_result_reason"]
     budget["no_result_reason"] = no_result_reason
-    payload_result = _build_payload(subscription, outbound_analysis, return_analysis, round_trip, calendar)
-    price_points = price_points_snapshot(round_trip, calendar, budget, payload_result["payload"])
+    payload_result = _capture_snapshot_item(
+        "notification",
+        lambda: _build_payload(subscription, outbound_analysis, return_analysis, round_trip, calendar),
+        {"payload": {}, "rendered": {}},
+        skipped_items,
+    )
+    price_points = _capture_snapshot_item(
+        "price_points",
+        lambda: price_points_snapshot(round_trip, calendar, budget, payload_result["payload"]),
+        {},
+        skipped_items,
+    )
+    airport_transport = _capture_snapshot_item(
+        "airport_transport",
+        lambda: airport_transport_snapshot(subscription),
+        {},
+        skipped_items,
+    )
 
     snapshot = {
         "snapshot_version": 1,
         "scenario": "standard_same_day_business_shanghai_beijing",
+        "skipped_items": skipped_items,
         "subscription": subscription,
         "collection": {
             "source": "snapshot_fixture",
@@ -763,7 +917,7 @@ def build_snapshot() -> dict:
             "outbound_count": len(outbound),
             "return_count": len(returns),
         },
-        "airport_transport_to_meeting": airport_transport_snapshot(subscription),
+        "airport_transport_to_meeting": airport_transport,
         "price_calendar": calendar,
         "price_points": price_points,
         "same_day": {

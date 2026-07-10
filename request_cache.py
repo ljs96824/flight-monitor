@@ -197,6 +197,7 @@ def cached_fetch(
     ttl_seconds: int = DEFAULT_TTL_SECONDS,
     cache_dir: Path | None = None,
     persist: bool = True,
+    force_fresh: bool = False,
 ):
     """Fetch through an in-run and short persistent cache.
 
@@ -209,22 +210,25 @@ def cached_fetch(
     source_name = key[0]
     _record_request(source_name)
 
-    memory_entry = _request_cache.get(key)
-    if memory_entry and _fresh(memory_entry.get("fetched_at"), ttl_seconds):
-        _record_hit(source_name)
-        safe_log(f"[缓存命中] {key[:4]} 复用已有结果,不重复调API")
-        return copy.deepcopy(memory_entry.get("result"))
-
-    if persist:
-        persisted = _read_persistent(key, ttl_seconds, cache_dir)
-        if persisted is not None:
+    if not force_fresh:
+        memory_entry = _request_cache.get(key)
+        if memory_entry and _fresh(memory_entry.get("fetched_at"), ttl_seconds):
             _record_hit(source_name)
-            safe_log(f"[缓存命中] {key[:4]} 复用持久缓存,不重复调API")
-            _request_cache[key] = {
-                "fetched_at": datetime.now().isoformat(timespec="seconds"),
-                "result": copy.deepcopy(persisted),
-            }
-            return copy.deepcopy(persisted)
+            safe_log(f"[缓存命中] {key[:4]} 复用已有结果,不重复调API")
+            return copy.deepcopy(memory_entry.get("result"))
+
+        if persist:
+            persisted = _read_persistent(key, ttl_seconds, cache_dir)
+            if persisted is not None:
+                _record_hit(source_name)
+                safe_log(f"[缓存命中] {key[:4]} 复用持久缓存,不重复调API")
+                _request_cache[key] = {
+                    "fetched_at": datetime.now().isoformat(timespec="seconds"),
+                    "result": copy.deepcopy(persisted),
+                }
+                return copy.deepcopy(persisted)
+    else:
+        safe_log(f"[缓存绕过] {key[:4]} force_fresh=True,执行真实API请求")
 
     safe_log(
         f"[API\u8c03\u7528] \u6e90={source_name} \u822a\u7ebf={key[1]}->{key[2]} \u65e5\u671f={key[3]} "

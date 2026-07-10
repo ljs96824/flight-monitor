@@ -23,6 +23,8 @@ from airports import (
 )
 from channels import CHANNEL_INFO
 from domestic_fare_rules import get_aircraft_name
+from flight_combo_utils import normalize_combo
+from log_utils import safe_log
 from analyzer import (
     build_execution_advice,
     build_budget_gap,
@@ -4879,7 +4881,7 @@ def _payload_freshness_text(payload: dict) -> str:
                 return value.strftime("%Y-%m-%d %H:%M采集")
             except ValueError:
                 return f"{collected[:16]}采集"
-        return "刚刚采集"
+        return "采集时间待确认"
     if age < 1:
         return "刚刚采集"
     if age < 60:
@@ -5125,28 +5127,62 @@ def _tracking_current_flights(
     analysis_result: dict,
     all_items: list[dict],
     is_roundtrip: bool,
+    return_analysis: dict | None = None,
+    source_names: list[str] | None = None,
 ) -> list[dict]:
     flights: list[dict] = []
+    sources = source_names if source_names is not None else []
+
+    def extend_source(name: str, candidates) -> None:
+        valid = [item for item in candidates or [] if isinstance(item, dict) and item]
+        if not valid:
+            return
+        flights.extend(valid)
+        sources.append(name)
+
+    plan_flights = []
     for plan in all_items or []:
-        flights.extend(_plan_flights(plan))
+        plan_flights.extend(_plan_flights(plan))
+    extend_source("all_items", plan_flights)
+
     if is_roundtrip:
+        combo_flights = []
         for combo in _round_trip_combinations(analysis_result):
             for key in ("outbound", "return"):
                 flight = combo.get(key)
                 if isinstance(flight, dict) and flight:
-                    flights.append(flight)
+                    combo_flights.append(flight)
+        extend_source("round_trip_analysis.top_combinations", combo_flights)
+
+        resolved_return = return_analysis or analysis_result.get("return_analysis") or {}
+        candidate_keys = (
+            "same_day_base_flights",
+            "raw_valid_flights",
+            "raw_valid_outbound",
+            "all_flights",
+            "qualified_flights",
+            "economy_recommendations",
+        )
+        for prefix, analysis in (
+            ("analysis_result", analysis_result),
+            ("return_analysis", resolved_return),
+        ):
+            if not isinstance(analysis, dict):
+                continue
+            for key in candidate_keys:
+                extend_source(f"{prefix}.{key}", analysis.get(key))
     else:
-        flights.extend(_single_flights_for_sections(analysis_result))
+        extend_source("single_flights_for_sections", _single_flights_for_sections(analysis_result))
 
     seen: set[str] = set()
     unique: list[dict] = []
     for flight in flights:
-        key = str(
-            flight.get("flight_no")
+        normalized = normalize_combo(
+            flight.get("flight_combo")
+            or flight.get("flight_no")
             or flight.get("flight_number")
-            or flight.get("flight_combo")
-            or id(flight)
         )
+        key = normalized or str(id(flight))
         if key in seen:
             continue
         seen.add(key)
@@ -5154,17 +5190,49 @@ def _tracking_current_flights(
     return unique
 
 
+def _tracking_item_label(item: dict) -> str:
+    outbound = item.get("outbound") or item.get("outbound_flight") or {}
+    return_flight = item.get("return") or item.get("return_flight") or {}
+    if isinstance(outbound, dict) and isinstance(return_flight, dict) and outbound and return_flight:
+        outbound_key = normalize_combo(
+            outbound.get("flight_combo") or outbound.get("flight_no") or outbound.get("flight_number")
+        )
+        return_key = normalize_combo(
+            return_flight.get("flight_combo") or return_flight.get("flight_no") or return_flight.get("flight_number")
+        )
+        return f"{outbound_key}/{return_key}"
+    return normalize_combo(
+        item.get("flight_combo") or item.get("flight_no") or item.get("flight_number")
+    )
+
+
 def _tracking_current_items(
     analysis_result: dict,
     all_items: list[dict],
     is_roundtrip: bool,
+    return_analysis: dict | None = None,
 ) -> list[dict]:
     items: list[dict] = []
     items.extend(all_items or [])
     if is_roundtrip:
         items.extend(_round_trip_combinations(analysis_result))
-    items.extend(_tracking_current_flights(analysis_result, all_items, is_roundtrip))
-    return [item for item in items if isinstance(item, dict) and item]
+    source_names: list[str] = []
+    items.extend(
+        _tracking_current_flights(
+            analysis_result,
+            all_items,
+            is_roundtrip,
+            return_analysis=return_analysis,
+            source_names=source_names,
+        )
+    )
+    pool = [item for item in items if isinstance(item, dict) and item]
+    normalized_items = [label for label in (_tracking_item_label(item) for item in pool) if label]
+    safe_log(
+        f"[追踪池] 池来源={'+'.join(dict.fromkeys(source_names)) or 'empty'} "
+        f"池大小={len(pool)} 池内容(norm后)={normalized_items[:10]}"
+    )
+    return pool
 
 
 def _plan_total_stops(plan: dict) -> int:
@@ -6178,12 +6246,22 @@ def build_notification_payload(
         or outbound_analysis.get("cabin_policy_summary")
         or build_cabin_policy_summary(
             constraints_for_cabin,
-            _tracking_current_flights(analysis_result, all_items, is_roundtrip),
+            _tracking_current_flights(
+                analysis_result,
+                all_items,
+                is_roundtrip,
+                return_analysis=return_analysis,
+            ),
         )
     )
     plan_status_change = track_plan_status(
         route_info.get("subscription_id") or subscription.get("id") or route_key,
-        _tracking_current_items(analysis_result, all_items, is_roundtrip),
+        _tracking_current_items(
+            analysis_result,
+            all_items,
+            is_roundtrip,
+            return_analysis=return_analysis,
+        ),
     )
 
     primary_flight = None
@@ -9173,7 +9251,7 @@ def _email_channel_picker(plan: dict, interactive: bool = False, context_label: 
             "<div style='font-weight:600;margin-bottom:4px;'>"
             f"{html.escape(heading)}:\u6574\u5957\u5f80\u8fd4\u9a8c\u8bc1:{price_text}</div>"
         )
-        body += "".join(_email_channel_section_html(title, links) for title, links in sections)
+        body += "".join(_email_channel_section_html(title, links, price=price) for title, links in sections)
         if interactive:
             return (
                 "<details style='margin:8px 0;'>"

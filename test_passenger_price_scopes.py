@@ -3,6 +3,7 @@ import types
 import unittest
 import io
 from contextlib import redirect_stdout
+from datetime import date, timedelta
 
 
 class _DummyFlask:
@@ -506,14 +507,17 @@ class PassengerPriceScopesTest(unittest.TestCase):
 
 
     def test_no_primary_calendar_uses_quick_mode_passenger_count(self):
+        depart_date = date.today() + timedelta(days=21)
+        return_date = depart_date + timedelta(days=7)
+        weekday_names = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
         calendar = {
             "scope": "roundtrip",
-            "return_date": "2026-06-30",
+            "return_date": return_date.isoformat(),
             "return_min_price": 557,
             "rows": [
                 {
-                    "date": "2026-06-23",
-                    "weekday": "\u5468\u4e8c",
+                    "date": depart_date.isoformat(),
+                    "weekday": weekday_names[depart_date.weekday()],
                     "outbound_min_price": 547,
                     "return_min_price": 557,
                     "roundtrip_ref_price": 1104,
@@ -527,8 +531,8 @@ class PassengerPriceScopesTest(unittest.TestCase):
             route_info={
                 "origin": "SHA",
                 "destination": "PEK",
-                "depart_date": "2026-06-23",
-                "return_date": "2026-06-30",
+                "depart_date": depart_date.isoformat(),
+                "return_date": return_date.isoformat(),
                 "price_calendar": calendar,
             },
             subscription={"basic": {"passenger_count": 3}, "constraints": {"route_type": "domestic"}},

@@ -6,8 +6,6 @@ import os
 import re
 from datetime import datetime, time, timedelta
 
-from serpapi import GoogleSearch
-
 from sources.base import FlightSource
 
 
@@ -33,6 +31,8 @@ class SerpAPISource(FlightSource):
     def fetch(
         self, origin: str, dest: str, date_str: str, cabin_class: str = "economy"
     ) -> dict:
+        from serpapi import GoogleSearch
+
         overrides = getattr(self, "query_overrides", {}) or {}
         params = {
             "engine": "google_flights",

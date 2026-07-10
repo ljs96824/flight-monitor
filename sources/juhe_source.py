@@ -15,6 +15,7 @@ from pathlib import Path
 
 from filename_utils import sanitize_filename
 from domestic_fare_rules import get_aircraft_name
+from log_utils import safe_log
 from sources.base import FlightSource
 
 
@@ -160,7 +161,7 @@ class JuheSource(FlightSource):
     ) -> dict:
         departure_date = _parse_departure_date(date_str)
         if departure_date is not None and departure_date < date.today():
-            print(f"[juhe] skip past date {date_str}")
+            safe_log(f"[juhe] skip past date {date_str}")
             return {
                 "flights": [],
                 "source": self.name,
@@ -170,9 +171,9 @@ class JuheSource(FlightSource):
             }
 
         key = os.getenv("JUHE_FLIGHT_KEY")
-        print(f"[juhe] key_exists={bool(key)}, start {origin}->{dest} {date_str}")
+        safe_log(f"[juhe] key_exists={bool(key)}, start {origin}->{dest} {date_str}")
         if not key:
-            print("[juhe] warning: JUHE_FLIGHT_KEY is not configured, skipped")
+            safe_log("[juhe] warning: JUHE_FLIGHT_KEY is not configured, skipped")
             return {
                 "flights": [],
                 "source": self.name,
@@ -198,14 +199,14 @@ class JuheSource(FlightSource):
         params = self.build_request_params(origin, dest, date_str, key)
         debug_params = dict(params)
         debug_params["key"] = "***"
-        print(f"[juhe] request params: {debug_params}")
+        safe_log(f"[juhe] request params: {debug_params}")
         response = requests.get(endpoint, params=params, timeout=20)
-        print(f"[juhe raw] status_code={response.status_code}")
-        print(f"[juhe raw] {response.text[:2000]}")
+        safe_log(f"[juhe raw] status_code={response.status_code}")
+        safe_log(f"[juhe raw] {response.text[:2000]}")
         response.raise_for_status()
         raw = response.json()
         if _is_invalid_date_response(raw):
-            print(f"[juhe] invalid date skipped {date_str}")
+            safe_log(f"[juhe] invalid date skipped {date_str}")
             return {
                 "flights": [],
                 "source": self.name,
@@ -252,7 +253,7 @@ class JuheSource(FlightSource):
 
             equipment = str(_first(item, "equipment", "planeType", "aircraft")).strip()
             if equipment:
-                print(f"[机型码收集] equipment={equipment}, 航班={flight_no}")
+                safe_log(f"[机型码收集] equipment={equipment}, 航班={flight_no}")
             aircraft = get_aircraft_name(equipment)
             transfer_num = _to_int(item.get("transferNum"), 1)
             stops = max(0, transfer_num - 1)
@@ -329,7 +330,7 @@ class JuheSource(FlightSource):
             return None
         raw = payload.get("raw")
         if not _is_success_response(raw):
-            print("[juhe] cached response is not successful, ignoring cache")
+            safe_log("[juhe] cached response is not successful, ignoring cache")
             return None
         return raw
 

@@ -73,6 +73,14 @@ class SourceProfilesTest(unittest.TestCase):
         self.assertEqual([source.name for source in enrichment_sources], ["duffel"])
         self.assertEqual(search_sources[0].query_overrides["stops"], "nonstop_preferred")
 
+    def test_hasdata_parser_import_does_not_require_serpapi_sdk(self):
+        with patch.dict(sys.modules, {"serpapi": None}):
+            sys.modules.pop("sources.serpapi_source", None)
+            sys.modules.pop("sources.hasdata_source", None)
+            from sources.hasdata_source import HasDataSource
+
+        self.assertEqual(HasDataSource.name, "hasdata")
+
     def test_route_type_aliases_and_classification_rule_are_explicit(self):
         self.assertEqual(normalize_route_type("hk_mo_tw"), "greater_china")
         self.assertEqual(classify_route_with_rule("PVG", "HKG"), ("greater_china", "mainland_to_hk_mo_tw"))

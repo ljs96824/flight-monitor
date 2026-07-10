@@ -37,56 +37,56 @@
     "calls": [
       {
         "count": 1,
-        "date": "2026-06-26",
+        "date": "2026-07-31",
         "dest": "PEK",
         "origin": "PVG",
         "source": "snapshot_fixture"
       },
       {
         "count": 1,
-        "date": "2026-06-26",
+        "date": "2026-07-31",
         "dest": "PKX",
         "origin": "PVG",
         "source": "snapshot_fixture"
       },
       {
         "count": 1,
-        "date": "2026-06-26",
+        "date": "2026-07-31",
         "dest": "PEK",
         "origin": "SHA",
         "source": "snapshot_fixture"
       },
       {
         "count": 2,
-        "date": "2026-06-26",
+        "date": "2026-07-31",
         "dest": "PKX",
         "origin": "SHA",
         "source": "snapshot_fixture"
       },
       {
         "count": 1,
-        "date": "2026-06-26",
+        "date": "2026-07-31",
         "dest": "PVG",
         "origin": "PEK",
         "source": "snapshot_fixture"
       },
       {
         "count": 1,
-        "date": "2026-06-26",
+        "date": "2026-07-31",
         "dest": "SHA",
         "origin": "PEK",
         "source": "snapshot_fixture"
       },
       {
         "count": 1,
-        "date": "2026-06-26",
+        "date": "2026-07-31",
         "dest": "PVG",
         "origin": "PKX",
         "source": "snapshot_fixture"
       },
       {
         "count": 2,
-        "date": "2026-06-26",
+        "date": "2026-07-31",
         "dest": "SHA",
         "origin": "PKX",
         "source": "snapshot_fixture"
@@ -97,48 +97,88 @@
     "source": "snapshot_fixture"
   },
   "notification": {
-    "email_html_chars": 20493,
+    "email_html_chars": 21071,
     "email_subject": "【无符合方案】上海 → 北京｜提供1个备选",
-    "pushplus_chars": 2072
+    "pushplus_chars": 2051
   },
   "price_calendar": {
     "after_passenger_first3": [
-      4224,
-      4437,
-      3981
+      3585,
+      3654,
+      4224
     ],
     "after_passenger_prices": [
+      3585,
+      3654,
       4224,
       4437,
       3981
     ],
     "before_unit_first3": [
-      1408.0,
-      1479.0,
-      1327.0
+      1195.0,
+      1218.0,
+      1408.0
     ],
     "before_unit_prices": [
+      1195.0,
+      1218.0,
       1408.0,
       1479.0,
       1327.0
     ],
     "note": "每行=该出发日单人单程最低+固定返程日单人单程最低，再按3名成人换算。",
     "passenger_factor": 3.0,
-    "return_date": "2026-06-26",
+    "return_date": "2026-07-31",
     "return_low_unit": 648,
     "route": "SHA-PKX + PKX-SHA",
     "rows": [
       {
+        "airline": "MU",
+        "breakdown": "去¥547+返¥648",
+        "date": "2026-07-28",
+        "label": "07-28 周二",
+        "lowest": true,
+        "min_price": 3585,
+        "outbound_min_price": 547.0,
+        "passenger_factor": 3.0,
+        "price_scope": "3人往返参考价",
+        "return_date": "2026-07-31",
+        "return_min_price": 648.0,
+        "scope": "passenger_roundtrip",
+        "selected": false,
+        "unit_roundtrip_price": 1195.0,
+        "value": 3585,
+        "weekday": "周二"
+      },
+      {
+        "airline": "MU",
+        "breakdown": "去¥570+返¥648",
+        "date": "2026-07-29",
+        "label": "07-29 周三",
+        "lowest": false,
+        "min_price": 3654,
+        "outbound_min_price": 570.0,
+        "passenger_factor": 3.0,
+        "price_scope": "3人往返参考价",
+        "return_date": "2026-07-31",
+        "return_min_price": 648.0,
+        "scope": "passenger_roundtrip",
+        "selected": false,
+        "unit_roundtrip_price": 1218.0,
+        "value": 3654,
+        "weekday": "周三"
+      },
+      {
         "airline": "CA",
         "breakdown": "去¥760+返¥648",
-        "date": "2026-06-25",
-        "label": "06-25 周四",
+        "date": "2026-07-30",
+        "label": "07-30 周四",
         "lowest": false,
         "min_price": 4224,
         "outbound_min_price": 760.0,
         "passenger_factor": 3.0,
         "price_scope": "3人往返参考价",
-        "return_date": "2026-06-26",
+        "return_date": "2026-07-31",
         "return_min_price": 648.0,
         "scope": "passenger_roundtrip",
         "selected": false,
@@ -149,14 +189,14 @@
       {
         "airline": "MU",
         "breakdown": "去¥831+返¥648",
-        "date": "2026-06-26",
-        "label": "06-26 周五",
+        "date": "2026-07-31",
+        "label": "07-31 周五",
         "lowest": false,
         "min_price": 4437,
         "outbound_min_price": 831.0,
         "passenger_factor": 3.0,
         "price_scope": "3人往返参考价",
-        "return_date": "2026-06-26",
+        "return_date": "2026-07-31",
         "return_min_price": 648.0,
         "scope": "passenger_roundtrip",
         "selected": true,
@@ -167,14 +207,14 @@
       {
         "airline": "MU",
         "breakdown": "去¥679+返¥648",
-        "date": "2026-06-27",
-        "label": "06-27 周六",
-        "lowest": true,
+        "date": "2026-08-01",
+        "label": "08-01 周六",
+        "lowest": false,
         "min_price": 3981,
         "outbound_min_price": 679.0,
         "passenger_factor": 3.0,
         "price_scope": "3人往返参考价",
-        "return_date": "2026-06-26",
+        "return_date": "2026-07-31",
         "return_min_price": 648.0,
         "scope": "passenger_roundtrip",
         "selected": false,
@@ -185,24 +225,32 @@
     ],
     "savings": [
       {
-        "date": "2026-06-27",
+        "date": "2026-07-28",
+        "offset": -3,
+        "price": 3585.0,
+        "save": 852,
+        "tip": "鎻愬墠3天(2026-07-28 周二)出发，省¥852/单程",
+        "weekday": "周二"
+      },
+      {
+        "date": "2026-07-29",
+        "offset": -2,
+        "price": 3654.0,
+        "save": 783,
+        "tip": "鎻愬墠2天(2026-07-29 周三)出发，省¥783/单程",
+        "weekday": "周三"
+      },
+      {
+        "date": "2026-08-01",
         "offset": 1,
         "price": 3981.0,
         "save": 456,
-        "tip": "鎺ㄨ繜1天(2026-06-27 周六)出发，省¥456/单程",
+        "tip": "鎺ㄨ繜1天(2026-08-01 周六)出发，省¥456/单程",
         "weekday": "周六"
-      },
-      {
-        "date": "2026-06-25",
-        "offset": -1,
-        "price": 4224.0,
-        "save": 213,
-        "tip": "鎻愬墠1天(2026-06-25 周四)出发，省¥213/单程",
-        "weekday": "周四"
       }
     ],
     "scope": "3人往返参考价",
-    "selected_date": "2026-06-26",
+    "selected_date": "2026-07-31",
     "selected_passenger_price": 4437.0,
     "selected_price_scope": "3人往返参考价",
     "selected_unit_price": 1479.0
@@ -236,28 +284,32 @@
     "calendar_array": {
       "before_after_first3": [
         {
+          "passenger_price": 3585.0,
+          "unit_price": 1195.0
+        },
+        {
+          "passenger_price": 3654.0,
+          "unit_price": 1218.0
+        },
+        {
           "passenger_price": 4224.0,
           "unit_price": 1408.0
-        },
-        {
-          "passenger_price": 4437.0,
-          "unit_price": 1479.0
-        },
-        {
-          "passenger_price": 3981.0,
-          "unit_price": 1327.0
         }
       ],
       "is_passenger_scoped": true,
       "passenger_factor": 3.0,
       "price_scope": "3人往返参考价",
       "prices": [
+        3585.0,
+        3654.0,
         4224.0,
         4437.0,
         3981.0
       ],
       "unit_price_scope": "单人往返参考价",
       "unit_prices": [
+        1195.0,
+        1218.0,
         1408.0,
         1479.0,
         1327.0
@@ -301,7 +353,7 @@
       "target_price_scope": "per_person"
     },
     "selected_date_price": {
-      "date": "2026-06-26",
+      "date": "2026-07-31",
       "is_passenger_scoped": true,
       "price": 4437.0,
       "price_scope": "3人往返参考价",
@@ -338,98 +390,103 @@
     "outbound_window_matches": [],
     "return_recommendation": {
       "departure_airport": "PKX",
-      "departure_datetime": "2026-06-26 21:00:00",
+      "departure_datetime": "2026-07-31 21:00:00",
       "flight_no": "MU5170",
       "price": 1720,
       "price_scope": "单人单程参考价",
       "selection_rule": "满足返程时间窗口后按单人单程价升序",
-      "window_depart_after": "2026-06-26 19:55"
+      "window_depart_after": "2026-07-31 19:55"
     },
     "return_window_debug": [
       {
         "departure_airport": "PEK",
-        "departure_datetime": "2026-06-26 21:30:00",
+        "departure_datetime": "2026-07-31 21:30:00",
         "flight_no": "CA1511",
         "index": 0,
         "passed": true,
         "raw_departure": "21:30",
         "return_depart_after": "20:39",
-        "return_depart_after_datetime": "2026-06-26 20:39:00"
+        "return_depart_after_datetime": "2026-07-31 20:39:00",
+        "warning": ""
       },
       {
         "departure_airport": "PEK",
-        "departure_datetime": "2026-06-26 19:30:00",
+        "departure_datetime": "2026-07-31 19:30:00",
         "flight_no": "CA1507",
         "index": 1,
         "passed": false,
         "raw_departure": "19:30",
         "return_depart_after": "20:39",
-        "return_depart_after_datetime": "2026-06-26 20:39:00"
+        "return_depart_after_datetime": "2026-07-31 20:39:00",
+        "warning": ""
       },
       {
         "departure_airport": "PKX",
-        "departure_datetime": "2026-06-26 20:30:00",
+        "departure_datetime": "2026-07-31 20:30:00",
         "flight_no": "CA1589",
         "index": 2,
         "passed": true,
         "raw_departure": "20:30",
         "return_depart_after": "19:55",
-        "return_depart_after_datetime": "2026-06-26 19:55:00"
+        "return_depart_after_datetime": "2026-07-31 19:55:00",
+        "warning": ""
       },
       {
         "departure_airport": "PKX",
-        "departure_datetime": "2026-06-26 20:10:00",
+        "departure_datetime": "2026-07-31 20:10:00",
         "flight_no": "MU5128",
         "index": 3,
         "passed": true,
         "raw_departure": "20:10",
         "return_depart_after": "19:55",
-        "return_depart_after_datetime": "2026-06-26 19:55:00"
+        "return_depart_after_datetime": "2026-07-31 19:55:00",
+        "warning": ""
       },
       {
         "departure_airport": "PKX",
-        "departure_datetime": "2026-06-26 21:00:00",
+        "departure_datetime": "2026-07-31 21:00:00",
         "flight_no": "MU5170",
         "index": 4,
         "passed": true,
         "raw_departure": "21:00",
         "return_depart_after": "19:55",
-        "return_depart_after_datetime": "2026-06-26 19:55:00"
+        "return_depart_after_datetime": "2026-07-31 19:55:00",
+        "warning": ""
       }
     ],
     "return_window_match_count": 4,
     "return_window_matches": [
       {
         "departure_airport": "PKX",
-        "departure_datetime": "2026-06-26 21:00:00",
+        "departure_datetime": "2026-07-31 21:00:00",
         "flight_no": "MU5170",
         "price": 1720,
         "price_scope": "单人单程参考价",
-        "window_depart_after": "2026-06-26 19:55"
+        "window_depart_after": "2026-07-31 19:55"
       },
       {
         "departure_airport": "PKX",
-        "departure_datetime": "2026-06-26 20:30:00",
+        "departure_datetime": "2026-07-31 20:30:00",
         "flight_no": "CA1589",
         "price": 1820,
         "price_scope": "单人单程参考价",
-        "window_depart_after": "2026-06-26 19:55"
+        "window_depart_after": "2026-07-31 19:55"
       },
       {
         "departure_airport": "PEK",
-        "departure_datetime": "2026-06-26 21:30:00",
+        "departure_datetime": "2026-07-31 21:30:00",
         "flight_no": "CA1511",
         "price": 1880,
         "price_scope": "单人单程参考价",
-        "window_depart_after": "2026-06-26 20:39"
+        "window_depart_after": "2026-07-31 20:39"
       },
       {
         "departure_airport": "PKX",
-        "departure_datetime": "2026-06-26 20:10:00",
+        "departure_datetime": "2026-07-31 20:10:00",
         "flight_no": "MU5128",
         "price": 1921,
         "price_scope": "单人单程参考价",
-        "window_depart_after": "2026-06-26 19:55"
+        "window_depart_after": "2026-07-31 19:55"
       }
     ],
     "same_day_alternatives": [
@@ -438,18 +495,18 @@
         "budget_overage": 2553,
         "budget_scope_label": "全员往返 vs 每人上限1700×3=总上限5100",
         "category": "same_day_earliest",
-        "date": "2026-06-26",
+        "date": "2026-07-31",
         "flight": {
           "aircraft": "333",
           "airline": "东方航空",
           "arrival_airport": "PKX",
-          "arrival_date": "2026-06-26",
+          "arrival_date": "2026-07-31",
           "arrival_time": "09:15",
           "buyability": {
             "label": "需支付页确认"
           },
           "departure_airport": "SHA",
-          "departure_date": "2026-06-26",
+          "departure_date": "2026-07-31",
           "departure_time": "07:00",
           "destination_transport_min": 25,
           "fare_rules": {
@@ -769,13 +826,13 @@
           "aircraft": "333",
           "airline": "东方航空",
           "arrival_airport": "PKX",
-          "arrival_date": "2026-06-26",
+          "arrival_date": "2026-07-31",
           "arrival_time": "09:15",
           "buyability": {
             "label": "需支付页确认"
           },
           "departure_airport": "SHA",
-          "departure_date": "2026-06-26",
+          "departure_date": "2026-07-31",
           "departure_time": "07:00",
           "destination_transport_min": 25,
           "fare_rules": {
@@ -1173,6 +1230,7 @@
             "total": 5160,
             "unit_price": 1720.0
           },
+          "route_type": "domestic",
           "scope": "roundtrip",
           "single_adult_price": 2551.0,
           "total_price": 7653
@@ -1208,13 +1266,13 @@
           "aircraft": "32A",
           "airline": "东方航空",
           "arrival_airport": "SHA",
-          "arrival_date": "2026-06-26",
+          "arrival_date": "2026-07-31",
           "arrival_time": "23:10",
           "buyability": {
             "label": "需支付页确认"
           },
           "departure_airport": "PKX",
-          "departure_date": "2026-06-26",
+          "departure_date": "2026-07-31",
           "departure_time": "21:00",
           "fare_rules": {
             "baggage": {
@@ -2374,10 +2432,11 @@
     }
   },
   "scenario": "standard_same_day_business_shanghai_beijing",
+  "skipped_items": [],
   "snapshot_version": 1,
   "subscription": {
     "basic": {
-      "depart_date": "2026-06-26",
+      "depart_date": "2026-07-31",
       "destination": "北京",
       "destination_airports_active": [
         "PEK",
@@ -2389,7 +2448,7 @@
         "SHA"
       ],
       "passenger_count": 3,
-      "return_date": "2026-06-26",
+      "return_date": "2026-07-31",
       "round_trip": true,
       "route_type": "domestic"
     },
@@ -2441,7 +2500,7 @@
       "transfer_policy": "direct_only",
       "transport_mode": "taxi"
     },
-    "id": "snapshot-standard-shanghai-beijing-20260626",
+    "id": "snapshot-standard-shanghai-beijing-20260731",
     "notification_goals": {
       "frequency": "important_only",
       "main_goal": "suitable_price"

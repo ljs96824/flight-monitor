@@ -80,6 +80,40 @@ class RequestCacheTest(unittest.TestCase):
 
             self.assertEqual(source.calls, [("SHA", "PEK", "2026-06-20", "economy")])
 
+    def test_force_fresh_bypasses_memory_and_persistent_cache_reads(self):
+        from request_cache import cached_fetch, get_request_cache_stats, reset_request_cache
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = Path(tmp)
+            source = CountingSource()
+            passengers = {"adult": 1}
+
+            reset_request_cache()
+            cached_fetch(
+                source,
+                "SHA",
+                "PEK",
+                "2026-07-31",
+                passengers,
+                "economy",
+                cache_dir=cache_dir,
+            )
+            cached_fetch(
+                source,
+                "SHA",
+                "PEK",
+                "2026-07-31",
+                passengers,
+                "economy",
+                cache_dir=cache_dir,
+                force_fresh=True,
+            )
+
+            stats = get_request_cache_stats()
+            self.assertEqual(len(source.calls), 2)
+            self.assertEqual(stats["actual"], 2)
+            self.assertEqual(stats["hits"], 0)
+
 
 
     def test_stats_requested_counts_real_fetch_not_cache_hits(self):
@@ -110,6 +144,32 @@ class RequestCacheTest(unittest.TestCase):
         aggregator.collect("SHA", "PEK", "2026-06-20", passengers={"adult": 1})
 
         self.assertEqual(source.calls, [("SHA", "PEK", "2026-06-20", "economy")])
+
+    def test_aggregator_force_fresh_reaches_request_cache(self):
+        from request_cache import reset_request_cache
+        from sources.aggregator import FlightAggregator
+
+        reset_request_cache()
+        source = CountingSource()
+        source.name = "juhe"
+        aggregator = FlightAggregator([source], [], route_type="domestic")
+
+        aggregator.collect(
+            "SHA",
+            "PEK",
+            "2026-07-31",
+            passengers={"adult": 1},
+            force_fresh=True,
+        )
+        aggregator.collect(
+            "SHA",
+            "PEK",
+            "2026-07-31",
+            passengers={"adult": 1},
+            force_fresh=True,
+        )
+
+        self.assertEqual(len(source.calls), 2)
 
     def test_price_calendar_source_fetch_reuses_cached_source_result(self):
         from price_calendar import _source_fetch

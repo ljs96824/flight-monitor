@@ -1,6 +1,7 @@
 import sqlite3
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 from unittest.mock import patch
 from contextlib import redirect_stdout
@@ -84,6 +85,37 @@ class ObservationsStoreTest(unittest.TestCase):
                     "SELECT days_to_departure, source, flight_combo, price_cny, method_version FROM observations"
                 ).fetchone()
             self.assertEqual(row, (27, "hasdata", "MU225", 1234.0, "v1"))
+
+    def test_count_observations_for_round_counts_only_requested_round(self):
+        from observations_store import append_observations, count_observations_for_round
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            db_path = Path(tmp) / "observations.sqlite3"
+            common = {
+                "route_type": "domestic",
+                "origin_airport": "SHA",
+                "dest_airport": "PEK",
+                "depart_date": "2099-12-28",
+                "cabin_class": "economy",
+                "source": "juhe",
+                "observed_at": "2099-12-01T10:00:00",
+                "db_path": db_path,
+            }
+            append_observations(
+                [{"flight_combo": "MU225", "price": 831}],
+                round_id="basket_20991201T100000",
+                **common,
+            )
+            append_observations(
+                [{"flight_combo": "MU226", "price": 900}],
+                round_id="subscription_20991201T100000",
+                **common,
+            )
+
+            self.assertEqual(
+                count_observations_for_round("basket_20991201T100000", db_path),
+                1,
+            )
 
     def test_append_observations_normalizes_transfer_combo_before_storage(self):
         from observations_store import append_observations, init_observations_db
@@ -204,14 +236,16 @@ class ObservationsStoreTest(unittest.TestCase):
                     "FROM observations GROUP BY depart_date ORDER BY depart_date"
                 ).fetchall()
 
-            self.assertEqual(
-                rows,
-                [
-                    ("2026-09-28", 1, 82, 82),
-                    ("2026-10-01", 1, 85, 85),
-                    ("2026-10-04", 1, 88, 88),
-                ],
-            )
+            expected_rows = [
+                (
+                    depart_date,
+                    1,
+                    (date.fromisoformat(depart_date) - date.today()).days,
+                    (date.fromisoformat(depart_date) - date.today()).days,
+                )
+                for depart_date in ("2026-09-28", "2026-10-01", "2026-10-04")
+            ]
+            self.assertEqual(rows, expected_rows)
             log = output.getvalue()
             self.assertIn("\u65e5\u671f=2026-09-28", log)
             self.assertIn("\u65e5\u671f=2026-10-01", log)

@@ -7,6 +7,8 @@ from datetime import datetime
 from pathlib import Path
 
 from filename_utils import sanitize_filename
+from flight_combo_utils import normalize_combo
+from log_utils import safe_log
 
 
 BASE_DIR = Path(__file__).parent
@@ -28,6 +30,14 @@ def _feedback_path(data_dir=None) -> Path:
     return Path(data_dir) / "feedback.json"
 
 
+
+def _track_combo_key(value) -> str:
+    normalized = normalize_combo(value)
+    if normalized:
+        return normalized
+    return str(value or "").replace(" ", "").upper()
+
+
 def _to_float(value) -> float | None:
     try:
         return float(value)
@@ -40,7 +50,7 @@ def _flight_no(flight: dict | None) -> str:
     for key in ("flight_no", "flight_number", "flight_combo"):
         value = str(flight.get(key) or "").strip()
         if value:
-            return value
+            return _track_combo_key(value)
     segments = flight.get("segments") or flight.get("flights") or []
     if segments:
         numbers = [
@@ -50,7 +60,7 @@ def _flight_no(flight: dict | None) -> str:
         ]
         numbers = [item for item in numbers if item]
         if numbers:
-            return "+".join(numbers)
+            return _track_combo_key("+".join(numbers))
     return ""
 
 
@@ -231,19 +241,19 @@ def feedback_acknowledgement(subscription_id, data_dir=None) -> str:
 
 
 def find_flight(current_flights: list[dict] | None, flight_no: str) -> dict | None:
-    target = str(flight_no or "").replace(" ", "").upper()
+    target = _track_combo_key(flight_no)
     if not target:
         return None
     for flight in current_flights or []:
         if not isinstance(flight, dict):
             continue
-        current = _flight_no(flight).replace(" ", "").upper()
+        current = _track_combo_key(_flight_no(flight))
         if current == target:
             return flight
         if "+" in current and target in current.split("+"):
             for direction in ("outbound", "return"):
                 leg = _item_leg_flight(flight, direction)
-                if _flight_no(leg).replace(" ", "").upper() == target:
+                if _track_combo_key(_flight_no(leg)) == target:
                     return leg
             if flight.get("is_roundtrip") or str(flight.get("scope") or "").lower() == "roundtrip":
                 return None
@@ -266,8 +276,8 @@ def _item_leg_flight(item: dict | None, direction: str) -> dict:
 
 
 def _find_roundtrip_combo(current_items: list[dict] | None, outbound_no: str, return_no: str) -> dict | None:
-    outbound_target = str(outbound_no or "").replace(" ", "").upper()
-    return_target = str(return_no or "").replace(" ", "").upper()
+    outbound_target = _track_combo_key(outbound_no)
+    return_target = _track_combo_key(return_no)
     if not outbound_target or not return_target:
         return None
     for item in current_items or []:
@@ -277,8 +287,8 @@ def _find_roundtrip_combo(current_items: list[dict] | None, outbound_no: str, re
         return_flight = _item_leg_flight(item, "return")
         if not outbound or not return_flight:
             continue
-        current_outbound = _flight_no(outbound).replace(" ", "").upper()
-        current_return = _flight_no(return_flight).replace(" ", "").upper()
+        current_outbound = _track_combo_key(_flight_no(outbound))
+        current_return = _track_combo_key(_flight_no(return_flight))
         if current_outbound == outbound_target and current_return == return_target:
             return item
     return None
@@ -433,6 +443,17 @@ def _track_roundtrip_plan(plan_a: dict, current_items: list[dict] | None) -> dic
         f"上次记录的是={json.dumps(plan_a, ensure_ascii=False, default=str)}"
     )
 
+    outbound_norm = _track_combo_key(outbound_no)
+    return_norm = _track_combo_key(return_no)
+    print(
+        f"[\u8ffd\u8e2a\u8bca\u65ad] norm\u540e \u4e0a\u6b21\u53bb\u7a0b={outbound_norm}, "
+        f"\u4e0a\u6b21\u8fd4\u7a0b={return_norm}, \u5339\u914d={bool(combo or (outbound_current and return_current))}"
+    )
+    safe_log(
+        f"[追踪池] 目标去程={outbound_norm} 在池中={bool(outbound_current or combo)} "
+        f"目标返程={return_norm} 在池中={bool(return_current or combo)}"
+    )
+
     if combo:
         current_price, outbound_price, return_price = _current_roundtrip_from_combo(combo)
         current_source = combo
@@ -567,6 +588,7 @@ def track_plan_status(sub_id, current_flights: list[dict] | None, data_dir=None)
     same = find_flight(current_flights, flight_no)
     previous_price = _to_float(plan_a.get("price"))
     print(f"[方案追踪诊断] 航班={flight_no}")
+    print(f"[\u8ffd\u8e2a\u8bca\u65ad] norm\u540e \u4e0a\u6b21\u822a\u73ed={_track_combo_key(flight_no)}, \u5339\u914d={bool(same)}")
     print(
         f"[方案追踪诊断] 上次价={previous_price}, 上次口径=单程, "
         f"上次记录的是={json.dumps(plan_a, ensure_ascii=False, default=str)}"

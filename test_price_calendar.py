@@ -198,32 +198,24 @@ class PriceCalendarTest(unittest.TestCase):
     def test_weekday_pattern_reports_actual_min_date_and_avoids_forced_weekend_claim(self):
         from price_calendar import analyze_weekday_pattern
 
+        start = date.today() + timedelta(days=14)
+        start += timedelta(days=(5 - start.weekday()) % 7)
+        prices = [607, 599, 659, 537, 570, 760, 636, 646, 665, 679, 605, 679, 834, 669]
         calendar = {
             "route": "PVG-PEK",
             "dates": {
-                "2026-06-20": {"min_price": 607},
-                "2026-06-21": {"min_price": 599},
-                "2026-06-22": {"min_price": 659},
-                "2026-06-23": {"min_price": 537},
-                "2026-06-24": {"min_price": 570},
-                "2026-06-25": {"min_price": 760},
-                "2026-06-26": {"min_price": 636},
-                "2026-06-27": {"min_price": 646},
-                "2026-06-28": {"min_price": 665},
-                "2026-06-29": {"min_price": 679},
-                "2026-06-30": {"min_price": 605},
-                "2026-07-01": {"min_price": 679},
-                "2026-07-02": {"min_price": 834},
-                "2026-07-03": {"min_price": 669},
+                (start + timedelta(days=offset)).isoformat(): {"min_price": price}
+                for offset, price in enumerate(prices)
             },
         }
 
         pattern = analyze_weekday_pattern(calendar, min_samples=7)
+        expected_min_date = (start + timedelta(days=3)).isoformat()
 
-        self.assertEqual(pattern["min_date"], "2026-06-23")
+        self.assertEqual(pattern["min_date"], expected_min_date)
         self.assertEqual(pattern["min_weekday"], "周二")
         self.assertEqual(pattern["min_price"], 537)
-        self.assertIn("2026-06-23", pattern["tip"])
+        self.assertIn(expected_min_date, pattern["tip"])
         self.assertIn("周二", pattern["tip"])
         self.assertNotIn("周日通常更便宜", pattern["tip"])
 

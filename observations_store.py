@@ -265,3 +265,19 @@ def count_observations(db_path: str | Path = DEFAULT_DB_PATH) -> int:
         return 0
     with sqlite3.connect(path) as conn:
         return int(conn.execute("SELECT COUNT(*) FROM observations").fetchone()[0])
+
+
+def count_observations_for_round(
+    round_id: str,
+    db_path: str | Path = DEFAULT_DB_PATH,
+) -> int:
+    path = Path(db_path)
+    if not path.exists():
+        return 0
+    with sqlite3.connect(path) as conn:
+        return int(
+            conn.execute(
+                "SELECT COUNT(*) FROM observations WHERE round_id = ?",
+                (str(round_id),),
+            ).fetchone()[0]
+        )

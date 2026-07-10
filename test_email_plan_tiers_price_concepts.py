@@ -280,10 +280,10 @@ class EmailPlanTiersPriceConceptsTest(unittest.TestCase):
         html = render_detail_html(payload)
 
         self.assertIn("\u524d\u540e\u65e5\u671f\u6700\u4f4e\u4ef7(\u5355\u7a0b\u53c2\u8003\u4ef7)", html)
-        self.assertIn("\u00a51,402(\u5355\u7a0b)", html)
+        self.assertIn("¥1,402 单人单程", html)
         self.assertIn("\u6ce8:\u4e3a\u5355\u7a0b\u4ef7,\u975e\u5f80\u8fd4\u603b\u4ef7", html)
-        self.assertIn("\u65b9\u6848A:\u00a56,521(\u5f80\u8fd4),\u76f4\u98de\u5f80\u8fd4,\u9996\u9009\u63a8\u8350", html)
-        self.assertIn("\u65b9\u6848B:\u00a56,186(\u5f80\u8fd4),\u53bb\u7a0b\u4e2d\u8f6c+\u4e24\u4e2a\u5355\u7a0b\u62fc\u63a5,\u4f4e\u4ef7\u5907\u9009", html)
+        self.assertIn("方案A:¥6,521 单人往返,直飞往返,首选推荐", html)
+        self.assertIn("方案B:¥6,186 单人往返,去程中转+两个单程拼接,低价备选", html)
         self.assertNotIn("\u00a56,521 B", html)
         self.assertNotIn("\u00a56,186 B", html)
 
