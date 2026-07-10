@@ -48,6 +48,45 @@ class SubscriptionLoadingTest(unittest.TestCase):
 
         self.assertEqual([flight["flight_combo"] for flight in data["flights"]], ["ACTIVE"])
 
+    def test_collect_for_airport_matrix_preserves_dual_source_price_anomalies(self):
+        class FakeAggregator:
+            def collect(self, origin, destination, date_str, cabin_classes=None):
+                combo = f"{origin}{destination}"
+                return {
+                    "flights": [
+                        {
+                            "flight_combo": combo,
+                            "price": 680,
+                            "departure_airport": origin,
+                            "arrival_airport": destination,
+                        }
+                    ],
+                    "dual_source_price_anomalies": [
+                        {
+                            "flight_combo": combo,
+                            "diff_pct": 20,
+                            "sources": [
+                                {"source": "hasdata", "price": 850},
+                                {"source": "juhe", "price": 680},
+                            ],
+                        }
+                    ],
+                    "source_stats": {},
+                }
+
+        data = main.collect_for_airport_matrix(
+            FakeAggregator(),
+            ["PVG", "SHA"],
+            ["KIX"],
+            "2026-10-01",
+        )
+
+        self.assertEqual(len(data["dual_source_price_anomalies"]), 2)
+        self.assertEqual(
+            {item["flight_combo"] for item in data["dual_source_price_anomalies"]},
+            {"PVGKIX", "SHAKIX"},
+        )
+
     def test_bad_subscription_is_skipped_without_stopping_batch(self):
         records = [
             {

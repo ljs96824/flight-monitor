@@ -216,7 +216,8 @@ def _source_price_map(flight: dict) -> dict[str, float]:
     return prices
 
 
-MERGE_PRICE_RULE = "source_priority_then_min_price"
+MERGE_PRICE_STRATEGY = "global_min"
+PRICE_GAP_DISCLOSE_PCT = 15.0
 
 
 def _selected_price_source(flight: dict, prices: dict[str, float]) -> str:
@@ -230,6 +231,9 @@ def _selected_price_source(flight: dict, prices: dict[str, float]) -> str:
         for source, price in prices.items()
         if abs(float(price) - selected_price) < 0.01
     ]
+    explicit_source = str(flight.get("price_source") or "").lower()
+    if explicit_source in matching_sources:
+        return explicit_source
     if len(matching_sources) == 1:
         return matching_sources[0]
 
@@ -271,15 +275,16 @@ def _log_dual_source_price_checks(flights: list[dict]) -> list[dict]:
         safe_log(
             f"[\u5408\u5e76\u9009\u4ef7] combo={combo} \u5165\u6c60\u4ef7={selected_price_text} "
             f"\u53d6\u81ea={selected_source} \u5019\u9009=hasdata:CNY{hasdata_price:g}/"
-            f"juhe:CNY{juhe_price:g} \u89c4\u5219={MERGE_PRICE_RULE}"
+            f"juhe:CNY{juhe_price:g} \u89c4\u5219={MERGE_PRICE_STRATEGY}"
         )
-        if diff_pct > 15:
+        if diff_pct > PRICE_GAP_DISCLOSE_PCT:
             anomalies.append(
                 {
                     "flight_combo": combo,
                     "min_price": min_price,
                     "max_price": max(hasdata_price, juhe_price),
                     "diff_pct": round(diff_pct, 1),
+                    "price_source": selected_source,
                     "sources": [
                         {"source": "hasdata", "flight_combo": combo, "price": hasdata_price},
                         {"source": "juhe", "flight_combo": combo, "price": juhe_price},
@@ -446,6 +451,12 @@ def _flight_primary_priority(flight: dict, is_domestic: bool) -> tuple[int, floa
 
 
 def _should_replace_flight(current: dict, incoming: dict, is_domestic: bool) -> bool:
+    if MERGE_PRICE_STRATEGY == "global_min":
+        try:
+            return float(incoming.get("price")) < float(current.get("price"))
+        except (TypeError, ValueError):
+            return False
+
     current_priority = _flight_primary_priority(current, is_domestic)
     incoming_priority = _flight_primary_priority(incoming, is_domestic)
     if incoming_priority != current_priority:
@@ -727,6 +738,10 @@ class FlightAggregator:
             normalized_combo = _flight_key(flight)
             source_name = flight.get("data_source") or flight.get("source")
             new_sources = _source_names(source_name)
+            candidate_price_source = (
+                str(flight.get("price_source") or "").lower()
+                or (new_sources[0] if new_sources else "unknown")
+            )
             sources_by_combo.setdefault(normalized_combo, [])
             for source in new_sources:
                 if source not in sources_by_combo[normalized_combo]:
@@ -742,6 +757,7 @@ class FlightAggregator:
             ):
                 previous = seen.get(normalized_combo)
                 seen[normalized_combo] = dict(flight)
+                seen[normalized_combo]["price_source"] = candidate_price_source
                 _append_source_price(seen[normalized_combo], source_name, flight.get("price"))
                 if previous:
                     _merge_flight_fields(seen[normalized_combo], previous)
@@ -862,6 +878,7 @@ class FlightAggregator:
             "source_stats": source_stats,
             "sources_used": "+".join(sources_used),
             "source_errors": source_errors,
+            "dual_source_price_anomalies": dual_source_price_anomalies,
             "price_anomalies": self._find_price_anomalies(successful_results) + dual_source_price_anomalies,
             "raw_by_source": raw_by_source,
             "collected_at": run_collected_at,
@@ -893,6 +910,11 @@ class FlightAggregator:
 
                 data_source = flight.get("data_source") or source
                 normalized_flight = {**flight, "flight_combo": combo}
+                price_sources = _source_names(data_source)
+                candidate_price_source = (
+                    str(flight.get("price_source") or "").lower()
+                    or (price_sources[0] if price_sources else "unknown")
+                )
                 raw_combo = flight.get("flight_combo")
                 if raw_combo and str(raw_combo) != combo:
                     normalized_flight.setdefault("raw_flight_combo", str(raw_combo))
@@ -900,6 +922,7 @@ class FlightAggregator:
                     merged_by_combo[combo] = {
                         **normalized_flight,
                         "data_source": "+".join(_source_names(data_source)),
+                        "price_source": candidate_price_source,
                     }
                     source_order_by_combo[combo] = []
                 else:
@@ -908,10 +931,13 @@ class FlightAggregator:
                         merged_by_combo[combo] = {
                             **normalized_flight,
                             "data_source": "+".join(_source_names(data_source)),
+                            "price_source": candidate_price_source,
                         }
                         _merge_flight_fields(merged_by_combo[combo], previous)
                     else:
                         _merge_flight_fields(merged_by_combo[combo], flight)
+
+                _append_source_price(merged_by_combo[combo], data_source, flight.get("price"))
 
                 for source_name in _source_names(data_source):
                     if source_name not in source_order_by_combo[combo]:
@@ -955,7 +981,7 @@ class FlightAggregator:
                 continue
 
             diff_pct = ((max_price - min_price) / min_price) * 100
-            if diff_pct > 15:
+            if diff_pct > PRICE_GAP_DISCLOSE_PCT:
                 anomalies.append(
                     {
                         "flight_combo": entries[0]["flight_combo"],

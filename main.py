@@ -1009,6 +1009,7 @@ def collect_for_airport_matrix(
     merged = {
         "flights": [],
         "price_insights": {},
+        "dual_source_price_anomalies": [],
         "source_stats": {},
         "source_errors": [],
         "raw_by_source": {},
@@ -1043,6 +1044,9 @@ def collect_for_airport_matrix(
             merged["collected_at"] = data["collected_at"]
         _merge_source_stats(merged["source_stats"], data.get("source_stats", {}))
         merged["source_errors"].extend(data.get("source_errors", []))
+        merged["dual_source_price_anomalies"].extend(
+            data.get("dual_source_price_anomalies", []) or []
+        )
         merged["raw_by_source"].update(data.get("raw_by_source", {}))
         for source in str(data.get("sources_used") or data.get("source") or "").split("+"):
             if source and source not in sources_used:
@@ -1303,6 +1307,9 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
         if price_calendar_result:
             analysis["price_calendar"] = price_calendar_result
         analysis["source_stats"] = data.get("source_stats", {})
+        analysis["dual_source_price_anomalies"] = data.get(
+            "dual_source_price_anomalies", []
+        )
         analysis["price_position"] = price_position_description(
             current_min_price, price_history
         )
@@ -1385,6 +1392,9 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
                     user_preferences=return_preferences,
                     hard_constraints=return_constraints,
                 )
+                return_analysis["dual_source_price_anomalies"] = (
+                    return_data or {}
+                ).get("dual_source_price_anomalies", [])
                 return_min_price = (
                     return_analysis.get("price_range", [0])[0]
                     if return_analysis.get("price_range")

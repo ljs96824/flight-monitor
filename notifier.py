@@ -50,6 +50,7 @@ from analyzer import (
 )
 from price_estimator import build_passenger_price_breakdown, build_price_tiers, calc_total_price_for_passengers
 from pricing import assert_same_caliber, budget_to_pp, caliber_label, itinerary_price_pp, passenger_rate_sum, price_in_scope
+from sources.aggregator import PRICE_GAP_DISCLOSE_PCT
 from storage import (
     get_lowest_price_history,
     get_last_push_price,
@@ -519,6 +520,82 @@ def _source_price_entries_for_display(flight: dict | None) -> list[dict]:
             }
         )
     return normalized
+
+
+def _source_price_gap_disclosure_text(anomaly: dict | None) -> str:
+    anomaly = anomaly or {}
+    diff_pct = _to_float(anomaly.get("diff_pct"))
+    if diff_pct is None or diff_pct <= PRICE_GAP_DISCLOSE_PCT:
+        return ""
+
+    source_prices = {}
+    for entry in anomaly.get("sources") or []:
+        if not isinstance(entry, dict):
+            continue
+        source = str(entry.get("source") or "").strip().lower()
+        price = _valid_price_float(entry.get("price"))
+        if source and price is not None:
+            source_prices[source] = price
+
+    google_price = source_prices.get("hasdata")
+    ota_price = source_prices.get("juhe")
+    if google_price is None or ota_price is None:
+        return ""
+    return (
+        f"渠道参考价:Google CNY{google_price:g} / OTA CNY{ota_price:g},"
+        "渠道价差较大,运价条款可能不同,以支付页为准"
+    )
+
+
+def _source_price_anomaly_map(anomalies: list[dict] | None) -> dict[str, dict]:
+    result = {}
+    for anomaly in anomalies or []:
+        if not isinstance(anomaly, dict) or not _source_price_gap_disclosure_text(anomaly):
+            continue
+        combo = normalize_combo(anomaly.get("flight_combo") or "")
+        if not combo:
+            continue
+        current = result.get(combo)
+        if current is None or (_to_float(anomaly.get("diff_pct")) or 0) > (
+            _to_float(current.get("diff_pct")) or 0
+        ):
+            result[combo] = anomaly
+    return result
+
+
+def _attach_source_price_anomalies_to_plans(
+    plans: list[dict],
+    outbound_anomalies: list[dict] | None,
+    return_anomalies: list[dict] | None,
+) -> list[dict]:
+    outbound_map = _source_price_anomaly_map(outbound_anomalies)
+    return_map = _source_price_anomaly_map(return_anomalies)
+
+    def attach(flight: dict | None, anomaly_map: dict[str, dict]) -> None:
+        if not isinstance(flight, dict):
+            return
+        combo = normalize_combo(flight.get("flight_combo") or flight.get("flight_no") or "")
+        anomaly = anomaly_map.get(combo)
+        if anomaly:
+            flight["source_price_anomaly"] = dict(anomaly)
+
+    for plan in plans or []:
+        if plan.get("is_roundtrip"):
+            attach(plan.get("outbound_flight"), outbound_map)
+            attach(plan.get("return_flight"), return_map)
+        else:
+            attach(plan.get("main_flight") or plan.get("flight"), outbound_map)
+    return plans
+
+
+def _source_price_gap_notice_html(flight: dict | None) -> str:
+    text = _source_price_gap_disclosure_text((flight or {}).get("source_price_anomaly"))
+    if not text:
+        return ""
+    return (
+        "<div style='margin:8px 0;color:#b45309;font-size:12px;'>"
+        f"{html.escape(text)}</div>"
+    )
 
 
 def _flight_price_text(flight: dict) -> str:
@@ -4985,6 +5062,15 @@ def _plan_leg_flights(plan: dict) -> list[dict]:
     return flights
 
 
+def _plan_source_price_gap_lines(plan: dict | None) -> list[str]:
+    lines = []
+    for flight in _plan_leg_flights(plan or {}):
+        text = _source_price_gap_disclosure_text(flight.get("source_price_anomaly"))
+        if text and text not in lines:
+            lines.append(text)
+    return lines
+
+
 def _hour_from_flight_time(value) -> int | None:
     text = _time_only(value)
     if not text or ":" not in text:
@@ -6291,6 +6377,17 @@ def build_notification_payload(
             _payload_single_plan(flight, route_info, analysis_result, index, "推荐" if index < 2 else "备选")
             for index, flight in enumerate(flights[:5])
         ]
+    outbound_source_price_anomalies = (
+        outbound_analysis.get("dual_source_price_anomalies")
+        or analysis_result.get("dual_source_price_anomalies")
+        or []
+    )
+    return_source_price_anomalies = return_analysis.get("dual_source_price_anomalies") or []
+    all_items = _attach_source_price_anomalies_to_plans(
+        all_items,
+        outbound_source_price_anomalies,
+        return_source_price_anomalies,
+    )
     all_items = _apply_plan_tiers(all_items)
     passenger_profile = (
         (analysis_result or {}).get("passenger_profile")
@@ -6641,6 +6738,14 @@ def build_notification_payload(
         "max_budget_pp_oneway": max_budget_pp_oneway,
         "target_price_pp_oneway": target_price_pp_oneway,
         "price_tiers": price_tiers,
+        "dual_source_price_anomalies": [
+            {"direction": "outbound", **item}
+            for item in _source_price_anomaly_map(outbound_source_price_anomalies).values()
+        ]
+        + [
+            {"direction": "return", **item}
+            for item in _source_price_anomaly_map(return_source_price_anomalies).values()
+        ],
         "last_push_price": (last_push or {}).get("price"),
         "recommendation": price_policy.get("conclusion") or decision.get("conclusion") or "可以观察",
         "price_policy_reason": price_policy.get("reason") or "",
@@ -7872,6 +7977,7 @@ def render_pushplus(payload: dict) -> str:
         reason_line,
         f"首选候选:{html.escape(str(primary_plan.get('label') or '方案A'))}, {_price_text(primary_plan.get('price') or payload.get('display_price'))}",
     ]
+    lines.extend(html.escape(item) for item in _plan_source_price_gap_lines(primary_plan))
     if gap_line:
         lines.append(html.escape(gap_line))
     lines.extend(
@@ -8247,6 +8353,10 @@ def _render_payload_plan_card(plan: dict, compact: bool = False, primary_plan: d
     if not compact:
         rows.append(("操作建议", f'<span style="color:#16a34a;">{html.escape(str(plan.get("buy_condition") or "以支付页为准"))}</span>'))
     body_parts.append(_email_plan_price_group(rows))
+    for flight in _plan_leg_flights(plan):
+        gap_notice = _source_price_gap_notice_html(flight)
+        if gap_notice:
+            body_parts.append(gap_notice)
     return _email_card(title, "".join(body_parts), _plan_card_style(plan, tier))
 
 
@@ -9713,6 +9823,10 @@ def _render_domestic_payload_plan_card(plan: dict, compact: bool = False, primar
     if not compact:
         rows.append(("操作建议", f'<span style="color:#16a34a;">{html.escape(str(plan.get("buy_condition") or "以支付页为准"))}</span>'))
     body_parts.append(_email_plan_price_group(rows))
+    for flight in _plan_leg_flights(plan):
+        gap_notice = _source_price_gap_notice_html(flight)
+        if gap_notice:
+            body_parts.append(gap_notice)
     return _email_card(title, "".join(body_parts), _plan_card_style(plan, tier))
 
 
