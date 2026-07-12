@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 class CountingSource:
@@ -130,6 +131,63 @@ class RequestCacheTest(unittest.TestCase):
         self.assertEqual(fake_stats["actual"], 1)
         self.assertEqual(fake_stats["requested"], 1)
         self.assertEqual(fake_stats["hits"], 1)
+
+    def test_round_stats_reset_while_process_totals_accumulate(self):
+        from request_cache import (
+            cached_fetch,
+            get_process_request_cache_stats,
+            get_request_cache_stats,
+            print_request_cache_stats,
+            reset_request_cache,
+            start_request_cache_round,
+        )
+
+        reset_request_cache()
+        hasdata = CountingSource()
+        hasdata.name = "hasdata"
+        juhe = CountingSource()
+        juhe.name = "juhe"
+
+        start_request_cache_round("round-international")
+        cached_fetch(
+            hasdata,
+            "PVG",
+            "KIX",
+            "2026-10-01",
+            {"adult": 1},
+            persist=False,
+            force_fresh=True,
+        )
+        start_request_cache_round("round-domestic")
+        cached_fetch(
+            juhe,
+            "SHA",
+            "PEK",
+            "2026-07-31",
+            {"adult": 1},
+            persist=False,
+            force_fresh=True,
+        )
+
+        round_stats = get_request_cache_stats()
+        process_stats = get_process_request_cache_stats()
+        self.assertNotIn("hasdata", round_stats["by_source"])
+        self.assertEqual(round_stats["by_source"]["juhe"]["requested"], 1)
+        self.assertEqual(round_stats["actual"], 1)
+        self.assertEqual(process_stats["by_source"]["hasdata"]["requested"], 1)
+        self.assertEqual(process_stats["by_source"]["juhe"]["requested"], 1)
+        self.assertEqual(process_stats["actual"], 2)
+
+        with patch("request_cache.safe_log") as log:
+            print_request_cache_stats()
+        messages = [call.args[0] for call in log.call_args_list]
+        round_line = next(line for line in messages if line.startswith("[API统计] "))
+        process_line = next(
+            line for line in messages if line.startswith("[API统计-进程累计] ")
+        )
+        self.assertIn("round=round-domestic", round_line)
+        self.assertNotIn("hasdata", round_line)
+        self.assertIn("hasdata", process_line)
 
     def test_aggregator_collect_reuses_cached_source_result(self):
         from request_cache import reset_request_cache

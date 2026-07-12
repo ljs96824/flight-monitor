@@ -28,6 +28,8 @@ from price_calendar import (
     roundtrip_calendar_rows as _roundtrip_calendar_rows,
 )
 from domestic_fare_rules import get_aircraft_name
+from log_utils import safe_log
+from observations_store import get_current_round
 from storage import get_all_history, get_latest_alternatives, get_target_history
 
 IATA_CITY_NAMES = {
@@ -8286,6 +8288,154 @@ def _matched_constraint_reasons(analysis_result: dict) -> list[str]:
     return reasons
 
 
+FILTER_DETAIL_TOP_N = 5
+FILTER_DETAIL_MAX_PER_ROUND = 10
+_filter_detail_round_id: str | None = None
+_filter_detail_count = 0
+_filter_detail_seen: set[tuple] = set()
+
+
+def _filter_detail_number(value) -> str:
+    number = _to_float(value)
+    if number is None:
+        return str(value if value not in (None, "") else "unknown")
+    return str(int(number)) if number.is_integer() else f"{number:g}"
+
+
+def _filter_detail_identity(flight: dict) -> tuple:
+    return (
+        str(flight.get("flight_combo") or flight.get("flight_no") or "unknown"),
+        str(flight.get("cabin_class") or flight.get("cabin") or ""),
+        str(flight.get("departure_time") or flight.get("dep_time") or ""),
+        str(flight.get("arrival_time") or flight.get("arr_time") or ""),
+        _to_float(flight.get("price")),
+    )
+
+
+def _filter_detail_times(flight: dict) -> str:
+    segments = [item for item in (flight.get("segments") or []) if isinstance(item, dict)]
+    first = segments[0] if segments else {}
+    last = segments[-1] if segments else {}
+    departure = (
+        flight.get("departure_time")
+        or flight.get("dep_time")
+        or first.get("departure_time")
+        or first.get("dep_time")
+        or "unknown"
+    )
+    arrival = (
+        flight.get("arrival_time")
+        or flight.get("arr_time")
+        or last.get("arrival_time")
+        or last.get("arr_time")
+        or "unknown"
+    )
+    return f"departure={departure},arrival={arrival}"
+
+
+def _filter_detail_airlines(flight: dict) -> str:
+    airlines = flight.get("airlines") or []
+    if isinstance(airlines, str):
+        airlines = [airlines]
+    if not airlines:
+        airlines = [
+            item.get("airline")
+            for item in (flight.get("segments") or [])
+            if isinstance(item, dict) and item.get("airline")
+        ]
+    return str(flight.get("airline_summary") or "/".join(airlines) or "unknown")
+
+
+def _filter_constraint_detail(flight: dict, preferences: dict) -> tuple[str, str]:
+    reason = str(flight.get("exclude_reason") or "不符合当前筛选条件")
+    if reason == "用户设置必须直飞":
+        return "direct_only", f"stops={_stops_count(flight)}"
+    if reason == "超过最高可接受价格":
+        return (
+            "max_budget",
+            f"price={_filter_detail_number(flight.get('price'))},"
+            f"max_budget={_filter_detail_number(preferences.get('max_budget') or preferences.get('budget'))}",
+        )
+    if "起飞时段" in reason:
+        return "departure_slots", _filter_detail_times(flight)
+    if "起飞时间" in reason:
+        return "departure_time_policy", _filter_detail_times(flight)
+    if "到达时段" in reason:
+        return "arrival_slots", _filter_detail_times(flight)
+    if "到达时间" in reason:
+        return "arrival_time_policy", _filter_detail_times(flight)
+    if "时间不符合" in reason:
+        return "time_preference", _filter_detail_times(flight)
+    if reason == "用户不接受廉航":
+        return "airline_policy", f"airlines={_filter_detail_airlines(flight)}"
+    if reason == "命中用户排除航司":
+        return "exclude_airlines", f"airlines={_filter_detail_airlines(flight)}"
+    if "最长可接受总行程时间" in reason:
+        return "max_total_duration", f"total_duration_min={flight.get('total_duration_min')}"
+    if "过夜中转" in reason:
+        return "allow_overnight_transfer", f"max_layover_min={_max_layover_minutes(flight)}"
+    if "非联程中转" in reason:
+        return "allow_self_transfer", "likely_self_transfer=True"
+    if "中转次数" in reason:
+        return "max_transfers", f"stops={_stops_count(flight)}"
+    if "尽量选择直飞" in reason:
+        return "allow_transfer", f"stops={_stops_count(flight)}"
+    if "换机场中转" in reason:
+        return "allow_airport_change", "airport_change=True"
+    if "中转安全时间" in reason or "中转时间低于" in reason:
+        return "min_connection_min", f"min_layover_min={_min_layover_minutes(flight)}"
+    if "红眼" in reason or "凌晨到达" in reason or "过早航班" in reason:
+        return "red_eye", _filter_detail_times(flight)
+    return reason, (
+        f"price={_filter_detail_number(flight.get('price'))},"
+        f"stops={_stops_count(flight)},{_filter_detail_times(flight)}"
+    )
+
+
+def _log_low_price_filter_rejections(
+    pool: list[dict],
+    excluded: list[dict],
+    preferences: dict | None,
+    *,
+    round_id: str | None = None,
+) -> None:
+    """记录全池低价前五中被拒航班，每轮最多十条。"""
+    global _filter_detail_round_id, _filter_detail_count, _filter_detail_seen
+    if round_id is None:
+        round_id, _ = get_current_round()
+    round_key = str(round_id or "standalone")
+    if _filter_detail_round_id != round_key:
+        _filter_detail_round_id = round_key
+        _filter_detail_count = 0
+        _filter_detail_seen = set()
+    if _filter_detail_count >= FILTER_DETAIL_MAX_PER_ROUND:
+        return
+
+    ranked = sorted(
+        [flight for flight in pool if (_to_float(flight.get("price")) or 0) > 0],
+        key=lambda flight: _to_float(flight.get("price")) or float("inf"),
+    )[:FILTER_DETAIL_TOP_N]
+    excluded_by_identity = {
+        _filter_detail_identity(flight): flight
+        for flight in excluded
+        if isinstance(flight, dict)
+    }
+    for flight in ranked:
+        rejected = excluded_by_identity.get(_filter_detail_identity(flight))
+        if not rejected:
+            continue
+        constraint, value = _filter_constraint_detail(rejected, preferences or {})
+        combo = str(rejected.get("flight_combo") or rejected.get("flight_no") or "unknown")
+        seen_key = (combo, constraint, value)
+        if seen_key in _filter_detail_seen:
+            continue
+        safe_log(f"[过滤明细] combo={combo} 拒因={constraint} 值={value}")
+        _filter_detail_seen.add(seen_key)
+        _filter_detail_count += 1
+        if _filter_detail_count >= FILTER_DETAIL_MAX_PER_ROUND:
+            break
+
+
 def _apply_user_preferences(
     flights: list[dict], preferences: dict | None
 ) -> tuple[list[dict], list[dict], dict]:
@@ -9046,6 +9196,7 @@ def analyze_all_flights(
         merged_preferences = user_preferences or {}
     travel_profile = build_travel_profile(merged_preferences)
     alert_policy = build_alert_policy(travel_profile)
+    filter_input_pool = list(usable_flights)
     print(f"[过滤前] {len(usable_flights)}个航班, 约束: {merged_preferences}")
     for flight in usable_flights:
         print(
@@ -9080,6 +9231,11 @@ def analyze_all_flights(
         usable_flights, merged_preferences
     )
     excluded_flights = direct_policy_excluded + preference_excluded
+    _log_low_price_filter_rejections(
+        filter_input_pool,
+        excluded_flights,
+        merged_preferences,
+    )
     print(f"[过滤后] {len(usable_flights)}个航班")
     if not usable_flights:
         return {

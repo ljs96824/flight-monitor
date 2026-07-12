@@ -47,7 +47,7 @@ from notifier import (
     send,
 )
 from price_calendar import load_calendar, update_calendar
-from request_cache import print_request_cache_stats
+from request_cache import print_request_cache_stats, start_request_cache_round
 from plan_tracker import feedback_acknowledgement
 from sources.aggregator import FlightAggregator, build_default_sources, is_domestic_route, route_type_for
 from storage import (
@@ -1165,6 +1165,7 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
     round_id = _make_round_id(sub)
     print(f"[\u89c2\u6d4b\u8f6e\u6b21] round_id={round_id}")
     set_current_round(round_id)
+    start_request_cache_round(round_id)
     route = f"{sub['origin']}-{sub['destination']}"
     logging.info(f"开始处理 {route}")
 

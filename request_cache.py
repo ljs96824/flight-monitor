@@ -24,12 +24,15 @@ DEFAULT_TTL_SECONDS = 15 * 60
 _request_cache: dict[tuple, dict] = {}
 _disabled_persistent_dirs: set[str] = set()
 _fetch_trigger_counts: dict[tuple, int] = {}
-_stats = {
-    "total": 0,
-    "hits": 0,
-    "actual": 0,
-    "by_source": {},
-}
+
+
+def _empty_stats() -> dict:
+    return {"total": 0, "hits": 0, "actual": 0, "by_source": {}}
+
+
+_stats = _empty_stats()
+_process_stats = _empty_stats()
+_current_stats_round_id: str | None = None
 
 
 def passenger_signature(passengers=None) -> str:
@@ -76,27 +79,31 @@ def _fresh(fetched_at: str | None, ttl_seconds: int) -> bool:
     return datetime.now() - dt < timedelta(seconds=ttl_seconds)
 
 
-def _source_stats_bucket(source_name: str) -> dict:
-    return _stats.setdefault("by_source", {}).setdefault(
+def _source_stats_bucket(stats: dict, source_name: str) -> dict:
+    return stats.setdefault("by_source", {}).setdefault(
         source_name, {"requested": 0, "actual": 0, "hits": 0, "calls": 0}
     )
 
 
 def _record_request(source_name: str) -> None:
-    _stats["total"] += 1
-    _source_stats_bucket(source_name)["calls"] += 1
+    for stats in (_stats, _process_stats):
+        stats["total"] += 1
+        _source_stats_bucket(stats, source_name)["calls"] += 1
 
 
 def _record_hit(source_name: str) -> None:
-    _stats["hits"] += 1
-    _source_stats_bucket(source_name)["hits"] += 1
+    for stats in (_stats, _process_stats):
+        stats["hits"] += 1
+        _source_stats_bucket(stats, source_name)["hits"] += 1
 
 
 def _record_actual(source_name: str) -> None:
-    _stats["actual"] += 1
-    source_stats = _source_stats_bucket(source_name)
-    source_stats["actual"] += 1
-    source_stats["requested"] += 1
+    for stats in (_stats, _process_stats):
+        stats["actual"] += 1
+        source_stats = _source_stats_bucket(stats, source_name)
+        source_stats["actual"] += 1
+        source_stats["requested"] += 1
+
 
 def _read_persistent(key: tuple, ttl_seconds: int, cache_dir: Path | None = None):
     path = _cache_path(key, cache_dir)
@@ -259,23 +266,45 @@ def get_request_cache_stats() -> dict:
     return copy.deepcopy(_stats)
 
 
+def get_process_request_cache_stats() -> dict:
+    return copy.deepcopy(_process_stats)
+
+
+def start_request_cache_round(round_id: str) -> None:
+    """开始新的采集轮，只清本轮统计，不清请求缓存和进程累计。"""
+    global _current_stats_round_id
+    _stats.clear()
+    _stats.update(_empty_stats())
+    _current_stats_round_id = str(round_id or "") or None
+
+
 def print_request_cache_stats() -> None:
     safe_log(
         "[API统计] "
+        f"round={_current_stats_round_id or 'unknown'}, "
         f"本轮总调用={_stats.get('total', 0)}, "
         f"缓存命中={_stats.get('hits', 0)}, "
         f"实际API请求={_stats.get('actual', 0)}, "
         f"各源: {_stats.get('by_source', {})}"
     )
+    safe_log(
+        "[API统计-进程累计] "
+        f"总调用={_process_stats.get('total', 0)}, "
+        f"缓存命中={_process_stats.get('hits', 0)}, "
+        f"实际API请求={_process_stats.get('actual', 0)}, "
+        f"各源: {_process_stats.get('by_source', {})}"
+    )
 
 
 def reset_request_cache(*, clear_memory: bool = True, reset_stats: bool = True) -> None:
+    global _current_stats_round_id
     if clear_memory:
         _request_cache.clear()
         _disabled_persistent_dirs.clear()
         _fetch_trigger_counts.clear()
     if reset_stats:
-        _stats["total"] = 0
-        _stats["hits"] = 0
-        _stats["actual"] = 0
-        _stats["by_source"] = {}
+        _stats.clear()
+        _stats.update(_empty_stats())
+        _process_stats.clear()
+        _process_stats.update(_empty_stats())
+        _current_stats_round_id = None

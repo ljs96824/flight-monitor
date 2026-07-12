@@ -14,7 +14,11 @@ from observations_store import (
     count_observations_for_round,
     set_current_round,
 )
-from request_cache import print_request_cache_stats, reset_request_cache
+from request_cache import (
+    print_request_cache_stats,
+    reset_request_cache,
+    start_request_cache_round,
+)
 from sources.aggregator import FlightAggregator, build_default_sources
 
 
@@ -171,6 +175,7 @@ def run_basket(
 
     reset_request_cache()
     set_current_round(round_id, db_path=db_path)
+    start_request_cache_round(round_id)
     safe_log(f"[篮子轮次] round_id={round_id}")
 
     queues = 0
