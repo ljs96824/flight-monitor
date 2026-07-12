@@ -313,8 +313,8 @@ def _normalize_goals(notification_goals: dict | None, legacy_goals) -> list[str]
 
 def _normalize_subscription(item: dict) -> dict:
     item = migrate_old_subscription(item)
-    hard_constraints = item.get("hard_constraints") or {}
-    soft_preferences = item.get("soft_preferences") or {}
+    hard_constraints = dict(item.get("hard_constraints") or {})
+    soft_preferences = dict(item.get("soft_preferences") or {})
     basic = dict(item.get("basic") or {})
     constraints = dict(item.get("constraints") or {})
     preferences = dict(item.get("preferences") or {})
@@ -385,6 +385,20 @@ def _normalize_subscription(item: dict) -> dict:
     destination_airports_active = [
         code for code in destination_airports_active if code in destination_airports
     ] or destination_airports
+    explicit_route_type = (
+        basic.get("route_type")
+        or item.get("route_type")
+        or constraints.get("route_type")
+        or hard_constraints.get("route_type")
+    )
+    route_type = route_type_for(
+        origin_airports_active[0],
+        destination_airports_active[0],
+        explicit_route_type,
+    )
+    basic["route_type"] = route_type
+    constraints["route_type"] = route_type
+    hard_constraints["route_type"] = route_type
     origin_airport_preference = hard_constraints.get(
         "origin_airport_preference", item.get("origin_airport_preference", "all")
     )
@@ -493,6 +507,7 @@ def _normalize_subscription(item: dict) -> dict:
         "destination_type": item.get("destination_type") or destination_info["type"],
         "destination_airports": destination_airports,
         "destination_airports_active": destination_airports_active,
+        "route_type": route_type,
         "monitor_mode": item.get("monitor_mode", "quick"),
         "depart_date": item.get("depart_date", ""),
         "budget": max_budget,

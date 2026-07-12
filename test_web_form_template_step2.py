@@ -365,6 +365,40 @@ class WebFormTemplateStep2Test(unittest.TestCase):
         self.assertTrue(subscription["preferences"]["invoice_special_vat"])
         self.assertTrue(subscription["preferences"]["invoice_cabin_limit"])
 
+    def test_route_type_is_derived_from_iata_when_form_value_conflicts(self):
+        class Form(dict):
+            def getlist(self, key):
+                value = self.get(key)
+                if value is None:
+                    return []
+                return value if isinstance(value, list) else [value]
+
+        form = Form(
+            {
+                "monitor_mode": "precise",
+                "route_type": "domestic",
+                "round_trip": "true",
+                "origin_select": "PVG",
+                "destination": "KIX",
+                "depart_date": "2026-10-01",
+                "return_date": "2026-10-06",
+                "price_strategy": "auto_judge",
+                "travel_scenario": ["tourism"],
+                "transfer_policy": "reasonable",
+                "baggage": "required",
+                "primary_goal": "buy_timing",
+                "notification_method": "pushplus",
+                "notification_frequency": "important_only",
+            }
+        )
+
+        subscription = build_subscription(form)
+
+        self.assertEqual(subscription["route_type"], "international")
+        self.assertEqual(subscription["basic"]["route_type"], "international")
+        self.assertEqual(subscription["constraints"]["route_type"], "international")
+        self.assertEqual(subscription["hard_constraints"]["route_type"], "international")
+
     def test_domestic_invoice_trigger_maps_to_existing_invoice_field(self):
         class Form(dict):
             def getlist(self, key):

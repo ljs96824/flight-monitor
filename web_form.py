@@ -17,6 +17,7 @@ from flask import Flask, jsonify, redirect, render_template_string, request, url
 from airports import AIRPORT_SHORT_NAMES, CITY_AIRPORTS, CITY_ALIASES, format_airport, location_error_message, resolve_location
 from analyzer import apply_default_rules, build_price_hint_from_calendar
 from filename_utils import sanitize_filename
+from log_utils import safe_log
 from price_calendar import load_calendar
 
 
@@ -4985,10 +4986,16 @@ def build_subscription(form) -> dict:
     destination_airports_active = parse_active_airports(
         form.get("destination_airports_active"), destination_info["airports"]
     )
-    route_type = form.get("route_type") or infer_route_type(
+    submitted_route_type = (form.get("route_type") or "").strip()
+    route_type = infer_route_type(
         origin_airports_active,
         destination_airports_active,
     )
+    if submitted_route_type and submitted_route_type != route_type:
+        safe_log(
+            "[路由分类修正] "
+            f"表单值={submitted_route_type} 与机场组合冲突，采用IATA分类={route_type}"
+        )
     excluded_airports = sorted(
         (
             set(origin_info["airports"])

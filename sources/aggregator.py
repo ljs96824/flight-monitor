@@ -435,13 +435,15 @@ def classify_route(origin: str, dest: str) -> str:
 
 
 def route_type_for_with_rule(origin: str, dest: str, route_type: str | None = None) -> tuple[str, str]:
+    inferred_type, inferred_rule = classify_route_with_rule(origin, dest)
     explicit = normalize_route_type(route_type)
-    if explicit:
-        inferred_type, inferred_rule = classify_route_with_rule(origin, dest)
-        if inferred_type == explicit:
-            return explicit, f"explicit/{inferred_rule}"
-        return explicit, f"explicit/overrides_{inferred_type}_{inferred_rule}"
-    return classify_route_with_rule(origin, dest)
+    if explicit and explicit != inferred_type:
+        safe_log(
+            "[路由分类修正] "
+            f"origin={origin} dest={dest} 忽略冲突显式值={explicit} "
+            f"采用IATA分类={inferred_type}"
+        )
+    return inferred_type, inferred_rule
 
 
 def route_type_for(origin: str, dest: str, route_type: str | None = None) -> str:

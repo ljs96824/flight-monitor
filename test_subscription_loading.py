@@ -250,6 +250,28 @@ class SubscriptionLoadingTest(unittest.TestCase):
         self.assertTrue(normalized["round_trip"])
         self.assertEqual(normalized["return_date"], "2026-06-19")
         self.assertTrue(normalized["hard_constraints"]["same_day_round_trip"])
+
+    def test_normalization_repairs_route_type_that_conflicts_with_iata(self):
+        normalized = main._normalize_subscription(
+            {
+                "id": "stale-osaka-route-type",
+                "origin": "上海",
+                "destination": "大阪",
+                "origin_airports_active": ["PVG", "SHA"],
+                "destination_airports_active": ["KIX", "ITM"],
+                "depart_date": "2026-10-01",
+                "route_type": "domestic",
+                "basic": {"route_type": "domestic"},
+                "constraints": {"route_type": "domestic"},
+                "hard_constraints": {"route_type": "domestic"},
+            }
+        )
+
+        self.assertEqual(normalized["route_type"], "international")
+        self.assertEqual(normalized["basic"]["route_type"], "international")
+        self.assertEqual(normalized["constraints"]["route_type"], "international")
+        self.assertEqual(normalized["hard_constraints"]["route_type"], "international")
+
     def test_subscription_preferences_include_travel_scenarios(self):
         prefs = main.subscription_preferences(
             {

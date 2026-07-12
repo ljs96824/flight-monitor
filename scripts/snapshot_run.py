@@ -397,14 +397,12 @@ def intl_dual_source_snapshot(today: date | None = None) -> dict:
         aggregator = aggregator_module.FlightAggregator(
             search_sources=_intl_fixture_sources(),
             enrichment_sources=[],
-            route_type="international",
         )
         collected = aggregator.collect(
             "PVG",
             "KIX",
             depart_date,
             cabin_classes=["economy"],
-            route_type="international",
             passengers={"adult": 1, "child": 0, "elderly": 0, "infant": 0},
             force_fresh=True,
         )

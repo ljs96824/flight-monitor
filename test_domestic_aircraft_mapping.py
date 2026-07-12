@@ -9,12 +9,15 @@ class DomesticAircraftMappingTest(unittest.TestCase):
             "325": "空客A320",
             "32K": "空客A320",
             "32S": "空客A320",
+            "32Y": "空客A320-200",
             "330": "空客A330",
             "73H": "波音737-800",
+            "739": "波音737-900",
             "767": "波音767",
             "777": "波音777",
             "781": "波音787-10",
             "7M8": "波音737 MAX 8",
+            "E70": "巴航E170",
         }
 
         for code, name in expected.items():
