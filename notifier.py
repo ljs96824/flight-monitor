@@ -568,6 +568,81 @@ def _source_price_entries_for_display(flight: dict | None) -> list[dict]:
     return normalized
 
 
+_SOURCE_CHANNEL_LABELS = {
+    "hasdata": "Google",
+    "serpapi": "Google",
+    "searchapi": "Google",
+    "juhe": "OTA",
+}
+_SOURCE_CHANNEL_ORDER = {"Google": 0, "OTA": 1}
+
+
+def _source_channel_label(source: str | None) -> str:
+    key = str(source or "unknown").strip().lower()
+    return _SOURCE_CHANNEL_LABELS.get(key, key.upper() if key else "UNKNOWN")
+
+
+def _payload_source_channel_rows(
+    flight: dict | None,
+    direction: str,
+) -> list[dict]:
+    """把同一航段的分源单人单程价转换为渠道对照行。"""
+    flight = flight or {}
+    by_provider: dict[str, dict] = {}
+    for entry in _source_price_entries_for_display(flight):
+        source = str(entry.get("source") or "unknown").strip().lower()
+        provider = _source_channel_label(source)
+        price = _valid_price_float(entry.get("price"))
+        if price is None:
+            continue
+        current = by_provider.get(provider)
+        if current is None:
+            by_provider[provider] = {
+                "source": source,
+                "price": price,
+                "sources": [source],
+            }
+            continue
+        if source not in current["sources"]:
+            current["sources"].append(source)
+        if price < current["price"]:
+            current["source"] = source
+            current["price"] = price
+
+    if len(by_provider) < 2:
+        return []
+
+    selected_source = str(flight.get("price_source") or "").strip().lower()
+    selected_price = _valid_price_float(flight.get("price"))
+    combo = normalize_combo(flight.get("flight_combo") or flight.get("flight_no") or "")
+    direction_label = {"outbound": "去程", "return": "返程", "main": "去程"}.get(
+        direction,
+        direction,
+    )
+    rows = []
+    for provider, item in sorted(
+        by_provider.items(),
+        key=lambda pair: (_SOURCE_CHANNEL_ORDER.get(pair[0], 9), pair[0]),
+    ):
+        selected = selected_source in item["sources"]
+        if not selected and not selected_source and selected_price is not None:
+            selected = abs(item["price"] - selected_price) < 0.01
+        rows.append(
+            {
+                "label": f"{direction_label} {combo} · {provider}".strip(),
+                "value": item["price"],
+                "scope": "oneway",
+                "price_scope": "per_person_oneway",
+                "direction": direction,
+                "flight_combo": combo,
+                "source": item["source"],
+                "provider": provider,
+                "selected": selected,
+            }
+        )
+    return rows
+
+
 def _source_price_gap_disclosure_text(anomaly: dict | None) -> str:
     anomaly = anomaly or {}
     diff_pct = _to_float(anomaly.get("diff_pct"))
@@ -5021,6 +5096,10 @@ def _payload_combo_plan(combo: dict, route_info: dict, index: int, variant: str)
     outbound_date = route_info.get("depart_date")
     return_date = route_info.get("return_date")
     purchase_mode = _combo_purchase_mode(outbound, return_flight)
+    source_channel_rows = (
+        _payload_source_channel_rows(outbound, "outbound")
+        + _payload_source_channel_rows(return_flight, "return")
+    )
     return {
         "label": f"方案{chr(65 + index)}",
         "variant": variant,
@@ -5055,11 +5134,12 @@ def _payload_combo_plan(combo: dict, route_info: dict, index: int, variant: str)
             "outbound": _payload_booking_links_for_flight(outbound, route_info, outbound_date, 6),
             "return": _payload_booking_links_for_flight(return_flight, route_info, return_date, 6),
         },
-        "channel_prices": _payload_roundtrip_channel_rows(combo),
+        "channel_prices": source_channel_rows or _payload_roundtrip_channel_rows(combo),
     }
 
 
 def _payload_single_plan(flight: dict, route_info: dict, analysis_result: dict, index: int, variant: str) -> dict:
+    source_channel_rows = _payload_source_channel_rows(flight, "main")
     return {
         "label": f"方案{chr(65 + index)}",
         "variant": variant,
@@ -5074,7 +5154,7 @@ def _payload_single_plan(flight: dict, route_info: dict, analysis_result: dict, 
         "risk": _status_risk_label(flight),
         "buy_condition": _human_recommendation_text(flight, route_info, analysis_result),
         "links": {"main": _payload_booking_links_for_flight(flight, route_info, route_info.get("depart_date"), 6)},
-        "channel_prices": _payload_channel_rows(flight),
+        "channel_prices": source_channel_rows or _payload_channel_rows(flight),
     }
 
 
@@ -8077,6 +8157,9 @@ def render_pushplus(payload: dict) -> str:
     calendar_lines = _pushplus_calendar_summary_lines(payload)
     if calendar_lines:
         lines.extend(["", *calendar_lines])
+    source_channel_lines = _pushplus_source_channel_price_lines(payload)
+    if source_channel_lines:
+        lines.extend(["", *source_channel_lines])
     lines.extend(
         [
             "",
@@ -10279,13 +10362,19 @@ def _source_stat_is_usable(status: str) -> bool:
 def _display_channel_price_rows(payload: dict) -> list[dict]:
     rows = payload.get("channel_price_rows") or []
     is_roundtrip = bool(payload.get("is_roundtrip"))
-    scope_text = "往返" if is_roundtrip else "单程"
-    filtered = []
+    leg_rows = []
+    legacy_rows = []
     for row in rows:
         if not isinstance(row, dict):
             continue
         value = _to_float(row.get("value") or row.get("price"))
         if value is None or value <= 0:
+            continue
+        if row.get("direction") and row.get("flight_combo") and row.get("provider"):
+            item = dict(row)
+            item["value"] = value
+            item["scope"] = "oneway"
+            leg_rows.append(item)
             continue
         row_scope = _chart_scope_label(row)
         if is_roundtrip:
@@ -10297,13 +10386,113 @@ def _display_channel_price_rows(payload: dict) -> list[dict]:
         item["value"] = value
         if not item.get("scope"):
             item["scope"] = "oneway"
-        filtered.append(item)
+        legacy_rows.append(item)
 
-    deduped = _dedupe_chart_rows(filtered)
-    print(f"[渠道对比] 来源数={len(deduped)}, 内容={deduped}, 方案口径={scope_text}")
+    if leg_rows:
+        deduped_by_key = {}
+        for row in leg_rows:
+            key = (
+                str(row.get("direction") or ""),
+                normalize_combo(row.get("flight_combo") or ""),
+                str(row.get("provider") or ""),
+            )
+            current = deduped_by_key.get(key)
+            if current is None or float(row["value"]) < float(current["value"]):
+                deduped_by_key[key] = row
+
+        provider_sets: dict[tuple[str, str], set[str]] = {}
+        for key, row in deduped_by_key.items():
+            group_key = key[:2]
+            provider_sets.setdefault(group_key, set()).add(str(row.get("provider") or ""))
+        qualified_groups = {
+            key for key, providers in provider_sets.items() if len(providers) >= 2
+        }
+        direction_order = {"outbound": 0, "return": 1, "main": 0}
+        return sorted(
+            [
+                row
+                for key, row in deduped_by_key.items()
+                if key[:2] in qualified_groups
+            ],
+            key=lambda row: (
+                direction_order.get(str(row.get("direction") or ""), 9),
+                str(row.get("flight_combo") or ""),
+                _SOURCE_CHANNEL_ORDER.get(str(row.get("provider") or ""), 9),
+            ),
+        )
+
+    deduped = _dedupe_chart_rows(legacy_rows)
     if len(deduped) < 2:
         return []
     return deduped
+
+
+def _channel_cny_text(value) -> str:
+    number = _to_float(value)
+    if number is None:
+        return "CNY待确认"
+    if float(number).is_integer():
+        return f"CNY{number:,.0f}"
+    return f"CNY{number:,.2f}".rstrip("0").rstrip(".")
+
+
+def _source_channel_comparison_lines(payload: dict) -> list[str]:
+    rows = [row for row in _display_channel_price_rows(payload) if row.get("direction")]
+    if not rows:
+        return []
+
+    groups: dict[tuple[str, str], list[dict]] = {}
+    for row in rows:
+        key = (
+            str(row.get("direction") or ""),
+            normalize_combo(row.get("flight_combo") or ""),
+        )
+        groups.setdefault(key, []).append(row)
+
+    direction_order = {"outbound": 0, "return": 1, "main": 0}
+    direction_labels = {"outbound": "去程", "return": "返程", "main": "去程"}
+    lines = []
+    for (direction, combo), group in sorted(
+        groups.items(),
+        key=lambda item: (direction_order.get(item[0][0], 9), item[0][1]),
+    ):
+        ordered = sorted(
+            group,
+            key=lambda row: _SOURCE_CHANNEL_ORDER.get(str(row.get("provider") or ""), 9),
+        )
+        prices = " / ".join(
+            f"{row.get('provider')} {_channel_cny_text(row.get('value'))}"
+            for row in ordered
+        )
+        selected_provider = next(
+            (str(row.get("provider")) for row in ordered if row.get("selected")),
+            "",
+        )
+        selected_text = f"(入池{selected_provider})" if selected_provider else ""
+        lines.append(
+            f"{direction_labels.get(direction, direction)} {combo}:{prices}{selected_text}"
+        )
+    return lines
+
+
+def _email_source_channel_price_body(payload: dict) -> str:
+    lines = _source_channel_comparison_lines(payload)
+    if not lines:
+        return ""
+    body = "".join(f"<div>{html.escape(line)}</div>" for line in lines)
+    return (
+        body
+        + "<div style='margin-top:8px;color:#666;font-size:12px;'>"
+        "以上均为同一航段的单人单程含税参考价；入池表示合并候选采用的价格来源，最终以支付页为准。"
+        "</div>"
+    )
+
+
+def _pushplus_source_channel_price_lines(payload: dict) -> list[str]:
+    lines = _source_channel_comparison_lines(payload)
+    if not lines:
+        return []
+    return ["首选方案A渠道价(单人单程):", *(html.escape(line) for line in lines)]
 
 
 def _email_detail_charts_body(payload: dict) -> str:
@@ -10314,7 +10503,7 @@ def _email_detail_charts_body(payload: dict) -> str:
         if note:
             parts.append(f"<div style='color:#666;font-size:12px;'>{html.escape(note)}</div>")
     channel_rows = _display_channel_price_rows(payload)
-    if channel_rows:
+    if channel_rows and not any(row.get("direction") for row in channel_rows):
         parts.append(_payload_bar_html("不同渠道报价对比", channel_rows))
     if payload.get("plan_price_rows"):
         parts.append(_payload_bar_html("方案价格对比", payload["plan_price_rows"]))
@@ -11053,6 +11242,9 @@ def render_email(payload: dict) -> tuple[str, str]:
                 ),
             )
     cards.append(_render_payload_plan_cards(payload, payload.get("recommended_plans") or [], primary_plan))
+    source_channel_body = _email_source_channel_price_body(payload)
+    if source_channel_body:
+        cards.append(_email_card("首选方案A渠道价对照", source_channel_body))
     adjustment_plans = payload.get("adjustment_required_plans") or []
     if adjustment_plans:
         cards.append(
@@ -11238,6 +11430,9 @@ def render_detail_html(payload: dict) -> str:
         _email_card("为什么提醒你", _email_list(_non_price_change_reasons(payload), 3)),
         _email_card("价格走势", _email_trend_card_body(payload)),
     ]
+    source_channel_body = _email_source_channel_price_body(payload)
+    if source_channel_body:
+        cards.insert(3, _email_card("首选方案A渠道价对照", source_channel_body))
     if payload.get("feedback_ack"):
         cards.insert(2, _email_card("反馈已响应", html.escape(str(payload.get("feedback_ack")))))
     if no_primary:

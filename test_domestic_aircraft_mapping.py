@@ -2,6 +2,26 @@ import unittest
 
 
 class DomesticAircraftMappingTest(unittest.TestCase):
+    def test_get_aircraft_name_translates_latest_equipment_codes(self):
+        from domestic_fare_rules import get_aircraft_name
+
+        expected = {
+            "325": "空客A320",
+            "32K": "空客A320",
+            "32S": "空客A320",
+            "330": "空客A330",
+            "73H": "波音737-800",
+            "767": "波音767",
+            "777": "波音777",
+            "781": "波音787-10",
+            "7M8": "波音737 MAX 8",
+        }
+
+        for code, name in expected.items():
+            with self.subTest(code=code):
+                self.assertEqual(get_aircraft_name(code), name)
+                self.assertNotIn("机型代码", get_aircraft_name(code))
+
     def test_get_aircraft_name_translates_juhe_equipment_codes(self):
         from domestic_fare_rules import get_aircraft_name
 

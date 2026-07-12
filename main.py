@@ -38,6 +38,7 @@ from collector import _normalize_detail_flight, save_raw_response
 from email_notifier import render_email, send_email
 from filename_utils import sanitize_filename
 from health_check import system_health_check
+from log_utils import safe_log
 from observations_store import clear_current_round, set_current_round
 from notifier import (
     build_notification_payload,
@@ -75,6 +76,7 @@ ANALYSIS_LOG = DATA_DIR / "analysis_log.jsonl"
 SUBSCRIPTIONS_PATH = DATA_DIR / "subscriptions.json"
 PAGE_PAYLOADS_DIR = DATA_DIR / "payloads"
 PYTHONANYWHERE_PAYLOAD_PATH = "/home/{user}/flight-monitor/data/payloads/{filename}"
+AIRPORT_COMBINATION_MIN_OPTIONS = 5
 
 
 
@@ -1018,20 +1020,40 @@ def collect_for_airport_matrix(
         "collected_at": datetime.now().isoformat(timespec="seconds"),
     }
     sources_used = []
+    primary_cache_status = None
 
     for index, (origin, destination) in enumerate(combinations):
         current_count = len(_dedupe_flights(merged["flights"]))
-        if index > 0 and current_count >= 5:
-            print(
-                f"[城市搜索] 主机场组合已返回{current_count}个有效方案，跳过低优先级机场组合"
+        if index > 0:
+            source_label = {
+                "fresh": "新鲜",
+                "cache": "缓存",
+            }.get(primary_cache_status, "未知")
+            should_skip = current_count >= AIRPORT_COMBINATION_MIN_OPTIONS
+            action = (
+                "跳过"
+                if should_skip
+                else f"继续搜{origin}->{destination}"
             )
-            break
+            safe_log(
+                f"[机场组合决策] 主组合={combinations[0][0]}->{combinations[0][1]} "
+                f"有效方案数={current_count} 阈值={AIRPORT_COMBINATION_MIN_OPTIONS} "
+                f"数据来源={source_label} 决策={action}"
+            )
+            if should_skip:
+                break
 
         print(f"[城市搜索] 采集 {origin}→{destination} {date_str}")
         collect_kwargs = {"cabin_classes": cabin_classes}
         if route_type:
             collect_kwargs["route_type"] = route_type
         data = _aggregator_collect(aggregator, origin, destination, date_str, passengers=passengers, **collect_kwargs)
+        if index == 0:
+            primary_cache_status = (
+                data.get("request_cache_status")
+                if isinstance(data, dict)
+                else getattr(aggregator, "last_request_cache_status", None)
+            )
         if not data:
             continue
         for flight in data.get("flights", []):

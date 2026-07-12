@@ -96,6 +96,88 @@
     "return_count": 5,
     "source": "snapshot_fixture"
   },
+  "intl_dual_source": {
+    "depart_date": "2026-08-26",
+    "disclosure_triggers": [
+      {
+        "combo": "MU730",
+        "diff_pct": 192.2,
+        "max_price": 12137.0,
+        "min_price": 4153.0,
+        "price_source": "juhe"
+      }
+    ],
+    "filter_reason_set": [
+      "用户不接受红眼/过早航班",
+      "超过合理中转最长可接受总行程时间"
+    ],
+    "filter_rejections": [
+      {
+        "combo": "OZ368",
+        "reason": "用户不接受红眼/过早航班"
+      },
+      {
+        "combo": "SQ825+SQ622",
+        "reason": "超过合理中转最长可接受总行程时间"
+      }
+    ],
+    "merge_strategy": "global_min",
+    "merged_pool": [
+      {
+        "combo": "JL891",
+        "data_source": "hasdata",
+        "pool_price": 7220.0,
+        "price_source": "hasdata"
+      },
+      {
+        "combo": "MU225",
+        "data_source": "hasdata+juhe",
+        "pool_price": 4883.0,
+        "price_source": "juhe"
+      },
+      {
+        "combo": "MU730",
+        "data_source": "hasdata+juhe",
+        "pool_price": 4153.0,
+        "price_source": "juhe"
+      },
+      {
+        "combo": "OZ368",
+        "data_source": "hasdata",
+        "pool_price": 1800.0,
+        "price_source": "hasdata"
+      },
+      {
+        "combo": "SQ825+SQ622",
+        "data_source": "juhe",
+        "pool_price": 2600.0,
+        "price_source": "juhe"
+      }
+    ],
+    "offline_fixture": true,
+    "plans": [
+      {
+        "combo": "MU730",
+        "data_source": "hasdata+juhe",
+        "duration_min": 205,
+        "price": 4153.0,
+        "price_source": "juhe",
+        "stops": 0,
+        "variant": "A"
+      },
+      {
+        "combo": "MU225",
+        "data_source": "hasdata+juhe",
+        "duration_min": 180,
+        "price": 4883.0,
+        "price_source": "juhe",
+        "stops": 0,
+        "variant": "B"
+      }
+    ],
+    "route": "PVG-KIX",
+    "route_type": "international"
+  },
   "notification": {
     "email_html_chars": 21104,
     "email_subject": "【无符合方案】上海 → 北京｜提供1个备选",
@@ -2433,7 +2515,7 @@
   },
   "scenario": "standard_same_day_business_shanghai_beijing",
   "skipped_items": [],
-  "snapshot_version": 1,
+  "snapshot_version": 2,
   "subscription": {
     "basic": {
       "depart_date": "2026-08-02",

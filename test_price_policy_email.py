@@ -3,12 +3,22 @@ import types
 import inspect
 import contextlib
 import io
+import unittest
 
 sys.modules.setdefault("httpx", types.SimpleNamespace(get=lambda *a, **k: None, post=lambda *a, **k: None))
 
 from analyzer import analyze_round_trip, build_excluded_roundtrip_combos, determine_push_type
 import email_notifier
-from notifier import render_email
+from notifier import _display_channel_price_rows, _email_detail_charts_body, render_email
+
+
+def load_tests(loader, tests, pattern):
+    suite = unittest.TestSuite()
+    module = sys.modules[__name__]
+    for name, function in inspect.getmembers(module, inspect.isfunction):
+        if name.startswith("test_") and function.__module__ == __name__:
+            suite.addTest(unittest.FunctionTestCase(function, description=name))
+    return suite
 
 
 def test_push_type_uses_transaction_price_when_display_price_only_looks_good():
@@ -32,7 +42,7 @@ def test_push_type_uses_transaction_price_when_display_price_only_looks_good():
     assert all("100%" not in reason for reason in meta["reasons"])
 
 
-def test_email_top_summary_separates_display_transaction_and_verify_prices():
+def test_email_no_primary_summary_uses_no_result_title_and_keeps_price_layers():
     payload = {
         "push_type": "值得验证",
         "route": "上海 → 大阪",
@@ -65,7 +75,7 @@ def test_email_top_summary_separates_display_transaction_and_verify_prices():
 
     subject, html = render_email(payload)
 
-    assert "【值得验证】上海 → 大阪 搜索参考价¥6,522，需确认实付价" == subject
+    assert "【无符合方案】上海 → 大阪｜提供0个备选" == subject
     assert "当前判断：</b>值得验证，不建议直接下单" in html
     assert "原因：</b>搜索参考价达标，但预估实付价高于验证购买价" in html
     assert "搜索参考价：</b>¥6,522" in html
@@ -362,11 +372,15 @@ def test_email_detail_charts_dedupe_channels_and_skip_empty_plan_rows():
         "feedback_url": "https://example.com/feedback",
     }
 
-    _, html = render_email(payload)
+    html = _email_detail_charts_body(payload)
 
+    # 直接核对结构化图表行，避免被详情页其他说明干扰。
+    channel_rows = _display_channel_price_rows(payload)
+    assert [row["label"] for row in channel_rows] == ["Google Flights", "携程"]
+    assert channel_rows[0]["note"] == "SerpAPI、HasData 2个数据源一致"
     assert html.count("Google Flights") == 1
     assert "SerpAPI、HasData 2个数据源一致" in html
-    assert "方案A: ¥6,522 推荐" in html
+    assert "方案A:¥6,522,推荐" in html
     assert "方案B" not in html
     assert "¥6,522 B" not in html
 
@@ -450,8 +464,8 @@ def test_email_uses_section_cards_and_plan_table_layout():
     assert "<table style='width:100%;font-size:14px;" in html
     assert "width:90px;" in html
     assert "方案A ｜ 首选推荐" in html
-    assert "✈ 去程" in html
-    assert "✈ 返程" in html
+    assert "✈ ━━ 去程 ━━" in html
+    assert "✈ ━━ 返程 ━━" in html
     assert "起飞</td>" in html
     assert "到达</td>" in html
     assert "中转</td>" in html

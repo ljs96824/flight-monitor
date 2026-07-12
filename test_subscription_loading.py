@@ -18,6 +18,53 @@ import main
 
 
 class SubscriptionLoadingTest(unittest.TestCase):
+    def test_airport_matrix_decision_counts_fresh_and_cached_results_equally(self):
+        class FakeAggregator:
+            def __init__(self, cache_status):
+                self.cache_status = cache_status
+                self.calls = []
+
+            def collect(self, origin, destination, date_str, cabin_classes=None):
+                self.calls.append((origin, destination, date_str))
+                return {
+                    "flights": [
+                        {
+                            "flight_combo": f"MU{5000 + index}",
+                            "price": 600 + index,
+                            "departure_airport": origin,
+                            "arrival_airport": destination,
+                        }
+                        for index in range(5)
+                    ],
+                    "request_cache_status": self.cache_status,
+                    "source_stats": {},
+                }
+
+        for cache_status, source_label in (("fresh", "新鲜"), ("cache", "缓存")):
+            with self.subTest(cache_status=cache_status):
+                aggregator = FakeAggregator(cache_status)
+                with patch("main.safe_log") as log:
+                    data = main.collect_for_airport_matrix(
+                        aggregator,
+                        ["SHA", "PVG"],
+                        ["PEK"],
+                        "2026-08-20",
+                    )
+
+                self.assertEqual(len(data["flights"]), 5)
+                self.assertEqual(aggregator.calls, [("SHA", "PEK", "2026-08-20")])
+                decision_lines = [
+                    str(call.args[0])
+                    for call in log.call_args_list
+                    if str(call.args[0]).startswith("[机场组合决策]")
+                ]
+                self.assertEqual(len(decision_lines), 1)
+                self.assertIn("主组合=SHA->PEK", decision_lines[0])
+                self.assertIn("有效方案数=5", decision_lines[0])
+                self.assertIn("阈值=5", decision_lines[0])
+                self.assertIn(f"数据来源={source_label}", decision_lines[0])
+                self.assertIn("决策=跳过", decision_lines[0])
+
     def test_collect_for_airport_matrix_filters_to_requested_active_airports(self):
         class FakeAggregator:
             def collect(self, origin, destination, date_str, cabin_classes=None):

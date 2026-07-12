@@ -1,4 +1,17 @@
+import inspect
+import sys
+import unittest
+
 from sources.aggregator import FlightAggregator
+
+
+def load_tests(loader, tests, pattern):
+    suite = unittest.TestSuite()
+    module = sys.modules[__name__]
+    for name, function in inspect.getmembers(module, inspect.isfunction):
+        if name.startswith("test_") and function.__module__ == __name__:
+            suite.addTest(unittest.FunctionTestCase(function, description=name))
+    return suite
 
 
 def test_merge_flights_keeps_lower_price_and_richer_segments():

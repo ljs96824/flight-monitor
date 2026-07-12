@@ -268,6 +268,7 @@ def cached_fetch(
     cache_dir: Path | None = None,
     persist: bool = True,
     force_fresh: bool = False,
+    include_cache_status: bool = False,
 ):
     """Fetch through an in-run and short persistent cache.
 
@@ -285,7 +286,8 @@ def cached_fetch(
         if memory_entry and _fresh(memory_entry.get("fetched_at"), ttl_seconds):
             _record_hit(source_name)
             safe_log(f"[缓存命中] {key[:4]} 复用已有结果,不重复调API")
-            return copy.deepcopy(memory_entry.get("result"))
+            cached_result = copy.deepcopy(memory_entry.get("result"))
+            return (cached_result, "cache") if include_cache_status else cached_result
 
         if persist:
             persisted = _read_persistent(key, ttl_seconds, cache_dir)
@@ -296,7 +298,8 @@ def cached_fetch(
                     "fetched_at": datetime.now().isoformat(timespec="seconds"),
                     "result": copy.deepcopy(persisted),
                 }
-                return copy.deepcopy(persisted)
+                cached_result = copy.deepcopy(persisted)
+                return (cached_result, "cache") if include_cache_status else cached_result
     else:
         safe_log(f"[缓存绕过] {key[:4]} force_fresh=True,执行真实API请求")
 
@@ -323,7 +326,8 @@ def cached_fetch(
     }
     if persist:
         _write_persistent(key, stored, cache_dir)
-    return copy.deepcopy(result)
+    fresh_result = copy.deepcopy(result)
+    return (fresh_result, "fresh") if include_cache_status else fresh_result
 
 
 def get_request_cache_stats() -> dict:

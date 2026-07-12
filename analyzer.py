@@ -8399,7 +8399,7 @@ def _log_low_price_filter_rejections(
     *,
     round_id: str | None = None,
 ) -> None:
-    """记录全池低价前五中被拒航班，每轮最多十条。"""
+    """分别记录直飞与中转低价前五中的被拒航班，每轮最多十条。"""
     global _filter_detail_round_id, _filter_detail_count, _filter_detail_seen
     if round_id is None:
         round_id, _ = get_current_round()
@@ -8411,10 +8411,21 @@ def _log_low_price_filter_rejections(
     if _filter_detail_count >= FILTER_DETAIL_MAX_PER_ROUND:
         return
 
-    ranked = sorted(
-        [flight for flight in pool if (_to_float(flight.get("price")) or 0) > 0],
-        key=lambda flight: _to_float(flight.get("price")) or float("inf"),
+    priced = [
+        flight
+        for flight in pool
+        if (_to_float(flight.get("price")) or 0) > 0
+    ]
+    price_key = lambda flight: _to_float(flight.get("price")) or float("inf")
+    ranked_direct = sorted(
+        [flight for flight in priced if _stops_count(flight) == 0],
+        key=price_key,
     )[:FILTER_DETAIL_TOP_N]
+    ranked_transfer = sorted(
+        [flight for flight in priced if _stops_count(flight) != 0],
+        key=price_key,
+    )[:FILTER_DETAIL_TOP_N]
+    ranked = ranked_direct + ranked_transfer
     excluded_by_identity = {
         _filter_detail_identity(flight): flight
         for flight in excluded

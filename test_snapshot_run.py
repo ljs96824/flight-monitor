@@ -1,7 +1,7 @@
-﻿import unittest
-
-
+﻿import hashlib
 import io
+import json
+import unittest
 from contextlib import redirect_stdout
 from datetime import date
 from unittest.mock import patch
@@ -42,6 +42,29 @@ class SnapshotRunTest(unittest.TestCase):
             snapshot["skipped_items"],
         )
         self.assertIn("[快照跳过] 项=price_calendar 原因=calendar boom", output.getvalue())
+
+    def test_build_snapshot_isolates_intl_dual_source_failure(self):
+        from scripts import snapshot_run
+
+        output = io.StringIO()
+        with patch.object(
+            snapshot_run,
+            "intl_dual_source_snapshot",
+            side_effect=RuntimeError("intl fixture boom"),
+        ):
+            with redirect_stdout(output):
+                snapshot = snapshot_run.build_snapshot()
+
+        self.assertGreater(snapshot["collection"]["outbound_count"], 0)
+        self.assertEqual(snapshot["intl_dual_source"]["merged_pool"], [])
+        self.assertIn(
+            {"item": "intl_dual_source", "reason": "intl fixture boom"},
+            snapshot["skipped_items"],
+        )
+        self.assertIn(
+            "[快照跳过] 项=intl_dual_source 原因=intl fixture boom",
+            output.getvalue(),
+        )
 
     def test_build_snapshot_has_full_chain_baseline_fields(self):
         from scripts.snapshot_run import build_snapshot
@@ -96,6 +119,62 @@ class SnapshotRunTest(unittest.TestCase):
         self.assertIn("no_result_reason", snapshot["same_day"])
         self.assertIn("airport_transport_to_meeting", snapshot)
         self.assertEqual(snapshot["airport_transport_to_meeting"]["PKX"], 25)
+
+        intl = snapshot["intl_dual_source"]
+        self.assertEqual(intl["route"], "PVG-KIX")
+        self.assertEqual(intl["merge_strategy"], "global_min")
+        self.assertEqual(len(intl["plans"]), 2)
+        merged_by_combo = {item["combo"]: item for item in intl["merged_pool"]}
+        self.assertEqual(merged_by_combo["MU730"]["pool_price"], 4153)
+        self.assertEqual(merged_by_combo["MU730"]["price_source"], "juhe")
+        self.assertIn(
+            "MU730",
+            {item["combo"] for item in intl["disclosure_triggers"]},
+        )
+        rejection_reasons = intl["filter_reason_set"]
+        self.assertTrue(any("红眼" in reason for reason in rejection_reasons))
+        self.assertTrue(any("总行程" in reason for reason in rejection_reasons))
+
+    def test_intl_dual_source_snapshot_hash_changes_with_merge_strategy(self):
+        from scripts import snapshot_run
+        from sources import aggregator as aggregator_module
+
+        def section_hash(section):
+            raw = json.dumps(section, ensure_ascii=False, sort_keys=True).encode("utf-8")
+            return hashlib.sha256(raw).hexdigest()
+
+        original_strategy = aggregator_module.MERGE_PRICE_STRATEGY
+        try:
+            aggregator_module.MERGE_PRICE_STRATEGY = "global_min"
+            global_min = snapshot_run.intl_dual_source_snapshot()
+            global_min_repeat = snapshot_run.intl_dual_source_snapshot()
+            aggregator_module.MERGE_PRICE_STRATEGY = "primary"
+            primary = snapshot_run.intl_dual_source_snapshot()
+        finally:
+            aggregator_module.MERGE_PRICE_STRATEGY = original_strategy
+
+        self.assertEqual(section_hash(global_min), section_hash(global_min_repeat))
+        self.assertNotEqual(section_hash(global_min), section_hash(primary))
+        global_behavior = {
+            key: value for key, value in global_min.items() if key != "merge_strategy"
+        }
+        primary_behavior = {
+            key: value for key, value in primary.items() if key != "merge_strategy"
+        }
+        self.assertNotEqual(section_hash(global_behavior), section_hash(primary_behavior))
+        global_pool = {item["combo"]: item for item in global_min["merged_pool"]}
+        primary_pool = {item["combo"]: item for item in primary["merged_pool"]}
+        self.assertEqual(
+            (global_pool["MU730"]["pool_price"], global_pool["MU730"]["price_source"]),
+            (4153, "juhe"),
+        )
+        self.assertEqual(
+            (primary_pool["MU730"]["pool_price"], primary_pool["MU730"]["price_source"]),
+            (12137, "hasdata"),
+        )
+        self.assertEqual(global_min["merge_strategy"], "global_min")
+        self.assertEqual(primary["merge_strategy"], "primary")
+        self.assertEqual(aggregator_module.MERGE_PRICE_STRATEGY, original_strategy)
 
 
 if __name__ == "__main__":

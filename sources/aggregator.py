@@ -664,6 +664,7 @@ class FlightAggregator:
         self.search_sources = search_sources
         self.enrichment_sources = enrichment_sources or []
         self.route_type = normalize_route_type(route_type)
+        self.last_request_cache_status = None
 
     def collect(
         self,
@@ -677,6 +678,7 @@ class FlightAggregator:
         force_fresh: bool = False,
     ) -> dict | None:
         cabin_classes = _normalize_cabin_classes(cabin_classes)
+        self.last_request_cache_status = None
         run_collected_at = datetime.now().isoformat(timespec="seconds")
         source_stats = {}
         all_flights = []
@@ -684,6 +686,7 @@ class FlightAggregator:
         source_errors = []
         price_insights = None
         raw_by_source = {}
+        request_cache_statuses = []
         resolved_route_type, route_rule = route_type_for_with_rule(
             origin, dest, route_type or self.route_type
         )
@@ -711,7 +714,7 @@ class FlightAggregator:
 
             for cabin_class in cabin_classes:
                 try:
-                    result = cached_fetch(
+                    cached_response = cached_fetch(
                         source,
                         origin,
                         dest,
@@ -720,7 +723,17 @@ class FlightAggregator:
                         cabin_class,
                         ttl_seconds=15 * 60,
                         force_fresh=force_fresh,
+                        include_cache_status=True,
                     )
+                    if (
+                        isinstance(cached_response, tuple)
+                        and len(cached_response) == 2
+                    ):
+                        result, request_cache_status = cached_response
+                    else:
+                        result = cached_response
+                        request_cache_status = "unknown"
+                    request_cache_statuses.append(request_cache_status)
                     source_status = result.get("source_status")
                     if source_status:
                         source_statuses.append(source_status)
@@ -974,6 +987,14 @@ class FlightAggregator:
         }
         source_stats["enriched_count"] = enriched_count
 
+        if not request_cache_statuses or "unknown" in request_cache_statuses:
+            request_cache_status = "unknown"
+        elif all(status == "cache" for status in request_cache_statuses):
+            request_cache_status = "cache"
+        else:
+            request_cache_status = "fresh"
+        self.last_request_cache_status = request_cache_status
+
         safe_log(
             "source_stats: "
             + json.dumps(source_stats, ensure_ascii=False, indent=2)
@@ -999,6 +1020,7 @@ class FlightAggregator:
             "price_anomalies": self._find_price_anomalies(successful_results) + dual_source_price_anomalies,
             "raw_by_source": raw_by_source,
             "collected_at": run_collected_at,
+            "request_cache_status": request_cache_status,
         }
 
     def _ordered_search_sources(

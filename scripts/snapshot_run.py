@@ -26,10 +26,12 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from airport_logistics import estimate_airport_to_meeting
 from analyzer import (
+    _apply_user_preferences,
     _flight_arrival_datetime,
     _flight_departure_datetime,
     _same_day_outbound_passes_window,
     _same_day_return_passes_window,
+    analyze_all_flights,
     analyze_round_trip,
     compute_same_day_windows,
 )
@@ -53,6 +55,7 @@ except ModuleNotFoundError:
     sys.modules["httpx"] = types.SimpleNamespace(post=_offline_post)
 
 import notifier
+from sources import aggregator as aggregator_module
 
 
 def resolve_snapshot_dates(
@@ -246,6 +249,242 @@ class FixtureSource:
         rows = [deepcopy(row) for row in FIXTURE_FLIGHTS.get(key, [])]
         self.calls.append({"source": self.name, "origin": origin, "dest": dest, "date": date_str, "count": len(rows)})
         return rows
+
+
+class IntlFixtureSource:
+    """只为国际双源快照提供离线标准化航班。"""
+
+    def __init__(self, name: str, flights: list[dict]) -> None:
+        self.name = name
+        self._flights = flights
+
+    def fetch(
+        self,
+        origin: str,
+        dest: str,
+        date_str: str,
+        passengers: dict | None = None,
+        cabin_class: str = "economy",
+    ) -> dict:
+        del passengers
+        rows = []
+        for flight in self._flights:
+            row = deepcopy(flight)
+            arrival_day_offset = int(row.pop("arrival_day_offset", 0) or 0)
+            arrival_date = (
+                date.fromisoformat(date_str) + timedelta(days=arrival_day_offset)
+            ).isoformat()
+            row["departure_airport"] = origin
+            row["arrival_airport"] = dest
+            row["departure_date"] = date_str
+            row["arrival_date"] = arrival_date
+            row["cabin_class"] = cabin_class
+            for index, segment in enumerate(row.get("segments") or []):
+                segment["departure_date"] = date_str
+                segment["arrival_date"] = (
+                    arrival_date if index == len(row["segments"]) - 1 else date_str
+                )
+            rows.append(row)
+        return {
+            "source_status": "success",
+            "flights": rows,
+            "raw": {"fixture": self.name},
+            "collected_at": f"{date_str}T00:00:00+08:00",
+        }
+
+
+def _intl_fixture_flight(
+    combo: str,
+    price: int,
+    departure_time: str,
+    arrival_time: str,
+    duration_min: int,
+    *,
+    stops: int = 0,
+    arrival_day_offset: int = 0,
+) -> dict:
+    segment_numbers = [part for part in combo.replace("|", "+").split("+") if part]
+    segments = []
+    for index, flight_no in enumerate(segment_numbers):
+        segments.append(
+            {
+                "flight_no": flight_no,
+                "airline": flight_no[:2],
+                "departure_airport": "PVG" if index == 0 else "ICN",
+                "arrival_airport": "KIX" if index == len(segment_numbers) - 1 else "ICN",
+                "departure_time": departure_time if index == 0 else "12:00",
+                "arrival_time": arrival_time if index == len(segment_numbers) - 1 else "10:00",
+                "dep_time": departure_time if index == 0 else "12:00",
+                "arr_time": arrival_time if index == len(segment_numbers) - 1 else "10:00",
+            }
+        )
+    return {
+        "flight_no": segment_numbers[0],
+        "flight_combo": combo,
+        "airline": segment_numbers[0][:2],
+        "departure_time": departure_time,
+        "arrival_time": arrival_time,
+        "arrival_day_offset": arrival_day_offset,
+        "price": price,
+        "stops": stops,
+        "total_duration_min": duration_min,
+        "route_summary": f"PVG-{combo}-KIX",
+        "segments": segments,
+        "layovers": ([{"airport": "ICN", "wait_minutes": 150}] if stops else []),
+        "fare_rules": {
+            "baggage": {"included": True, "checked_kg": 20},
+            "refund": {"label": "以支付页为准"},
+        },
+    }
+
+
+def _intl_fixture_sources() -> list[IntlFixtureSource]:
+    hasdata_flights = [
+        _intl_fixture_flight("MU225", 5124, "09:00", "12:00", 180),
+        _intl_fixture_flight("MU730", 12137, "13:20", "16:45", 205),
+        _intl_fixture_flight("JL891", 7220, "15:00", "18:00", 180),
+        _intl_fixture_flight("OZ368", 1800, "01:05", "04:00", 175),
+    ]
+    juhe_flights = [
+        _intl_fixture_flight("MU225", 4883, "09:00", "12:00", 180),
+        _intl_fixture_flight("MU730", 4153, "13:20", "16:45", 205),
+        _intl_fixture_flight(
+            "SQ825+SQ622",
+            2600,
+            "09:00",
+            "21:00",
+            36 * 60,
+            stops=1,
+            arrival_day_offset=1,
+        ),
+    ]
+    return [
+        IntlFixtureSource("hasdata", hasdata_flights),
+        IntlFixtureSource("juhe", juhe_flights),
+    ]
+
+
+def _intl_plan_snapshot(flight: dict, variant: str) -> dict:
+    return {
+        "variant": variant,
+        "combo": flight.get("flight_combo"),
+        "price": _price_number(flight.get("price")),
+        "price_source": flight.get("price_source"),
+        "data_source": flight.get("data_source"),
+        "duration_min": flight.get("total_duration_min"),
+        "stops": flight.get("stops"),
+    }
+
+
+def intl_dual_source_snapshot(today: date | None = None) -> dict:
+    """离线跑国际双源的 collect、过滤和方案对比链路。"""
+    depart_date = ((today or date.today()) + timedelta(days=45)).isoformat()
+    original_cached_fetch = aggregator_module.cached_fetch
+
+    def fixture_cached_fetch(
+        source,
+        origin,
+        dest,
+        date_str,
+        passengers,
+        cabin_class,
+        **_kwargs,
+    ):
+        return source.fetch(origin, dest, date_str, passengers, cabin_class)
+
+    try:
+        aggregator_module.cached_fetch = fixture_cached_fetch
+        aggregator = aggregator_module.FlightAggregator(
+            search_sources=_intl_fixture_sources(),
+            enrichment_sources=[],
+            route_type="international",
+        )
+        collected = aggregator.collect(
+            "PVG",
+            "KIX",
+            depart_date,
+            cabin_classes=["economy"],
+            route_type="international",
+            passengers={"adult": 1, "child": 0, "elderly": 0, "infant": 0},
+            force_fresh=True,
+        )
+    finally:
+        aggregator_module.cached_fetch = original_cached_fetch
+
+    if not collected or not collected.get("flights"):
+        raise RuntimeError("国际双源fixture未生成合并候选")
+
+    merged = collected["flights"]
+    constraints = {
+        "route_type": "international",
+        "red_eye": "reject",
+        "time_preference_mode": "unlimited",
+        "transfer_policy": "reasonable",
+        "max_total_duration_hours": 12,
+    }
+    kept, excluded, _summary = _apply_user_preferences(deepcopy(merged), constraints)
+    analysis = analyze_all_flights(deepcopy(kept), mode="balanced")
+    if analysis.get("error"):
+        raise RuntimeError(f"国际双源fixture分析失败:{analysis['error']}")
+
+    analyzed = sorted(
+        analysis.get("all_flights") or [],
+        key=lambda flight: (
+            float(flight.get("price") or 999999),
+            int(flight.get("total_duration_min") or 999999),
+            str(flight.get("flight_combo") or ""),
+        ),
+    )
+    plans = [
+        _intl_plan_snapshot(flight, variant)
+        for variant, flight in zip(("A", "B"), analyzed[:2])
+    ]
+    if len(plans) < 2:
+        raise RuntimeError("国际双源fixture不足两个可比较方案")
+
+    merged_pool = [
+        {
+            "combo": flight.get("flight_combo"),
+            "pool_price": _price_number(flight.get("price")),
+            "price_source": flight.get("price_source"),
+            "data_source": flight.get("data_source"),
+        }
+        for flight in sorted(merged, key=lambda item: str(item.get("flight_combo") or ""))
+    ]
+    disclosure_triggers = [
+        {
+            "combo": item.get("flight_combo"),
+            "min_price": _price_number(item.get("min_price")),
+            "max_price": _price_number(item.get("max_price")),
+            "diff_pct": _price_number(item.get("diff_pct")),
+            "price_source": item.get("price_source"),
+        }
+        for item in sorted(
+            collected.get("dual_source_price_anomalies") or [],
+            key=lambda item: str(item.get("flight_combo") or ""),
+        )
+    ]
+    filter_rejections = [
+        {
+            "combo": item.get("flight_combo"),
+            "reason": item.get("exclude_reason"),
+        }
+        for item in sorted(excluded, key=lambda item: str(item.get("flight_combo") or ""))
+    ]
+    return {
+        "route": "PVG-KIX",
+        "route_type": "international",
+        "depart_date": depart_date,
+        "offline_fixture": True,
+        "merge_strategy": aggregator_module.MERGE_PRICE_STRATEGY,
+        "merged_pool": merged_pool,
+        "plans": plans,
+        "disclosure_triggers": disclosure_triggers,
+        "filter_rejections": filter_rejections,
+        "filter_reason_set": sorted(
+            {item["reason"] for item in filter_rejections if item.get("reason")}
+        ),
+    }
 
 
 def collect_flights(source: FixtureSource, origins: Iterable[str], dests: Iterable[str], date_str: str) -> list[dict]:
@@ -905,9 +1144,24 @@ def build_snapshot() -> dict:
         {},
         skipped_items,
     )
+    intl_dual_source = _capture_snapshot_item(
+        "intl_dual_source",
+        intl_dual_source_snapshot,
+        {
+            "route": "PVG-KIX",
+            "route_type": "international",
+            "offline_fixture": True,
+            "merged_pool": [],
+            "plans": [],
+            "disclosure_triggers": [],
+            "filter_rejections": [],
+            "filter_reason_set": [],
+        },
+        skipped_items,
+    )
 
     snapshot = {
-        "snapshot_version": 1,
+        "snapshot_version": 2,
         "scenario": "standard_same_day_business_shanghai_beijing",
         "skipped_items": skipped_items,
         "subscription": subscription,
@@ -943,6 +1197,7 @@ def build_snapshot() -> dict:
             "same_day_no_feasible_note": round_trip.get("same_day_no_feasible_note"),
             "budget_limits": round_trip.get("budget_limits"),
         },
+        "intl_dual_source": intl_dual_source,
         "notification": payload_result["rendered"],
     }
     return snapshot

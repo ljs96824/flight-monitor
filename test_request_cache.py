@@ -35,6 +35,38 @@ class EquipmentSource:
 
 
 class RequestCacheTest(unittest.TestCase):
+    def test_cached_fetch_reports_fresh_then_cache_without_changing_payload(self):
+        from request_cache import cached_fetch, reset_request_cache
+
+        reset_request_cache()
+        source = CountingSource()
+        passengers = {"adult": 1}
+
+        first, first_status = cached_fetch(
+            source,
+            "SHA",
+            "PEK",
+            "2026-08-20",
+            passengers,
+            "economy",
+            persist=False,
+            include_cache_status=True,
+        )
+        second, second_status = cached_fetch(
+            source,
+            "SHA",
+            "PEK",
+            "2026-08-20",
+            passengers,
+            "economy",
+            persist=False,
+            include_cache_status=True,
+        )
+
+        self.assertEqual(first, second)
+        self.assertEqual((first_status, second_status), ("fresh", "cache"))
+        self.assertEqual(len(source.calls), 1)
+
     def test_same_request_reuses_in_memory_result(self):
         from request_cache import cached_fetch, reset_request_cache
 
@@ -248,7 +280,7 @@ class RequestCacheTest(unittest.TestCase):
         hasdata_summary = next(message for message in summaries if "源=hasdata" in message)
         self.assertIn("组合数=4", juhe_summary)
         self.assertIn("机型种类=2", juhe_summary)
-        self.assertIn("未映射机型=[32S]", juhe_summary)
+        self.assertIn("未映射机型=[]", juhe_summary)
         self.assertIn("组合数=2", hasdata_summary)
         self.assertIn("机型种类=2", hasdata_summary)
         self.assertIn("未映射机型=[]", hasdata_summary)
@@ -266,6 +298,22 @@ class RequestCacheTest(unittest.TestCase):
         aggregator.collect("SHA", "PEK", "2026-06-20", passengers={"adult": 1})
 
         self.assertEqual(source.calls, [("SHA", "PEK", "2026-06-20", "economy")])
+
+    def test_aggregator_reports_fresh_then_cached_collection(self):
+        from request_cache import reset_request_cache
+        from sources.aggregator import FlightAggregator
+
+        reset_request_cache()
+        source = CountingSource()
+        source.name = "juhe"
+        aggregator = FlightAggregator([source], [], route_type="domestic")
+
+        first = aggregator.collect("SHA", "PEK", "2026-08-20", passengers={"adult": 1})
+        second = aggregator.collect("SHA", "PEK", "2026-08-20", passengers={"adult": 1})
+
+        self.assertEqual(first["request_cache_status"], "fresh")
+        self.assertEqual(second["request_cache_status"], "cache")
+        self.assertEqual(len(first["flights"]), len(second["flights"]))
 
     def test_aggregator_force_fresh_reaches_request_cache(self):
         from request_cache import reset_request_cache

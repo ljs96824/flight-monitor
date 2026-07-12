@@ -13,29 +13,36 @@ def _flight(combo, price, *, stops=0):
 
 
 class FilterReasonLoggingTest(unittest.TestCase):
-    def test_only_logs_rejected_flights_in_pool_lowest_five(self):
+    def test_logs_lowest_five_rejections_from_direct_and_transfer_pools(self):
         from analyzer import _log_low_price_filter_rejections
 
-        pool = [_flight(f"MU{index}", 100 + index * 10) for index in range(7)]
+        transfers = [
+            _flight(f"TR{index}", 100 + index, stops=1)
+            for index in range(6)
+        ]
+        directs = [
+            _flight("MU730" if index == 0 else f"DR{index}", 500 + index)
+            for index in range(6)
+        ]
+        pool = transfers + directs
         excluded = [
-            {**pool[0], "stops": 1, "exclude_reason": "用户设置必须直飞"},
-            {**pool[4], "exclude_reason": "超过最高可接受价格"},
-            {**pool[5], "exclude_reason": "用户不接受红眼/过早航班"},
+            {**flight, "exclude_reason": "用户不接受红眼/过早航班"}
+            for flight in pool
         ]
 
         with patch("analyzer.safe_log") as log:
             _log_low_price_filter_rejections(
                 pool,
                 excluded,
-                {"max_budget": 130},
-                round_id="round-low-five",
+                {"red_eye": "reject"},
+                round_id="round-direct-transfer-five",
             )
 
         messages = [call.args[0] for call in log.call_args_list]
-        self.assertEqual(len(messages), 2)
-        self.assertIn("combo=MU0 拒因=direct_only 值=stops=1", messages[0])
-        self.assertIn("combo=MU4 拒因=max_budget 值=price=140,max_budget=130", messages[1])
-        self.assertFalse(any("MU5" in message for message in messages))
+        self.assertEqual(len(messages), 10)
+        self.assertTrue(any("combo=MU730 " in message for message in messages))
+        self.assertFalse(any("combo=TR5 " in message for message in messages))
+        self.assertFalse(any("combo=DR5 " in message for message in messages))
 
     def test_each_round_logs_at_most_ten_filter_details(self):
         from analyzer import _log_low_price_filter_rejections
