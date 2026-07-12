@@ -45,7 +45,8 @@ class PushTextSweepTest(unittest.TestCase):
             price_scope="per_person_roundtrip",
         )
 
-        self.assertIn("人均预估实付约¥9,230(单人往返)", decision["conclusion"])
+        self.assertIn("单人参考价(成人口径)约¥9,230(单人往返)", decision["conclusion"])
+        self.assertNotIn("人均预估实付", decision["conclusion"])
         self.assertNotIn("预估实付总价¥9,230", decision["conclusion"])
 
     def test_budget_reason_labels_single_person_roundtrip_scope(self):
@@ -147,7 +148,7 @@ class PushTextSweepTest(unittest.TestCase):
                 "unit_roundtrip": 9230,
                 "total_roundtrip_ref": 43842,
                 "total_estimated": 43842,
-                "per_person_estimated": 9230,
+                "per_person_estimated": 8768,
                 "passenger_count": 5,
                 "passenger_label": "2成人+1儿童+2老人",
                 "passengers": {"adult": 2, "child": 1, "elderly": 2, "infant": 0},
@@ -172,7 +173,7 @@ class PushTextSweepTest(unittest.TestCase):
             "route": "上海 → 大阪",
             "route_type": "international",
             "is_roundtrip": True,
-            "recommendation": "人均预估实付约¥9,230(单人往返)已超过预算，建议保持监控本条航线",
+            "recommendation": "单人参考价(成人口径)约¥9,230(单人往返)已超过预算，建议保持监控本条航线",
             "price_policy_reason": "单人往返参考价超过预算",
             "display_price": 43842,
             "current_price": 43842,
@@ -201,6 +202,9 @@ class PushTextSweepTest(unittest.TestCase):
             self.assertNotIn("¥43,843", output)
         self.assertIn("往返搜索参考价¥9,230(单人往返)", outputs[0])
         self.assertIn("¥43,842", email_body)
+        self.assertIn("单人参考价(成人口径)约¥9,230(单人往返)", email_body)
+        self.assertIn("人均摊薄(全员÷5,含儿童折扣):约¥8,768", email_body)
+        self.assertNotIn("人均预估实付", email_body)
 
 
 if __name__ == "__main__":

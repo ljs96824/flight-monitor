@@ -316,7 +316,7 @@ def _estimated_price_subject(price, scope) -> str:
     price_text = _price_text_with_parenthesized_caliber(price, scope)
     label = _short_caliber_label(scope)
     if label.startswith("单人"):
-        return f"人均预估实付约{price_text}"
+        return f"单人参考价(成人口径)约{price_text}"
     if label.startswith("全员"):
         return f"当前预估实付总价{price_text}"
     return f"当前预估实付价{price_text}"
@@ -5802,7 +5802,7 @@ def _payload_price_policy_decision(
                 "不满足购买条件，建议保持监控本条航线"
             ),
             "reason": (
-                "人均预估实付已超过最高可接受价，不建议按当前价买入"
+                "单人参考价(成人口径)已超过最高可接受价，不建议按当前价买入"
                 if _short_caliber_label(price_scope).startswith("单人")
                 else "预估实付总价已超过最高可接受价，不建议按当前价买入"
             ),
@@ -6619,7 +6619,7 @@ def build_notification_payload(
                 f"{compare_subject}已超过你的最高可接受价{compare_max_text}，"
                 "不满足购买条件，建议继续保持监控本条航线"
             ),
-            "summary": "人均预估实付已超过最高可接受价" if compare_is_per_person else "预估实付总价已超过最高可接受价",
+            "summary": "单人参考价(成人口径)已超过最高可接受价" if compare_is_per_person else "预估实付总价已超过最高可接受价",
             "condition": _budget_purchase_condition(compare_max_budget, budget_compare_scope),
         }
     if execution_advice.get("conclusion"):
@@ -9000,6 +9000,12 @@ def _passenger_total_count(passengers: dict | None) -> int:
     return total or 1
 
 
+def _per_head_blended_label(passenger_count) -> str:
+    count = _to_float(passenger_count)
+    count = max(1, int(count)) if count is not None else 1
+    return f"人均摊薄(全员÷{count},含儿童折扣)"
+
+
 def _passenger_part_text(breakdown: dict | None) -> str:
     parts = []
     for item in (breakdown or {}).get("parts") or []:
@@ -9251,7 +9257,10 @@ def _passenger_pricing_rows(plan: dict) -> list[tuple[str, str]]:
         if tiers.get("total_estimated") is not None:
             rows.append(("\u591a\u4eba\u5f80\u8fd4\u9884\u4f30\u5b9e\u4ed8\u603b\u4ef7", f"\u7ea6{_price_text_with_caliber(tiers.get('total_estimated'), 'all_passengers_roundtrip', passengers, route_type)}"))
         if tiers.get("per_person_estimated") is not None:
-            rows.append(("\u4eba\u5747\u9884\u4f30\u5b9e\u4ed8", f"\u7ea6{_price_text_with_caliber(tiers.get('per_person_estimated'), 'per_person_roundtrip', passengers, route_type)}"))
+            rows.append((
+                _per_head_blended_label(tiers.get("passenger_count") or _passenger_total_count(passengers)),
+                f"\u7ea6{_price_text(tiers.get('per_person_estimated'))}",
+            ))
         if pricing.get("single_adult_price"):
             rows.append(("\u5355\u4eba\u5f80\u8fd4\u53c2\u8003", f"\u7ea6{_price_text_with_caliber(pricing.get('single_adult_price'), 'per_person_roundtrip', passengers, route_type)}/\u6210\u4eba"))
     else:
@@ -9267,7 +9276,10 @@ def _passenger_pricing_rows(plan: dict) -> list[tuple[str, str]]:
         if tiers.get("total_estimated") is not None:
             rows.append(("\u5168\u5458\u9884\u4f30\u5b9e\u4ed8", f"\u7ea6{_price_text_with_caliber(tiers.get('total_estimated'), 'all_passengers_oneway', passengers, route_type)}"))
         if tiers.get("per_person_estimated") is not None:
-            rows.append(("\u4eba\u5747\u9884\u4f30\u5b9e\u4ed8", f"\u7ea6{_price_text_with_caliber(tiers.get('per_person_estimated'), 'per_person_oneway', passengers, route_type)}"))
+            rows.append((
+                _per_head_blended_label(tiers.get("passenger_count") or _passenger_total_count(passengers)),
+                f"\u7ea6{_price_text(tiers.get('per_person_estimated'))}",
+            ))
         if pricing.get("single_adult_price"):
             rows.append(("\u5355\u4eba\u53c2\u8003", f"\u7ea6{_price_text_with_caliber(pricing.get('single_adult_price'), 'per_person_oneway', passengers, route_type)}/\u6210\u4eba"))
     if note:
@@ -9357,7 +9369,8 @@ def _action_panel_price_tier_lines(payload: dict, primary_plan: dict) -> list[st
     if tiers.get("total_estimated") is not None:
         lines.append(f"\u9884\u4f30\u5b9e\u4ed8\u603b\u4ef7:\u7ea6{_price_text_with_caliber(tiers.get('total_estimated'), 'all_passengers_roundtrip', passengers, route_type)}")
     if tiers.get("per_person_estimated") is not None:
-        lines.append(f"\u4eba\u5747\u9884\u4f30\u5b9e\u4ed8:\u7ea6{_price_text_with_caliber(tiers.get('per_person_estimated'), 'per_person_roundtrip', passengers, route_type)}")
+        blended_label = _per_head_blended_label(passenger_count or _passenger_total_count(passengers))
+        lines.append(f"{blended_label}:\u7ea6{_price_text(tiers.get('per_person_estimated'))}")
     return lines
 
 def _email_trigger_type(payload: dict) -> str:
