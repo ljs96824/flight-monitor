@@ -18,7 +18,7 @@ from airport_logistics import (
 )
 from on_time_data import estimate_punctuality
 from price_estimator import build_passenger_price_breakdown, build_price_tiers, calc_transaction_price
-from pricing import budget_to_pp, caliber_label, itinerary_price_pp, price_in_scope
+from pricing import assert_same_caliber, budget_to_pp, caliber_label, itinerary_price_pp, price_in_scope
 from price_calendar import (
     analyze_date_savings as _calendar_date_savings,
     analyze_row_savings as _calendar_row_savings,
@@ -8082,6 +8082,48 @@ def build_price_signal(display_price, target_price=None, price_history=None) -> 
     }
 
 
+def evaluate_purchase_budget(
+    unit_roundtrip,
+    target_price=None,
+    max_budget=None,
+    *,
+    price_scope=None,
+    budget_scope=None,
+) -> dict:
+    """在调用方已选定的同一口径内判断完整行程价格。"""
+    if price_scope is not None or budget_scope is not None:
+        assert_same_caliber(
+            price_scope or budget_scope,
+            budget_scope or price_scope,
+        )
+
+    current = _to_float(unit_roundtrip)
+    target = _to_float(target_price)
+    maximum = _to_float(max_budget)
+    if current is None:
+        status = "no_price"
+    elif maximum is not None and current > maximum:
+        status = "over_budget"
+    elif target is not None and current <= target:
+        status = "at_or_below_target"
+    elif maximum is not None and current <= maximum:
+        status = "within_budget"
+    elif target is not None and current > target:
+        status = "above_target"
+    else:
+        status = "unbounded"
+
+    return {
+        "status": status,
+        "price": current,
+        "target_price": target,
+        "max_budget": maximum,
+        "is_over_budget": status == "over_budget",
+        "price_scope": price_scope,
+        "budget_scope": budget_scope,
+    }
+
+
 def build_execution_advice(
     display_price,
     transaction_price=None,
@@ -8089,6 +8131,9 @@ def build_execution_advice(
     target_price=None,
     max_price=None,
     push_type=None,
+    budget_decision=None,
+    price_scope=None,
+    budget_scope=None,
 ) -> dict:
     """Describe whether the current plan is executable, using estimated/checkout price concepts."""
     display = _to_float(display_price)
@@ -8097,8 +8142,15 @@ def build_execution_advice(
     target = _to_float(target_price)
     max_p = _to_float(max_price)
     push_type_text = str(push_type or "")
+    budget_decision = budget_decision or evaluate_purchase_budget(
+        display,
+        target,
+        max_p,
+        price_scope=price_scope,
+        budget_scope=budget_scope,
+    )
 
-    if display is not None and max_p is not None and display > max_p:
+    if budget_decision.get("status") == "over_budget":
         return {
             "label": "继续监控",
             "conclusion": f"当前搜索价¥{display:,.0f}已超过你的最高可接受价¥{max_p:,.0f}，不满足购买条件，建议继续监控",
@@ -8479,6 +8531,9 @@ def _apply_user_preferences(
         and preferences.get("business_start")
         and preferences.get("business_end")
     )
+    roundtrip_purchase_context = bool(
+        preferences.get("round_trip") or preferences.get("same_day_round_trip")
+    )
     if same_day_meeting_time_override:
         use_legacy_time_filters = False
     preferred_departure_slots, preferred_arrival_slots = _direction_time_slots(
@@ -8620,18 +8675,19 @@ def _apply_user_preferences(
                 penalty += 2
                 penalties.append("非全服务航司")
 
-        if max_budget and max_budget > 0 and price > max_budget:
-            excluded.append({**flight, "exclude_reason": "\u8d85\u8fc7\u6700\u9ad8\u53ef\u63a5\u53d7\u4ef7\u683c"})
-            continue
-        if budget and budget > 0:
-            notes.append("\u6700\u9ad8\u53ef\u63a5\u53d7\u4ef7\u683c\u5185")
-        if target_price and target_price > 0:
-            if price <= target_price:
-                notes.append("\u4f4e\u4e8e\u7406\u60f3\u5165\u624b\u4ef7")
-            elif price <= target_price + price_tolerance:
-                notes.append("在理想价浮动范围内")
-            else:
-                penalties.append(f"\u8ddd\u79bb\u7406\u60f3\u5165\u624b\u4ef7\u00a5{price - target_price:,.0f}")
+        if not roundtrip_purchase_context:
+            if max_budget and max_budget > 0 and price > max_budget:
+                excluded.append({**flight, "exclude_reason": "\u8d85\u8fc7\u6700\u9ad8\u53ef\u63a5\u53d7\u4ef7\u683c"})
+                continue
+            if budget and budget > 0:
+                notes.append("\u6700\u9ad8\u53ef\u63a5\u53d7\u4ef7\u683c\u5185")
+            if target_price and target_price > 0:
+                if price <= target_price:
+                    notes.append("\u4f4e\u4e8e\u7406\u60f3\u5165\u624b\u4ef7")
+                elif price <= target_price + price_tolerance:
+                    notes.append("在理想价浮动范围内")
+                else:
+                    penalties.append(f"\u8ddd\u79bb\u7406\u60f3\u5165\u624b\u4ef7\u00a5{price - target_price:,.0f}")
 
         if direct_required and stops > 0:
             excluded_flight = {**flight, "exclude_reason": "用户设置必须直飞"}
@@ -9205,6 +9261,10 @@ def analyze_all_flights(
             merged_preferences["need_baggage"] = hard_constraints.get("baggage")
     else:
         merged_preferences = user_preferences or {}
+    roundtrip_purchase_context = bool(
+        merged_preferences.get("round_trip")
+        or merged_preferences.get("same_day_round_trip")
+    )
     travel_profile = build_travel_profile(merged_preferences)
     alert_policy = build_alert_policy(travel_profile)
     filter_input_pool = list(usable_flights)
@@ -9330,14 +9390,17 @@ def analyze_all_flights(
         )
         flight["buyability"] = classify_buyability(flight)
         calc_execution_risk(flight)
-        advice = price_tolerance_advice(
-            flight.get("price"),
-            target_price_effective,
-            price_tolerance,
-            max_budget_effective,
-        )
-        if advice:
-            flight["price_advice"] = advice
+        if roundtrip_purchase_context:
+            flight.pop("price_advice", None)
+        else:
+            advice = price_tolerance_advice(
+                flight.get("price"),
+                target_price_effective,
+                price_tolerance,
+                max_budget_effective,
+            )
+            if advice:
+                flight["price_advice"] = advice
         calc_execution_grade(flight, merged_preferences)
         score_multiplier = float(flight.get("score_multiplier") or 1)
         flight["preference_score"] = round(
@@ -9488,21 +9551,26 @@ def analyze_all_flights(
     price_tolerance = _to_float((merged_preferences or {}).get("price_tolerance"))
     if price_tolerance is None:
         price_tolerance = 100
-    price_band = price_tolerance_advice(
-        lowest_price,
-        target_price_effective,
-        price_tolerance,
-        max_budget_effective,
-    )
-    for flight in usable_flights:
-        advice = price_tolerance_advice(
-            flight.get("price"),
+    price_band = None
+    if not roundtrip_purchase_context:
+        price_band = price_tolerance_advice(
+            lowest_price,
             target_price_effective,
             price_tolerance,
             max_budget_effective,
         )
-        if advice:
-            flight["price_advice"] = advice
+    for flight in usable_flights:
+        if roundtrip_purchase_context:
+            flight.pop("price_advice", None)
+        else:
+            advice = price_tolerance_advice(
+                flight.get("price"),
+                target_price_effective,
+                price_tolerance,
+                max_budget_effective,
+            )
+            if advice:
+                flight["price_advice"] = advice
 
     decision_flight = by_price[0] if by_price else usable_flights[0]
     confidence_breakdown = calc_confidence(
@@ -10146,21 +10214,27 @@ def _roundtrip_budget_context(total, max_budget, recommended_total) -> dict:
     total_value = _to_float(total)
     max_budget_value = _to_float(max_budget)
     recommended_value = _to_float(recommended_total)
-    recommended_over_budget = (
-        total_value is not None
-        and max_budget_value is not None
-        and recommended_value is not None
-        and recommended_value > max_budget_value
+    candidate_decision = evaluate_purchase_budget(
+        total_value,
+        max_budget=max_budget_value,
     )
+    recommended_decision = evaluate_purchase_budget(
+        recommended_value,
+        max_budget=max_budget_value,
+    )
+    recommended_over_budget = recommended_decision["is_over_budget"]
     return {
         "total": total_value,
         "max_budget": max_budget_value,
         "recommended_total": recommended_value,
+        "candidate_budget_decision": candidate_decision,
+        "recommended_budget_decision": recommended_decision,
+        "candidate_over_budget": candidate_decision["is_over_budget"],
         "recommended_over_budget": recommended_over_budget,
         "all_over_budget_reference": bool(
             recommended_over_budget
+            and candidate_decision["is_over_budget"]
             and total_value is not None
-            and total_value > max_budget_value
             and recommended_value is not None
             and total_value < recommended_value
         ),
@@ -10261,14 +10335,12 @@ def _roundtrip_specific_exclusion_reasons(
             if _stops_count(flight or {}) > 0:
                 reasons.append(f"{label}需中转,但你设置了'必须直飞'。")
 
-    total_value = _to_float(total)
-    max_budget_value = _to_float(max_budget)
     if (
-        max_budget_value is not None
-        and total_value is not None
-        and total_value > max_budget_value
+        budget_context.get("candidate_over_budget")
         and not budget_context.get("all_over_budget_reference")
     ):
+        total_value = budget_context.get("total")
+        max_budget_value = budget_context.get("max_budget")
         reasons.append(
             f"往返总价¥{total_value:,.0f},超过你的最高可接受价¥{max_budget_value:,.0f},"
             f"超出¥{total_value - max_budget_value:,.0f}。"
@@ -10348,9 +10420,7 @@ def _roundtrip_budget_safe_reasons_v2(
         if _is_budget_exclusion_reason(text):
             removed_budget_reason = True
             if (
-                max_budget_value is not None
-                and total_value is not None
-                and total_value > max_budget_value
+                context.get("candidate_over_budget")
                 and not all_over_budget_reference
             ):
                 cleaned.append(
@@ -10468,10 +10538,13 @@ def build_excluded_roundtrip_combos(
         f"[排除诊断] 推荐方案价={recommended_total}, 最高可接受价={max_budget}, "
         f"排除候选价={[combo.get('total_price') for combo in combos]}"
     )
-    max_budget_value = _to_float(max_budget)
+    recommended_budget_decision = evaluate_purchase_budget(
+        recommended_total,
+        max_budget=max_budget,
+    )
     print(
         f"[排除诊断] 推荐方案是否超预算="
-        f"{bool(max_budget_value is not None and recommended_total > max_budget_value)}"
+        f"{recommended_budget_decision['is_over_budget']}"
     )
     limited = _dedupe_and_limit_excluded_roundtrip_combos(combos, max_show)
     for combo in limited:

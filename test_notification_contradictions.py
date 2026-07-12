@@ -1,3 +1,5 @@
+import contextlib
+import io
 import sys
 import types
 import unittest
@@ -6,10 +8,139 @@ from unittest.mock import patch
 
 sys.modules.setdefault("httpx", types.SimpleNamespace(get=lambda *a, **k: None, post=lambda *a, **k: None))
 
+from analyzer import analyze_all_flights
 from notifier import build_notification_payload, render_email
 
 
 class NotificationContradictionsTest(unittest.TestCase):
+    @staticmethod
+    def _roundtrip_advice_payload(max_budget):
+        analysis = {
+            "round_trip_analysis": {
+                "top_combinations": [
+                    {
+                        "outbound": {
+                            "flight_no": "MU225",
+                            "price": 4902,
+                            "stops": 0,
+                            "execution_grade": "A",
+                        },
+                        "return": {
+                            "flight_no": "JL891",
+                            "price": 4169,
+                            "stops": 0,
+                            "execution_grade": "A",
+                        },
+                        "outbound_price": 4902,
+                        "return_price": 4169,
+                        "total_price": 9071,
+                    }
+                ],
+                "total_min": 9071,
+            },
+            "decision": {"conclusion": "可以观察", "confidence": "中"},
+        }
+        route_info = {
+            "round_trip": True,
+            "origin": "PVG",
+            "destination": "KIX",
+            "depart_date": "2026-10-01",
+            "return_date": "2026-10-06",
+            "target_price": 6000,
+            "max_budget": max_budget,
+            "route_type": "international",
+        }
+        subscription = {
+            "id": f"advice-scope-{max_budget}",
+            "basic": {"route_type": "international", "passenger_count": 1},
+            "preferences": {
+                "passengers": {"adult": 1, "child": 0, "elderly": 0, "infant": 0}
+            },
+            "constraints": {
+                "budget_scope": "per_person",
+                "max_budget_scope": "per_person",
+                "target_price_scope": "per_person",
+                "target_price": 6000,
+                "max_budget": max_budget,
+            },
+        }
+        output = io.StringIO()
+        with patch("notifier.get_last_push_price", return_value=None), patch(
+            "notifier.get_last_push_snapshot", return_value=None
+        ), patch("notifier.track_plan_status", return_value=None), contextlib.redirect_stdout(output):
+            payload = build_notification_payload(
+                analysis,
+                route_info=route_info,
+                subscription=subscription,
+            )
+        return payload, output.getvalue()
+
+    def test_roundtrip_over_budget_advice_matches_headline_and_diagnosis(self):
+        payload, log = self._roundtrip_advice_payload(8000)
+
+        self.assertTrue(payload["budget_gap"]["is_over_budget"])
+        self.assertEqual(
+            payload["recommended_plans"][0]["buy_condition"],
+            payload["recommendation"],
+        )
+        self.assertNotIn("强烈建议购买", payload["recommended_plans"][0]["buy_condition"])
+        self.assertNotIn("达标", payload["recommended_plans"][0]["buy_condition"])
+        self.assertIn(
+            "[购买建议] unit_roundtrip=9071 max_budget=8000 判定=over_budget 与排除诊断一致=True",
+            log,
+        )
+
+    def test_roundtrip_budget_raise_switches_headline_and_card_together(self):
+        payload, log = self._roundtrip_advice_payload(10000)
+
+        self.assertFalse(payload["budget_gap"]["is_over_budget"])
+        self.assertEqual(
+            payload["recommended_plans"][0]["buy_condition"],
+            payload["recommendation"],
+        )
+        self.assertIn("购买前验证", payload["recommendation"])
+        self.assertIn(
+            "[购买建议] unit_roundtrip=9071 max_budget=10000 判定=within_budget 与排除诊断一致=True",
+            log,
+        )
+
+    def test_roundtrip_analysis_does_not_attach_leg_budget_advice(self):
+        flight = {
+            "price": 4902,
+            "flight_combo": "MU225",
+            "airline_summary": "MU",
+            "route_summary": "PVG → KIX",
+            "total_duration_min": 210,
+            "total_hours": 3.5,
+            "stops": 0,
+            "segments": [
+                {
+                    "flight_no": "MU225",
+                    "airline": "MU",
+                    "dep_airport": "PVG",
+                    "dep_time": "2026-10-01 09:50",
+                    "arr_airport": "KIX",
+                    "arr_time": "2026-10-01 13:20",
+                    "duration_min": 210,
+                }
+            ],
+            "layovers": [],
+            "data_source": "hasdata",
+            "cabin_class": "economy",
+        }
+
+        result = analyze_all_flights(
+            [flight],
+            user_preferences={
+                "round_trip": True,
+                "target_price": 6000,
+                "max_budget": 8000,
+            },
+        )
+
+        self.assertNotIn("price_advice", result["all_flights"][0])
+        self.assertIsNone(result["price_band"])
+
     def test_roundtrip_payload_ignores_unscoped_last_push_without_plan_tracking(self):
         analysis = {
             "round_trip_analysis": {

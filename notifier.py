@@ -41,6 +41,7 @@ from analyzer import (
     analyze_departure_feasibility,
     classify_plan_tier,
     determine_push_type,
+    evaluate_purchase_budget,
     generate_decision_summary,
     generate_trend_summary,
     get_total_passengers,
@@ -2190,11 +2191,23 @@ def _combo_price_status(total_price, route_info: dict) -> str:
     max_budget = _to_float(route_info.get("max_budget") or route_info.get("budget"))
     if total is None:
         return ""
-    if target and total <= target * 2:
+    budget_scope = _normalize_payload_budget_scope(
+        route_info.get("max_budget_scope") or route_info.get("budget_scope")
+    )
+    if budget_scope == "all":
+        return ""
+    decision = evaluate_purchase_budget(
+        total,
+        target,
+        max_budget,
+        price_scope="per_person_roundtrip",
+        budget_scope="per_person_roundtrip",
+    )
+    if decision["status"] == "at_or_below_target":
         return " ✅ 低于理想价"
-    if max_budget and total <= max_budget * 2:
+    if decision["status"] == "within_budget":
         return " ✅ 预算内"
-    if max_budget and total > max_budget * 2:
+    if decision["status"] == "over_budget":
         return " ⚠️ 超预算"
     return ""
 
@@ -3286,17 +3299,32 @@ def _round_trip_combo_tags(combo: dict, route_info: dict, confidence: dict | Non
 
     total = _to_float(combo.get("total_price"))
     target = _to_float(route_info.get("target_price"))
-    target_total = target * 2 if target else None
-    if total is None or not target_total:
+    max_budget = _to_float(route_info.get("max_budget") or route_info.get("budget"))
+    budget_scope = _normalize_payload_budget_scope(
+        route_info.get("max_budget_scope") or route_info.get("budget_scope")
+    )
+    if total is None or budget_scope == "all":
         price_label = "价格待判断"
-    elif total <= target_total:
-        price_label = "价格偏低"
-    elif total <= target_total * 1.05:
-        price_label = "接近理想"
-    elif total <= target_total * 1.25:
-        price_label = "价格中等"
     else:
-        price_label = "价格偏高"
+        decision = evaluate_purchase_budget(
+            total,
+            target,
+            max_budget,
+            price_scope="per_person_roundtrip",
+            budget_scope="per_person_roundtrip",
+        )
+        if decision["status"] == "at_or_below_target":
+            price_label = "价格偏低"
+        elif decision["status"] == "within_budget":
+            price_label = "预算内"
+        elif decision["status"] == "over_budget":
+            price_label = "超预算"
+        elif target and total <= target * 1.05:
+            price_label = "接近理想"
+        elif target and total <= target * 1.25:
+            price_label = "价格中等"
+        else:
+            price_label = "价格偏高"
 
     availability_labels = [_status_availability_label(flight) for flight in legs if flight]
     availability_labels = [label for label in availability_labels if label]
@@ -3355,21 +3383,39 @@ def _round_trip_combinations(analysis_result: dict) -> list[dict]:
 
 
 def _combo_human_recommendation(combo: dict, route_info: dict) -> str:
+    explicit_advice = combo.get("purchase_advice") or {}
+    if isinstance(explicit_advice, dict) and explicit_advice.get("conclusion"):
+        return str(explicit_advice["conclusion"])
+    if combo.get("buy_condition"):
+        return str(combo["buy_condition"])
     total = _to_float(combo.get("total_price"))
     target = _to_float(route_info.get("target_price"))
     max_budget = _to_float(route_info.get("max_budget") or route_info.get("budget"))
-    target_total = target * 2 if target else None
-    max_total = max_budget * 2 if max_budget else None
-    grade = _combo_grade(combo)
     if total is None:
         return "建议等待 - 当前总价仍需确认"
-    if target_total and total <= target_total and grade == "A":
-        return "强烈建议购买 - 往返总价达标且执行信息较完整"
-    if target_total and total <= target_total * 1.05:
-        return "值得验证 - 价格达标，但购买链路尚未完全确认"
-    if max_total and total <= max_total:
-        return "可以观察 - 总价仍在预算内"
-    return "建议等待 - 当前往返总价或执行信息仍需确认"
+    budget_scope = _normalize_payload_budget_scope(
+        route_info.get("max_budget_scope") or route_info.get("budget_scope")
+    )
+    if budget_scope == "all":
+        return "请按完整往返总价与整单预算核对后决定"
+    decision = evaluate_purchase_budget(
+        total,
+        target,
+        max_budget,
+        price_scope="per_person_roundtrip",
+        budget_scope="per_person_roundtrip",
+    )
+    advice = build_execution_advice(
+        total,
+        total,
+        _payload_verify_price(total, max_budget),
+        target,
+        max_budget,
+        budget_decision=decision,
+        price_scope="per_person_roundtrip",
+        budget_scope="per_person_roundtrip",
+    )
+    return str(advice.get("conclusion") or "请核对完整往返总价后决定")
 
 
 def _single_flights_for_sections(analysis_result: dict) -> list[dict]:
@@ -5866,6 +5912,7 @@ def _payload_price_policy_decision(
     max_price=None,
     fallback="可以观察",
     price_scope=None,
+    budget_decision=None,
 ) -> dict:
     display = _to_float(display_price)
     transaction = _to_float(transaction_price)
@@ -5873,8 +5920,14 @@ def _payload_price_policy_decision(
     target = _to_float(target_price)
     max_p = _to_float(max_price)
 
-    if transaction is not None and max_p is not None and transaction > max_p:
-        transaction_text = _estimated_price_subject(transaction, price_scope)
+    is_over_budget = (
+        bool(budget_decision.get("is_over_budget"))
+        if isinstance(budget_decision, dict)
+        else bool(transaction is not None and max_p is not None and transaction > max_p)
+    )
+    if is_over_budget:
+        decision_price = _to_float((budget_decision or {}).get("price")) or transaction or display
+        transaction_text = _estimated_price_subject(decision_price, price_scope)
         max_text = _price_text_with_parenthesized_caliber(max_p, price_scope)
         return {
             "conclusion": (
@@ -5889,7 +5942,7 @@ def _payload_price_policy_decision(
             "push_type_hint": None,
         }
 
-    if display is not None and max_p is not None and display > max_p:
+    if budget_decision is None and display is not None and max_p is not None and display > max_p:
         return {
             "conclusion": (
                 f"当前搜索价{_price_text(display)}已超过你的最高可接受价{_price_text(max_p)}，"
@@ -6071,6 +6124,51 @@ def _plan_price_in_budget_scope(primary_plan, fallback_price, passengers, route_
         return _round_payload_price(itinerary_pp)
 
     return _to_float(fallback_price)
+
+
+def _apply_roundtrip_purchase_advice(
+    plans,
+    target_price,
+    max_budget,
+    passengers,
+    route_type,
+    visible_scope,
+):
+    for plan in plans or []:
+        if not isinstance(plan, dict) or not plan.get("is_roundtrip"):
+            continue
+        compare_price = _plan_price_in_budget_scope(
+            plan,
+            plan.get("estimated_price") or plan.get("price"),
+            passengers,
+            route_type,
+            True,
+            visible_scope,
+        )
+        verify_limit = _payload_verify_price(compare_price, max_budget)
+        decision = evaluate_purchase_budget(
+            compare_price,
+            target_price,
+            max_budget,
+            price_scope=visible_scope,
+            budget_scope=visible_scope,
+        )
+        advice = build_execution_advice(
+            compare_price,
+            compare_price,
+            verify_limit,
+            target_price,
+            max_budget,
+            budget_decision=decision,
+            price_scope=visible_scope,
+            budget_scope=visible_scope,
+        )
+        plan["budget_compare_price"] = compare_price
+        plan["budget_compare_scope"] = visible_scope
+        plan["purchase_budget_decision"] = decision
+        plan["purchase_advice"] = advice
+        plan["buy_condition"] = advice.get("conclusion") or "请核对完整往返总价后决定"
+    return plans
 
 def _payload_dedupe_text(items) -> list[str]:
     result = []
@@ -6645,6 +6743,27 @@ def build_notification_payload(
     )
     verify_limit = _payload_verify_price(budget_compare_price, compare_max_budget)
     policy_compare_price = budget_compare_price
+    purchase_budget_decision = evaluate_purchase_budget(
+        policy_compare_price,
+        compare_target,
+        compare_max_budget,
+        price_scope=budget_compare_scope,
+        budget_scope=budget_compare_scope,
+    )
+    if is_roundtrip:
+        all_items = _apply_roundtrip_purchase_advice(
+            all_items,
+            compare_target,
+            compare_max_budget,
+            passenger_pricing_breakdown,
+            payload_route_type,
+            budget_compare_scope,
+        )
+        primary_plan = all_items[0] if all_items else {}
+        purchase_budget_decision = (
+            primary_plan.get("purchase_budget_decision")
+            or purchase_budget_decision
+        )
     price_policy = _payload_price_policy_decision(
         policy_compare_price,
         policy_compare_price,
@@ -6653,13 +6772,23 @@ def build_notification_payload(
         compare_max_budget,
         decision.get("conclusion") or "\u53ef\u4ee5\u89c2\u5bdf",
         price_scope=budget_compare_scope,
+        budget_decision=purchase_budget_decision,
     )
     price_signal = build_price_signal(
         policy_compare_price,
         compare_target,
         _price_history_for_push(price_insights, analysis_result, is_roundtrip),
     )
-    execution_advice = build_execution_advice(policy_compare_price, policy_compare_price, verify_limit, compare_target, compare_max_budget)
+    execution_advice = build_execution_advice(
+        policy_compare_price,
+        policy_compare_price,
+        verify_limit,
+        compare_target,
+        compare_max_budget,
+        budget_decision=purchase_budget_decision,
+        price_scope=budget_compare_scope,
+        budget_scope=budget_compare_scope,
+    )
     if execution_advice.get("conclusion"):
         price_policy["conclusion"] = execution_advice["conclusion"]
     if execution_advice.get("summary"):
@@ -6688,8 +6817,11 @@ def build_notification_payload(
         compare_target,
         compare_max_budget,
         (push_meta or {}).get("type"),
+        budget_decision=purchase_budget_decision,
+        price_scope=budget_compare_scope,
+        budget_scope=budget_compare_scope,
     )
-    if compare_max_budget is not None and budget_compare_price is not None and budget_compare_price > compare_max_budget:
+    if purchase_budget_decision.get("is_over_budget"):
         compare_subject = _estimated_price_subject(budget_compare_price, budget_compare_scope)
         compare_max_text = _price_text_with_parenthesized_caliber(compare_max_budget, budget_compare_scope)
         compare_is_per_person = _short_caliber_label(budget_compare_scope).startswith("单人")
@@ -6706,6 +6838,10 @@ def build_notification_payload(
         price_policy["conclusion"] = execution_advice["conclusion"]
     if execution_advice.get("summary"):
         price_policy["reason"] = execution_advice["summary"]
+    if is_roundtrip and primary_plan:
+        primary_plan["purchase_budget_decision"] = purchase_budget_decision
+        primary_plan["purchase_advice"] = execution_advice
+        primary_plan["buy_condition"] = price_policy.get("conclusion") or execution_advice.get("conclusion")
     if price_policy.get("push_type_hint"):
         push_meta["type"] = price_policy["push_type_hint"]
     if price_policy.get("reason"):
@@ -6742,6 +6878,29 @@ def build_notification_payload(
     budget_gap["target_price_scope"] = target_budget_scope
     budget_gap["budget_compare_scope"] = budget_compare_scope
     budget_gap["target_compare_scope"] = target_compare_scope
+    if is_roundtrip:
+        unit_roundtrip = _to_float(
+            (price_tiers or {}).get("unit_roundtrip")
+            or primary_plan.get("adult_roundtrip_price")
+            or primary_plan.get("single_adult_price")
+        )
+        max_budget_unit_roundtrip = (
+            itinerary_price_pp(max_budget_pp_oneway, round_trip=True)
+            if max_budget_pp_oneway is not None
+            else None
+        )
+        if primary_plan and unit_roundtrip is not None:
+            diagnosis_consistent = (
+                bool(purchase_budget_decision.get("is_over_budget"))
+                == bool(budget_gap.get("is_over_budget"))
+            )
+            safe_log(
+                "[购买建议] "
+                f"unit_roundtrip={_round_payload_price(unit_roundtrip)} "
+                f"max_budget={_round_payload_price(max_budget_unit_roundtrip)} "
+                f"判定={purchase_budget_decision.get('status')} "
+                f"与排除诊断一致={diagnosis_consistent}"
+            )
     next_step_guidance = build_next_step_guidance(
         (push_meta or {}).get("type"),
         budget_compare_price,
@@ -6909,6 +7068,7 @@ def build_notification_payload(
         "no_primary_reason": no_primary_reason,
         "candidate_price_summary": candidate_price_summary,
         "budget_gap": budget_gap,
+        "purchase_budget_decision": purchase_budget_decision,
         "next_step_guidance": next_step_guidance,
         "confidence": confidence.get("overall") or decision.get("confidence") or "中",
         "confidence_dimensions": confidence.get("dimensions") or {},
