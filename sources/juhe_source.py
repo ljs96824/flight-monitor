@@ -252,8 +252,6 @@ class JuheSource(FlightSource):
                 continue
 
             equipment = str(_first(item, "equipment", "planeType", "aircraft")).strip()
-            if equipment:
-                safe_log(f"[机型码收集] equipment={equipment}, 航班={flight_no}")
             aircraft = get_aircraft_name(equipment)
             transfer_num = _to_int(item.get("transferNum"), 1)
             stops = max(0, transfer_num - 1)

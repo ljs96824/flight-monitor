@@ -23,6 +23,17 @@ class CountingSource:
         }
 
 
+class EquipmentSource:
+    route_type = "international"
+
+    def __init__(self, name, flights):
+        self.name = name
+        self.flights = flights
+
+    def fetch(self, origin, dest, date_str, cabin_class="economy"):
+        return {"flights": [dict(item) for item in self.flights], "source": self.name}
+
+
 class RequestCacheTest(unittest.TestCase):
     def test_same_request_reuses_in_memory_result(self):
         from request_cache import cached_fetch, reset_request_cache
@@ -188,6 +199,59 @@ class RequestCacheTest(unittest.TestCase):
         self.assertIn("round=round-domestic", round_line)
         self.assertNotIn("hasdata", round_line)
         self.assertIn("hasdata", process_line)
+
+    def test_equipment_codes_are_summarized_once_per_source_and_round(self):
+        from request_cache import (
+            cached_fetch,
+            print_request_cache_stats,
+            reset_request_cache,
+            start_request_cache_round,
+        )
+
+        reset_request_cache()
+        self.addCleanup(reset_request_cache)
+        juhe = EquipmentSource(
+            "juhe",
+            [
+                {"flight_combo": "MU225", "price": 4883, "aircraft_code": "320"},
+                {"flight_combo": "MU730", "price": 4153, "aircraft_code": "32S"},
+            ],
+        )
+        hasdata = EquipmentSource(
+            "hasdata",
+            [
+                {
+                    "flight_combo": "MU225",
+                    "price": 5124,
+                    "segments": [{"aircraft": "Airbus A320"}],
+                },
+                {
+                    "flight_combo": "JL891",
+                    "price": 7268,
+                    "segments": [{"aircraft": "Boeing 787"}],
+                },
+            ],
+        )
+
+        with patch("request_cache.safe_log") as log:
+            start_request_cache_round("round-equipment")
+            cached_fetch(juhe, "PVG", "KIX", "2026-10-01", {"adult": 1}, persist=False)
+            cached_fetch(juhe, "KIX", "PVG", "2026-10-06", {"adult": 1}, persist=False)
+            cached_fetch(hasdata, "PVG", "KIX", "2026-10-01", {"adult": 1}, persist=False)
+            print_request_cache_stats()
+
+        messages = [str(call.args[0]) for call in log.call_args_list]
+        self.assertFalse(any(message.startswith("[机型码收集]") for message in messages))
+        summaries = [message for message in messages if message.startswith("[机型码汇总]")]
+        self.assertEqual(len(summaries), 2)
+        juhe_summary = next(message for message in summaries if "源=juhe" in message)
+        hasdata_summary = next(message for message in summaries if "源=hasdata" in message)
+        self.assertIn("组合数=4", juhe_summary)
+        self.assertIn("机型种类=2", juhe_summary)
+        self.assertIn("未映射机型=[32S]", juhe_summary)
+        self.assertIn("组合数=2", hasdata_summary)
+        self.assertIn("机型种类=2", hasdata_summary)
+        self.assertIn("未映射机型=[]", hasdata_summary)
 
     def test_aggregator_collect_reuses_cached_source_result(self):
         from request_cache import reset_request_cache

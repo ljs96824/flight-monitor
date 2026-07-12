@@ -79,9 +79,13 @@ class JuheIntegrationTest(unittest.TestCase):
             }
         }
 
-        flights = source.normalize(source.parse(raw), collected_at="2026-06-06T12:00:00")
+        with patch("sources.juhe_source.safe_log") as log:
+            flights = source.normalize(source.parse(raw), collected_at="2026-06-06T12:00:00")
 
         self.assertEqual(len(flights), 1)
+        self.assertFalse(
+            any(str(call.args[0]).startswith("[机型码收集]") for call in log.call_args_list)
+        )
         flight = flights[0]
         self.assertEqual(flight["flight_no"], "KN5978")
         self.assertEqual(flight["price"], 527)

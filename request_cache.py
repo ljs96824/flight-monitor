@@ -13,6 +13,7 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from domestic_fare_rules import AIRCRAFT_NAMES, re_match_aircraft_code
 from filename_utils import sanitize_filename
 from log_utils import safe_log
 import observations_store
@@ -24,6 +25,7 @@ DEFAULT_TTL_SECONDS = 15 * 60
 _request_cache: dict[tuple, dict] = {}
 _disabled_persistent_dirs: set[str] = set()
 _fetch_trigger_counts: dict[tuple, int] = {}
+_equipment_summary: dict[tuple[str, str], dict] = {}
 
 
 def _empty_stats() -> dict:
@@ -152,6 +154,67 @@ def _positive_price_flights(result) -> list[dict]:
     return priced
 
 
+def _flight_equipment_values(flight: dict) -> list[str]:
+    raw_code = str(flight.get("aircraft_code") or flight.get("equipment") or "").strip()
+    if raw_code:
+        return [raw_code]
+
+    values = []
+    direct_name = str(flight.get("aircraft") or "").strip()
+    if direct_name:
+        values.append(direct_name)
+    for segment in flight.get("segments") or []:
+        if not isinstance(segment, dict):
+            continue
+        value = str(segment.get("aircraft_code") or segment.get("aircraft") or "").strip()
+        if value:
+            values.append(value)
+    return values
+
+
+def _unmapped_aircraft_code(value: str) -> str | None:
+    code = str(value or "").strip().upper()
+    if code in AIRCRAFT_NAMES:
+        return None
+    if 2 <= len(code) <= 4 and re_match_aircraft_code(code):
+        return code
+    return None
+
+
+def _record_equipment_summary(source_name: str, result) -> None:
+    if source_name not in {"juhe", "hasdata"}:
+        return
+    round_key = str(_current_stats_round_id or "standalone")
+    entry = _equipment_summary.setdefault(
+        (round_key, source_name),
+        {"combo_count": 0, "equipment": set(), "unmapped": set()},
+    )
+    flights = _positive_price_flights(result)
+    entry["combo_count"] += len(flights)
+    for flight in flights:
+        for value in _flight_equipment_values(flight):
+            normalized = str(value).strip().upper()
+            if not normalized:
+                continue
+            entry["equipment"].add(normalized)
+            unmapped = _unmapped_aircraft_code(normalized)
+            if unmapped:
+                entry["unmapped"].add(unmapped)
+
+
+def _flush_equipment_summary(round_id: str | None) -> None:
+    round_key = str(round_id or "standalone")
+    keys = sorted(key for key in _equipment_summary if key[0] == round_key)
+    for key in keys:
+        _, source_name = key
+        entry = _equipment_summary.pop(key)
+        unmapped = ",".join(sorted(entry["unmapped"]))
+        safe_log(
+            f"[机型码汇总] 源={source_name} 组合数={entry['combo_count']} "
+            f"机型种类={len(entry['equipment'])} 未映射机型=[{unmapped}]"
+        )
+
+
 def _record_observations_after_fetch(source, key: tuple, result, cabin_class: str) -> None:
     source_name = key[0]
     if source_name not in {"juhe", "hasdata"}:
@@ -251,6 +314,7 @@ def cached_fetch(
         f"\u65e5\u671f={key[3]} \u6e90={source_name} \u7b2c{trigger_count}\u6b21"
     )
     result = source.fetch(origin, dest, date_str, cabin_class)
+    _record_equipment_summary(source_name, result)
     _record_observations_after_fetch(source, key, result, cabin_class)
     stored = copy.deepcopy(result)
     _request_cache[key] = {
@@ -275,10 +339,12 @@ def start_request_cache_round(round_id: str) -> None:
     global _current_stats_round_id
     _stats.clear()
     _stats.update(_empty_stats())
+    _equipment_summary.clear()
     _current_stats_round_id = str(round_id or "") or None
 
 
 def print_request_cache_stats() -> None:
+    _flush_equipment_summary(_current_stats_round_id)
     safe_log(
         "[API统计] "
         f"round={_current_stats_round_id or 'unknown'}, "
@@ -307,4 +373,5 @@ def reset_request_cache(*, clear_memory: bool = True, reset_stats: bool = True) 
         _stats.update(_empty_stats())
         _process_stats.clear()
         _process_stats.update(_empty_stats())
+        _equipment_summary.clear()
         _current_stats_round_id = None
