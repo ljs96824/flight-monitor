@@ -65,7 +65,10 @@ class RouteTypeCrossBorderCardTest(unittest.TestCase):
                     "links": {"outbound": '<a href="https://example.com">Trip.com</a>'},
                 }
             ],
-            "source_stats": {"serpapi": {"count": 10, "route_type": "international"}},
+            "source_stats": {
+                "hasdata": {"count": 10, "route_type": "international"},
+                "juhe": {"count": 18, "route_type": "international"},
+            },
             "detail_url": "https://example.com/detail",
         }
 
@@ -78,7 +81,8 @@ class RouteTypeCrossBorderCardTest(unittest.TestCase):
         self.assertIn("非联程", body)
         self.assertIn("自行转机提行李", body)
         self.assertIn("国际票务提示", body)
-        self.assertIn("Google Flights 多源", body)
+        self.assertIn("主源:Google Flights(HasData)—10个方案", body)
+        self.assertIn("交叉/OTA:聚合数据—18个方案", body)
 
     def test_greater_china_email_shows_pass_permit_and_no_transit_visa_warning(self):
         flight = {
@@ -108,7 +112,10 @@ class RouteTypeCrossBorderCardTest(unittest.TestCase):
                     "links": {"main": '<a href="https://example.com">携程</a>'},
                 }
             ],
-            "source_stats": {"serpapi": {"count": 8, "route_type": "greater_china"}},
+            "source_stats": {
+                "hasdata": {"count": 8, "route_type": "greater_china"},
+                "juhe": {"count": 13, "route_type": "greater_china"},
+            },
             "detail_url": "https://example.com/detail",
         }
 
@@ -117,6 +124,8 @@ class RouteTypeCrossBorderCardTest(unittest.TestCase):
         self.assertIn("港澳通行证/台湾通行证", body)
         self.assertIn("签注", body)
         self.assertIn("国内OTA", body)
+        self.assertIn("主源:Google Flights(HasData)—8个方案", body)
+        self.assertIn("交叉/OTA:聚合数据—13个方案", body)
         self.assertNotIn("美国转机", body)
         self.assertNotIn("聚合数据(国内实时报价)", body)
 

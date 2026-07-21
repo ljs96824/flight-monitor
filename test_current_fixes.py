@@ -62,7 +62,8 @@ class CurrentFixesRegressionTest(unittest.TestCase):
         self.assertIn("\u00a52,760", body)
         self.assertIn("\u5355\u4eba\u5f80\u8fd4\u00a51,104\u00d72.5", body)
         self.assertIn("\u00a53,090", body)
-        self.assertIn("单人往返¥1,236 单人往返×2.5", body)
+        self.assertIn("单人往返¥1,104 单人往返×2.5", body)
+        self.assertNotIn("(单人往返¥1,236 单人往返×2.5)", body)
 
     def test_roundtrip_missing_combo_reports_collection_confidence(self):
         from plan_tracker import save_pushed_plans, track_plan_status

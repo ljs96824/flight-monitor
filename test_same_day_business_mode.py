@@ -1,3 +1,5 @@
+import contextlib
+import io
 import unittest
 
 
@@ -1034,23 +1036,27 @@ class SameDayBusinessModeTest(unittest.TestCase):
             }
         ]
 
-        result = analyze_round_trip(
-            {
-                "all_flights": outbound,
-                "hard_constraints": constraints,
-                "depart_date": "2026-06-19",
-            },
-            {
-                "all_flights": returns,
-                "hard_constraints": constraints,
-                "depart_date": "2026-06-19",
-            },
-        )
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            result = analyze_round_trip(
+                {
+                    "all_flights": outbound,
+                    "hard_constraints": constraints,
+                    "depart_date": "2026-06-19",
+                },
+                {
+                    "all_flights": returns,
+                    "hard_constraints": constraints,
+                    "depart_date": "2026-06-19",
+                },
+            )
 
         self.assertTrue(result["same_day_time_conflict"])
         self.assertEqual(result["top_combinations"], [])
         self.assertEqual(result["closest_same_day_outbound_options"][0]["flight_no"], "MU5099")
         self.assertNotEqual(result["closest_same_day_outbound_options"][0]["flight_no"], "CA1510")
+        self.assertIn("[排除诊断] 无推荐方案,不适用", stdout.getvalue())
+        self.assertNotIn("推荐方案是否超预算", stdout.getvalue())
 
     def test_same_day_earliest_alternative_uses_raw_valid_pool_not_price_display_pool(self):
         from analyzer import analyze_round_trip
@@ -2009,7 +2015,6 @@ class SameDayBusinessModeTest(unittest.TestCase):
         self.assertEqual(stream.getvalue().count("[\u53bb\u7a0b\u5230\u4f1a-\u65b0]"), 1)
 if __name__ == "__main__":
     unittest.main()
-
 
 
 

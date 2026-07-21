@@ -10,7 +10,7 @@ sys.modules.setdefault(
 
 
 class AirportComparisonGuardTest(unittest.TestCase):
-    def test_route_airports_string_does_not_crash_and_hides_comparison(self):
+    def test_route_airports_string_does_not_crash_and_keeps_reference(self):
         from notifier import _active_airport_combo_count, _should_show_airport_comparison
 
         payload = {
@@ -21,7 +21,7 @@ class AirportComparisonGuardTest(unittest.TestCase):
         }
 
         self.assertEqual(_active_airport_combo_count(payload), 0)
-        self.assertFalse(_should_show_airport_comparison(payload))
+        self.assertTrue(_should_show_airport_comparison(payload))
 
     def test_active_airports_from_route_info_count_as_multiple_combos(self):
         from notifier import _active_airport_combo_count, _should_show_airport_comparison

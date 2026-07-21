@@ -114,10 +114,11 @@ class EmailPlanTiersPriceConceptsTest(unittest.TestCase):
             "verify_price": 6847,
             "confidence": "\u4e2d\u9ad8",
             "is_roundtrip": True,
+            "route_type": "international",
             "freshness_minutes": 0,
             "source_stats": {
-                "serpapi": {"count": 10, "status": "\u6210\u529f"},
                 "hasdata": {"count": 11, "status": "\u6210\u529f"},
+                "juhe": {"count": 19, "status": "\u6210\u529f"},
                 "searchapi": {"count": 0, "status": "\u5931\u8d25 429"},
                 "travelpayouts": {"count": 0, "status": "\u5931\u8d25"},
                 "skyscanner": {"count": 0, "status": "\u5931\u8d25 429"},
@@ -158,7 +159,9 @@ class EmailPlanTiersPriceConceptsTest(unittest.TestCase):
 
         _, html = render_email(payload)
 
-        self.assertIn("主源:Google Flights 多源", html)
+        self.assertIn("主源:Google Flights(HasData)—11个方案", html)
+        self.assertIn("交叉/OTA:聚合数据—19个方案", html)
+        self.assertIn("入池价:按全局最低(global_min)", html)
         self.assertIn("行李/退改:Duffel 规则参考", html)
         self.assertIn("\u5019\u9009\u65b9\u6848:\u5df2\u53bb\u91cd\u5e76\u7b5b\u9009", html)
         self.assertIn("\u91c7\u96c6\u65f6\u95f4:\u521a\u521a\u91c7\u96c6", html)
@@ -186,9 +189,10 @@ class EmailPlanTiersPriceConceptsTest(unittest.TestCase):
             "verify_price": 6847,
             "confidence": "\u4e2d\u9ad8",
             "is_roundtrip": True,
+            "route_type": "international",
             "source_stats": {
-                "serpapi": {"count": 10, "status": "\u6210\u529f"},
                 "hasdata": {"count": 11, "status": "\u6210\u529f"},
+                "juhe": {"count": 19, "status": "\u6210\u529f"},
                 "after_dedup_by_cabin": {"count": 20, "status": "\u6210\u529f"},
                 "duffel": {"count": 78, "status": "\u6210\u529f"},
             },
@@ -353,7 +357,8 @@ class EmailPlanTiersPriceConceptsTest(unittest.TestCase):
         self.assertIn("\u4f60\u53ef\u4ee5:", html)
         self.assertIn("\u89e6\u53d1\u7c7b\u578b:\u4f4e\u4ef7\u7ebf\u7d22 | \u9700\u9a8c\u8bc1 | \u975e\u76f4\u63a5\u8d2d\u4e70", html)
         self.assertIn("\u89e6\u53d1\u539f\u56e0:\u641c\u7d22\u53c2\u8003\u4ef7\u8fdb\u5165\u7406\u60f3\u5165\u624b\u533a\u95f4,\u4f46\u9884\u4f30\u5b9e\u4ed8\u4ecd\u9700\u9a8c\u8bc1", html)
-        self.assertLess(html.index("\u53bb\u9a8c\u8bc1\u4ef7\u683c"), html.index("\u4ef7\u683c\u53e3\u5f84\u4e0e\u4fe1\u53f7"))
+        self.assertLess(html.index("行动面板"), html.index("\u4ef7\u683c\u53e3\u5f84\u4e0e\u4fe1\u53f7"))
+        self.assertNotIn("快速验证首选方案A", html)
         self.assertIn("\u65b9\u6848A \uff5c \u9996\u9009\u63a8\u8350 \uff5c \u66f4\u7701\u5fc3", html)
         self.assertIn("\u65b9\u6848A:\u76f4\u98de,\u7701\u5fc3", html)
         self.assertIn("\u65b9\u6848B \uff5c \u4f4e\u4ef7\u5907\u9009 \uff5c \u66f4\u4fbf\u5b9c\u4f46\u98ce\u9669\u66f4\u9ad8", html)
@@ -398,17 +403,22 @@ class EmailPlanTiersPriceConceptsTest(unittest.TestCase):
         _, email_html = render_email(payload)
         detail_html = render_detail_html(payload)
 
-        self.assertIn("\u5feb\u901f\u9a8c\u8bc1\u9996\u9009\u65b9\u6848A", email_html)
+        self.assertNotIn("\u5feb\u901f\u9a8c\u8bc1\u9996\u9009\u65b9\u6848A", email_html)
         self.assertIn("\u5f80\u8fd4\u7ec4\u5408", email_html)
-        self.assertIn("\u643a\u7a0b \u00a56,521", email_html)
+        self.assertIn("验证此方案", email_html)
         self.assertIn("\u643a\u7a0b", email_html)
         self.assertIn("https://ctrip.example", email_html)
         self.assertIn("\u98de\u732a", email_html)
         self.assertIn("https://fliggy.example", email_html)
         self.assertIn("\u53bb\u54ea\u513f", email_html)
         self.assertIn("https://qunar.example", email_html)
+        self.assertEqual(email_html.count("https://ctrip.example"), 1)
+        self.assertEqual(email_html.count("https://fliggy.example"), 1)
+        self.assertEqual(email_html.count("https://qunar.example"), 1)
         self.assertIn("<details", detail_html)
-        self.assertIn("\u53bb\u9a8c\u8bc1\u4ef7\u683c", detail_html)
+        self.assertIn("验证此方案", detail_html)
+        self.assertNotIn("快速验证首选方案A", detail_html)
+        self.assertEqual(detail_html.count("https://ctrip.example"), 1)
         self.assertIn("3\u4eba\u51fa\u884c", email_html)
 
 

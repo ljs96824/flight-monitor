@@ -4,12 +4,18 @@ import inspect
 import contextlib
 import io
 import unittest
+from unittest.mock import patch
 
 sys.modules.setdefault("httpx", types.SimpleNamespace(get=lambda *a, **k: None, post=lambda *a, **k: None))
 
 from analyzer import analyze_round_trip, build_excluded_roundtrip_combos, determine_push_type
 import email_notifier
-from notifier import _display_channel_price_rows, _email_detail_charts_body, render_email
+from notifier import (
+    _display_channel_price_rows,
+    _email_detail_charts_body,
+    build_notification_payload,
+    render_email,
+)
 
 
 def load_tests(loader, tests, pattern):
@@ -42,7 +48,7 @@ def test_push_type_uses_transaction_price_when_display_price_only_looks_good():
     assert all("100%" not in reason for reason in meta["reasons"])
 
 
-def test_email_no_primary_summary_uses_no_result_title_and_keeps_price_layers():
+def test_email_no_primary_uses_candidate_pool_reference_without_purchase_signals():
     payload = {
         "push_type": "值得验证",
         "route": "上海 → 大阪",
@@ -54,6 +60,29 @@ def test_email_no_primary_summary_uses_no_result_title_and_keeps_price_layers():
         "ideal_price": 7994,
         "max_price": 9000,
         "buy_condition": "支付页≤¥6,848且含托运行李",
+        "price_signal": {"label": "低价", "summary": "建议验证支付页价格"},
+        "execution_advice": {"label": "可验证购买", "summary": "预估实付价不高于验证价"},
+        "candidate_price_summary": {
+            "lowest": 932,
+            "count": 5,
+            "reason": "时间窗口不符",
+            "price_scope": "per_person_roundtrip",
+        },
+        "no_primary_reason": "本次无方案主因是【去程时间】:最早航班晚于到达上限。",
+        "no_primary_diagnosis": {
+            "primary_cause": "outbound_time",
+            "max_bottleneck": {
+                "label": "去程时间",
+                "count": 5,
+                "ratio": 100.0,
+                "pool_scope": "去程池",
+            },
+        },
+        "plan_status_change": {
+            "status": "partial_unavailable",
+            "msg": "上次推荐航班本次未获取到报价。",
+        },
+        "trend_summary": "近3次采集持平约暂无报价，建议验证支付页价格。",
         "confidence": "中高",
         "source_count": 2,
         "freshness_minutes": 15,
@@ -76,14 +105,105 @@ def test_email_no_primary_summary_uses_no_result_title_and_keeps_price_layers():
     subject, html = render_email(payload)
 
     assert "【无符合方案】上海 → 大阪｜提供0个备选" == subject
-    assert "当前判断：</b>值得验证，不建议直接下单" in html
-    assert "原因：</b>搜索参考价达标，但预估实付价高于验证购买价" in html
-    assert "搜索参考价：</b>¥6,522" in html
-    assert "预估实付价：</b>¥7,182" in html
-    assert "本次方案验证价：</b>支付页≤¥6,848" in html
-    assert "你的理想入手价：</b>¥7,994" in html
-    assert "最高可接受价：</b>¥9,000" in html
-    assert "当前价：</b>" not in html
+    assert "候选池参考" in html
+    assert "候选中最低¥932 单人往返(时间窗口不符,不可购)" in html
+    assert "理想入手价" in html and "¥7,994" in html
+    assert "最高可接受价" in html and "¥9,000" in html
+    assert "最大卡点:去程时间(去程池)排除最多(5个,占比100.0%)" in html
+    assert "上次方案航班本次未获报价,趋势暂缺" in html
+    assert "价格口径与信号" not in html
+    assert "执行建议" not in html
+    assert "预估实付价" not in html
+    assert "本次验证价" not in html
+    assert "本次方案验证价" not in html
+    assert "可验证购买" not in html
+    assert "建议验证支付页" not in html
+
+
+def test_no_primary_payload_clears_purchase_only_price_fields():
+    outbound = {
+        "flight_no": "MU5099",
+        "flight_combo": "MU5099",
+        "price": 932,
+        "departure_airport": "SHA",
+        "arrival_airport": "PEK",
+        "departure_time": "07:00",
+        "arrival_time": "09:15",
+        "departure_date": "2026-08-11",
+        "arrival_date": "2026-08-11",
+    }
+    return_flight = {
+        "flight_no": "MU5170",
+        "flight_combo": "MU5170",
+        "price": 2492,
+        "departure_airport": "PEK",
+        "arrival_airport": "SHA",
+        "departure_time": "21:00",
+        "arrival_time": "23:15",
+        "departure_date": "2026-08-11",
+        "arrival_date": "2026-08-11",
+    }
+    analysis = {
+        "all_flights": [outbound],
+        "return_analysis": {"all_flights": [return_flight]},
+        "round_trip_analysis": {
+            "top_combinations": [],
+            "same_day_time_conflict": True,
+            "total_min": 3424,
+            "filter_counts": {
+                "total_candidates": 2,
+                "valid_price_count": 2,
+                "outbound_collected": 1,
+                "return_collected": 1,
+                "after_meeting_outbound": 0,
+                "after_meeting_return": 1,
+                "return_after_lowerbound": 1,
+                "same_day_combos": 0,
+            },
+        },
+    }
+    route_info = {
+        "origin": "上海",
+        "destination": "北京",
+        "depart_date": "2026-08-11",
+        "return_date": "2026-08-11",
+        "round_trip": True,
+        "target_price": 1200,
+        "max_budget": 4000,
+    }
+    subscription = {
+        "id": "no-primary-purchase-signal",
+        "basic": {"route_type": "domestic", "passenger_count": 1},
+        "preferences": {"passengers": {"adult": 1, "child": 0, "elderly": 0, "infant": 0}},
+        "constraints": {
+            "same_day_round_trip": True,
+            "business_start": "10:30",
+            "business_end": "17:00",
+            "budget_scope": "per_person",
+            "max_budget": 4000,
+            "target_price": 1200,
+        },
+    }
+
+    with patch("notifier.get_last_push_price", return_value=None), patch(
+        "notifier.get_last_push_snapshot", return_value=None
+    ), patch("notifier.track_plan_status", return_value=None):
+        payload = build_notification_payload(
+            analysis,
+            outbound_analysis=analysis,
+            return_analysis=analysis["return_analysis"],
+            route_info=route_info,
+            subscription=subscription,
+        )
+
+    assert payload["recommended_plans"] == []
+    assert payload["display_price"] is None
+    assert payload["transaction_price"] is None
+    assert payload["verify_price"] is None
+    assert payload["budget_compare_price"] is None
+    assert payload["price_signal"] == {}
+    assert payload["execution_advice"] == {}
+    assert payload["purchase_budget_decision"]["status"] == "not_applicable"
 
 
 def test_email_roundtrip_excluded_single_leg_is_not_compared_to_roundtrip_total():

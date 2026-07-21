@@ -202,22 +202,21 @@ class SourceWeightingTest(unittest.TestCase):
         self.assertEqual(flight["flight_combo"], "BR705+BR182")
         self.assertEqual(flight["data_source"], "hasdata+juhe")
 
-    def test_email_source_body_shows_domestic_primary_and_google_cross_check(self):
+    def test_email_source_body_shows_domestic_primary_only(self):
         body = _email_source_body(
             {
                 "route_type": "domestic",
                 "source_stats": {
                     "juhe": {"count": 12, "status": "成功", "role": "primary"},
-                    "serpapi": {"count": 8, "status": "成功", "role": "cross_check"},
                     "duffel": {"count": 78, "status": "成功（仅用于行李退改信息）"},
                 },
                 "collected_at": "2026-06-06T12:00:00",
             }
         )
 
-        self.assertIn("主源:聚合数据", body)
-        self.assertIn("交叉验证:Google Flights", body)
-        self.assertIn("国内航线以聚合数据", body)
+        self.assertIn("主源:聚合数据(Juhe)—12个方案", body)
+        self.assertNotIn("Google Flights", body)
+        self.assertIn("国内航线按当前源策略以聚合数据为搜索源", body)
 
 
 if __name__ == "__main__":

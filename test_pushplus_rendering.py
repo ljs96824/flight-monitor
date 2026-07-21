@@ -435,7 +435,7 @@ class PushPlusRenderingTest(unittest.TestCase):
         detail_html = render_detail_html(payload)
 
         self.assertIn("【无符合方案】", subject)
-        self.assertLess(email_html.index("可选备选方案"), email_html.index("价格口径与信号"))
+        self.assertLess(email_html.index("可选备选方案"), email_html.index("候选池参考"))
         self.assertLess(detail_html.index("可选备选方案"), detail_html.index("为什么提醒你"))
 
     def test_same_day_reserve_rendering_uses_breakdown_single_source(self):
@@ -628,7 +628,7 @@ class PushPlusRenderingTest(unittest.TestCase):
             }
         )
 
-        self.assertIn("\u5019\u9009\u4e2d\u6700\u4f4e\u00a52,551 \u5355\u4eba\u5f80\u8fd4(\u4f46\u8d85\u51fa\u9884\u7b97)", text)
+        self.assertIn("候选中最低¥2,551 单人往返(超出预算,不可购)", text)
         self.assertNotIn("?", text)
 
 
@@ -647,7 +647,7 @@ class PushPlusRenderingTest(unittest.TestCase):
             }
         )
 
-        self.assertIn("\u5019\u9009\u4e2d\u6700\u4f4e\u00a52,551 \u5355\u4eba\u5f80\u8fd4(\u4f46\u4e0d\u6ee1\u8db3\u5f53\u524d\u7ea6\u675f)", text)
+        self.assertIn("候选中最低¥2,551 单人往返(不满足当前约束,不可购)", text)
         self.assertNotIn("?", text)
 
     def test_candidate_price_summary_repairs_legacy_question_mark_budget_reason(self):
@@ -667,7 +667,7 @@ class PushPlusRenderingTest(unittest.TestCase):
             }
         )
 
-        self.assertIn("\u5019\u9009\u4e2d\u6700\u4f4e\u00a52,551 \u5355\u4eba\u5f80\u8fd4(\u4f46\u8d85\u51fa\u9884\u7b97)", text)
+        self.assertIn("候选中最低¥2,551 单人往返(超出预算,不可购)", text)
         self.assertNotIn("?", text)
 
 if __name__ == "__main__":

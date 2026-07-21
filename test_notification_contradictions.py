@@ -370,9 +370,10 @@ class NotificationContradictionsTest(unittest.TestCase):
         self.assertIn("方案A ｜ 首选推荐", html)
         self.assertIn("方案B ｜ 次选方案", html)
         self.assertNotIn("方案B ｜ 首选推荐", html)
-        self.assertEqual(html.count("快速验证首选方案A"), 1)
+        self.assertNotIn("快速验证首选方案A", html)
+        self.assertEqual(html.count("https://example.com/a"), 1)
 
-    def test_single_airport_combo_hides_airport_comparison(self):
+    def test_single_airport_combo_is_labeled_as_reference(self):
         payload = {
             "push_type": "值得验证",
             "route": "上海 → 北京",
@@ -402,6 +403,7 @@ class NotificationContradictionsTest(unittest.TestCase):
         _, html = render_email(payload)
 
         self.assertNotIn("机场选择对比", html)
+        self.assertIn("机场参考", html)
 
 
 if __name__ == "__main__":

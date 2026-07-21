@@ -5,7 +5,7 @@ import unittest
 
 sys.modules.setdefault("httpx", types.SimpleNamespace(get=lambda *a, **k: None, post=lambda *a, **k: None))
 
-from analyzer import build_excluded_roundtrip_combos
+from analyzer import build_excluded_roundtrip_combos, determine_push_type
 from notifier import (
     _email_channel_picker,
     _email_detail_charts_body,
@@ -490,13 +490,17 @@ class NotificationNumericScopesTest(unittest.TestCase):
 
         _subject, email_html = render_email(payload)
         action_panel = email_html[email_html.find("行动面板"):email_html.find("价格口径与信号")]
+        plan_a = email_html[email_html.find("方案A"):email_html.find("方案B")]
         plan_b = email_html[email_html.find("方案B"):]
         operation_links = email_html[email_html.rfind("操作链接"):]
         push_text = render_pushplus(payload)
 
-        self.assertIn("快速验证首选方案A", action_panel)
-        self.assertIn("a-out-ctrip", action_panel)
+        self.assertNotIn("快速验证首选方案A", action_panel)
+        self.assertNotIn("a-out-ctrip", action_panel)
         self.assertNotIn("b-out-ctrip", action_panel)
+        self.assertIn("验证此方案", plan_a)
+        self.assertIn("a-out-ctrip", plan_a)
+        self.assertIn("a-ret-airline", plan_a)
         self.assertIn("验证此方案", plan_b)
         self.assertIn("b-out-ctrip", plan_b)
         self.assertIn("b-ret-airline", plan_b)
@@ -976,6 +980,128 @@ class NotificationNumericScopesTest(unittest.TestCase):
         self.assertIn("\u5bf9\u6bd4\u63a8\u8350\u65b9\u6848", body)
         self.assertIn("\u63a8\u835020:30", body)
         self.assertNotIn("\u5b8c\u6574\u6392\u9664\u65b9\u6848\u8be6\u60c5\u89c1\u7f51\u9875", body)
+
+    def test_trigger_reason_uses_budget_compare_price_for_ideal_gap(self):
+        meta = determine_push_type(
+            8931,
+            target_price=6000,
+            max_budget=8000,
+            analysis_result={
+                "decision_prices": {
+                    "display_price": 42422,
+                    "budget_compare_price": 8931,
+                    "budget_compare_scope": "per_person_roundtrip",
+                }
+            },
+        )
+
+        reasons = " | ".join(meta["reasons"])
+        self.assertIn("距离理想入手价还差¥2,931", reasons)
+        self.assertNotIn("¥36,422", reasons)
+
+    def test_excluded_budget_basis_labels_all_passenger_conversion(self):
+        outbound = {
+            "flight": {"flight_combo": "MU225", "price": 3000, "stops": 0},
+            "price": 3000,
+            "excluded": True,
+            "reason": "时间窗口不符",
+        }
+        ret = {
+            "flight": {"flight_combo": "JL891", "price": 2000, "stops": 0},
+            "price": 2000,
+            "excluded": False,
+        }
+
+        combos = build_excluded_roundtrip_combos(
+            {"excluded_flights": [outbound]},
+            {"all_flights": [ret]},
+            recommended_total=42422,
+            max_budget=38000,
+            constraints={
+                "max_budget": 8000,
+                "budget_scope": "per_person",
+                "max_budget_scope": "per_person",
+            },
+            passengers={"adult": 2, "child": 1, "elderly": 2, "infant": 0},
+            route_type="international",
+        )
+
+        self.assertEqual(len(combos), 1)
+        basis = " ".join(combos[0]["exclusion_basis"])
+        self.assertIn("最高可接受价¥38,000(全员,=单人¥8,000×4.75)", basis)
+
+    def test_roundtrip_effective_cost_uses_single_person_ticket_scope(self):
+        plan = {
+            "is_roundtrip": True,
+            "price": 42422,
+            "single_adult_price": 8931,
+            "passenger_pricing": {
+                "applies": True,
+                "factor": 4.75,
+                "passengers": {"adult": 2, "child": 1, "elderly": 2, "infant": 0},
+                "route_type": "international",
+            },
+            "outbound_flight": {
+                "effective_cost": {
+                    "ticket_price": 4805,
+                    "transport_cost": 260,
+                    "time_cost": 206,
+                    "effective_cost": 5271,
+                }
+            },
+            "return_flight": {
+                "effective_cost": {
+                    "ticket_price": 4126,
+                    "transport_cost": 260,
+                    "time_cost": 206,
+                    "effective_cost": 4592,
+                }
+            },
+        }
+
+        line = _plan_effective_cost_line(plan)
+
+        self.assertIn(
+            "约¥9,863=机票¥8,931(单人往返)+机场交通约¥520+时间成本约¥412",
+            line,
+        )
+        self.assertNotIn("机票¥42,422", line)
+
+    def test_calendar_lowest_parenthesis_uses_lowest_row_unit_price(self):
+        payload = {
+            "is_roundtrip": True,
+            "passenger_pricing": {
+                "applies": True,
+                "factor": 3,
+                "passenger_count": 3,
+                "passenger_label": "3成人",
+                "passengers": {"adult": 3, "child": 0, "elderly": 0, "infant": 0},
+                "single_adult_price": 1254,
+            },
+            "price_calendar": {
+                "scope": "roundtrip",
+                "return_date": "2026-07-31",
+                "rows": [
+                    {
+                        "date": "2026-07-28",
+                        "weekday": "周二",
+                        "min_price": 1135,
+                        "lowest": True,
+                    },
+                    {
+                        "date": "2026-07-31",
+                        "weekday": "周五",
+                        "min_price": 1254,
+                        "selected": True,
+                    },
+                ],
+            },
+        }
+
+        body = _email_price_calendar_body(payload)
+
+        self.assertIn("(单人往返¥1,135 单人往返×3)", body)
+        self.assertNotIn("(单人往返¥1,254 单人往返×3)", body)
 
 
 if __name__ == "__main__":

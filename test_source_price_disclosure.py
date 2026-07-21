@@ -20,10 +20,7 @@ from notifier import (
 )
 
 
-DISCLOSURE = (
-    "渠道参考价:Google CNY12137 / OTA CNY4153,"
-    "渠道价差较大,运价条款可能不同,以支付页为准"
-)
+DISCLOSURE = "渠道价差&gt;15%"
 
 
 class SourcePriceDisclosureTest(unittest.TestCase):
@@ -129,9 +126,9 @@ class SourcePriceDisclosureTest(unittest.TestCase):
         detail_html = render_detail_html(payload)
         pushplus_html = render_pushplus(payload)
 
-        self.assertNotIn("渠道参考价:Google", email_html)
-        self.assertNotIn("渠道参考价:Google", detail_html)
-        self.assertNotIn("渠道参考价:Google", pushplus_html)
+        self.assertNotIn(DISCLOSURE, email_html)
+        self.assertNotIn(DISCLOSURE, detail_html)
+        self.assertNotIn(DISCLOSURE, pushplus_html)
 
     def test_primary_roundtrip_plan_always_shows_leg_source_prices(self):
         outbound = {

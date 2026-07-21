@@ -23,3 +23,5 @@ Thumbs.db
 data/observations.sqlite3
 analytics/out/
 data/*.sqlite3.bak
+before_*.json
+after_*.json

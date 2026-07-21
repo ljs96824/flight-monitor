@@ -18,7 +18,14 @@ from airport_logistics import (
 )
 from on_time_data import estimate_punctuality
 from price_estimator import build_passenger_price_breakdown, build_price_tiers, calc_transaction_price
-from pricing import assert_same_caliber, budget_to_pp, caliber_label, itinerary_price_pp, price_in_scope
+from pricing import (
+    assert_same_caliber,
+    budget_to_pp,
+    caliber_label,
+    itinerary_price_pp,
+    passenger_rate_sum,
+    price_in_scope,
+)
 from price_calendar import (
     analyze_date_savings as _calendar_date_savings,
     analyze_row_savings as _calendar_row_savings,
@@ -6427,11 +6434,9 @@ def _flight_airline_code(flight: dict | None) -> str:
 
 def _is_domestic_flight(flight: dict | None) -> bool:
     flight = flight or {}
-    if str(flight.get("route_type") or "").lower() == "domestic":
-        return True
-    data_source = str(flight.get("data_source") or flight.get("source") or "").lower()
-    if "juhe" in data_source:
-        return True
+    route_type = str(flight.get("route_type") or "").lower()
+    if route_type:
+        return route_type == "domestic"
     try:
         from sources.aggregator import is_domestic_route
 
@@ -6632,25 +6637,50 @@ def enrich_travel_risk_and_cost(flight: dict, preferences: dict | None = None) -
     return flight
 
 
-def build_airport_cost_comparison(flights: list[dict], limit: int = 4) -> list[dict]:
-    """Compare representative effective cost by departure/arrival airport pair."""
+def build_airport_cost_comparison(
+    flights: list[dict],
+    preferences: dict | None = None,
+    limit: int = 4,
+) -> list[dict]:
+    """按机场组合保留最低有效成本，并携带票价来源和采集时间。"""
     best_by_pair = {}
     for flight in flights or []:
         effective = flight.get("effective_cost") or {}
         value = _to_float(effective.get("effective_cost"))
         if value is None:
+            effective = calc_effective_cost(flight, preferences or {})
+            value = _to_float(effective.get("effective_cost"))
+        if value is None:
             continue
         dep, arr = _flight_airports(flight)
+        if not dep or not arr:
+            continue
         key = (dep, arr)
         current = best_by_pair.get(key)
         if not current or value < current["effective_cost"]:
+            note = "；".join(flight.get("logistics_notes") or [])
+            if not note:
+                note = str(effective.get("note") or "").strip()
             best_by_pair[key] = {
                 "departure_airport": dep,
                 "arrival_airport": arr,
                 "ticket_price": _to_float(flight.get("price")),
                 "effective_cost": value,
-                "note": "；".join(flight.get("logistics_notes") or []),
+                "note": note,
                 "flight_no": flight.get("flight_no") or flight.get("flight_combo"),
+                "price_source": (
+                    flight.get("price_source")
+                    or flight.get("source")
+                    or flight.get("data_source")
+                    or ""
+                ),
+                "data_source": flight.get("data_source") or flight.get("source") or "",
+                "collected_at": (
+                    flight.get("collected_at")
+                    or flight.get("snapshot_time")
+                    or flight.get("fetched_at")
+                    or ""
+                ),
             }
     return sorted(best_by_pair.values(), key=lambda item: item["effective_cost"])[:limit]
 
@@ -6714,7 +6744,10 @@ def verify_fare_rules(flight, hard_constraints):
             matches.append("同航司中转，大概率联程票")
 
     if fare_rules.get("source") == "国内标准规则推断":
-        matches.append("国内标准规则推断，具体条款以支付页为准")
+        if _is_domestic_flight(flight):
+            matches.append("国内标准规则推断，具体条款以支付页为准")
+        else:
+            matches.append("标准规则推断(国际线)，具体条款以支付页为准")
 
     if not issues:
         match_level = "full"
@@ -7559,6 +7592,7 @@ def _no_result_max_bottleneck(reason_counts: dict, total: int) -> dict:
         "label": labels[key],
         "count": count,
         "ratio": round(count / denominator * 100, 1),
+        "pool_scope": "双向候选池",
     }
 
 
@@ -7821,6 +7855,7 @@ def build_no_result_diagnosis(
         if capped_reasons.get("direct"):
             reason_parts.append("\u76f4\u98de\u8981\u6c42\u4e0d\u7b26")
         summary["reason"] = " / ".join(reason_parts) or "\u4e0d\u6ee1\u8db3\u7ea6\u675f"
+        summary["price_scope"] = "per_person_oneway"
 
     strict_same_day_reason = None
     def _stage_int(value):
@@ -7843,9 +7878,31 @@ def build_no_result_diagnosis(
             )
             strict_same_day_reason = f"本次无方案主因是【去程时间】:去程窗口内0个可选;{return_clause};预算在去程时间之后判断。剩余0个完全匹配。"
             counts["primary_cause"] = "outbound_time"
+            outbound_total = _stage_int(stage_counts.get("outbound_collected"))
+            if outbound_total is None:
+                outbound_total = valid_price_count
+            blocked = max(0, outbound_total - max(0, outbound_ok))
+            counts["max_bottleneck"] = {
+                "key": "outbound_time",
+                "label": "去程时间",
+                "count": blocked,
+                "ratio": round(blocked / max(outbound_total, 1) * 100, 1),
+                "pool_scope": "去程池",
+            }
         elif return_ok is not None and return_ok <= 0:
             strict_same_day_reason = "本次无方案主因是【返程时间】:去程窗口已有可选,但返程下限后无可选航班。剩余0个完全匹配。"
             counts["primary_cause"] = "return_time"
+            return_total = _stage_int(stage_counts.get("return_collected"))
+            if return_total is None:
+                return_total = valid_price_count
+            blocked = max(0, return_total - max(0, return_ok))
+            counts["max_bottleneck"] = {
+                "key": "return_time",
+                "label": "返程时间",
+                "count": blocked,
+                "ratio": round(blocked / max(return_total, 1) * 100, 1),
+                "pool_scope": "返程池",
+            }
         elif after_budget_count is not None and after_budget_count <= 0:
             if summary.get("primary_cause") == "budget" and summary.get("lowest") is not None:
                 lowest = _to_float(summary.get("lowest"))
@@ -7871,6 +7928,15 @@ def build_no_result_diagnosis(
                 budget_text = f"¥{max_budget:,.0f}" if max_budget else "当前预算"
                 strict_same_day_reason = f"本次无方案主因是【预算】:去程和返程时间均有可选,但完整往返组合超过{budget_text}。剩余0个完全匹配。"
             counts["primary_cause"] = "budget"
+            combo_total = _stage_int(stage_counts.get("same_day_combos")) or 0
+            blocked = max(0, combo_total - max(0, after_budget_count))
+            counts["max_bottleneck"] = {
+                "key": "budget",
+                "label": "预算",
+                "count": blocked,
+                "ratio": round(blocked / max(combo_total, 1) * 100, 1),
+                "pool_scope": "完整往返组合池",
+            }
     counts["reason"] = strict_same_day_reason or diagnose_no_result(counts, constraints)
     safe_reason = str(counts["reason"])
     print(f"[无方案理由诊断] diagnose_no_result返回={safe_reason}")
@@ -7938,6 +8004,8 @@ def determine_push_type(
     analysis_result = analysis_result or {}
     decision_prices = analysis_result.get("decision_prices") or {}
     display_price = _to_float(decision_prices.get("display_price")) or current
+    budget_compare_price = _to_float(decision_prices.get("budget_compare_price"))
+    reason_price = budget_compare_price if budget_compare_price is not None else display_price
     transaction_price = _to_float(decision_prices.get("transaction_price"))
     verify_price = _to_float(decision_prices.get("verify_price"))
     prices = sorted(_flatten_price_history(price_history))
@@ -7997,11 +8065,11 @@ def determine_push_type(
     reasons = []
     if display_reaches_verify and transaction_over_verify:
         reasons.append("搜索参考价达标，但预估实付价高于验证购买价")
-    if target and display_price is not None:
-        if display_price <= target:
+    if target and reason_price is not None:
+        if reason_price <= target:
             reasons.append("搜索参考价进入你的理想入手区间")
         else:
-            reasons.append(f"搜索参考价距离理想入手价还差¥{display_price - target:,.0f}")
+            reasons.append(f"搜索参考价距离理想入手价还差¥{reason_price - target:,.0f}")
     if last_price and display_price is not None:
         diff = display_price - last_price
         if diff < 0:
@@ -8276,8 +8344,31 @@ def _has_stale_primary_price(analysis_result: dict) -> bool:
 
 
 def _has_cheaper_nearby_date(analysis_result: dict, current: float | None) -> bool:
+    calendar = analysis_result.get("price_calendar") or {}
+    calendar_rows = calendar.get("rows") or [] if isinstance(calendar, dict) else []
+    if calendar_rows:
+        selected = next(
+            (
+                row
+                for row in calendar_rows
+                if isinstance(row, dict) and row.get("selected")
+            ),
+            None,
+        )
+        selected_price = _to_float((selected or {}).get("min_price"))
+        if selected_price is not None:
+            return any(
+                (_to_float(row.get("min_price")) or float("inf")) < selected_price
+                for row in calendar_rows
+                if isinstance(row, dict) and row is not selected
+            )
+
     if current is None:
         return False
+    is_roundtrip = bool(
+        analysis_result.get("round_trip")
+        or analysis_result.get("round_trip_analysis")
+    )
     candidates = []
     nearby = analysis_result.get("nearby_dates") or analysis_result.get("nearby_date_prices") or {}
     if isinstance(nearby, dict):
@@ -8286,8 +8377,18 @@ def _has_cheaper_nearby_date(analysis_result: dict, current: float | None) -> bo
         candidates = nearby
     for item in candidates:
         if isinstance(item, dict):
-            price = _to_float(item.get("min_price") or item.get("price"))
+            item_scope = str(item.get("scope") or "").strip().lower()
+            has_roundtrip_price = item.get("roundtrip_total") not in (None, "", 0)
+            if is_roundtrip and not (has_roundtrip_price or item_scope == "roundtrip"):
+                continue
+            price = _to_float(
+                item.get("roundtrip_total")
+                or item.get("min_price")
+                or item.get("price")
+            )
         else:
+            if is_roundtrip:
+                continue
             price = _to_float(item)
         if price and price < current:
             return True
@@ -8405,8 +8506,16 @@ def _filter_constraint_detail(flight: dict, preferences: dict) -> tuple[str, str
     if reason == "超过最高可接受价格":
         return (
             "max_budget",
-            f"price={_filter_detail_number(flight.get('price'))},"
-            f"max_budget={_filter_detail_number(preferences.get('max_budget') or preferences.get('budget'))}",
+            (
+                f"price={_filter_detail_number(flight.get('price'))},"
+                f"max_budget={_filter_detail_number(preferences.get('max_budget') or preferences.get('budget'))}"
+            ),
+        )
+    if "行李" in reason or "托运" in reason:
+        baggage = ((flight.get("fare_rules") or {}).get("baggage") or {})
+        return (
+            "need_baggage",
+            f"included={baggage.get('included')},checked_kg={baggage.get('checked_kg')}",
         )
     if "起飞时段" in reason:
         return "departure_slots", _filter_detail_times(flight)
@@ -8442,6 +8551,20 @@ def _filter_constraint_detail(flight: dict, preferences: dict) -> tuple[str, str
         f"price={_filter_detail_number(flight.get('price'))},"
         f"stops={_stops_count(flight)},{_filter_detail_times(flight)}"
     )
+
+
+def _attach_filter_reason_details(
+    flights: list[dict],
+    preferences: dict | None,
+) -> list[dict]:
+    """把过滤日志使用的精确拒因同步存入排除方案数据。"""
+    for flight in flights or []:
+        if not isinstance(flight, dict):
+            continue
+        constraint, value = _filter_constraint_detail(flight, preferences or {})
+        flight["filter_reason_code"] = constraint
+        flight["filter_reason_value"] = value
+    return flights
 
 
 def _log_low_price_filter_rejections(
@@ -8487,7 +8610,10 @@ def _log_low_price_filter_rejections(
         rejected = excluded_by_identity.get(_filter_detail_identity(flight))
         if not rejected:
             continue
-        constraint, value = _filter_constraint_detail(rejected, preferences or {})
+        constraint = rejected.get("filter_reason_code")
+        value = rejected.get("filter_reason_value")
+        if not constraint:
+            constraint, value = _filter_constraint_detail(rejected, preferences or {})
         combo = str(rejected.get("flight_combo") or rejected.get("flight_no") or "unknown")
         seen_key = (combo, constraint, value)
         if seen_key in _filter_detail_seen:
@@ -8968,6 +9094,8 @@ def _excluded_flight_summary(flights: list[dict]) -> list[dict]:
                 "airline_summary": flight.get("airline_summary")
                 or " / ".join(flight.get("airlines") or []),
                 "reason": flight.get("exclude_reason") or "不符合当前筛选条件",
+                "filter_reason_code": flight.get("filter_reason_code") or "",
+                "filter_reason_value": flight.get("filter_reason_value") or "",
                 "scope": flight.get("scope") or flight.get("direction") or "single_leg",
                 "route_summary": flight.get("route_summary") or "",
                 "segments": flight.get("segments") or [],
@@ -9302,6 +9430,7 @@ def analyze_all_flights(
         usable_flights, merged_preferences
     )
     excluded_flights = direct_policy_excluded + preference_excluded
+    _attach_filter_reason_details(excluded_flights, merged_preferences)
     _log_low_price_filter_rejections(
         filter_input_pool,
         excluded_flights,
@@ -9633,7 +9762,10 @@ def analyze_all_flights(
         "travel_profile_explanation": travel_profile_explanation(travel_profile),
         "recommendation_basis": build_recommendation_basis(travel_profile),
         "alert_policy": alert_policy,
-        "airport_cost_comparison": build_airport_cost_comparison(usable_flights),
+        "airport_cost_comparison": build_airport_cost_comparison(
+            filter_input_pool,
+            merged_preferences,
+        ),
         "mode": mode,
         "priorities": priority_config,
         "qualified_flights": qualified_flights,
@@ -10253,7 +10385,12 @@ def _duration_text_from_minutes(minutes: int | float | None) -> str:
     return f"{mins}分钟"
 
 
-def _roundtrip_exclusion_basis(constraints: dict | None, max_budget=None) -> list[str]:
+def _roundtrip_exclusion_basis(
+    constraints: dict | None,
+    max_budget=None,
+    passengers: dict | None = None,
+    route_type: str | None = None,
+) -> list[str]:
     constraints = constraints or {}
     basis = []
     if constraints.get("same_day_round_trip"):
@@ -10275,7 +10412,23 @@ def _roundtrip_exclusion_basis(constraints: dict | None, max_budget=None) -> lis
         basis.append("必须含托运")
     max_budget_value = _to_float(max_budget)
     if max_budget_value is not None:
-        basis.append(f"最高可接受价¥{max_budget_value:,.0f}")
+        max_scope = normalize_budget_scope(
+            constraints.get("max_budget_scope") or constraints.get("budget_scope")
+        )
+        input_max_budget = _to_float(
+            constraints.get("max_budget")
+            or constraints.get("budget")
+            or constraints.get("price_ceiling")
+        )
+        if max_scope == "per_person" and input_max_budget is not None and passengers:
+            factor = passenger_rate_sum(passengers, route_type)
+            basis.append(
+                f"最高可接受价¥{max_budget_value:,.0f}"
+                f"(全员,=单人¥{input_max_budget:,.0f}×{factor:g})"
+            )
+        else:
+            scope_label = "全员往返" if max_scope == "all" else "单人往返"
+            basis.append(f"最高可接受价¥{max_budget_value:,.0f}({scope_label})")
     return basis
 
 
@@ -10462,10 +10615,29 @@ def build_excluded_roundtrip_combos(
     for outbound in outbound_candidates:
         for return_item in return_candidates:
             reasons = []
+            filter_reasons = []
             if outbound.get("excluded") and outbound.get("reason"):
                 reasons.append(f"去程：{outbound['reason']}")
+                outbound_flight = outbound.get("flight") or {}
+                if outbound_flight.get("filter_reason_code"):
+                    filter_reasons.append(
+                        {
+                            "direction": "去程",
+                            "code": outbound_flight.get("filter_reason_code"),
+                            "value": outbound_flight.get("filter_reason_value") or "",
+                        }
+                    )
             if return_item.get("excluded") and return_item.get("reason"):
                 reasons.append(f"返程：{return_item['reason']}")
+                return_flight = return_item.get("flight") or {}
+                if return_flight.get("filter_reason_code"):
+                    filter_reasons.append(
+                        {
+                            "direction": "返程",
+                            "code": return_flight.get("filter_reason_code"),
+                            "value": return_flight.get("filter_reason_value") or "",
+                        }
+                    )
             if not reasons:
                 continue
 
@@ -10520,11 +10692,17 @@ def build_excluded_roundtrip_combos(
                 "diff": recommended_total - comparison_total,
                 "reasons": reasons,
                 "reason": "；".join(reasons),
+                "filter_reasons": filter_reasons,
                 "recommended_price": recommended_total,
                 "max_budget": budget_context.get("max_budget"),
                 "recommended_over_budget": budget_context.get("recommended_over_budget"),
                 "all_over_budget_reference": budget_context.get("all_over_budget_reference"),
-                "exclusion_basis": _roundtrip_exclusion_basis(constraints, max_budget),
+                "exclusion_basis": _roundtrip_exclusion_basis(
+                    constraints,
+                    max_budget,
+                    normalized_passengers,
+                    route_type,
+                ),
             }
             combo_payload["comparison_points"] = _roundtrip_comparison_points(
                 combo_payload,
@@ -10979,17 +11157,21 @@ def analyze_round_trip(
         execution_grade,
     )
     combo_max_budget = summary_budget_total
-    excluded_roundtrip_combos = build_excluded_roundtrip_combos(
-        outbound_analysis,
-        return_analysis,
-        budget_price,
-        3,
-        max_budget=combo_max_budget,
-        constraints=combined_preferences,
-        recommended_combo=combinations[0] if combinations else None,
-        passengers=pricing_passengers,
-        route_type=pricing_route_type,
-    )
+    if combinations:
+        excluded_roundtrip_combos = build_excluded_roundtrip_combos(
+            outbound_analysis,
+            return_analysis,
+            budget_price,
+            3,
+            max_budget=combo_max_budget,
+            constraints=combined_preferences,
+            recommended_combo=combinations[0],
+            passengers=pricing_passengers,
+            route_type=pricing_route_type,
+        )
+    else:
+        safe_log("[排除诊断] 无推荐方案,不适用")
+        excluded_roundtrip_combos = []
 
     return {
         "outbound_min": outbound_min,

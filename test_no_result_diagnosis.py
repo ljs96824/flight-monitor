@@ -44,6 +44,8 @@ class NoResultDiagnosisTest(unittest.TestCase):
             {
                 "total_candidates": 10,
                 "valid_price_count": 10,
+                "outbound_collected": 5,
+                "return_collected": 5,
                 "after_meeting_outbound": 0,
                 "after_meeting_return": 4,
                 "after_meeting_window": 4,
@@ -54,6 +56,9 @@ class NoResultDiagnosisTest(unittest.TestCase):
         self.assertEqual(result["counts"]["after_meeting_window"], 0)
         self.assertEqual(result["counts"]["reason_counts"]["meeting"], 10)
         self.assertEqual(result["counts"]["primary_cause"], "outbound_time")
+        self.assertEqual(result["counts"]["max_bottleneck"]["pool_scope"], "去程池")
+        self.assertEqual(result["counts"]["max_bottleneck"]["count"], 5)
+        self.assertEqual(result["counts"]["max_bottleneck"]["ratio"], 100.0)
         self.assertIn("本次无方案主因是【去程时间】", result["reason"])
         self.assertIn("返程有4个可选,非阻塞", result["reason"])
         self.assertNotIn("时间窗口排除最多", result["reason"])

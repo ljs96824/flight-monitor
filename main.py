@@ -1122,17 +1122,13 @@ def collect_nearby_dates(
         }
     ]
     searched_offsets = {0}
-    primary_sources = [
-        source
-        for source in aggregator.search_sources
-        if getattr(source, "name", "").lower() == "serpapi"
-    ] or aggregator.search_sources[:1]
+    calendar_sources = list(aggregator.search_sources)
     route_type = _subscription_route_type(
         sub,
         _subscription_airports(sub, "origin_airports_active", "origin_airports", "origin"),
         _subscription_airports(sub, "destination_airports_active", "destination_airports", "destination"),
     )
-    primary_aggregator = FlightAggregator(primary_sources, [], route_type=route_type)
+    primary_aggregator = FlightAggregator(calendar_sources, [], route_type=route_type)
 
     for stage in [1, 3, 7]:
         if days_range < stage:
