@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
+from typing import Iterator
 
 
 BASE_DIR = Path(__file__).parent
@@ -42,10 +44,15 @@ FLIGHT_DETAIL_COLUMNS = [
 ]
 
 
-def _connect() -> sqlite3.Connection:
+@contextmanager
+def _connect() -> Iterator[sqlite3.Connection]:
     connection = sqlite3.connect(DB_PATH)
     connection.row_factory = sqlite3.Row
-    return connection
+    try:
+        with connection:
+            yield connection
+    finally:
+        connection.close()
 
 
 def _rows_to_dicts(rows: list[sqlite3.Row]) -> list[dict]:

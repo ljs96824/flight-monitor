@@ -1,8 +1,11 @@
 """Run the minimal subscription form service."""
 
-from log_utils import configure_stdio_utf8
+from pathlib import Path
 
-configure_stdio_utf8()
+from log_utils import configure_run_logging
+
+
+configure_run_logging(Path(__file__).resolve().parent / "data" / "run_latest.log")
 
 from web_form import app
 

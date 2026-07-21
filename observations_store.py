@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import re
 import sqlite3
+from contextlib import contextmanager
 from datetime import date, datetime
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Iterator
 
 from flight_combo_utils import normalize_combo
 from log_utils import safe_log
@@ -19,6 +20,16 @@ METHOD_VERSION = "v1"
 _current_round_id: str | None = None
 _current_db_path: Path = DEFAULT_DB_PATH
 _duration_missing_logged: set[str] = set()
+
+
+@contextmanager
+def _managed_connection(path: str | Path) -> Iterator[sqlite3.Connection]:
+    connection = sqlite3.connect(path)
+    try:
+        with connection:
+            yield connection
+    finally:
+        connection.close()
 
 
 def set_current_round(round_id: str, db_path: str | Path | None = None) -> None:
@@ -72,7 +83,7 @@ def _ensure_duration_column(conn: sqlite3.Connection) -> None:
 def init_observations_db(db_path: str | Path = DEFAULT_DB_PATH) -> Path:
     path = Path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(path) as conn:
+    with _managed_connection(path) as conn:
         conn.execute(SCHEMA)
         _ensure_duration_column(conn)
     return path
@@ -195,7 +206,7 @@ def append_observations(
         )
 
     written = 0
-    with sqlite3.connect(db_path) as conn:
+    with _managed_connection(db_path) as conn:
         for row in rows:
             cursor = conn.execute(
                 """
@@ -218,7 +229,7 @@ def migrate_normalized_combos(db_path: str | Path = DEFAULT_DB_PATH) -> dict[str
     price_cny row and delete the others.
     """
     path = init_observations_db(db_path)
-    with sqlite3.connect(path) as conn:
+    with _managed_connection(path) as conn:
         rows = conn.execute(
             """
             SELECT id, round_id, source, origin_airport, dest_airport, depart_date,
@@ -263,7 +274,7 @@ def count_observations(db_path: str | Path = DEFAULT_DB_PATH) -> int:
     path = Path(db_path)
     if not path.exists():
         return 0
-    with sqlite3.connect(path) as conn:
+    with _managed_connection(path) as conn:
         return int(conn.execute("SELECT COUNT(*) FROM observations").fetchone()[0])
 
 
@@ -274,7 +285,7 @@ def count_observations_for_round(
     path = Path(db_path)
     if not path.exists():
         return 0
-    with sqlite3.connect(path) as conn:
+    with _managed_connection(path) as conn:
         return int(
             conn.execute(
                 "SELECT COUNT(*) FROM observations WHERE round_id = ?",

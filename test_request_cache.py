@@ -158,6 +158,32 @@ class RequestCacheTest(unittest.TestCase):
             self.assertEqual(stats["actual"], 2)
             self.assertEqual(stats["hits"], 0)
 
+    def test_juhe_past_date_is_source_skip_not_actual_request(self):
+        from request_cache import cached_fetch, get_request_cache_stats, reset_request_cache
+        from sources.juhe_source import JuheSource
+
+        reset_request_cache()
+        source = JuheSource()
+
+        result = cached_fetch(
+            source,
+            "PVG",
+            "ABQ",
+            "2000-01-01",
+            {"adult": 1},
+            "economy",
+            persist=False,
+            force_fresh=True,
+        )
+
+        stats = get_request_cache_stats()
+        self.assertEqual(result["source_status"], "skipped_past_date")
+        self.assertEqual(stats["actual"], 0)
+        self.assertEqual(stats["hits"], 0)
+        self.assertEqual(stats["skipped"], 1)
+        self.assertEqual(stats["by_source"]["juhe"]["actual"], 0)
+        self.assertEqual(stats["by_source"]["juhe"]["skipped"], 1)
+
 
 
     def test_stats_requested_counts_real_fetch_not_cache_hits(self):

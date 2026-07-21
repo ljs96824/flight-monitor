@@ -1,0 +1,63 @@
+{
+  "payload_changes": [
+    {
+      "path": "$.payload.execution_advice.summary",
+      "before": "单人参考价(成人口径)已超过最高可接受价",
+      "after": "单人参考价(成人口径)已超过最高可接受价（你的设置）"
+    },
+    {
+      "path": "$.payload.price_policy_reason",
+      "before": "单人参考价(成人口径)已超过最高可接受价",
+      "after": "单人参考价(成人口径)已超过最高可接受价（你的设置）"
+    },
+    {
+      "path": "$.payload.price_signal.summary",
+      "before": "搜索参考价处于近期低位",
+      "after": "搜索参考价处于近期低位（近14次同条件采集）"
+    },
+    {
+      "path": "$.payload.recommended_plans[0].purchase_advice.summary",
+      "before": "单人参考价(成人口径)已超过最高可接受价",
+      "after": "单人参考价(成人口径)已超过最高可接受价（你的设置）"
+    },
+    {
+      "path": "$.payload.trigger_reason[1]",
+      "before": "单人参考价(成人口径)已超过最高可接受价",
+      "after": "单人参考价(成人口径)已超过最高可接受价（你的设置）"
+    },
+    {
+      "path": "$.payload.trigger_reason[2]",
+      "before": "搜索参考价距离理想入手价还差¥3,049",
+      "after": "搜索参考价距离理想入手价还差¥3,049（你的设置）"
+    },
+    {
+      "path": "$.payload.trigger_reason[3]",
+      "before": "当前搜索价高于大多数相似历史样本",
+      "after": "当前搜索价高于大多数相似历史样本（近14次同条件采集）"
+    }
+  ],
+  "html_summary": {
+    "old_card_source_count": {
+      "before": 1,
+      "after": 0
+    },
+    "new_card_source_count": {
+      "before": 0,
+      "after": 1
+    },
+    "history_tier_count": {
+      "before": 0,
+      "after": 3
+    },
+    "user_setting_tier_count": {
+      "before": 3,
+      "after": 13
+    },
+    "amount_sequence_equal": true,
+    "amount_token_count": 151
+  },
+  "scope_guard": {
+    "numeric_payload_changes": [],
+    "payload_key_or_list_length_changes": []
+  }
+}

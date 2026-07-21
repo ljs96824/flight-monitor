@@ -1,7 +1,7 @@
 import tempfile
 import sqlite3
 import unittest
-from contextlib import redirect_stdout
+from contextlib import closing, redirect_stdout
 from datetime import date, datetime
 from io import StringIO
 from pathlib import Path
@@ -165,7 +165,7 @@ class BasketCollectTest(unittest.TestCase):
                         aggregator_factory=FlightAggregator,
                     )
 
-            with sqlite3.connect(db_path) as conn:
+            with closing(sqlite3.connect(db_path)) as conn, conn:
                 rows = conn.execute(
                     "SELECT origin_airport, dest_airport, depart_date, source, COUNT(*) "
                     "FROM observations GROUP BY origin_airport, dest_airport, depart_date, source"

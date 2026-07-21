@@ -4,7 +4,7 @@ import unittest
 from datetime import date
 from pathlib import Path
 from unittest.mock import patch
-from contextlib import redirect_stdout
+from contextlib import closing, redirect_stdout
 from io import StringIO
 
 
@@ -80,7 +80,7 @@ class ObservationsStoreTest(unittest.TestCase):
             self.assertEqual(first, {"written": 1, "skipped": 0})
             self.assertEqual(second, {"written": 0, "skipped": 1})
             self.assertEqual(count_observations(db_path), 1)
-            with sqlite3.connect(db_path) as conn:
+            with closing(sqlite3.connect(db_path)) as conn, conn:
                 row = conn.execute(
                     "SELECT days_to_departure, source, flight_combo, price_cny, method_version FROM observations"
                 ).fetchone()
@@ -137,7 +137,7 @@ class ObservationsStoreTest(unittest.TestCase):
             )
 
             self.assertEqual(result, {"written": 1, "skipped": 0})
-            with sqlite3.connect(db_path) as conn:
+            with closing(sqlite3.connect(db_path)) as conn, conn:
                 combo = conn.execute("SELECT flight_combo FROM observations").fetchone()[0]
             self.assertEqual(combo, "BR705+BR182")
 
@@ -166,7 +166,7 @@ class ObservationsStoreTest(unittest.TestCase):
             )
 
             self.assertEqual(result["source_stats"]["after_dedup"], 1)
-            with sqlite3.connect(db_path) as conn:
+            with closing(sqlite3.connect(db_path)) as conn, conn:
                 rows = conn.execute(
                     "SELECT source, flight_combo, price_cny FROM observations ORDER BY source"
                 ).fetchall()
@@ -230,7 +230,7 @@ class ObservationsStoreTest(unittest.TestCase):
                 cached_fetch(source, "PVG", "KIX", "2026-10-01", {"adult": 1}, "economy", ttl_seconds=0, persist=False)
                 cached_fetch(source, "PVG", "KIX", "2026-10-04", {"adult": 1}, "economy", ttl_seconds=0, persist=False)
 
-            with sqlite3.connect(db_path) as conn:
+            with closing(sqlite3.connect(db_path)) as conn, conn:
                 rows = conn.execute(
                     "SELECT depart_date, COUNT(*), MIN(days_to_departure), MAX(days_to_departure) "
                     "FROM observations GROUP BY depart_date ORDER BY depart_date"
@@ -286,7 +286,7 @@ class ObservationsStoreTest(unittest.TestCase):
                 observed_at="2099-12-01T10:00:00",
             )
 
-            with sqlite3.connect(db_path) as conn:
+            with closing(sqlite3.connect(db_path)) as conn, conn:
                 columns = [row[1] for row in conn.execute("PRAGMA table_info(observations)").fetchall()]
                 row = conn.execute("SELECT flight_combo, duration_min FROM observations").fetchone()
             self.assertIn("duration_min", columns)
@@ -298,7 +298,7 @@ class ObservationsStoreTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db_path = Path(tmp) / "observations.sqlite3"
             init_observations_db(db_path)
-            with sqlite3.connect(db_path) as conn:
+            with closing(sqlite3.connect(db_path)) as conn, conn:
                 base = (
                     "2099-12-01T10:00:00",
                     "round-migrate",
@@ -342,7 +342,7 @@ class ObservationsStoreTest(unittest.TestCase):
 
             result = migrate_normalized_combos(db_path)
 
-            with sqlite3.connect(db_path) as conn:
+            with closing(sqlite3.connect(db_path)) as conn, conn:
                 rows = conn.execute("SELECT flight_combo, price_cny FROM observations").fetchall()
                 pipe_count = conn.execute("SELECT COUNT(*) FROM observations WHERE instr(flight_combo, char(124)) > 0").fetchone()[0]
             self.assertEqual(result["merged"], 1)

@@ -29,7 +29,7 @@ _equipment_summary: dict[tuple[str, str], dict] = {}
 
 
 def _empty_stats() -> dict:
-    return {"total": 0, "hits": 0, "actual": 0, "by_source": {}}
+    return {"total": 0, "hits": 0, "actual": 0, "skipped": 0, "by_source": {}}
 
 
 _stats = _empty_stats()
@@ -83,7 +83,8 @@ def _fresh(fetched_at: str | None, ttl_seconds: int) -> bool:
 
 def _source_stats_bucket(stats: dict, source_name: str) -> dict:
     return stats.setdefault("by_source", {}).setdefault(
-        source_name, {"requested": 0, "actual": 0, "hits": 0, "calls": 0}
+        source_name,
+        {"requested": 0, "actual": 0, "hits": 0, "skipped": 0, "calls": 0},
     )
 
 
@@ -105,6 +106,24 @@ def _record_actual(source_name: str) -> None:
         source_stats = _source_stats_bucket(stats, source_name)
         source_stats["actual"] += 1
         source_stats["requested"] += 1
+
+
+def _record_skip(source_name: str) -> None:
+    for stats in (_stats, _process_stats):
+        stats["skipped"] += 1
+        _source_stats_bucket(stats, source_name)["skipped"] += 1
+
+
+def _source_preflight_skip(source, origin, dest, date_str, cabin_class):
+    check = getattr(source, "preflight_skip", None)
+    if not callable(check):
+        return None
+    try:
+        result = check(origin, dest, date_str, cabin_class)
+    except Exception as exc:
+        safe_log(f"[源级跳过检查失败] 源={_source_name(source)} 原因={exc},继续正常请求")
+        return None
+    return result if isinstance(result, dict) else None
 
 
 def _read_persistent(key: tuple, ttl_seconds: int, cache_dir: Path | None = None):
@@ -281,6 +300,23 @@ def cached_fetch(
     source_name = key[0]
     _record_request(source_name)
 
+    skipped_result = _source_preflight_skip(
+        source,
+        origin,
+        dest,
+        date_str,
+        cabin_class,
+    )
+    if skipped_result is not None:
+        _record_skip(source_name)
+        reason = skipped_result.get("skipped_reason") or "源级前置条件不满足"
+        safe_log(
+            f"[源级跳过] 源={source_name} 航线={key[1]}->{key[2]} "
+            f"日期={key[3]} 原因={reason}"
+        )
+        fresh_result = copy.deepcopy(skipped_result)
+        return (fresh_result, "skipped") if include_cache_status else fresh_result
+
     if not force_fresh:
         memory_entry = _request_cache.get(key)
         if memory_entry and _fresh(memory_entry.get("fetched_at"), ttl_seconds):
@@ -354,6 +390,7 @@ def print_request_cache_stats() -> None:
         f"round={_current_stats_round_id or 'unknown'}, "
         f"本轮总调用={_stats.get('total', 0)}, "
         f"缓存命中={_stats.get('hits', 0)}, "
+        f"源级跳过={_stats.get('skipped', 0)}, "
         f"实际API请求={_stats.get('actual', 0)}, "
         f"各源: {_stats.get('by_source', {})}"
     )
@@ -361,6 +398,7 @@ def print_request_cache_stats() -> None:
         "[API统计-进程累计] "
         f"总调用={_process_stats.get('total', 0)}, "
         f"缓存命中={_process_stats.get('hits', 0)}, "
+        f"源级跳过={_process_stats.get('skipped', 0)}, "
         f"实际API请求={_process_stats.get('actual', 0)}, "
         f"各源: {_process_stats.get('by_source', {})}"
     )

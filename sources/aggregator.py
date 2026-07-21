@@ -667,6 +667,7 @@ class FlightAggregator:
         self.enrichment_sources = enrichment_sources or []
         self.route_type = normalize_route_type(route_type)
         self.last_request_cache_status = None
+        self.last_source_errors: list[dict] = []
 
     def collect(
         self,
@@ -681,6 +682,7 @@ class FlightAggregator:
     ) -> dict | None:
         cabin_classes = _normalize_cabin_classes(cabin_classes)
         self.last_request_cache_status = None
+        self.last_source_errors = []
         run_collected_at = datetime.now().isoformat(timespec="seconds")
         source_stats = {}
         all_flights = []
@@ -748,7 +750,9 @@ class FlightAggregator:
                         f"{len(flights)}/{len(raw_flights)}"
                     )
 
-                    if source_status in {"not_configured", "skipped"}:
+                    if source_status == "not_configured" or str(source_status or "").startswith(
+                        "skipped"
+                    ):
                         cabin_counts[cabin_class] = 0
                         raw_by_source[f"{source_name}:{cabin_class}"] = result.get("raw")
                         safe_log(f"[{source_name}] {cabin_class} skipped: {source_status}")
@@ -825,6 +829,8 @@ class FlightAggregator:
                 status = "成功"
             elif "not_configured" in source_statuses:
                 status = "not_configured"
+            elif any(str(value).startswith("skipped") for value in source_statuses):
+                status = "skipped"
             elif "cache" in source_statuses or "success" in source_statuses:
                 status = "empty"
             elif source_optional:
@@ -996,6 +1002,7 @@ class FlightAggregator:
         else:
             request_cache_status = "fresh"
         self.last_request_cache_status = request_cache_status
+        self.last_source_errors = list(source_errors)
 
         safe_log(
             "source_stats: "

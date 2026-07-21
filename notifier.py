@@ -7,7 +7,9 @@ import re
 import json
 import time
 import html
+from contextvars import ContextVar
 from datetime import date, datetime, timedelta
+from functools import wraps
 from pathlib import Path
 from urllib.parse import quote, quote_plus
 
@@ -68,6 +70,31 @@ from storage import (
     save_push_snapshot,
 )
 from plan_tracker import save_pushed_plans, track_plan_status
+
+
+_RENDER_LOG_CHANNEL: ContextVar[str] = ContextVar(
+    "notification_render_log_channel",
+    default="渲染",
+)
+
+
+def _render_log_prefix(label: str) -> str:
+    return f"[{label}][{_RENDER_LOG_CHANNEL.get()}]"
+
+
+def _with_render_log_channel(channel: str):
+    def decorator(func):
+        @wraps(func)
+        def wrapped(*args, **kwargs):
+            token = _RENDER_LOG_CHANNEL.set(channel)
+            try:
+                return func(*args, **kwargs)
+            finally:
+                _RENDER_LOG_CHANNEL.reset(token)
+
+        return wrapped
+
+    return decorator
 
 
 BUY_SIGNALS = {"strong_buy", "buy", "buy_now"}
@@ -466,7 +493,8 @@ def _log_card_price_consistency(
     legs = [leg for leg in (tree.get("outbound"), tree.get("return")) if isinstance(leg, dict)]
     if not legs:
         safe_log(
-            f"[口径校验] card={card_label} 成分和=空 段合计=空 总价=空 差价=空 一致=True"
+            f"{_render_log_prefix('口径校验')} card={card_label} "
+            "成分和=空 段合计=空 总价=空 差价=空 一致=True"
         )
         return
     component_sum = sum(sum(part.get("total") or 0 for part in leg.get("parts") or []) for leg in legs)
@@ -481,7 +509,8 @@ def _log_card_price_consistency(
     if expected_difference is not None:
         consistent = consistent and difference_value == expected_difference
     safe_log(
-        f"[口径校验] card={card_label} 成分和={component_sum} 段合计={leg_sum} "
+        f"{_render_log_prefix('口径校验')} card={card_label} "
+        f"成分和={component_sum} 段合计={leg_sum} "
         f"总价={canonical_total} 差价={difference_value if difference_value is not None else '空'} "
         f"一致={consistent}"
     )
@@ -509,7 +538,8 @@ def _log_recommended_total_consistency(plan: dict) -> None:
     if "." not in drift_text:
         drift_text += ".0"
     safe_log(
-        f"[口径校验] 推荐总价 面板={panel_total} 原始浮点={raw_total} "
+        f"{_render_log_prefix('口径校验')} 推荐总价 "
+        f"面板={panel_total} 原始浮点={raw_total} "
         f"漂移={drift_text} 分项数={rounding_item_count} "
         f"允差={tolerance:.1f} 一致={consistent}"
     )
@@ -6182,9 +6212,9 @@ def _payload_price_policy_decision(
                 "不满足购买条件，建议保持监控本条航线"
             ),
             "reason": (
-                "单人参考价(成人口径)已超过最高可接受价，不建议按当前价买入"
+                "单人参考价(成人口径)已超过最高可接受价，不建议按当前价买入（你的设置）"
                 if _short_caliber_label(price_scope).startswith("单人")
-                else "预估实付总价已超过最高可接受价，不建议按当前价买入"
+                else "预估实付总价已超过最高可接受价，不建议按当前价买入（你的设置）"
             ),
             "push_type_hint": None,
         }
@@ -6195,26 +6225,26 @@ def _payload_price_policy_decision(
                 f"当前搜索价{_price_text(display)}已超过你的最高可接受价{_price_text(max_p)}，"
                 "不满足购买条件，建议保持监控本条航线"
             ),
-            "reason": "搜索参考价已超过最高可接受价，不建议按当前价买入",
+            "reason": "搜索参考价已超过最高可接受价，不建议按当前价买入（你的设置）",
             "push_type_hint": None,
         }
 
     if transaction is not None and verify is not None and transaction <= verify:
         return {
             "conclusion": "可以购买前验证",
-            "reason": "预估实付价不高于本次验证购买价",
+            "reason": "预估实付价不高于本次验证购买价（你的设置）",
             "push_type_hint": None,
         }
     if display is not None and verify is not None and display <= verify and transaction is not None and transaction > verify:
         return {
             "conclusion": "值得验证，不建议直接下单",
-            "reason": "搜索参考价达标，但预估实付价高于验证购买价",
+            "reason": "搜索参考价达标，但预估实付价高于验证购买价（你的设置）",
             "push_type_hint": "值得验证",
         }
     if target is not None and display is not None and display > target:
         return {
             "conclusion": "继续观察",
-            "reason": "搜索参考价仍高于理想入手价",
+            "reason": "搜索参考价仍高于理想入手价（你的设置）",
             "push_type_hint": None,
         }
     return {
@@ -7140,7 +7170,11 @@ def build_notification_payload(
                 f"{compare_subject}已超过你的最高可接受价{compare_max_text}，"
                 "不满足购买条件，建议继续保持监控本条航线"
             ),
-            "summary": "单人参考价(成人口径)已超过最高可接受价" if compare_is_per_person else "预估实付总价已超过最高可接受价",
+            "summary": (
+                "单人参考价(成人口径)已超过最高可接受价（你的设置）"
+                if compare_is_per_person
+                else "预估实付总价已超过最高可接受价（你的设置）"
+            ),
             "condition": _budget_purchase_condition(compare_max_budget, budget_compare_scope),
         }
     if execution_advice.get("conclusion"):
@@ -10762,23 +10796,64 @@ def _render_domestic_payload_plan_card(plan: dict, compact: bool = False, primar
 
 
 def _plan_source_label(plan: dict) -> str:
-    flights = []
-    for key in ("outbound_flight", "return_flight", "main_flight", "flight"):
-        flight = plan.get(key)
-        if isinstance(flight, dict) and flight:
-            flights.append(flight)
-    labels = []
-    for flight in flights:
-        primary = str(flight.get("primary_source") or "").lower()
-        if primary == "juhe":
-            label = "聚合数据(国内实时)"
-        elif primary in {"serpapi", "searchapi", "hasdata"}:
-            label = "Google Flights"
-        else:
-            label = _compact_source_label(flight)
-        if label and label not in labels:
-            labels.append(label)
-    return " / ".join(labels)
+    def source_name(source) -> str:
+        key = str(source or "").strip().lower()
+        if key in {"serpapi", "searchapi", "hasdata"}:
+            return "Google Flights"
+        if key == "juhe":
+            return "OTA(聚合)"
+        if key == "duffel":
+            return "Duffel"
+        return key or "待确认"
+
+    def source_facts(flight: dict) -> tuple[str, str]:
+        structure_source = flight.get("primary_source") or flight.get("source")
+        if not structure_source:
+            merged_sources = [
+                part.strip()
+                for part in str(flight.get("data_source") or "").split("+")
+                if part.strip()
+            ]
+            structure_source = merged_sources[0] if len(merged_sources) == 1 else None
+        return source_name(structure_source), source_name(flight.get("price_source"))
+
+    outbound = plan.get("outbound_flight") or plan.get("main_flight") or plan.get("flight")
+    inbound = plan.get("return_flight")
+    legs = [flight for flight in (outbound, inbound) if isinstance(flight, dict) and flight]
+    if not legs:
+        return ""
+
+    facts = [source_facts(flight) for flight in legs]
+    structures = [structure for structure, _ in facts]
+    selected_prices = [selected for _, selected in facts]
+    same_structure = len(set(structures)) == 1
+    same_selected = len(set(selected_prices)) == 1
+
+    if same_structure and same_selected:
+        if structures[0] == selected_prices[0]:
+            return f"结构与入池:{structures[0]}"
+        return f"航班结构:{structures[0]} / 入池价:{selected_prices[0]}"
+
+    if len(facts) == 1:
+        structure, selected = facts[0]
+        return f"航班结构:{structure} / 入池价:{selected}"
+
+    parts = []
+    if same_structure:
+        parts.append(f"航班结构:{structures[0]}")
+    else:
+        parts.extend((f"去程结构:{structures[0]}", f"返程结构:{structures[1]}"))
+    parts.extend((f"去程入池:{selected_prices[0]}", f"返程入池:{selected_prices[1]}"))
+    return " / ".join(parts)
+
+
+def _action_range_display_text(row: dict) -> str:
+    text = row.get("text")
+    if not text:
+        left = "-∞" if row.get("min") is None else _price_text(row.get("min"))
+        right = "+∞" if row.get("max") is None else _price_text(row.get("max"))
+        text = f"{left} - {right}"
+    return f"{text}：{row.get('label')}（你的设置）"
 
 
 FULL_SERVICE_AIRLINE_CODES = {
@@ -11913,6 +11988,20 @@ def _email_airport_cost_comparison_body(payload: dict) -> str:
     return "".join(parts)
 
 
+def _log_render_stats(render_stats: dict) -> None:
+    duplicate_count = sum(
+        max(0, count - 1)
+        for count in (render_stats.get("full_identity_counts") or {}).values()
+    )
+    safe_log(
+        f"{_render_log_prefix('渲染统计')} "
+        f"整卡:主区={render_stats.get('full_main', 0)} "
+        f"需调整区={render_stats.get('full_adjustment', 0)} "
+        f"紧凑引用={render_stats.get('compact_refs', 0)} 重复={duplicate_count}"
+    )
+
+
+@_with_render_log_channel("邮件")
 def render_email(payload: dict) -> tuple[str, str]:
     """Render the full HTML email report from a normalized payload."""
     payload = payload or {}
@@ -12157,12 +12246,7 @@ def render_email(payload: dict) -> tuple[str, str]:
     if (not no_primary) and action.get("ranges"):
         range_lines = []
         for row in action["ranges"]:
-            text = row.get("text")
-            if not text:
-                left = "-∞" if row.get("min") is None else _price_text(row.get("min"))
-                right = "+∞" if row.get("max") is None else _price_text(row.get("max"))
-                text = f"{left} - {right}"
-            range_lines.append(f"<div>{html.escape(str(text))}：{html.escape(str(row.get('label')))}</div>")
+            range_lines.append(f"<div>{html.escape(_action_range_display_text(row))}</div>")
         change_lines.extend(range_lines)
     if change_lines:
         cards.append(_email_card("价格变化与参考区间", "".join(change_lines)))
@@ -12183,18 +12267,11 @@ def render_email(payload: dict) -> tuple[str, str]:
             + f"<div style='margin-top:8px;color:#666;font-size:12px;'>数据采集于 {html.escape(str(payload.get('collected_at') or ''))}。最终价格以购买平台支付页为准。</div>",
         )
     )
-    duplicate_count = sum(
-        max(0, count - 1)
-        for count in (render_stats.get("full_identity_counts") or {}).values()
-    )
-    safe_log(
-        f"[渲染统计] 整卡:主区={render_stats.get('full_main', 0)} "
-        f"需调整区={render_stats.get('full_adjustment', 0)} "
-        f"紧凑引用={render_stats.get('compact_refs', 0)} 重复={duplicate_count}"
-    )
+    _log_render_stats(render_stats)
     return subject, "".join(cards)
 
 
+@_with_render_log_channel("详情")
 def render_detail_html(payload: dict) -> str:
     """Render the web detail page HTML with core modules visible and details folded."""
     payload = payload or {}
@@ -12203,6 +12280,13 @@ def render_detail_html(payload: dict) -> str:
     price_reason = str(payload.get("price_policy_reason") or "请以预估实付价和支付页最终价为准")
     primary_plan = _plan_for_render((payload.get("recommended_plans") or [{}])[0] or {}, payload)
     no_primary = _no_primary_plan_state(payload)
+    rendered_full_keys = set()
+    render_stats = {
+        "full_main": 0,
+        "full_adjustment": 0,
+        "compact_refs": 0,
+        "full_identity_counts": {},
+    }
     cards = [
         f"<h2 style='font-size:18px;color:#111;margin:0 0 12px;'>{html.escape(subject)}</h2>",
         _email_card(
@@ -12215,7 +12299,14 @@ def render_detail_html(payload: dict) -> str:
                 interactive_channels=True,
             ),
         ),
-        _render_payload_plan_cards(payload, payload.get("recommended_plans") or [], primary_plan),
+        _render_payload_plan_cards(
+            payload,
+            payload.get("recommended_plans") or [],
+            primary_plan,
+            rendered_full_keys=rendered_full_keys,
+            render_stats=render_stats,
+            section="main",
+        ),
         _email_card("为什么提醒你", _email_list(_non_price_change_reasons(payload), 3)),
         _email_card("价格走势", _email_trend_card_body(payload)),
     ]
@@ -12315,6 +12406,7 @@ def render_detail_html(payload: dict) -> str:
             + f"<div style='margin-top:8px;color:#666;font-size:12px;'>数据采集于 {html.escape(str(payload.get('collected_at') or ''))}。最终价格以购买平台支付页为准。</div>",
         )
     )
+    _log_render_stats(render_stats)
     return "".join(cards)
 
 

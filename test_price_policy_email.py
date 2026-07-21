@@ -44,7 +44,7 @@ def test_push_type_uses_transaction_price_when_display_price_only_looks_good():
     )
 
     assert meta["type"] == "值得验证"
-    assert "搜索参考价达标，但预估实付价高于验证购买价" in meta["reasons"]
+    assert "搜索参考价达标，但预估实付价高于验证购买价（你的设置）" in meta["reasons"]
     assert all("100%" not in reason for reason in meta["reasons"])
 
 

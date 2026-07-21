@@ -50,7 +50,14 @@ from notifier import (
 from price_calendar import load_calendar, update_calendar
 from request_cache import print_request_cache_stats, start_request_cache_round
 from plan_tracker import feedback_acknowledgement
-from sources.aggregator import FlightAggregator, build_default_sources, is_domestic_route, route_type_for
+from source_profiles import get_source_profile
+from sources.aggregator import (
+    FlightAggregator,
+    _redact_api_key,
+    build_default_sources,
+    is_domestic_route,
+    route_type_for,
+)
 from storage import (
     get_roundtrip_price_history,
     get_lowest_price_history,
@@ -60,6 +67,10 @@ from storage import (
     save_flight_details,
 )
 from sync_subscriptions import sync_subscriptions
+from subscription_preflight import (
+    evaluate_subscription_preflight,
+    shanghai_today as _shanghai_today,
+)
 from tracker import log_signal
 
 
@@ -77,6 +88,92 @@ SUBSCRIPTIONS_PATH = DATA_DIR / "subscriptions.json"
 PAGE_PAYLOADS_DIR = DATA_DIR / "payloads"
 PYTHONANYWHERE_PAYLOAD_PATH = "/home/{user}/flight-monitor/data/payloads/{filename}"
 AIRPORT_COMBINATION_MIN_OPTIONS = 5
+
+_SOURCE_ENV_KEYS = {
+    "hasdata": "HASDATA_KEY",
+    "duffel": "DUFFEL_TOKEN",
+    "juhe": "JUHE_FLIGHT_KEY",
+}
+
+
+def _subscription_label(sub: dict) -> str:
+    name = str(sub.get("name") or "").strip()
+    if name and name != "网页订阅":
+        return name
+    for key in ("_index", "index", "id", "subscription_id"):
+        value = sub.get(key)
+        if value not in (None, ""):
+            return str(value)
+    return f"{sub.get('origin') or '?'}->{sub.get('destination') or '?'}"
+
+
+def _subscription_route_label(sub: dict) -> str:
+    return f"{sub.get('origin') or '?'}->{sub.get('destination') or '?'}"
+
+
+def _estimated_saved_api_calls(sub: dict) -> int:
+    """估算目标日首轮本会发出的真实外部请求数，Juhe 过去日期守卫不计。"""
+    profile = get_source_profile(sub.get("route_type"))
+    enabled_external_sources = 0
+    for spec in profile.get("sources") or []:
+        source_name = str(spec.get("name") or "").lower()
+        if source_name == "juhe":
+            continue
+        env_key = _SOURCE_ENV_KEYS.get(source_name)
+        if env_key is None or os.environ.get(env_key):
+            enabled_external_sources += 1
+    origins = sub.get("origin_airports_active") or sub.get("origin_airports") or [sub.get("origin")]
+    destinations = (
+        sub.get("destination_airports_active")
+        or sub.get("destination_airports")
+        or [sub.get("destination")]
+    )
+    airport_combinations = max(1, len(origins or [])) * max(1, len(destinations or []))
+    cabin_count = max(1, len(sub.get("cabin_classes") or ["economy"]))
+    return enabled_external_sources * airport_combinations * cabin_count
+
+
+def _log_preflight_skip(sub: dict, preflight: dict) -> None:
+    latest = preflight.get("latest_date")
+    safe_log(
+        f"[订阅前置校验] 订阅={_subscription_label(sub)} "
+        f"航线={_subscription_route_label(sub)} 结果=跳过 "
+        f"原因=全部采集日期已过期(最晚={latest.isoformat() if latest else '不可解析'}) "
+        f"省API={_estimated_saved_api_calls(sub)}"
+    )
+
+
+def _source_error_items(aggregator=None, data=None) -> list[dict]:
+    errors = []
+    if isinstance(data, dict):
+        errors.extend(data.get("source_errors") or [])
+    if not errors and aggregator is not None:
+        errors.extend(getattr(aggregator, "last_source_errors", None) or [])
+    unique = []
+    seen = set()
+    for item in errors:
+        if not isinstance(item, dict):
+            continue
+        key = (item.get("source"), item.get("cabin_class"), item.get("error"))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+    return unique
+
+
+def _log_subscription_failure(sub: dict, *, source_errors=None, reason: str | None = None) -> None:
+    parts = []
+    for item in source_errors or []:
+        source = str(item.get("source") or "source")
+        detail = _redact_api_key(str(item.get("error") or "返回失败"))
+        parts.append(f"{source}:{detail}")
+    if not parts:
+        parts.append(_redact_api_key(str(reason or "采集未返回有效航班")))
+    safe_log(
+        f"[订阅处理失败] 订阅={_subscription_label(sub)} "
+        f"航线={_subscription_route_label(sub)} 原因={'; '.join(parts)}"
+    )
 
 
 
@@ -964,6 +1061,22 @@ def _merge_source_stats(target: dict, incoming: dict) -> None:
             current["cabin_counts"][cabin] = current["cabin_counts"].get(cabin, 0) + int(count or 0)
 
 
+def _merge_source_errors(target: list[dict], incoming) -> None:
+    seen = {
+        (item.get("source"), item.get("cabin_class"), item.get("error"))
+        for item in target
+        if isinstance(item, dict)
+    }
+    for item in incoming or []:
+        if not isinstance(item, dict):
+            continue
+        key = (item.get("source"), item.get("cabin_class"), item.get("error"))
+        if key in seen:
+            continue
+        seen.add(key)
+        target.append(item)
+
+
 def _dedupe_flights(flights: list[dict]) -> list[dict]:
     seen = {}
     for flight in flights:
@@ -1070,6 +1183,10 @@ def collect_for_airport_matrix(
                 else getattr(aggregator, "last_request_cache_status", None)
             )
         if not data:
+            _merge_source_errors(
+                merged["source_errors"],
+                getattr(aggregator, "last_source_errors", None),
+            )
             continue
         for flight in data.get("flights", []):
             flight["search_origin"] = origin
@@ -1080,7 +1197,7 @@ def collect_for_airport_matrix(
         if not merged.get("collected_at") and data.get("collected_at"):
             merged["collected_at"] = data["collected_at"]
         _merge_source_stats(merged["source_stats"], data.get("source_stats", {}))
-        merged["source_errors"].extend(data.get("source_errors", []))
+        _merge_source_errors(merged["source_errors"], data.get("source_errors", []))
         merged["dual_source_price_anomalies"].extend(
             data.get("dual_source_price_anomalies", []) or []
         )
@@ -1095,6 +1212,7 @@ def collect_for_airport_matrix(
     merged["source_stats"]["after_dedup"] = len(merged["flights"])
     merged["sources_used"] = "+".join(sources_used)
     merged["source"] = merged["sources_used"]
+    aggregator.last_source_errors = list(merged["source_errors"])
     return merged if merged["flights"] else None
 
 
@@ -1190,8 +1308,20 @@ def collect_nearby_dates(
             break
     return results
 
-def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
+def process_subscription(
+    sub: dict,
+    ensure_db: bool = True,
+    preflight_result: dict | None = None,
+) -> bool:
     """Process one subscription once and send the generated notification."""
+    preflight = preflight_result or evaluate_subscription_preflight(
+        sub,
+        today=_shanghai_today(),
+    )
+    if preflight.get("skip"):
+        _log_preflight_skip(sub, preflight)
+        return True
+
     if ensure_db:
         init_db()
 
@@ -1201,6 +1331,7 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
     start_request_cache_round(round_id)
     route = f"{sub['origin']}-{sub['destination']}"
     logging.info(f"开始处理 {route}")
+    agg = None
 
     try:
         active_origins = _subscription_airports(
@@ -1234,6 +1365,11 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
 
         if data is None or not data.get("flights"):
             logging.error(f"{route} 采集返回空")
+            _log_subscription_failure(
+                sub,
+                source_errors=_source_error_items(agg, data),
+                reason="采集未返回有效航班",
+            )
             return False
 
         run_collected_at = data.get("collected_at") or datetime.now().isoformat(timespec="seconds")
@@ -1498,6 +1634,7 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
                     return_analysis,
                     target_price=sub.get("target_price"),
                     max_budget=sub.get("max_budget"),
+                    emit_diagnostics=False,
                 )
                 if (
                     round_trip_analysis.get("same_day_time_conflict")
@@ -1651,6 +1788,7 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
         print(f"[DEBUG] 传给notifier的参数keys: {list(message_kwargs.keys())}")
         if not _deliver_notification(sub, route, message_kwargs):
             logging.warning(f"{route} 未能完成任何主动推送")
+            _log_subscription_failure(sub, reason="通知未发送成功")
             return False
         logging.info(f"{route} 已推送方案对比表")
         return True
@@ -1659,6 +1797,11 @@ def process_subscription(sub: dict, ensure_db: bool = True) -> bool:
         print(f"[处理失败] {type(e).__name__}: {e}")
         print(traceback.format_exc())
         logging.error(f"{route} 处理失败: {e}", exc_info=True)
+        _log_subscription_failure(
+            sub,
+            source_errors=_source_error_items(agg),
+            reason=f"{type(e).__name__}: {e}",
+        )
         return False
 
 
@@ -1680,22 +1823,35 @@ def run(sync_remote: bool = True):
     if not subscriptions:
         print("暂无订阅，请通过表单添加")
         logging.info("暂无订阅，请通过表单添加")
+        safe_log("[订阅前置校验] 本轮检查=0 跳过=0")
         return
 
+    preflight_checked = 0
+    preflight_skipped = 0
+    current_day = _shanghai_today()
     for sub in subscriptions:
+        preflight_checked += 1
         try:
-            ok = process_subscription(sub, ensure_db=False)
-            if not ok:
-                print(f"[订阅处理失败] {sub.get('id') or sub.get('_index') or '未知'}: 返回失败")
+            preflight = evaluate_subscription_preflight(sub, today=current_day)
+            if preflight.get("skip"):
+                preflight_skipped += 1
+            process_subscription(
+                sub,
+                ensure_db=False,
+                preflight_result=preflight,
+            )
         except Exception as exc:
-            print(f"[订阅处理失败] {sub.get('id') or sub.get('_index') or '未知'}: {exc}")
+            _log_subscription_failure(sub, reason=f"{type(exc).__name__}: {exc}")
             print(traceback.format_exc())
             logging.error(
-                f"订阅处理失败 {sub.get('id') or sub.get('_index') or '未知'}: {exc}",
+                f"订阅处理失败 {_subscription_label(sub)}: {exc}",
                 exc_info=True,
             )
             continue
 
+    safe_log(
+        f"[订阅前置校验] 本轮检查={preflight_checked} 跳过={preflight_skipped}"
+    )
     logging.info("本轮执行完成")
 
 

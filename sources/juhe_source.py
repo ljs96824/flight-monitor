@@ -17,6 +17,7 @@ from filename_utils import sanitize_filename
 from domestic_fare_rules import get_aircraft_name
 from log_utils import safe_log
 from sources.base import FlightSource
+from subscription_preflight import shanghai_today
 
 
 CACHE_TTL_MINUTES = 15
@@ -156,19 +157,31 @@ class JuheSource(FlightSource):
     name = "juhe"
     role = "search"
 
+    def preflight_skip(
+        self,
+        origin: str,
+        dest: str,
+        date_str: str,
+        cabin_class: str = "economy",
+    ) -> dict | None:
+        departure_date = _parse_departure_date(date_str)
+        if departure_date is None or departure_date >= shanghai_today():
+            return None
+        return {
+            "flights": [],
+            "source": self.name,
+            "raw": {},
+            "source_status": "skipped_past_date",
+            "skipped_reason": "过去日期不可售",
+        }
+
     def fetch(
         self, origin: str, dest: str, date_str: str, cabin_class: str = "economy"
     ) -> dict:
-        departure_date = _parse_departure_date(date_str)
-        if departure_date is not None and departure_date < date.today():
+        skipped = self.preflight_skip(origin, dest, date_str, cabin_class)
+        if skipped is not None:
             safe_log(f"[juhe] skip past date {date_str}")
-            return {
-                "flights": [],
-                "source": self.name,
-                "raw": {},
-                "source_status": "skipped_past_date",
-                "skipped_reason": "过去日期不可售",
-            }
+            return skipped
 
         key = os.getenv("JUHE_FLIGHT_KEY")
         safe_log(f"[juhe] key_exists={bool(key)}, start {origin}->{dest} {date_str}")

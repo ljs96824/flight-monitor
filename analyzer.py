@@ -5,6 +5,7 @@ from __future__ import annotations
 import statistics
 import copy
 import json
+import os
 import re
 from datetime import date, datetime, time, timedelta
 
@@ -7337,6 +7338,10 @@ def _flatten_price_history(price_history) -> list[float]:
     return prices
 
 
+def _history_reference_suffix(prices) -> str:
+    return f"（近{len(prices)}次同条件采集）" if prices else ""
+
+
 def determine_push_type(
     current_price,
     target_price=None,
@@ -8070,27 +8075,28 @@ def determine_push_type(
 
     reasons = []
     if display_reaches_verify and transaction_over_verify:
-        reasons.append("搜索参考价达标，但预估实付价高于验证购买价")
+        reasons.append("搜索参考价达标，但预估实付价高于验证购买价（你的设置）")
     if target and reason_price is not None:
         if reason_price <= target:
-            reasons.append("搜索参考价进入你的理想入手区间")
+            reasons.append("搜索参考价进入你的理想入手区间（你的设置）")
         else:
-            reasons.append(f"搜索参考价距离理想入手价还差¥{reason_price - target:,.0f}")
+            reasons.append(f"搜索参考价距离理想入手价还差¥{reason_price - target:,.0f}（你的设置）")
     if last_price and display_price is not None:
         diff = display_price - last_price
         if diff < 0:
-            reasons.append(f"较上次提醒：下降¥{abs(diff):,.0f}")
+            reasons.append(f"较上次提醒：下降¥{abs(diff):,.0f}（上次同口径提醒）")
         elif diff > 0:
-            reasons.append(f"较上次提醒：上涨¥{diff:,.0f}")
+            reasons.append(f"较上次提醒：上涨¥{diff:,.0f}（上次同口径提醒）")
         else:
-            reasons.append("与上次提醒价格持平")
+            reasons.append("与上次提醒价格持平（上次同口径提醒）")
     if percentile is not None:
+        history_suffix = _history_reference_suffix(prices)
         if percentile <= 0:
-            reasons.append(f"当前搜索价低于近{len(prices)}次相似采集记录，处于近期低位")
+            reasons.append(f"当前搜索价低于所有相似采集记录，处于近期低位{history_suffix}")
         elif percentile <= 30:
-            reasons.append("当前搜索价处于相似历史样本低价区间")
+            reasons.append(f"当前搜索价处于相似历史样本低价区间{history_suffix}")
         elif percentile >= 70:
-            reasons.append("当前搜索价高于大多数相似历史样本")
+            reasons.append(f"当前搜索价高于大多数相似历史样本{history_suffix}")
     reasons.extend(_matched_constraint_reasons(analysis_result))
     if _is_price_rise_risk(days_to_dept, analysis_result):
         days_text = f"{days_to_dept}天" if days_to_dept is not None else "临近出发"
@@ -8135,16 +8141,16 @@ def build_price_signal(display_price, target_price=None, price_history=None) -> 
 
     if percentile is not None and percentile <= 30:
         label = "强"
-        summary = "搜索参考价处于近期低位"
+        summary = f"搜索参考价处于近期低位{_history_reference_suffix(prices)}"
     elif target is not None and display <= target:
         label = "强"
-        summary = "搜索参考价已进入理想入手区间"
+        summary = "搜索参考价已进入理想入手区间（你的设置）"
     elif target is not None and display <= target * 1.05:
         label = "中高"
-        summary = "搜索参考价接近理想入手价"
+        summary = "搜索参考价接近理想入手价（你的设置）"
     elif target is not None:
         label = "中"
-        summary = "搜索参考价仍高于理想入手价"
+        summary = "搜索参考价仍高于理想入手价（你的设置）"
     else:
         label = "中"
         summary = "搜索参考价可作为低价线索，需结合历史数据判断"
@@ -8228,7 +8234,7 @@ def build_execution_advice(
         return {
             "label": "继续监控",
             "conclusion": f"当前搜索价¥{display:,.0f}已超过你的最高可接受价¥{max_p:,.0f}，不满足购买条件，建议继续监控",
-            "summary": "搜索参考价已超过最高可接受价，不建议按当前价买入",
+            "summary": "搜索参考价已超过最高可接受价，不建议按当前价买入（你的设置）",
             "condition": f"支付页最终价≤¥{max_p:,.0f}，且含托运行李",
         }
 
@@ -8237,13 +8243,13 @@ def build_execution_advice(
             return {
                 "label": "可验证后决定",
                 "conclusion": "价格仍可接受，但呈上涨趋势，可验证后决定",
-                "summary": "搜索参考价仍在理想价内，但近期呈上涨趋势",
+                "summary": "搜索参考价仍在理想价内（你的设置），但近期呈上涨趋势",
                 "condition": f"支付页最终价≤¥{verify:,.0f}，且含托运行李" if verify else "以支付页最终价和票规为准",
             }
         return {
             "label": "继续监控",
             "conclusion": "价格已高于你的理想价且在上涨，建议继续观察，暂不建议买入",
-            "summary": "涨价风险存在，但当前搜索参考价已高于理想入手价",
+            "summary": "涨价风险存在，但当前搜索参考价已高于理想入手价（你的设置）",
             "condition": f"支付页最终价≤¥{verify:,.0f}，且含托运行李" if verify else "等待价格回落到理想区间",
         }
 
@@ -8251,7 +8257,7 @@ def build_execution_advice(
         return {
             "label": "可验证购买",
             "conclusion": "可以购买前验证",
-            "summary": "预估实付价不高于本次验证价，进入渠道确认最终价和票规后可购买",
+            "summary": "预估实付价不高于本次验证价（你的设置），进入渠道确认最终价和票规后可购买",
             "condition": f"支付页最终价≤¥{verify:,.0f}，且含托运行李",
         }
 
@@ -8259,7 +8265,7 @@ def build_execution_advice(
         return {
             "label": "验证后再买",
             "conclusion": "值得验证，不建议直接下单",
-            "summary": "预估实付价高于本次验证价，需确认最终价和行李",
+            "summary": "预估实付价高于本次验证价（你的设置），需确认最终价和行李",
             "condition": f"支付页最终价≤¥{verify:,.0f}，且含托运行李",
         }
 
@@ -8267,7 +8273,7 @@ def build_execution_advice(
         return {
             "label": "继续观察",
             "conclusion": "继续观察",
-            "summary": "搜索参考价仍高于理想入手价",
+            "summary": "搜索参考价仍高于理想入手价（你的设置）",
             "condition": f"理想入手价≤¥{target:,.0f}",
         }
 
@@ -10275,12 +10281,18 @@ def _roundtrip_debug_flight_no(flight: dict | None) -> str:
     )
 
 
-def _print_roundtrip_plan_comparison(combos: list[dict]) -> None:
+def _print_roundtrip_plan_comparison(
+    combos: list[dict],
+    *,
+    emit_diagnostics: bool = True,
+) -> None:
+    if not emit_diagnostics:
+        return
     for index, combo in enumerate((combos or [])[:2]):
         label = "A" if index == 0 else "B"
         outbound = combo.get("outbound") or {}
         return_flight = combo.get("return") or {}
-        print(
+        safe_log(
             f"[方案对比] {label}去程={_roundtrip_debug_flight_no(outbound)} "
             f"{label}返程={_roundtrip_debug_flight_no(return_flight)} "
             f"{label}价={combo.get('total_price')}"
@@ -10606,6 +10618,41 @@ def _roundtrip_budget_safe_reasons_v2(
     return cleaned
 
 
+def _log_excluded_price_diagnostics(
+    recommended_total,
+    max_budget,
+    combos: list[dict],
+) -> None:
+    prices = [
+        price
+        for price in (_to_float(combo.get("total_price")) for combo in (combos or []))
+        if price is not None
+    ]
+    unique_keys = {
+        _roundtrip_combo_dedupe_key(combo)
+        for combo in (combos or [])
+        if _to_float(combo.get("total_price")) is not None
+    }
+    budget = _to_float(max_budget)
+    below_limit = sum(1 for price in prices if budget is not None and price < budget)
+    lowest_five = sorted(prices)[:5]
+    min_price = min(prices) if prices else None
+    max_price = max(prices) if prices else None
+    summary = (
+        f"[排除诊断] 推荐方案价={recommended_total} 最高可接受价={max_budget} "
+        f"候选数={len(prices)} 去重={len(unique_keys)} min={min_price} max={max_price} "
+        f"低于上限={below_limit if budget is not None else '不适用'} 最低5={lowest_five}"
+    )
+    safe_log(summary)
+    if str(os.environ.get("FLIGHT_DEBUG_FULL_ARRAYS") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        safe_log(f"[排除诊断][完整数组] 排除候选价={prices}")
+
+
 def build_excluded_roundtrip_combos(
     outbound_analysis: dict,
     return_analysis: dict,
@@ -10616,6 +10663,7 @@ def build_excluded_roundtrip_combos(
     recommended_combo: dict | None = None,
     passengers: dict | None = None,
     route_type: str | None = None,
+    emit_diagnostics: bool = True,
 ) -> list[dict]:
     """Build same-unit excluded round-trip combos for notification explanations."""
     recommended_total = _to_float(recommended_total)
@@ -10726,31 +10774,31 @@ def build_excluded_roundtrip_combos(
 
             combos.append(combo_payload)
 
-    print(
-        f"[排除诊断] 推荐方案价={recommended_total}, 最高可接受价={max_budget}, "
-        f"排除候选价={[combo.get('total_price') for combo in combos]}"
-    )
+    if emit_diagnostics:
+        _log_excluded_price_diagnostics(recommended_total, max_budget, combos)
     recommended_budget_decision = evaluate_purchase_budget(
         recommended_total,
         max_budget=max_budget,
     )
-    print(
-        f"[排除诊断] 推荐方案是否超预算="
-        f"{recommended_budget_decision['is_over_budget']}"
-    )
-    limited = _dedupe_and_limit_excluded_roundtrip_combos(combos, max_show)
-    for combo in limited:
-        outbound_flight = combo.get("outbound") or {}
-        return_flight = combo.get("return") or {}
-        print(
-            "[排除组合] "
-            f"去程={outbound_flight.get('flight_combo')} "
-            f"返程={return_flight.get('flight_combo')} "
-            f"去程机型={_roundtrip_debug_aircraft(outbound_flight)} "
-            f"返程机型={_roundtrip_debug_aircraft(return_flight)} "
-            f"去程时间={_roundtrip_debug_departure(outbound_flight)} "
-            f"返程时间={_roundtrip_debug_departure(return_flight)}"
+    if emit_diagnostics:
+        safe_log(
+            f"[排除诊断] 推荐方案是否超预算="
+            f"{recommended_budget_decision['is_over_budget']}"
         )
+    limited = _dedupe_and_limit_excluded_roundtrip_combos(combos, max_show)
+    if emit_diagnostics:
+        for combo in limited:
+            outbound_flight = combo.get("outbound") or {}
+            return_flight = combo.get("return") or {}
+            safe_log(
+                "[排除组合] "
+                f"去程={outbound_flight.get('flight_combo')} "
+                f"返程={return_flight.get('flight_combo')} "
+                f"去程机型={_roundtrip_debug_aircraft(outbound_flight)} "
+                f"返程机型={_roundtrip_debug_aircraft(return_flight)} "
+                f"去程时间={_roundtrip_debug_departure(outbound_flight)} "
+                f"返程时间={_roundtrip_debug_departure(return_flight)}"
+            )
     return limited
 
 
@@ -10760,6 +10808,7 @@ def analyze_round_trip(
     target_price=None,
     max_budget=None,
     history: list[dict] | None = None,
+    emit_diagnostics: bool = True,
 ) -> dict:
     """Analyze outbound and return legs together for a round-trip subscription."""
     outbound_top = _top_flights_for_round_trip(outbound_analysis, 3)
@@ -11049,7 +11098,10 @@ def analyze_round_trip(
 
     combinations.sort(key=lambda item: item["total_price"])
     combinations = _dedupe_roundtrip_combinations(combinations)
-    _print_roundtrip_plan_comparison(combinations)
+    _print_roundtrip_plan_comparison(
+        combinations,
+        emit_diagnostics=emit_diagnostics,
+    )
     best_combo = combinations[0] if combinations else {}
     if same_day_round_trip and best_combo:
         outbound_min = _to_float(best_combo.get("outbound_price"))
@@ -11182,9 +11234,11 @@ def analyze_round_trip(
             recommended_combo=combinations[0],
             passengers=pricing_passengers,
             route_type=pricing_route_type,
+            emit_diagnostics=emit_diagnostics,
         )
     else:
-        safe_log("[排除诊断] 无推荐方案,不适用")
+        if emit_diagnostics:
+            safe_log("[排除诊断] 无推荐方案,不适用")
         excluded_roundtrip_combos = []
 
     return {
