@@ -17,7 +17,12 @@ from airport_logistics import (
     route_type_buffer_label,
 )
 from on_time_data import estimate_punctuality
-from price_estimator import build_passenger_price_breakdown, build_price_tiers, calc_transaction_price
+from price_estimator import (
+    build_display_prices,
+    build_passenger_price_breakdown,
+    build_price_tiers,
+    calc_transaction_price,
+)
 from pricing import (
     assert_same_caliber,
     budget_to_pp,
@@ -680,6 +685,7 @@ def build_passenger_roundtrip_pricing(
     cabin: str | None = "economy",
 ) -> dict:
     passengers = _normalize_passengers(passengers) or {"adult": 1, "child": 0, "elderly": 0, "infant": 0}
+    display_prices = build_display_prices(outbound_price, return_price, passengers, route_type)
     outbound_breakdown = build_passenger_price_breakdown(outbound_price, passengers, cabin, route_type)
     return_breakdown = (
         build_passenger_price_breakdown(return_price, passengers, cabin, route_type)
@@ -687,7 +693,7 @@ def build_passenger_roundtrip_pricing(
         else None
     )
     single_adult_total = (_to_float(outbound_price) or 0) + (_to_float(return_price) or 0)
-    total = outbound_breakdown["total"] + (return_breakdown["total"] if return_breakdown else 0)
+    raw_total = display_prices["raw_total"]
     factor = outbound_breakdown.get("factor") or 1
     price_tiers = build_price_tiers(
         outbound_price,
@@ -706,7 +712,7 @@ def build_passenger_roundtrip_pricing(
         "route_type": route_type or "",
         "outbound": outbound_breakdown,
         "return": return_breakdown,
-        "total_price": total,
+        "total_price": raw_total,
         "single_adult_price": single_adult_total,
         "price_tiers": price_tiers,
         "note": outbound_breakdown.get("note") or "",
@@ -2748,7 +2754,7 @@ def _same_day_roundtrip_alternative(
     return_price = _to_float((return_flight or {}).get("price")) or 0
     adult_roundtrip = outbound_price + return_price
     passenger_pricing = build_passenger_roundtrip_pricing(outbound_price, return_price, passengers, route_type)
-    display_total = _to_float(passenger_pricing.get("total_price"))
+    display_total = _to_float((passenger_pricing.get("price_tiers") or {}).get("total_roundtrip_ref"))
     if display_total is None:
         display_total = adult_roundtrip
     price_scope_label = "total_roundtrip" if passenger_pricing.get("applies") else "single_roundtrip"
@@ -10514,6 +10520,7 @@ def _roundtrip_specific_exclusion_reasons(
 def _roundtrip_comparison_points(combo: dict, recommended_combo: dict | None, recommended_total) -> list[str]:
     points: list[str] = []
     combo = combo or {}
+    recommended_combo = recommended_combo or {}
     outbound_flight = combo.get("outbound") or {}
     return_flight = combo.get("return") or {}
 
@@ -10527,8 +10534,16 @@ def _roundtrip_comparison_points(combo: dict, recommended_combo: dict | None, re
     if flight_no or arrival_text:
         points.append(f"去程:此方案{flight_no} {arrival_text}到达")
 
-    total = _to_float(combo.get("total_price"))
-    recommended_value = _to_float(recommended_total)
+    combo_pricing = combo.get("passenger_pricing") or {}
+    total = _to_float(
+        (combo_pricing.get("price_tiers") or {}).get("total_roundtrip_ref")
+        or combo.get("total_price")
+    )
+    recommended_pricing = recommended_combo.get("passenger_pricing") or {}
+    recommended_value = _to_float(
+        (recommended_pricing.get("price_tiers") or {}).get("total_roundtrip_ref")
+        or recommended_total
+    )
     if total is not None and recommended_value is not None:
         diff = recommended_value - total
         if diff > 0:
@@ -10538,7 +10553,6 @@ def _roundtrip_comparison_points(combo: dict, recommended_combo: dict | None, re
         else:
             points.append(f"价格:此方案¥{total:,.0f},与推荐持平")
 
-    recommended_combo = recommended_combo or {}
     recommended_return = recommended_combo.get("return") or {}
     return_dep = _minutes_to_text(_flight_departure_minutes(return_flight))
     recommended_return_dep = _minutes_to_text(_flight_departure_minutes(recommended_return))

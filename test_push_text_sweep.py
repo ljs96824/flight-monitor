@@ -78,11 +78,11 @@ class PushTextSweepTest(unittest.TestCase):
         )
 
         self.assertEqual(plan["passenger_pricing"]["factor"], 4.75)
-        self.assertEqual(plan["price"], 43842)
-        self.assertEqual(plan["roundtrip_price"], 43842)
-        self.assertEqual(plan["estimated_price"], 43842)
-        self.assertEqual(plan["price_tiers"]["total_roundtrip_ref"], 43842)
-        self.assertEqual(plan["price_tiers"]["total_estimated"], 43842)
+        self.assertEqual(plan["price"], 43843)
+        self.assertEqual(plan["roundtrip_price"], 43843)
+        self.assertEqual(plan["estimated_price"], 43843)
+        self.assertEqual(plan["price_tiers"]["total_roundtrip_ref"], 43843)
+        self.assertEqual(plan["price_tiers"]["total_estimated"], 43843)
 
     def test_non_meeting_feasibility_uses_neutral_time_wording(self):
         line = _plan_feasibility_line(
@@ -128,9 +128,9 @@ class PushTextSweepTest(unittest.TestCase):
             "label": "方案A",
             "tier": "首选推荐",
             "is_roundtrip": True,
-            "price": 43842,
-            "roundtrip_price": 43842,
-            "estimated_price": 43842,
+            "price": 43843,
+            "roundtrip_price": 43843,
+            "estimated_price": 43843,
             "outbound_price": 4001,
             "return_price": 5229,
             "purchase_mode": "两个单程拼接",
@@ -142,13 +142,13 @@ class PushTextSweepTest(unittest.TestCase):
                 "passengers": {"adult": 2, "child": 1, "elderly": 2, "infant": 0},
                 "passenger_label": "2成人+1儿童+2老人",
                 "single_adult_price": 9230,
-                "total_price": 43842,
+                "total_price": 43843,
             },
             "price_tiers": {
                 "unit_roundtrip": 9230,
-                "total_roundtrip_ref": 43842,
-                "total_estimated": 43842,
-                "per_person_estimated": 8768,
+                "total_roundtrip_ref": 43843,
+                "total_estimated": 43843,
+                "per_person_estimated": 8769,
                 "passenger_count": 5,
                 "passenger_label": "2成人+1儿童+2老人",
                 "passengers": {"adult": 2, "child": 1, "elderly": 2, "infant": 0},
@@ -175,9 +175,9 @@ class PushTextSweepTest(unittest.TestCase):
             "is_roundtrip": True,
             "recommendation": "单人参考价(成人口径)约¥9,230(单人往返)已超过预算，建议保持监控本条航线",
             "price_policy_reason": "单人往返参考价超过预算",
-            "display_price": 43842,
-            "current_price": 43842,
-            "transaction_price": 43842,
+            "display_price": 43843,
+            "current_price": 43843,
+            "transaction_price": 43843,
             "budget_compare_price": 9230,
             "budget_compare_scope": "per_person_roundtrip",
             "max_price": 8500,
@@ -199,11 +199,11 @@ class PushTextSweepTest(unittest.TestCase):
         for output in outputs:
             self.assertNotIn("当前预估实付总价¥9,230", output)
             self.assertNotIn("距会议开始", output)
-            self.assertNotIn("¥43,843", output)
+            self.assertNotIn("¥43,842", output)
         self.assertIn("往返搜索参考价¥9,230(单人往返)", outputs[0])
-        self.assertIn("¥43,842", email_body)
+        self.assertIn("¥43,843", email_body)
         self.assertIn("单人参考价(成人口径)约¥9,230(单人往返)", email_body)
-        self.assertIn("人均摊薄(全员÷5,含儿童折扣):约¥8,768", email_body)
+        self.assertIn("人均摊薄(全员÷5,含儿童折扣):约¥8,769", email_body)
         self.assertNotIn("人均预估实付", email_body)
 
 

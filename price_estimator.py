@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+
 from log_utils import safe_log
 
 
@@ -58,6 +60,7 @@ def normalize_passengers_for_pricing(passengers):
 
 
 PASSENGER_FARE_RATE_SOURCE = "PASSENGER_FARE_RATES"
+DISPLAY_PRICE_ROUNDING = ROUND_HALF_UP
 _logged_passenger_factor_keys = set()
 
 
@@ -162,6 +165,100 @@ def _passenger_label(passengers):
     return "+".join(parts) or "1成人"
 
 
+def _to_decimal(value) -> Decimal | None:
+    try:
+        if value is None or value == "":
+            return None
+        return Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+
+
+def round_display_price(value) -> int | None:
+    """金额展示唯一舍入口：Decimal ROUND_HALF_UP 到整数元。"""
+    number = _to_decimal(value)
+    if number is None:
+        return None
+    return int(number.quantize(Decimal("1"), rounding=DISPLAY_PRICE_ROUNDING))
+
+
+def build_display_prices(
+    outbound_unit_price,
+    return_unit_price=None,
+    passengers=None,
+    route_type=None,
+) -> dict:
+    """自成员分项向上汇总唯一的展示金额树。"""
+    normalized = normalize_passengers_for_pricing(passengers)
+    route_key, rates = passenger_fare_rates(route_type)
+
+    def build_leg(unit_price):
+        unit_decimal = _to_decimal(unit_price)
+        if unit_decimal is None:
+            return None
+        parts = []
+        raw_total = Decimal("0")
+        display_total = 0
+        for key, label in (
+            ("adult", "成人"),
+            ("elderly", "老人"),
+            ("child", "儿童"),
+            ("infant", "婴儿"),
+        ):
+            count = normalized.get(key, 0)
+            if not count:
+                continue
+            rate = Decimal(str(rates[key]))
+            raw_unit = unit_decimal * rate
+            raw_subtotal = raw_unit * count
+            display_unit = round_display_price(raw_unit)
+            display_subtotal = int(display_unit or 0) * count
+            raw_total += raw_subtotal
+            display_total += display_subtotal
+            parts.append(
+                {
+                    "type": key,
+                    "label": label,
+                    "count": count,
+                    "ratio": rates[key],
+                    "raw_unit_price": float(raw_unit),
+                    "raw_total": float(raw_subtotal),
+                    "unit_price": display_unit,
+                    "total": display_subtotal,
+                }
+            )
+        return {
+            "unit_price": float(unit_decimal),
+            "raw_total": float(raw_total),
+            "total": display_total,
+            "component_sum": sum(item["total"] for item in parts),
+            "parts": parts,
+            "parts_by_type": {item["type"]: item for item in parts},
+        }
+
+    outbound = build_leg(outbound_unit_price)
+    ret = build_leg(return_unit_price) if return_unit_price is not None else None
+    legs = [leg for leg in (outbound, ret) if leg]
+    total = sum(leg["total"] for leg in legs)
+    raw_total = sum((_to_decimal(leg["raw_total"]) or Decimal("0")) for leg in legs)
+    passenger_count = sum(normalized.values()) or 1
+    return {
+        "outbound": outbound,
+        "return": ret,
+        "total": total,
+        "raw_total": float(raw_total),
+        "per_person_blended": round_display_price(Decimal(total) / passenger_count),
+        "passenger_count": passenger_count,
+        "passengers": normalized,
+        "passenger_label": _passenger_label(normalized),
+        "factor": round(passenger_price_factor(normalized, route_type), 2),
+        "route_type": route_type or "",
+        "route_rate_key": route_key,
+        "note": rates["note"],
+        "rounding": "ROUND_HALF_UP",
+    }
+
+
 def build_passenger_price_breakdown(unit_price, passengers, cabin=None, route_type=None):
     """Build a passenger-aware total from one adult reference price.
 
@@ -170,42 +267,25 @@ def build_passenger_price_breakdown(unit_price, passengers, cabin=None, route_ty
     fare; child/infant ratios depend on route type.
     """
     price = _to_float(unit_price) or 0
-    passengers = normalize_passengers_for_pricing(passengers)
-    ratios = _passenger_ratios(route_type)
-    parts = []
-    total = 0.0
-    for key, label, ratio in (
-        ("adult", "成人", 1.0),
-        ("elderly", "老人", 1.0),
-        ("child", "儿童", ratios["child"]),
-        ("infant", "婴儿", ratios["infant"]),
-    ):
-        count = passengers.get(key, 0)
-        if not count:
-            continue
-        unit = price * ratio
-        subtotal = unit * count
-        total += subtotal
-        parts.append(
-            {
-                "type": key,
-                "label": label,
-                "count": count,
-                "ratio": ratio,
-                "unit_price": round(unit),
-                "total": round(subtotal),
-            }
-        )
+    tree = build_display_prices(price, None, passengers, route_type)
+    leg = tree["outbound"] or {"parts": [], "total": 0}
+    parts = [
+        {
+            key: item.get(key)
+            for key in ("type", "label", "count", "ratio", "unit_price", "total")
+        }
+        for item in leg["parts"]
+    ]
     return {
         "unit_price": price,
-        "total": round(total),
-        "factor": round(passenger_price_factor(passengers, route_type), 2),
-        "passengers": passengers,
-        "passenger_label": _passenger_label(passengers),
+        "total": leg["total"],
+        "factor": tree["factor"],
+        "passengers": tree["passengers"],
+        "passenger_label": tree["passenger_label"],
         "parts": parts,
         "cabin": cabin or "economy",
         "route_type": route_type or "",
-        "note": ratios["note"],
+        "note": tree["note"],
     }
 
 
@@ -220,8 +300,7 @@ def calc_total_for_passengers(unit_price, passengers, route_type=None, cabin=Non
 
 
 def _round_price(value):
-    number = _to_float(value)
-    return round(number) if number is not None else None
+    return round_display_price(value)
 
 
 def build_price_tiers(
@@ -242,10 +321,11 @@ def build_price_tiers(
     ret = _to_float(return_unit_price)
     is_roundtrip = ret is not None
 
+    display_prices = build_display_prices(outbound, ret if is_roundtrip else None, normalized, route_type)
     outbound_breakdown = build_passenger_price_breakdown(outbound, normalized, cabin, route_type)
     return_breakdown = build_passenger_price_breakdown(ret, normalized, cabin, route_type) if is_roundtrip else None
     unit_roundtrip = outbound + (ret or 0)
-    total_ref = outbound_breakdown["total"] + (return_breakdown["total"] if return_breakdown else 0)
+    total_ref = display_prices["total"]
 
     explicit_estimated = _round_price(total_estimated)
     if explicit_estimated is not None:
@@ -257,10 +337,15 @@ def build_price_tiers(
             est_outbound = outbound
         if is_roundtrip and est_return is None:
             est_return = ret
-        estimated_unit_total = est_outbound + (est_return or 0)
-        estimated_total = calc_total_price_for_passengers(estimated_unit_total, normalized, cabin, route_type)
+        estimated_display = build_display_prices(
+            est_outbound,
+            est_return if is_roundtrip else None,
+            normalized,
+            route_type,
+        )
+        estimated_total = estimated_display["total"]
 
-    per_person = round(estimated_total / passenger_count) if passenger_count else estimated_total
+    per_person = round_display_price(Decimal(estimated_total) / passenger_count) if passenger_count else estimated_total
     note = outbound_breakdown.get("note") or ""
     if passenger_count > 1:
         note = (

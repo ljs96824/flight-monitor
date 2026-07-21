@@ -586,7 +586,7 @@ class PassengerPriceScopesTest(unittest.TestCase):
 
         log = output.getvalue()
         self.assertIn("\u4f60\u9009\u65e5\u671f\u4ef7=3708", log)
-        self.assertIn("\u5168\u90e8\u4ef7\u683c=[3312.0, 3708.0, 3900.0]", log)
+        self.assertIn("\u5168\u90e8\u4ef7\u683c=[3312, 3708, 3900]", log)
         self.assertIn("\u662f\u5426\u5df2\u00d7\u4eba\u6570=True", log)
 
     def test_calendar_percentile_respects_pre_multiplied_passenger_rows(self):
