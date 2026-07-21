@@ -25,3 +25,10 @@ analytics/out/
 data/*.sqlite3.bak
 before_*.json
 after_*.json
+before_*.json
+after_*.json
+*_diff.json
+*_email.html
+*_snapshot.json
+after_*.log
+live_run_console.txt
