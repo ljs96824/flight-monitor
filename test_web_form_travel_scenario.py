@@ -48,7 +48,7 @@ class _Form(dict):
 
 class WebFormTravelScenarioTest(unittest.TestCase):
     def test_build_subscription_unknown_destination_has_field_specific_error(self):
-        with self.assertRaisesRegex(ValueError, "无法识别目的地 不存在城市"):
+        with self.assertRaisesRegex(ValueError, "无法识别目的地'不存在城市'"):
             build_subscription(
                 _Form(
                     {

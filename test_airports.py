@@ -44,9 +44,8 @@ class ResolveLocationTest(unittest.TestCase):
             },
         )
 
-    def test_abq_timezone_uses_existing_us_label(self):
-        self.assertEqual(get_airport_timezone("ABQ"), "美西")
-        self.assertNotEqual(get_airport_timezone("ABQ"), "美山")
+    def test_abq_timezone_uses_canonical_mountain_label(self):
+        self.assertEqual(get_airport_timezone("ABQ"), "美山")
 
 
 if __name__ == "__main__":

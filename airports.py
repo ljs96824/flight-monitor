@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from difflib import SequenceMatcher
 import re
+
+from log_utils import safe_log
 
 
 EXPECTED_AIRPORT_CODES = frozenset(
@@ -397,15 +400,82 @@ AIRPORTS = {
 }
 
 
+TIMEZONE_LABELS = {
+    "America/Chicago": "美中",
+    "America/Denver": "美山",
+    "America/Los_Angeles": "美西",
+    "America/New_York": "美东",
+    "Asia/Bangkok": "曼谷",
+    "Asia/Dubai": "迪拜",
+    "Asia/Hong_Kong": "香港",
+    "Asia/Qatar": "多哈",
+    "Asia/Seoul": "韩国",
+    "Asia/Shanghai": "北京",
+    "Asia/Singapore": "新加坡",
+    "Asia/Taipei": "台北",
+    "Asia/Tokyo": "日本",
+    "Europe/Amsterdam": "阿姆斯特丹",
+    "Europe/Berlin": "法兰克福",
+    "Europe/London": "伦敦",
+    "Europe/Paris": "巴黎",
+}
+
+_LEGACY_TIMEZONE_TO_IANA = {
+    "北京": "Asia/Shanghai",
+    "日本": "Asia/Tokyo",
+    "韩国": "Asia/Seoul",
+    "美东": "America/New_York",
+    "美中": "America/Chicago",
+    "美西": "America/Los_Angeles",
+    "伦敦": "Europe/London",
+    "巴黎": "Europe/Paris",
+    "香港": "Asia/Hong_Kong",
+    "台北": "Asia/Taipei",
+    "新加坡": "Asia/Singapore",
+    "曼谷": "Asia/Bangkok",
+    "迪拜": "Asia/Dubai",
+    "多哈": "Asia/Qatar",
+    "法兰克福": "Europe/Berlin",
+    "阿姆斯特丹": "Europe/Amsterdam",
+}
+
+# 机场主表中的 tz 在模块加载时统一规范为 IANA 名称；展示标签只走上面的唯一映射。
+for _code, _item in AIRPORTS.items():
+    _legacy_timezone = _item["tz"]
+    _item["tz"] = (
+        "America/Denver"
+        if _code == "ABQ"
+        else _LEGACY_TIMEZONE_TO_IANA[_legacy_timezone]
+    )
+
 AIRPORT_NAMES = {code: item["name"] for code, item in AIRPORTS.items()}
 AIRPORT_SHORT_NAMES = {code: item["short"] for code, item in AIRPORTS.items()}
 AIRPORT_CITY = {code: item["city"] for code, item in AIRPORTS.items()}
 AIRPORT_CITY_EN = {code: item["city_en"] for code, item in AIRPORTS.items()}
-AIRPORT_TIMEZONE = {code: item["tz"] for code, item in AIRPORTS.items()}
+AIRPORT_IANA_TIMEZONE = {code: item["tz"] for code, item in AIRPORTS.items()}
+AIRPORT_TIMEZONE = {
+    code: TIMEZONE_LABELS[iana_name]
+    for code, iana_name in AIRPORT_IANA_TIMEZONE.items()
+}
 
 CITY_AIRPORTS = {}
 for code, item in AIRPORTS.items():
     CITY_AIRPORTS.setdefault(item["city"], []).append(code)
+
+CITY_EN_AIRPORTS = {}
+for code, item in AIRPORTS.items():
+    CITY_EN_AIRPORTS.setdefault(item["city_en"].casefold(), []).append(code)
+
+AIRPORT_NAME_CODES = {}
+for code, item in AIRPORTS.items():
+    for name in (item["name"], item["short"]):
+        AIRPORT_NAME_CODES.setdefault(name, []).append(code)
+
+EXACT_LOCATION_AIRPORTS = {
+    **{city: list(codes) for city, codes in CITY_AIRPORTS.items()},
+    **{name: list(codes) for name, codes in AIRPORT_NAME_CODES.items()},
+    **{name.upper(): list(codes) for name, codes in CITY_EN_AIRPORTS.items()},
+}
 
 AIRPORT_TO_CITY = {}
 for city, airport_codes in CITY_AIRPORTS.items():
@@ -436,6 +506,7 @@ def validate_airports():
         assert not missing, f"{code} missing fields: {sorted(missing)}"
         for field in required_fields:
             assert str(item.get(field) or "").strip(), f"{code}.{field} is empty"
+        assert item["tz"] in TIMEZONE_LABELS, f"{code}.tz is not a mapped IANA timezone"
 
     for city, airport_codes in CITY_AIRPORTS.items():
         assert airport_codes, f"{city} has empty airport list"
@@ -485,24 +556,93 @@ def get_airport_short_name(iata_code):
     return AIRPORT_SHORT_NAMES.get(code, AIRPORT_NAMES.get(code, code))
 
 
+def _candidate_label(value: str, airports: list[str]) -> str:
+    return f"{value}（{'、'.join(airports)}）"
+
+
+def location_candidates(value, limit: int = 5) -> list[dict]:
+    """仅在中文名称与精选别名中寻找候选，不自动替用户选择。"""
+    text = str(value or "").strip()
+    if not text or not re.search(r"[\u3400-\u9fff]", text):
+        return []
+
+    ranked: dict[tuple[str, tuple[str, ...]], tuple[float, str]] = {}
+
+    def consider(search_text: str, candidate_value: str, airport_codes: list[str], candidate_type: str):
+        score = SequenceMatcher(None, text, search_text).ratio()
+        if text in search_text or search_text in text:
+            score = max(score, 0.72)
+        if score < 0.45:
+            return
+        key = (candidate_value, tuple(airport_codes))
+        previous = ranked.get(key)
+        if previous is None or score > previous[0]:
+            ranked[key] = (score, candidate_type)
+
+    for city, airport_codes in CITY_AIRPORTS.items():
+        consider(city, city, airport_codes, "city")
+    for airport_name, airport_codes in AIRPORT_NAME_CODES.items():
+        consider(airport_name, airport_name, airport_codes, "airport")
+    for alias, canonical in CITY_ALIASES.items():
+        airport_codes = CITY_AIRPORTS.get(canonical, [])
+        if airport_codes:
+            consider(alias, canonical, airport_codes, "city")
+
+    candidates = []
+    for (candidate_value, airport_codes), (score, candidate_type) in sorted(
+        ranked.items(),
+        key=lambda item: (-item[1][0], item[0][0]),
+    )[: max(0, int(limit))]:
+        codes = list(airport_codes)
+        candidates.append(
+            {
+                "value": candidate_value,
+                "type": candidate_type,
+                "airports": codes,
+                "label": _candidate_label(candidate_value, codes),
+                "similarity": round(score, 3),
+            }
+        )
+    return candidates
+
+
 def resolve_location(value):
-    """Resolve a city name or airport code into a display name and airport list."""
+    """严格解析已知城市、机场名称、精选别名或主表内 IATA。"""
     text = str(value or "").strip()
     if not text:
-        return {"value": "", "type": "airport", "airports": []}
+        return {"value": "", "type": "unknown", "airports": [], "candidates": []}
     resolved_text = CITY_ALIASES.get(text, text)
     if resolved_text != text:
-        print(f"[地点纠错] {text} → {resolved_text}")
-    upper = text.upper()
+        safe_log(f"[地点纠错] {text} -> {resolved_text}")
     if resolved_text in CITY_AIRPORTS:
         return {
             "value": resolved_text,
             "type": "city",
             "airports": CITY_AIRPORTS[resolved_text],
         }
-    if 2 <= len(upper) <= 4 and upper.isascii() and upper.isalpha():
+    english_airports = CITY_EN_AIRPORTS.get(resolved_text.casefold())
+    if english_airports:
+        city = AIRPORT_CITY[english_airports[0]]
+        return {"value": city, "type": "city", "airports": english_airports}
+    if resolved_text in AIRPORT_NAME_CODES:
+        airport_codes = AIRPORT_NAME_CODES[resolved_text]
+        return {
+            "value": airport_codes[0] if len(airport_codes) == 1 else resolved_text,
+            "type": "airport",
+            "airports": airport_codes,
+        }
+    upper = resolved_text.upper()
+    if re.fullmatch(r"[A-Z]{2,3}", upper) and upper in AIRPORTS:
         return {"value": upper, "type": "airport", "airports": [upper]}
-    return {"value": resolved_text, "type": "unknown", "airports": []}
+    unresolved = {
+        "value": resolved_text,
+        "type": "unknown",
+        "airports": [],
+    }
+    candidates = location_candidates(resolved_text)
+    if candidates:
+        unresolved["candidates"] = candidates
+    return unresolved
 
 
 def location_error_message(field, info):
@@ -511,14 +651,30 @@ def location_error_message(field, info):
     label = labels.get(str(field or "").strip(), "地点")
     value = str((info or {}).get("value") or "").strip()
     if value:
-        return f"无法识别{label} {value},请输入机场三字码或已支持的城市"
-    return f"{label}不能为空,请输入机场三字码或已支持的城市"
+        candidates = (info or {}).get("candidates") or []
+        candidate_text = "、".join(
+            str(item.get("label") or item.get("value") or "")
+            for item in candidates[:5]
+            if isinstance(item, dict)
+        )
+        if candidate_text:
+            return f"无法识别{label}'{value}'。请选择候选：{candidate_text}，或重新输入"
+        if re.fullmatch(r"[A-Za-z]{2,3}", value):
+            return f"无法识别{label}'{value}'，该IATA不在支持的机场表中，请重新输入"
+        return f"无法识别{label}'{value}'，请输入已支持的城市、机场名称或IATA"
+    return f"{label}不能为空，请输入已支持的城市、机场名称或IATA"
 
 
 def get_airport_timezone(iata_code):
     """Return a short user-facing timezone label for an airport."""
     code = str(iata_code or "").strip().upper()
     return AIRPORT_TIMEZONE.get(code, "当地")
+
+
+def get_airport_iana_timezone(iata_code):
+    """Return the canonical IANA timezone for an airport."""
+    code = str(iata_code or "").strip().upper()
+    return AIRPORT_IANA_TIMEZONE.get(code)
 
 
 def format_airport(iata_code):

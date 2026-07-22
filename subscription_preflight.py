@@ -99,11 +99,23 @@ def evaluate_subscription_preflight(
     *,
     today: date | None = None,
 ) -> dict:
+    invalid_reason = str(subscription.get("invalid_reason") or "").strip()
+    if subscription.get("validation_status") == "invalid" or invalid_reason:
+        return {
+            "skip": True,
+            "reason_code": "invalid_location",
+            "reason": invalid_reason or "地点无法解析",
+            "today": today or shanghai_today(),
+            "collection_dates": [],
+            "latest_date": None,
+        }
     collection_dates = derive_subscription_collection_dates(subscription)
     latest_date = max(collection_dates) if collection_dates else None
     effective_today = today or shanghai_today()
     return {
         "skip": bool(latest_date is not None and latest_date < effective_today),
+        "reason_code": "expired" if latest_date is not None and latest_date < effective_today else "",
+        "reason": "全部采集日期已过期" if latest_date is not None and latest_date < effective_today else "",
         "today": effective_today,
         "collection_dates": collection_dates,
         "latest_date": latest_date,

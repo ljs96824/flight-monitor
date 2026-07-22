@@ -12,7 +12,7 @@ try:
 except ModuleNotFoundError:  # Optional: only needed for PythonAnywhere payload sync.
     httpx = None
 from dotenv import load_dotenv
-from airports import location_error_message, resolve_location
+from airports import AIRPORTS, location_error_message, resolve_location
 
 
 BASE_DIR = Path(__file__).parent
@@ -143,6 +143,14 @@ def _estimated_saved_api_calls(sub: dict) -> int:
 
 
 def _log_preflight_skip(sub: dict, preflight: dict) -> None:
+    if preflight.get("reason_code") == "invalid_location":
+        safe_log(
+            f"[订阅前置校验] 订阅={_subscription_label(sub)} "
+            f"航线={_subscription_route_label(sub)} 结果=跳过 "
+            f"原因={preflight.get('reason') or sub.get('invalid_reason') or '地点无法解析'} "
+            f"省API={_estimated_saved_api_calls(sub)}"
+        )
+        return
     latest = preflight.get("latest_date")
     safe_log(
         f"[订阅前置校验] 订阅={_subscription_label(sub)} "
@@ -278,6 +286,15 @@ def _clean_airport_codes(codes) -> list[str]:
     return [str(code).strip().upper() for code in (codes or []) if str(code or "").strip()]
 
 
+def _resolved_airport_codes(location_info: dict) -> list[str]:
+    """只接受 resolve_location 从 AIRPORTS 主字典推导出的 IATA。"""
+    return [
+        code
+        for code in _clean_airport_codes((location_info or {}).get("airports"))
+        if code in AIRPORTS
+    ]
+
+
 def _subscription_airports(sub: dict, active_key: str, all_key: str, fallback_key: str) -> list[str]:
     basic = sub.get("basic") or {}
     active = _clean_airport_codes(sub.get(active_key) or basic.get(active_key))
@@ -365,15 +382,23 @@ def _calendar_source_for_route(aggregator: FlightAggregator, origin: str, dest: 
 
 
 def _price_hint_route_candidates(origin: str, dest: str) -> list[str]:
-    origin_code = str(origin or "").strip().upper()
-    dest_code = str(dest or "").strip().upper()
-    if not origin_code or not dest_code:
+    origin_info = resolve_location(origin)
+    dest_info = resolve_location(dest)
+    if origin_info.get("type") == "unknown" or dest_info.get("type") == "unknown":
         return []
-    return [
-        f"{origin_code}-{dest_code}",
-        f"{origin_code}_{dest_code}",
-        f"{origin_code}→{dest_code}",
-    ]
+    routes = []
+    for origin_code in origin_info.get("airports") or []:
+        for dest_code in dest_info.get("airports") or []:
+            if origin_code not in AIRPORTS or dest_code not in AIRPORTS:
+                continue
+            routes.extend(
+                [
+                    f"{origin_code}-{dest_code}",
+                    f"{origin_code}_{dest_code}",
+                    f"{origin_code}→{dest_code}",
+                ]
+            )
+    return routes
 
 
 def price_hint_for_route(origin: str, dest: str, *, data_dir: Path | None = None) -> dict:
@@ -474,6 +499,52 @@ def _normalize_goals(notification_goals: dict | None, legacy_goals) -> list[str]
     return normalized
 
 
+def _invalid_location_subscription(
+    item: dict,
+    *,
+    origin_value,
+    destination_value,
+    origin_info: dict,
+    destination_info: dict,
+) -> dict:
+    invalid_values = []
+    if origin_info.get("type") == "unknown":
+        invalid_values.append(("出发地", str(origin_value or "").strip()))
+    if destination_info.get("type") == "unknown":
+        invalid_values.append(("目的地", str(destination_value or "").strip()))
+    if len(invalid_values) == 1:
+        invalid_reason = f"地点无法解析(输入={invalid_values[0][1] or '空'})"
+    else:
+        details = "、".join(f"{label}输入={value or '空'}" for label, value in invalid_values)
+        invalid_reason = f"地点无法解析({details})"
+
+    basic = item.get("basic") if isinstance(item.get("basic"), dict) else {}
+    invalid = dict(item)
+    invalid.update(
+        {
+            "_index": item.get("_index", item.get("index")),
+            "name": item.get("name") or "网页订阅",
+            "origin": origin_value,
+            "destination": destination_value,
+            "depart_date": item.get("depart_date") or basic.get("depart_date") or "",
+            "status": "invalid",
+            "validation_status": "invalid",
+            "invalid_reason": invalid_reason,
+            "validation_errors": [
+                location_error_message("origin", origin_info)
+                for _label, _value in invalid_values
+                if _label == "出发地"
+            ]
+            + [
+                location_error_message("destination", destination_info)
+                for _label, _value in invalid_values
+                if _label == "目的地"
+            ],
+        }
+    )
+    return invalid
+
+
 def _normalize_subscription(item: dict) -> dict:
     item = migrate_old_subscription(item)
     hard_constraints = dict(item.get("hard_constraints") or {})
@@ -508,23 +579,17 @@ def _normalize_subscription(item: dict) -> dict:
     )
     origin_info = resolve_location(origin_value)
     destination_info = resolve_location(destination_value)
-    if origin_info.get("type") == "unknown":
-        raise ValueError(location_error_message("origin", origin_info))
-    if destination_info.get("type") == "unknown":
-        raise ValueError(location_error_message("destination", destination_info))
-    origin_airports = (
-        item.get("origin_airports")
-        or basic.get("origin_airports")
-        or origin_info["airports"]
-    )
-    destination_airports = (
-        item.get("destination_airports")
-        or basic.get("destination_airports")
-        or basic.get("dest_airports")
-        or destination_info["airports"]
-    )
-    origin_airports = _clean_airport_codes(origin_airports)
-    destination_airports = _clean_airport_codes(destination_airports)
+    if origin_info.get("type") == "unknown" or destination_info.get("type") == "unknown":
+        return _invalid_location_subscription(
+            item,
+            origin_value=origin_value,
+            destination_value=destination_value,
+            origin_info=origin_info,
+            destination_info=destination_info,
+        )
+    # 旧订阅可能残留错误机场列表；全部机场必须由地点解析结果重新推导。
+    origin_airports = _resolved_airport_codes(origin_info)
+    destination_airports = _resolved_airport_codes(destination_info)
     if not origin_airports:
         raise ValueError(location_error_message("origin", origin_info))
     if not destination_airports:
@@ -662,12 +727,12 @@ def _normalize_subscription(item: dict) -> dict:
         "_index": item.get("_index", item.get("index")),
         "name": item.get("name") or "网页订阅",
         "origin": origin_info["value"],
-        "origin_type": item.get("origin_type") or origin_info["type"],
+        "origin_type": origin_info["type"],
         "origin_airports": origin_airports,
         "origin_airports_active": origin_airports_active,
         "origin_airport_preference": origin_airport_preference,
         "destination": destination_info["value"],
-        "destination_type": item.get("destination_type") or destination_info["type"],
+        "destination_type": destination_info["type"],
         "destination_airports": destination_airports,
         "destination_airports_active": destination_airports_active,
         "route_type": route_type,
@@ -1025,7 +1090,8 @@ def load_file_subscriptions() -> list[dict]:
     return [
         sub
         for sub in active
-        if sub.get("origin") and sub.get("destination") and sub.get("depart_date")
+        if sub.get("validation_status") == "invalid"
+        or (sub.get("origin") and sub.get("destination") and sub.get("depart_date"))
     ]
 
 

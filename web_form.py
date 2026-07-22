@@ -14,7 +14,16 @@ from pathlib import Path
 from dotenv import load_dotenv
 from flask import Flask, jsonify, redirect, render_template_string, request, url_for
 
-from airports import AIRPORT_SHORT_NAMES, CITY_AIRPORTS, CITY_ALIASES, format_airport, location_error_message, resolve_location
+from airports import (
+    AIRPORTS,
+    AIRPORT_SHORT_NAMES,
+    CITY_AIRPORTS,
+    CITY_ALIASES,
+    EXACT_LOCATION_AIRPORTS,
+    format_airport,
+    location_error_message,
+    resolve_location,
+)
 from analyzer import apply_default_rules, build_price_hint_from_calendar
 from filename_utils import sanitize_filename
 from log_utils import safe_log
@@ -29,21 +38,6 @@ PAGE_PAYLOADS_DIR = BASE_DIR / "data" / "payloads"
 load_dotenv(BASE_DIR / ".env", encoding="utf-8")
 
 app = Flask(__name__)
-
-DESTINATION_ALIASES = {
-    "ORLANDO": "MCO",
-    "奥兰多": "MCO",
-    "LOS ANGELES": "LAX",
-    "洛杉矶": "LAX",
-    "NEW YORK": "JFK",
-    "纽约": "JFK",
-    "SAN FRANCISCO": "SFO",
-    "旧金山": "SFO",
-    "TOKYO": "NRT",
-    "东京": "NRT",
-    "BANGKOK": "BKK",
-    "曼谷": "BKK",
-}
 
 CITY_LABELS = {
     "PVG": "上海PVG",
@@ -1538,6 +1532,8 @@ FORM_TEMPLATE = """
     const cityAirports = {{ city_airports|tojson }};
     const cityAliases = {{ city_aliases|tojson }};
     const airportShortNames = {{ airport_short_names|tojson }};
+    const airportCodes = new Set({{ airport_codes|tojson }});
+    const exactLocationAirports = {{ exact_location_airports|tojson }};
     const editSubscription = {{ edit_subscription|tojson }};
 
     const form = document.getElementById('subscription-form');
@@ -2079,13 +2075,73 @@ FORM_TEMPLATE = """
         return [];
       }
       const upper = text.toUpperCase();
-      if (cityAirports[text]) {
-        return cityAirports[text];
+      const corrected = cityAliases[text] || cityAliases[upper] || text;
+      const exactKey = exactLocationAirports[corrected]
+        ? corrected
+        : (exactLocationAirports[corrected.toUpperCase()] ? corrected.toUpperCase() : '');
+      if (exactKey) {
+        return exactLocationAirports[exactKey];
       }
-      if (/^[A-Z]{2,4}$/.test(upper)) {
+      if (/^[A-Z]{2,3}$/.test(upper) && airportCodes.has(upper)) {
         return [upper];
       }
       return [];
+    }
+
+    function editDistance(left, right) {
+      const a = Array.from(String(left || ''));
+      const b = Array.from(String(right || ''));
+      const row = Array.from({length: b.length + 1}, (_, index) => index);
+      a.forEach((char, i) => {
+        let previous = row[0];
+        row[0] = i + 1;
+        b.forEach((other, j) => {
+          const old = row[j + 1];
+          row[j + 1] = Math.min(
+            row[j + 1] + 1,
+            row[j] + 1,
+            previous + (char === other ? 0 : 1)
+          );
+          previous = old;
+        });
+      });
+      return row[b.length];
+    }
+
+    function locationCandidates(value) {
+      const text = String(value || '').trim();
+      if (!/[\u3400-\u9fff]/.test(text)) return [];
+      const bestByValue = new Map();
+      const consider = (searchText, candidateValue, airports) => {
+        if (!/[\u3400-\u9fff]/.test(searchText) || !airports?.length) return;
+        const distance = editDistance(text, searchText);
+        const maxLength = Math.max(Array.from(text).length, Array.from(searchText).length, 1);
+        let score = 1 - (distance / maxLength);
+        if (searchText.includes(text) || text.includes(searchText)) score = Math.max(score, 0.72);
+        if (score < 0.45) return;
+        const previous = bestByValue.get(candidateValue);
+        if (!previous || score > previous.score) {
+          bestByValue.set(candidateValue, {value: candidateValue, airports, score});
+        }
+      };
+      Object.entries(exactLocationAirports).forEach(([name, airports]) => {
+        consider(name, name, airports);
+      });
+      Object.entries(cityAliases).forEach(([alias, canonical]) => {
+        consider(alias, canonical, cityAirports[canonical] || []);
+      });
+      return Array.from(bestByValue.values())
+        .sort((left, right) => right.score - left.score || left.value.localeCompare(right.value))
+        .slice(0, 5);
+    }
+
+    function escapeHtml(value) {
+      return String(value || '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
     }
 
     function renderAirportTags(kind) {
@@ -2185,27 +2241,27 @@ FORM_TEMPLATE = """
       }
       const suggestion = aliasSuggestion(value);
       if (suggestion && suggestion !== value) {
-        const buttonId = `${kind}-alias-suggestion`;
-        setFieldError(
-          input,
-          errorEl,
-          `未识别'${value}',是否指'${suggestion}'? <button id="${buttonId}" class="inline-suggestion" type="button">使用${suggestion}</button> 或输入机场三字码`
-        );
-        document.getElementById(buttonId)?.addEventListener('click', () => {
-          if (kind === 'origin') {
-            originManual.value = suggestion;
-          } else {
-            destinationInput.value = suggestion;
-          }
-          updateAirportSelection(kind);
-          validateLocationField(kind);
-          refreshPriceHint();
-        });
-        return false;
+        console.info(`[地点纠错] ${value} -> ${suggestion}`);
+        updateAirportSelection(kind);
+        setFieldError(input, errorEl, '');
+        return true;
       }
       const airports = resolveAirportsForInput(value);
       if (!airports.length) {
-        setFieldError(input, errorEl, `未识别'${value}',请输入机场三字码或已支持的城市`);
+        const candidates = locationCandidates(value);
+        const choices = candidates.map((candidate, index) => (
+          `<button id="${kind}-location-candidate-${index}" class="inline-suggestion" type="button">${escapeHtml(candidate.value)}（${candidate.airports.join('、')}）</button>`
+        )).join('、');
+        const candidateText = choices ? ` 可选：${choices}；` : ' ';
+        setFieldError(input, errorEl, `无法识别地点'${escapeHtml(value)}'。${candidateText}请重新输入`);
+        candidates.forEach((candidate, index) => {
+          document.getElementById(`${kind}-location-candidate-${index}`)?.addEventListener('click', () => {
+            input.value = candidate.value;
+            updateAirportSelection(kind);
+            validateLocationField(kind);
+            refreshPriceHint();
+          });
+        });
         return false;
       }
       setFieldError(input, errorEl, '');
@@ -4776,8 +4832,7 @@ def start_background_collection(subscription: dict) -> None:
 
 
 def normalize_destination(value: str) -> str:
-    text = value.strip().upper()
-    return DESTINATION_ALIASES.get(text, text)
+    return value.strip()
 
 
 def city_label(code: str) -> str:
@@ -5690,6 +5745,8 @@ def index():
         city_airports=CITY_AIRPORTS,
         city_aliases=CITY_ALIASES,
         airport_short_names=AIRPORT_SHORT_NAMES,
+        airport_codes=sorted(AIRPORTS),
+        exact_location_airports=EXACT_LOCATION_AIRPORTS,
         edit_subscription=edit_subscription or {},
         edit_index=edit_index,
         form_error="",
@@ -5698,15 +5755,17 @@ def index():
 
 @app.get("/price_hint")
 def price_hint():
-    origin = request.args.get("origin", "").strip().upper()
-    dest = request.args.get("dest", "").strip().upper()
-    if not origin or not dest:
+    origin_info = resolve_location(request.args.get("origin", ""))
+    dest_info = resolve_location(request.args.get("dest", ""))
+    if origin_info.get("type") == "unknown" or dest_info.get("type") == "unknown":
         return jsonify({"has_data": False, "scope": "oneway"})
-    for route in (f"{origin}-{dest}", f"{origin}_{dest}", f"{origin}→{dest}"):
-        hint = build_price_hint_from_calendar(load_calendar(route))
-        if hint.get("has_data"):
-            hint["route"] = route
-            return jsonify(hint)
+    for origin in origin_info.get("airports") or []:
+        for dest in dest_info.get("airports") or []:
+            for route in (f"{origin}-{dest}", f"{origin}_{dest}", f"{origin}→{dest}"):
+                hint = build_price_hint_from_calendar(load_calendar(route))
+                if hint.get("has_data"):
+                    hint["route"] = route
+                    return jsonify(hint)
     return jsonify({"has_data": False, "scope": "oneway"})
 
 
@@ -5744,6 +5803,8 @@ def subscribe():
             city_airports=CITY_AIRPORTS,
             city_aliases=CITY_ALIASES,
             airport_short_names=AIRPORT_SHORT_NAMES,
+            airport_codes=sorted(AIRPORTS),
+            exact_location_airports=EXACT_LOCATION_AIRPORTS,
             edit_subscription={},
             edit_index=None,
             form_error=str(exc),

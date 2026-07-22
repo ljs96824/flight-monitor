@@ -444,8 +444,8 @@ class WebFormTemplateStep2Test(unittest.TestCase):
         self.assertIn("function refreshPriceHint", FORM_TEMPLATE)
         self.assertIn("function updateMobileActionBar", FORM_TEMPLATE)
         self.assertIn('id="mobile-action-bar"', FORM_TEMPLATE)
-        self.assertIn('未识别', FORM_TEMPLATE)
-        self.assertIn('是否指', FORM_TEMPLATE)
+        self.assertIn('无法识别地点', FORM_TEMPLATE)
+        self.assertIn('可选：', FORM_TEMPLATE)
         self.assertIn('该航线近期参考区间', FORM_TEMPLATE)
         self.assertIn('当前条件较严格', FORM_TEMPLATE)
 

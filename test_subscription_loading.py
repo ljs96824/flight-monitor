@@ -4,6 +4,7 @@ import sys
 import tempfile
 import types
 import unittest
+from datetime import date
 from pathlib import Path
 from unittest.mock import patch
 
@@ -269,7 +270,7 @@ class SubscriptionLoadingTest(unittest.TestCase):
 
         self.assertEqual(aggregator.reasons, ["弹性日期"])
 
-    def test_bad_subscription_is_skipped_without_stopping_batch(self):
+    def test_bad_subscription_is_marked_invalid_without_stopping_batch(self):
         records = [
             {
                 "id": "bad-location",
@@ -297,12 +298,15 @@ class SubscriptionLoadingTest(unittest.TestCase):
             finally:
                 main.SUBSCRIPTIONS_PATH = original_path
 
-        self.assertEqual(len(loaded), 1)
-        self.assertEqual(loaded[0]["id"], "good-osaka")
-        self.assertEqual(loaded[0]["destination"], "大阪")
-        self.assertEqual(loaded[0]["destination_airports"], ["KIX", "ITM"])
+        self.assertEqual(len(loaded), 2)
+        invalid = next(item for item in loaded if item["id"] == "bad-location")
+        valid = next(item for item in loaded if item["id"] == "good-osaka")
+        self.assertEqual(invalid["validation_status"], "invalid")
+        self.assertIn("地点无法解析", invalid["invalid_reason"])
+        self.assertEqual(valid["destination"], "大阪")
+        self.assertEqual(valid["destination_airports"], ["KIX", "ITM"])
 
-    def test_unknown_city_inside_basic_is_reported_and_skipped(self):
+    def test_unknown_city_inside_basic_is_marked_for_preflight_skip(self):
         records = [
             {
                 "id": "bad-basic-location",
@@ -321,15 +325,16 @@ class SubscriptionLoadingTest(unittest.TestCase):
             path.write_text(json.dumps(records, ensure_ascii=False), encoding="utf-8")
             main.SUBSCRIPTIONS_PATH = path
             try:
-                with patch("builtins.print") as fake_print:
-                    loaded = main.load_file_subscriptions()
+                loaded = main.load_file_subscriptions()
             finally:
                 main.SUBSCRIPTIONS_PATH = original_path
 
-        self.assertEqual(loaded, [])
-        printed = "\n".join(str(call.args[0]) for call in fake_print.call_args_list if call.args)
-        self.assertIn("bad-basic-location", printed)
-        self.assertIn("无法识别目的地 不存在城市", printed)
+        self.assertEqual(len(loaded), 1)
+        self.assertEqual(loaded[0]["validation_status"], "invalid")
+        self.assertIn("输入=不存在城市", loaded[0]["invalid_reason"])
+        preflight = main.evaluate_subscription_preflight(loaded[0], today=date(2026, 7, 22))
+        self.assertTrue(preflight["skip"])
+        self.assertEqual(preflight["reason_code"], "invalid_location")
 
 
     def test_paused_subscription_is_skipped_with_log(self):

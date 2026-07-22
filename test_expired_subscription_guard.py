@@ -160,6 +160,7 @@ class ExpiredSubscriptionGuardTest(unittest.TestCase):
             ok = main.process_subscription(
                 _subscription(depart_date="2026-08-03", date_flexibility=0),
                 ensure_db=False,
+                manage_collection_round=False,
             )
 
         self.assertFalse(ok)
@@ -200,7 +201,12 @@ class ExpiredSubscriptionGuardTest(unittest.TestCase):
             patch("main.print_request_cache_stats"),
             patch("main.send", return_value=True) as push_send,
         ):
-            ok = main.process_subscription(subscription, ensure_db=False, web_trigger=True)
+            ok = main.process_subscription(
+                subscription,
+                ensure_db=False,
+                web_trigger=True,
+                manage_collection_round=False,
+            )
 
         self.assertFalse(ok)
         content = push_send.call_args.args[0]
