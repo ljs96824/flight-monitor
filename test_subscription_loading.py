@@ -18,6 +18,68 @@ import main
 
 
 class SubscriptionLoadingTest(unittest.TestCase):
+    def test_july21_shanghai_osaka_dump_keeps_all_budget_scopes_per_person(self):
+        july21_subscription = {
+            "origin": "上海",
+            "destination": "大阪",
+            "origin_airports": ["PVG", "SHA"],
+            "origin_airports_active": ["PVG", "SHA"],
+            "destination_airports": ["KIX", "ITM"],
+            "destination_airports_active": ["KIX", "ITM"],
+            "route_type": "international",
+            "monitor_mode": "quick",
+            "depart_date": "2026-10-01",
+            "return_date": "2026-10-06",
+            "round_trip": True,
+            "passenger_count": 5,
+            "budget_scope": "per_person",
+            "max_budget_scope": "per_person",
+            "target_price_scope": "per_person",
+            "basic": {
+                "route_type": "international",
+                "passenger_count": 5,
+            },
+            "constraints": {
+                "budget_scope": "per_person",
+                "max_budget_scope": "per_person",
+                "target_price_scope": "per_person",
+            },
+            "hard_constraints": {
+                "max_budget": 8000,
+                "target_price": 6000,
+                "budget_scope": "per_person",
+                "max_budget_scope": "per_person",
+                "target_price_scope": "per_person",
+            },
+            "preferences": {
+                "passengers": {
+                    "adult": 2,
+                    "child": 1,
+                    "elderly": 2,
+                    "infant": 0,
+                },
+                "passenger_count": 5,
+                "budget_scope": "per_person",
+                "max_budget_scope": "per_person",
+                "target_price_scope": "per_person",
+            },
+            "soft_preferences": {
+                "max_budget": 8000,
+                "target_price": 6000,
+                "budget_scope": "per_person",
+                "max_budget_scope": "per_person",
+                "target_price_scope": "per_person",
+            },
+        }
+
+        normalized = main._normalize_subscription(july21_subscription)
+
+        self.assertEqual(normalized["budget_scope"], "per_person")
+        self.assertEqual(normalized["max_budget_scope"], "per_person")
+        self.assertEqual(normalized["target_price_scope"], "per_person")
+        self.assertEqual(normalized["max_budget"], 8000)
+        self.assertEqual(normalized["target_price"], 6000)
+
     def test_airport_matrix_decision_counts_fresh_and_cached_results_equally(self):
         class FakeAggregator:
             def __init__(self, cache_status):

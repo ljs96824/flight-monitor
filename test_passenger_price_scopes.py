@@ -4,6 +4,7 @@ import unittest
 import io
 from contextlib import redirect_stdout
 from datetime import date, timedelta
+from unittest.mock import patch
 
 
 class _DummyFlask:
@@ -45,6 +46,7 @@ from price_estimator import (
     passenger_price_factor,
     reset_passenger_factor_log_cache,
 )
+from analyzer import _roundtrip_exclusion_basis, passenger_budget_limits
 from web_form import build_subscription
 from notifier import (
     _apply_passenger_pricing_to_plans,
@@ -140,6 +142,182 @@ class PassengerPriceScopesTest(unittest.TestCase):
         self.assertEqual(sub["constraints"]["target_price_scope"], "per_person")
         self.assertEqual(sub["hard_constraints"]["budget_scope"], "per_person")
         self.assertEqual(sub["soft_preferences"]["target_price_scope"], "per_person")
+
+    def test_legacy_budget_scope_total_does_not_override_per_person_default(self):
+        sub = build_subscription(
+            _base_form(
+                monitor_mode="quick",
+                origin_select="上海",
+                destination="大阪",
+                route_type="international",
+                max_budget="8000",
+                target_price="6000",
+                budget_scope="total",
+                passenger_count="5",
+                adult_count="2",
+                child_count="1",
+                elderly_count="2",
+                infant_count="0",
+            )
+        )
+
+        for container_name in (
+            "constraints",
+            "hard_constraints",
+            "soft_preferences",
+        ):
+            container = sub[container_name]
+            self.assertEqual(container["budget_scope"], "per_person")
+            self.assertEqual(container["max_budget_scope"], "per_person")
+
+    def test_explicit_all_budget_scope_remains_all(self):
+        sub = build_subscription(
+            _base_form(
+                monitor_mode="quick",
+                max_budget_scope="all",
+                target_price_scope="all",
+                budget_scope="per_person",
+            )
+        )
+
+        for container_name in (
+            "constraints",
+            "hard_constraints",
+            "soft_preferences",
+        ):
+            container = sub[container_name]
+            self.assertEqual(container["budget_scope"], "all")
+            self.assertEqual(container["max_budget_scope"], "all")
+            self.assertEqual(container["target_price_scope"], "all")
+
+    def test_legacy_shanghai_osaka_budget_scope_stays_consistent_end_to_end(self):
+        passengers = {"adult": 2, "child": 1, "elderly": 2, "infant": 0}
+        sub = build_subscription(
+            _base_form(
+                monitor_mode="precise",
+                origin_select="上海",
+                destination="大阪",
+                route_type="international",
+                max_budget="8000",
+                target_price="6000",
+                budget_scope="total",
+                adult_count="2",
+                child_count="1",
+                elderly_count="2",
+                infant_count="0",
+            )
+        )
+        constraints = sub["hard_constraints"]
+        limits = passenger_budget_limits(
+            max_budget=constraints["max_budget"],
+            ideal_price=constraints["target_price"],
+            budget_scope=constraints["budget_scope"],
+            passengers=passengers,
+            route_type="international",
+            round_trip=True,
+            max_budget_scope=constraints["max_budget_scope"],
+            target_price_scope=constraints["target_price_scope"],
+        )
+        basis = _roundtrip_exclusion_basis(
+            constraints,
+            limits["max_budget_total"],
+            passengers,
+            "international",
+        )
+
+        self.assertEqual(limits["max_budget_compare"], 8000)
+        self.assertEqual(limits["max_budget_compare_scope"], "per_person_roundtrip")
+        self.assertEqual(limits["max_budget_total"], 38000)
+        self.assertIn(
+            "最高可接受价¥38,000(全员,=单人¥8,000×4.75)",
+            basis,
+        )
+
+        analysis_result = {
+            "round_trip_analysis": {
+                "top_combinations": [
+                    {
+                        "outbound": {"flight_no": "CA857", "price": 7200},
+                        "return": {"flight_no": "MU730", "price": 7197},
+                        "outbound_price": 7200,
+                        "return_price": 7197,
+                        "total_price": 14397,
+                    }
+                ],
+                "total_min": 14397,
+            },
+            "decision": {"conclusion": "can_watch", "confidence": "medium"},
+        }
+        route_info = {
+            "round_trip": True,
+            "origin": "PVG",
+            "destination": "KIX",
+            "depart_date": "2026-10-01",
+            "return_date": "2026-10-06",
+            "target_price": 6000,
+            "max_budget": 8000,
+            "route_type": "international",
+        }
+        output = io.StringIO()
+        with patch("notifier.get_last_push_price", return_value=None), patch(
+            "notifier.get_last_push_snapshot", return_value=None
+        ), patch("notifier.track_plan_status", return_value=None), redirect_stdout(output):
+            payload = build_notification_payload(
+                analysis_result,
+                route_info=route_info,
+                subscription=sub,
+            )
+
+        self.assertEqual(payload["budget_compare_scope"], "per_person_roundtrip")
+        self.assertEqual(payload["max_price"], 8000)
+        self.assertEqual(payload["purchase_budget_decision"]["max_budget"], 8000)
+        self.assertIn("¥8,000(单人往返)", payload["buy_condition"])
+        self.assertIn(
+            "[购买建议] unit_roundtrip=14397 max_budget=8000",
+            output.getvalue(),
+        )
+
+    def test_explicit_all_shanghai_osaka_budget_uses_raw_total(self):
+        passengers = {"adult": 2, "child": 1, "elderly": 2, "infant": 0}
+        sub = build_subscription(
+            _base_form(
+                monitor_mode="precise",
+                origin_select="上海",
+                destination="大阪",
+                route_type="international",
+                max_budget="8000",
+                target_price="6000",
+                max_budget_scope="all",
+                target_price_scope="all",
+                adult_count="2",
+                child_count="1",
+                elderly_count="2",
+                infant_count="0",
+            )
+        )
+        constraints = sub["hard_constraints"]
+        limits = passenger_budget_limits(
+            max_budget=constraints["max_budget"],
+            ideal_price=constraints["target_price"],
+            budget_scope=constraints["budget_scope"],
+            passengers=passengers,
+            route_type="international",
+            round_trip=True,
+            max_budget_scope=constraints["max_budget_scope"],
+            target_price_scope=constraints["target_price_scope"],
+        )
+        basis = _roundtrip_exclusion_basis(
+            constraints,
+            limits["max_budget_total"],
+            passengers,
+            "international",
+        )
+
+        self.assertEqual(limits["max_budget_compare_scope"], "all_passengers_roundtrip")
+        self.assertEqual(limits["max_budget_compare"], 8000)
+        self.assertEqual(limits["max_budget_total"], 8000)
+        self.assertEqual(limits["max_budget_pp_oneway"] * 2, 1684.22)
+        self.assertIn("最高可接受价¥8,000(全员往返)", basis)
     def test_roundtrip_plan_card_shows_all_passenger_total_and_unit_reference(self):
         plan = {
             "label": "方案A",

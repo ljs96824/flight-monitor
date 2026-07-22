@@ -5021,7 +5021,8 @@ def build_subscription(form) -> dict:
     max_budget = None
     if budget_strategy == "explicit" and max_budget_mode == "fixed":
         max_budget = infer_max_budget(parse_int(form.get("max_budget"), 0), target_price)
-    max_budget_scope = normalize_price_scope(form.get("max_budget_scope") or form.get("budget_scope") or "per_person")
+    # 旧版快速表单的 budget_scope=total 是隐式默认值，不能当作用户明确选择。
+    max_budget_scope = normalize_price_scope(form.get("max_budget_scope") or "per_person")
     target_price_scope = normalize_price_scope(form.get("target_price_scope") or max_budget_scope)
     budget_scope = max_budget_scope
     day_trip_period = form.get("day_trip_period", "morning").strip() or "morning"
