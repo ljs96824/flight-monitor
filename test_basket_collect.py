@@ -9,8 +9,17 @@ from unittest.mock import patch
 
 
 class FakeSource:
+    calls = []
+
     def __init__(self, name):
         self.name = name
+
+    def fetch(self, origin, dest, date_str, cabin_class="economy"):
+        self.__class__.calls.append((self.name, origin, dest, date_str, cabin_class))
+        return {
+            "source_status": "success",
+            "flights": [{"flight_combo": "TEST1", "price": 100}],
+        }
 
 
 class FakeAggregator:
@@ -84,6 +93,7 @@ class BasketCollectTest(unittest.TestCase):
     def setUp(self):
         FakeAggregator.instances.clear()
         FakeAggregator.collect_calls.clear()
+        FakeSource.calls.clear()
         FreshObservationSource.calls.clear()
 
     def test_initial_queue_dates_are_fixed_after_first_creation(self):
@@ -131,12 +141,14 @@ class BasketCollectTest(unittest.TestCase):
                         now=datetime(2026, 7, 10, 9, 30, 0),
                         state_path=Path(tmp) / "basket_state.json",
                         db_path=Path(tmp) / "observations.sqlite3",
+                        usage_path=Path(tmp) / "api_usage.json",
                         source_builder=fake_source_builder,
                         aggregator_factory=FakeAggregator,
                     )
 
         self.assertEqual(summary, {"round_id": "basket_20260710T093000", "queues": 6, "success": 4, "failed": 2, "written": 123})
-        self.assertTrue(all(call[3]["force_fresh"] is True for call in FakeAggregator.collect_calls))
+        self.assertTrue(all(call[3]["force_fresh"] is False for call in FakeAggregator.collect_calls))
+        self.assertEqual(len(FakeSource.calls), 10)
         self.assertTrue(all(instance.enrichment_sources == [] for instance in FakeAggregator.instances))
         self.assertEqual(
             [[source.name for source in instance.search_sources] for instance in FakeAggregator.instances],
@@ -161,6 +173,7 @@ class BasketCollectTest(unittest.TestCase):
                         now=datetime(2026, 7, 10, 9, 30, 0),
                         state_path=root / "basket_state.json",
                         db_path=db_path,
+                        usage_path=root / "api_usage.json",
                         source_builder=fresh_source_builder,
                         aggregator_factory=FlightAggregator,
                     )
@@ -179,6 +192,7 @@ class BasketCollectTest(unittest.TestCase):
         self.assertEqual(sum(1 for call in FreshObservationSource.calls if call[0] == "juhe"), 6)
         self.assertEqual(sum(1 for call in FreshObservationSource.calls if call[0] == "hasdata"), 4)
         self.assertEqual(sum(1 for call in FreshObservationSource.calls if call[0] == "duffel"), 0)
+        self.assertIn("[采集计划] 唯一请求=10", output.getvalue())
         self.assertIn("[篮子完成] 队列=6 成功=6 失败=0 总写入=10", output.getvalue())
 
 

@@ -196,6 +196,79 @@ class SubscriptionLoadingTest(unittest.TestCase):
             {"PVGKIX", "SHAKIX"},
         )
 
+    def test_airport_matrix_marks_secondary_combo_as_outside_plan_fallback(self):
+        class FakeAggregator:
+            def __init__(self):
+                self.reasons = []
+
+            def collect(
+                self,
+                origin,
+                destination,
+                date_str,
+                cabin_classes=None,
+                request_reason=None,
+            ):
+                self.reasons.append(request_reason)
+                return {
+                    "flights": [
+                        {
+                            "flight_combo": f"{origin}{destination}",
+                            "price": 680,
+                            "departure_airport": origin,
+                            "arrival_airport": destination,
+                        }
+                    ],
+                    "source_stats": {},
+                }
+
+        aggregator = FakeAggregator()
+        main.collect_for_airport_matrix(
+            aggregator,
+            ["PVG", "SHA"],
+            ["KIX"],
+            "2026-10-01",
+        )
+
+        self.assertEqual(aggregator.reasons, [None, "机场组合回退"])
+
+    def test_airport_matrix_propagates_runtime_reason_to_primary_combo(self):
+        class FakeAggregator:
+            def __init__(self):
+                self.reasons = []
+
+            def collect(
+                self,
+                origin,
+                destination,
+                date_str,
+                cabin_classes=None,
+                request_reason=None,
+            ):
+                self.reasons.append(request_reason)
+                return {
+                    "flights": [
+                        {
+                            "flight_combo": f"{origin}{destination}",
+                            "price": 680,
+                            "departure_airport": origin,
+                            "arrival_airport": destination,
+                        }
+                    ],
+                    "source_stats": {},
+                }
+
+        aggregator = FakeAggregator()
+        main.collect_for_airport_matrix(
+            aggregator,
+            ["PVG"],
+            ["KIX"],
+            "2026-09-30",
+            request_reason="弹性日期",
+        )
+
+        self.assertEqual(aggregator.reasons, ["弹性日期"])
+
     def test_bad_subscription_is_skipped_without_stopping_batch(self):
         records = [
             {

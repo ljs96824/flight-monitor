@@ -175,6 +175,137 @@ class RequestCacheTest(unittest.TestCase):
             self.assertEqual(stats["actual"], 2)
             self.assertEqual(stats["hits"], 0)
 
+    def test_force_fresh_only_calls_once_for_same_key_inside_collection_round(self):
+        from request_cache import (
+            activate_collection_plan,
+            cache_key,
+            cached_fetch,
+            start_request_cache_round,
+        )
+
+        source = CountingSource()
+        key = cache_key(source, "SHA", "PEK", "2026-08-20", {"adult": 3}, "economy")
+        start_request_cache_round("round-force-fresh")
+        activate_collection_plan({key})
+
+        for adult_count in (3, 1):
+            cached_fetch(
+                source,
+                "SHA",
+                "PEK",
+                "2026-08-20",
+                {"adult": adult_count},
+                "economy",
+                persist=False,
+                force_fresh=True,
+            )
+
+        self.assertEqual(len(source.calls), 1)
+
+    def test_same_round_pool_ignores_ttl_expiry_after_first_real_request(self):
+        from request_cache import (
+            activate_collection_plan,
+            cache_key,
+            cached_fetch,
+            reset_request_cache,
+            start_request_cache_round,
+        )
+
+        reset_request_cache()
+        self.addCleanup(reset_request_cache)
+        source = CountingSource()
+        key = cache_key(source, "PVG", "KIX", "2026-10-01", {"adult": 1}, "economy")
+        start_request_cache_round("round-long-analysis")
+        activate_collection_plan({key})
+
+        first = cached_fetch(source, "PVG", "KIX", "2026-10-01", persist=False)
+        with patch("request_cache._fresh", return_value=False):
+            second, status = cached_fetch(
+                source,
+                "PVG",
+                "KIX",
+                "2026-10-01",
+                persist=False,
+                include_cache_status=True,
+            )
+
+        self.assertEqual(first, second)
+        self.assertEqual(status, "cache")
+        self.assertEqual(len(source.calls), 1)
+
+    def test_same_round_pool_pins_persistent_cache_result_after_ttl_expiry(self):
+        from request_cache import (
+            activate_collection_plan,
+            cache_key,
+            cached_fetch,
+            reset_request_cache,
+            start_request_cache_round,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = Path(tmp)
+            source = CountingSource()
+            key = cache_key(source, "PVG", "KIX", "2026-10-01", {"adult": 1}, "economy")
+
+            reset_request_cache()
+            self.addCleanup(reset_request_cache)
+            cached_fetch(
+                source,
+                "PVG",
+                "KIX",
+                "2026-10-01",
+                cache_dir=cache_dir,
+            )
+            reset_request_cache()
+            start_request_cache_round("round-persistent-long-analysis")
+            activate_collection_plan({key})
+
+            first, first_status = cached_fetch(
+                source,
+                "PVG",
+                "KIX",
+                "2026-10-01",
+                cache_dir=cache_dir,
+                include_cache_status=True,
+            )
+            with patch("request_cache._fresh", return_value=False):
+                second, second_status = cached_fetch(
+                    source,
+                    "PVG",
+                    "KIX",
+                    "2026-10-01",
+                    cache_dir=cache_dir,
+                    include_cache_status=True,
+                )
+
+        self.assertEqual(first_status, "cache")
+        self.assertEqual(second_status, "cache")
+        self.assertEqual(first, second)
+        self.assertEqual(len(source.calls), 1)
+
+    def test_source_exception_is_pooled_and_api_key_is_redacted(self):
+        from request_cache import cached_fetch, start_request_cache_round
+
+        class FailingSource:
+            name = "hasdata"
+
+            def __init__(self):
+                self.calls = 0
+
+            def fetch(self, origin, dest, date_str, cabin_class="economy"):
+                self.calls += 1
+                raise RuntimeError("HTTP 422 api_key=super-secret&route=PVG-KIX")
+
+        source = FailingSource()
+        start_request_cache_round("round-failure")
+        first = cached_fetch(source, "PVG", "KIX", "2026-10-01", persist=False)
+        second = cached_fetch(source, "PVG", "KIX", "2026-10-01", persist=False)
+
+        self.assertEqual(source.calls, 1)
+        self.assertEqual(first, second)
+        self.assertIn("api_key=***", first["error"])
+        self.assertNotIn("super-secret", first["error"])
+
     def test_juhe_past_date_is_source_skip_not_actual_request(self):
         from request_cache import cached_fetch, get_request_cache_stats, reset_request_cache
         from sources.juhe_source import JuheSource
@@ -238,6 +369,72 @@ class RequestCacheTest(unittest.TestCase):
         self.assertEqual(source.calls, [("SHA", "PEK", "2026-08-20", "economy")])
         self.assertEqual(stats["actual"], 1)
         self.assertEqual(stats["skipped"], 1)
+
+    def test_tracked_round_flushes_actual_usage_once(self):
+        from api_usage import load_usage
+        from request_cache import (
+            cached_fetch,
+            print_request_cache_stats,
+            reset_request_cache,
+            start_request_cache_round,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            usage_path = Path(tmp) / "api_usage.json"
+            source = CountingSource()
+            reset_request_cache()
+            start_request_cache_round(
+                "tracked-round",
+                track_usage=True,
+                usage_path=usage_path,
+            )
+            cached_fetch(
+                source,
+                "SHA",
+                "PEK",
+                "2026-08-20",
+                persist=False,
+            )
+            print_request_cache_stats()
+            print_request_cache_stats()
+
+            usage = load_usage(usage_path)
+
+        today_counts = next(iter(usage["dates"].values()))
+        self.assertEqual(today_counts, {"fake": 1})
+
+    def test_tracked_round_flushes_actual_usage_once(self):
+        from api_usage import load_usage
+        from request_cache import (
+            cached_fetch,
+            print_request_cache_stats,
+            reset_request_cache,
+            start_request_cache_round,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            usage_path = Path(tmp) / "api_usage.json"
+            source = CountingSource()
+            reset_request_cache()
+            start_request_cache_round(
+                "tracked-round",
+                track_usage=True,
+                usage_path=usage_path,
+            )
+            cached_fetch(
+                source,
+                "SHA",
+                "PEK",
+                "2026-08-20",
+                persist=False,
+            )
+            print_request_cache_stats()
+            print_request_cache_stats()
+
+            usage = load_usage(usage_path)
+
+        today_counts = next(iter(usage["dates"].values()))
+        self.assertEqual(today_counts, {"fake": 1})
 
 
     def test_stats_requested_counts_real_fetch_not_cache_hits(self):
@@ -428,8 +625,10 @@ class RequestCacheTest(unittest.TestCase):
         reset_request_cache()
         source = CountingSource()
 
-        _source_fetch(source, "SHA", "PEK", "2026-06-20", "economy", {"adult": 1})
-        _source_fetch(source, "SHA", "PEK", "2026-06-20", "economy", {"adult": 1})
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("request_cache.DEFAULT_CACHE_DIR", Path(tmp)):
+                _source_fetch(source, "SHA", "PEK", "2026-06-20", "economy", {"adult": 1})
+                _source_fetch(source, "SHA", "PEK", "2026-06-20", "economy", {"adult": 1})
 
         self.assertEqual(source.calls, [("SHA", "PEK", "2026-06-20", "economy")])
 

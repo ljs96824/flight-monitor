@@ -7,6 +7,8 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
+from api_usage import load_usage, usage_snapshot
+from collection_plan import build_collection_plan, load_collection_settings
 from log_utils import configure_stdio_utf8, safe_log
 from observations_store import (
     DEFAULT_DB_PATH,
@@ -15,6 +17,8 @@ from observations_store import (
     set_current_round,
 )
 from request_cache import (
+    activate_collection_plan,
+    deactivate_collection_plan,
     print_request_cache_stats,
     reset_request_cache,
     start_request_cache_round,
@@ -24,6 +28,8 @@ from sources.aggregator import FlightAggregator, build_default_sources
 
 BASE_DIR = Path(__file__).parent
 DEFAULT_STATE_PATH = BASE_DIR / "data" / "basket_state.json"
+CONFIG_PATH = BASE_DIR / "config.yaml"
+API_USAGE_PATH = BASE_DIR / "data" / "api_usage.json"
 
 BASKET_ROUTES = (
     {
@@ -157,12 +163,33 @@ def make_round_id(now: datetime) -> str:
     return now.strftime("basket_%Y%m%dT%H%M%S")
 
 
+def _basket_requests(state: dict) -> list[dict]:
+    requests = []
+    for route in BASKET_ROUTES:
+        route_name = _route_name(route)
+        queue_dates = (state.get("routes") or {}).get(route_name) or {}
+        for queue_name in ("A", "B"):
+            requests.append(
+                {
+                    "origin": route["origin"],
+                    "dest": route["dest"],
+                    "depart_date": str(queue_dates.get(queue_name) or ""),
+                    "route_type": route["route_type"],
+                    "sources": route["sources"],
+                    "queue": f"{route_name}:{queue_name}",
+                    "cabin_class": "economy",
+                }
+            )
+    return requests
+
+
 def run_basket(
     *,
     today: date | None = None,
     now: datetime | None = None,
     state_path: str | Path = DEFAULT_STATE_PATH,
     db_path: str | Path = DEFAULT_DB_PATH,
+    usage_path: str | Path = API_USAGE_PATH,
     source_builder: Callable = build_default_sources,
     aggregator_factory: Callable = FlightAggregator,
 ) -> dict:
@@ -175,13 +202,36 @@ def run_basket(
 
     reset_request_cache()
     set_current_round(round_id, db_path=db_path)
-    start_request_cache_round(round_id)
+    settings = load_collection_settings(CONFIG_PATH)
+    start_request_cache_round(
+        round_id,
+        track_usage=True,
+        usage_path=usage_path,
+        quota_budgets=settings["source_quota_budget"],
+    )
     safe_log(f"[篮子轮次] round_id={round_id}")
 
     queues = 0
     success = 0
     failed = 0
+    plan_active = False
     try:
+        plan = build_collection_plan(
+            subscriptions=[],
+            basket_requests=_basket_requests(state),
+            source_builder=source_builder,
+        )
+        activate_collection_plan(plan.request_keys)
+        plan_active = True
+        plan.log_summary(
+            quota_budgets=settings["source_quota_budget"],
+            quota_low_remaining_threshold=settings[
+                "source_quota_low_remaining_threshold"
+            ],
+            usage_snapshot=usage_snapshot(load_usage(usage_path)),
+        )
+        plan.execute()
+
         for route in BASKET_ROUTES:
             route_name = _route_name(route)
             queue_dates = (state.get("routes") or {}).get(route_name) or {}
@@ -209,7 +259,7 @@ def run_basket(
                         cabin_classes=["economy"],
                         route_type=route["route_type"],
                         passengers={"adult": 1, "child": 0, "elderly": 0, "infant": 0},
-                        force_fresh=True,
+                        force_fresh=False,
                     )
                     if not result or not result.get("flights"):
                         raise RuntimeError("未返回有效航班")
@@ -227,6 +277,8 @@ def run_basket(
             written = 0
             safe_log(f"[篮子失败] route=summary 原因=观测计数失败:{exc}")
         print_request_cache_stats()
+        if plan_active:
+            deactivate_collection_plan()
         clear_current_round()
 
     summary = {

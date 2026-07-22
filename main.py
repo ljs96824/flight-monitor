@@ -35,6 +35,8 @@ from analyzer import (
     waiting_risk_description,
 )
 from collector import _normalize_detail_flight, save_raw_response
+from api_usage import load_usage, usage_snapshot
+from collection_plan import build_collection_plan, load_collection_settings
 from email_notifier import render_email, send_email
 from filename_utils import sanitize_filename
 from health_check import system_health_check
@@ -48,7 +50,12 @@ from notifier import (
     send,
 )
 from price_calendar import load_calendar, update_calendar
-from request_cache import print_request_cache_stats, start_request_cache_round
+from request_cache import (
+    activate_collection_plan,
+    deactivate_collection_plan,
+    print_request_cache_stats,
+    start_request_cache_round,
+)
 from plan_tracker import feedback_acknowledgement
 from source_profiles import get_source_profile
 from sources.aggregator import (
@@ -86,6 +93,8 @@ logging.basicConfig(
 ANALYSIS_LOG = DATA_DIR / "analysis_log.jsonl"
 SUBSCRIPTIONS_PATH = DATA_DIR / "subscriptions.json"
 PAGE_PAYLOADS_DIR = DATA_DIR / "payloads"
+CONFIG_PATH = BASE_DIR / "config.yaml"
+API_USAGE_PATH = DATA_DIR / "api_usage.json"
 PYTHONANYWHERE_PAYLOAD_PATH = "/home/{user}/flight-monitor/data/payloads/{filename}"
 AIRPORT_COMBINATION_MIN_OPTIONS = 5
 
@@ -224,6 +233,21 @@ def _make_round_id(sub: dict) -> str:
     raw_suffix = sub.get("_index") or sub.get("index") or sub.get("id") or "sub"
     suffix = re.sub(r"[^0-9A-Za-z_-]+", "_", str(raw_suffix)).strip("_")[:80]
     return f"{stamp}_{suffix or 'sub'}"
+
+
+def _make_collection_round_id() -> str:
+    return datetime.now().strftime("collection_%Y%m%dT%H%M%S%f")
+
+
+def _collection_plan_log_options() -> dict:
+    settings = load_collection_settings(CONFIG_PATH)
+    return {
+        "quota_budgets": settings["source_quota_budget"],
+        "quota_low_remaining_threshold": settings[
+            "source_quota_low_remaining_threshold"
+        ],
+        "usage_snapshot": usage_snapshot(load_usage(API_USAGE_PATH)),
+    }
 
 def _first_airport(codes, fallback):
     values = [str(code).strip().upper() for code in (codes or []) if str(code or "").strip()]
@@ -820,6 +844,7 @@ def _collect_same_day_fallback_flights(
     cabin_classes=None,
     route_type: str | None = None,
     passengers=None,
+    request_reason: str | None = None,
 ) -> list[dict]:
     cache_path = _fallback_cache_path(origins, dests, date_str, cabin_classes)
     cached = _fresh_cached_flights(cache_path)
@@ -833,6 +858,7 @@ def _collect_same_day_fallback_flights(
         cabin_classes=cabin_classes,
         route_type=route_type,
         passengers=passengers,
+        request_reason=request_reason,
     )
     flights = [
         _normalize_detail_flight(flight, flight.get("data_source") or flight.get("source"))
@@ -1142,6 +1168,8 @@ def _aggregator_collect(aggregator, origin, destination, date_str, passengers=No
         params = {}
     if "passengers" in params:
         kwargs["passengers"] = passengers
+    if "request_reason" not in params:
+        kwargs.pop("request_reason", None)
     return aggregator.collect(origin, destination, date_str, **kwargs)
 
 def collect_for_airport_matrix(
@@ -1152,6 +1180,7 @@ def collect_for_airport_matrix(
     cabin_classes=None,
     route_type: str | None = None,
     passengers=None,
+    request_reason: str | None = None,
 ) -> dict | None:
     origins = _clean_airport_codes(origins)
     destinations = _clean_airport_codes(destinations)
@@ -1162,7 +1191,15 @@ def collect_for_airport_matrix(
         collect_kwargs = {"cabin_classes": cabin_classes}
         if route_type:
             collect_kwargs["route_type"] = route_type
-        data = _aggregator_collect(aggregator, origins[0], destinations[0], date_str, passengers=passengers, **collect_kwargs)
+        data = _aggregator_collect(
+            aggregator,
+            origins[0],
+            destinations[0],
+            date_str,
+            passengers=passengers,
+            request_reason=request_reason,
+            **collect_kwargs,
+        )
         if data:
             for flight in data.get("flights", []) or []:
                 flight["search_origin"] = flight.get("search_origin") or origins[0]
@@ -1217,6 +1254,12 @@ def collect_for_airport_matrix(
         collect_kwargs = {"cabin_classes": cabin_classes}
         if route_type:
             collect_kwargs["route_type"] = route_type
+        if index == 0:
+            collect_kwargs["request_reason"] = request_reason
+        elif request_reason:
+            collect_kwargs["request_reason"] = f"{request_reason}/机场组合回退"
+        else:
+            collect_kwargs["request_reason"] = "机场组合回退"
         data = _aggregator_collect(aggregator, origin, destination, date_str, passengers=passengers, **collect_kwargs)
         if index == 0:
             primary_cache_status = (
@@ -1313,6 +1356,7 @@ def collect_nearby_dates(
                     cabin_classes=cabin_classes,
                     route_type=route_type,
                     passengers=_subscription_passengers(sub),
+                    request_reason="弹性日期",
                 )
                 flights = data.get("flights", []) if data else []
                 prices = [
@@ -1355,6 +1399,8 @@ def process_subscription(
     ensure_db: bool = True,
     preflight_result: dict | None = None,
     web_trigger: bool = False,
+    manage_collection_round: bool = True,
+    collection_round_id: str | None = None,
 ) -> bool:
     """Process one subscription once and send the generated notification."""
     preflight = preflight_result or evaluate_subscription_preflight(
@@ -1369,15 +1415,29 @@ def process_subscription(
     if ensure_db:
         init_db()
 
-    round_id = _make_round_id(sub)
-    print(f"[\u89c2\u6d4b\u8f6e\u6b21] round_id={round_id}")
-    set_current_round(round_id)
-    start_request_cache_round(round_id)
+    round_id = collection_round_id or _make_round_id(sub)
     route = f"{sub['origin']}-{sub['destination']}"
     logging.info(f"开始处理 {route}")
     agg = None
+    managed_plan_active = False
 
     try:
+        if manage_collection_round:
+            print(f"[\u89c2\u6d4b\u8f6e\u6b21] round_id={round_id}")
+            set_current_round(round_id)
+            log_options = _collection_plan_log_options()
+            start_request_cache_round(
+                round_id,
+                track_usage=True,
+                usage_path=API_USAGE_PATH,
+                quota_budgets=log_options.get("quota_budgets"),
+            )
+            collection_plan = build_collection_plan(subscriptions=[sub], basket_requests=[])
+            activate_collection_plan(collection_plan.request_keys)
+            managed_plan_active = True
+            collection_plan.log_summary(**log_options)
+            collection_plan.execute()
+
         active_origins = _subscription_airports(
             sub, "origin_airports_active", "origin_airports", "origin"
         )
@@ -1719,6 +1779,7 @@ def process_subscription(
                             cabin_classes=sub.get("cabin_classes"),
                             route_type=route_type,
                             passengers=request_passengers,
+                            request_reason="前一晚备选",
                         )
                     except Exception as exc:
                         print(f"[当天往返备选] 前一晚去程补采失败: {exc}")
@@ -1735,6 +1796,7 @@ def process_subscription(
                             cabin_classes=sub.get("cabin_classes"),
                             route_type=route_type,
                             passengers=request_passengers,
+                            request_reason="次日返程备选",
                         )
                     except Exception as exc:
                         print(f"[当天往返备选] 次日返程补采失败: {exc}")
@@ -1870,8 +1932,11 @@ def process_subscription(
 
 
     finally:
-        clear_current_round()
-        print_request_cache_stats()
+        if manage_collection_round:
+            print_request_cache_stats()
+            if managed_plan_active:
+                deactivate_collection_plan()
+            clear_current_round()
 
 def run(sync_remote: bool = True):
     if sync_remote:
@@ -1893,25 +1958,72 @@ def run(sync_remote: bool = True):
     preflight_checked = 0
     preflight_skipped = 0
     current_day = _shanghai_today()
+    ready: list[tuple[dict, dict]] = []
     for sub in subscriptions:
         preflight_checked += 1
         try:
             preflight = evaluate_subscription_preflight(sub, today=current_day)
-            if preflight.get("skip"):
-                preflight_skipped += 1
-            process_subscription(
-                sub,
-                ensure_db=False,
-                preflight_result=preflight,
-            )
         except Exception as exc:
-            _log_subscription_failure(sub, reason=f"{type(exc).__name__}: {exc}")
-            print(traceback.format_exc())
-            logging.error(
-                f"订阅处理失败 {_subscription_label(sub)}: {exc}",
-                exc_info=True,
+            _log_subscription_failure(
+                sub,
+                reason=f"前置校验失败: {type(exc).__name__}: {exc}",
             )
             continue
+        if preflight.get("skip"):
+            preflight_skipped += 1
+            _log_preflight_skip(sub, preflight)
+            continue
+        ready.append((sub, preflight))
+
+    if not ready:
+        safe_log(
+            f"[订阅前置校验] 本轮检查={preflight_checked} 跳过={preflight_skipped}"
+        )
+        return
+
+    round_id = _make_collection_round_id()
+    plan_active = False
+    print(f"[观测轮次] round_id={round_id}")
+    set_current_round(round_id)
+    log_options = _collection_plan_log_options()
+    start_request_cache_round(
+        round_id,
+        track_usage=True,
+        usage_path=API_USAGE_PATH,
+        quota_budgets=log_options.get("quota_budgets"),
+    )
+    try:
+        collection_plan = build_collection_plan(
+            subscriptions=[sub for sub, _ in ready],
+            basket_requests=[],
+        )
+        activate_collection_plan(collection_plan.request_keys)
+        plan_active = True
+        collection_plan.log_summary(**log_options)
+        collection_plan.execute()
+
+        for sub, preflight in ready:
+            try:
+                process_subscription(
+                    sub,
+                    ensure_db=False,
+                    preflight_result=preflight,
+                    manage_collection_round=False,
+                    collection_round_id=round_id,
+                )
+            except Exception as exc:
+                _log_subscription_failure(sub, reason=f"{type(exc).__name__}: {exc}")
+                print(traceback.format_exc())
+                logging.error(
+                    f"订阅处理失败 {_subscription_label(sub)}: {exc}",
+                    exc_info=True,
+                )
+                continue
+    finally:
+        print_request_cache_stats()
+        if plan_active:
+            deactivate_collection_plan()
+        clear_current_round()
 
     safe_log(
         f"[订阅前置校验] 本轮检查={preflight_checked} 跳过={preflight_skipped}"

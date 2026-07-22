@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 
 class FakeSource:
@@ -55,15 +56,16 @@ class PriceCalendarTest(unittest.TestCase):
             }
             source = FakeSource(prices)
 
-            calendar = update_calendar(
-                "PVG-PEK",
-                "PVG",
-                "PEK",
-                target.isoformat(),
-                source,
-                data_dir=data_dir,
-                sleep_seconds=0,
-            )
+            with patch("request_cache.DEFAULT_CACHE_DIR", data_dir / "request_cache"):
+                calendar = update_calendar(
+                    "PVG-PEK",
+                    "PVG",
+                    "PEK",
+                    target.isoformat(),
+                    source,
+                    data_dir=data_dir,
+                    sleep_seconds=0,
+                )
 
             called_dates = {call[2] for call in source.calls}
             self.assertTrue(all(date.fromisoformat(d) >= today for d in called_dates))

@@ -693,6 +693,7 @@ class FlightAggregator:
         route_type: str | None = None,
         passengers: dict | None = None,
         force_fresh: bool = False,
+        request_reason: str | None = None,
     ) -> dict | None:
         cabin_classes = _normalize_cabin_classes(cabin_classes)
         self.last_request_cache_status = None
@@ -742,6 +743,7 @@ class FlightAggregator:
                         ttl_seconds=15 * 60,
                         force_fresh=force_fresh,
                         include_cache_status=True,
+                        request_reason=request_reason,
                     )
                     if (
                         isinstance(cached_response, tuple)
@@ -968,6 +970,7 @@ class FlightAggregator:
                         cabin_class,
                         ttl_seconds=15 * 60,
                         force_fresh=force_fresh,
+                        request_reason=request_reason,
                     )
                     enrichment_flights = result.get("flights", []) or []
                     enrichment_count += len(enrichment_flights)

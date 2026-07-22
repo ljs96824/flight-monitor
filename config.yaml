@@ -1,3 +1,7 @@
+source_quota_budget:
+  juhe: 550
+source_quota_low_remaining_threshold: 50
+
 subscriptions:
   - name: "奥兰多暑期行"
     origin: PVG

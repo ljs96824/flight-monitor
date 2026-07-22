@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -27,15 +28,40 @@ _disabled_persistent_dirs: set[str] = set()
 _fetch_trigger_counts: dict[tuple, int] = {}
 _equipment_summary: dict[tuple[str, str], dict] = {}
 _source_circuit_breakers: dict[str, str] = {}
+_SECRET_VALUE_PATTERN = re.compile(
+    r"(?i)\b(api[_-]?key|access[_-]?token|token|authorization)=([^&\s]+)"
+)
+
+
+def _redact_error_text(value) -> str:
+    return _SECRET_VALUE_PATTERN.sub(r"\1=***", str(value or ""))
 
 
 def _empty_stats() -> dict:
-    return {"total": 0, "hits": 0, "actual": 0, "skipped": 0, "by_source": {}}
+    return {
+        "total": 0,
+        "hits": 0,
+        "actual": 0,
+        "skipped": 0,
+        "planned_actual": 0,
+        "outside_actual": 0,
+        "outside_unique": 0,
+        "by_source": {},
+    }
 
 
 _stats = _empty_stats()
 _process_stats = _empty_stats()
 _current_stats_round_id: str | None = None
+_active_collection_plan_keys: set[tuple] | None = None
+_active_collection_plan_unique = 0
+_outside_plan_seen: set[tuple] = set()
+_actual_request_keys_this_round: set[tuple] = set()
+_resolved_request_keys_this_round: set[tuple] = set()
+_track_usage_for_round = False
+_usage_path_for_round: Path | None = None
+_quota_budgets_for_round: dict[str, int] = {}
+_usage_flushed_for_round = False
 
 
 def passenger_signature(passengers=None) -> str:
@@ -55,12 +81,17 @@ def _source_name(source) -> str:
 
 
 def cache_key(source, origin, dest, date_str, passengers=None, cabin_class="economy") -> tuple:
+    request_passengers = (
+        passengers
+        if bool(getattr(source, "uses_passenger_count", False))
+        else {"adult": 1, "child": 0, "elderly": 0, "infant": 0}
+    )
     return (
         _source_name(source),
         str(origin or "").upper(),
         str(dest or "").upper(),
         str(date_str or ""),
-        passenger_signature(passengers),
+        passenger_signature(request_passengers),
         str(cabin_class or "economy"),
     )
 
@@ -101,9 +132,13 @@ def _record_hit(source_name: str) -> None:
         _source_stats_bucket(stats, source_name)["hits"] += 1
 
 
-def _record_actual(source_name: str) -> None:
+def _record_actual(source_name: str, plan_scope: str | None = None) -> None:
     for stats in (_stats, _process_stats):
         stats["actual"] += 1
+        if plan_scope == "planned":
+            stats["planned_actual"] += 1
+        elif plan_scope == "outside":
+            stats["outside_actual"] += 1
         source_stats = _source_stats_bucket(stats, source_name)
         source_stats["actual"] += 1
         source_stats["requested"] += 1
@@ -113,6 +148,36 @@ def _record_skip(source_name: str) -> None:
     for stats in (_stats, _process_stats):
         stats["skipped"] += 1
         _source_stats_bucket(stats, source_name)["skipped"] += 1
+
+
+def activate_collection_plan(request_keys) -> None:
+    global _active_collection_plan_keys, _active_collection_plan_unique
+    _active_collection_plan_keys = set(request_keys or [])
+    _active_collection_plan_unique = len(_active_collection_plan_keys)
+    _outside_plan_seen.clear()
+
+
+def deactivate_collection_plan() -> None:
+    global _active_collection_plan_keys, _active_collection_plan_unique
+    _active_collection_plan_keys = None
+    _active_collection_plan_unique = 0
+    _outside_plan_seen.clear()
+
+
+def _plan_scope_for_request(key: tuple, source_name: str, reason: str | None) -> str | None:
+    if _active_collection_plan_keys is None:
+        return None
+    if key in _active_collection_plan_keys:
+        return "planned"
+    if key not in _outside_plan_seen:
+        _outside_plan_seen.add(key)
+        for stats in (_stats, _process_stats):
+            stats["outside_unique"] += 1
+        safe_log(
+            f"[计划外补充] 源={source_name} od={key[1]}->{key[2]} 日期={key[3]} "
+            f"原因={reason or '运行期补采'}"
+        )
+    return "outside"
 
 
 def _quota_failure_reason(result) -> str | None:
@@ -298,34 +363,27 @@ def cached_fetch(
     persist: bool = True,
     force_fresh: bool = False,
     include_cache_status: bool = False,
+    request_reason: str | None = None,
 ):
     """Fetch through an in-run and short persistent cache.
 
-    The cache key intentionally includes source, direction, date, passengers,
-    and cabin so only truly identical requests are deduplicated.
+    缓存键包含源、方向、日期和舱位。仅当源明确声明人数会改变 HTTP 请求时，
+    才把乘客组合纳入键；当前各源均按规范化单成人请求跨订阅复用。
     """
     if cabin is not None:
         cabin_class = cabin
     key = cache_key(source, origin, dest, date_str, passengers, cabin_class)
     source_name = key[0]
+    plan_scope = _plan_scope_for_request(key, source_name, request_reason)
     _record_request(source_name)
 
-    disabled_reason = _source_circuit_breakers.get(source_name)
-    if disabled_reason:
-        _record_skip(source_name)
-        safe_log(
-            f"[源熔断] 源={source_name} 原因={disabled_reason} 生效范围=本进程 "
-            f"航线={key[1]}->{key[2]} 日期={key[3]}"
-        )
-        skipped_result = {
-            "flights": [],
-            "source": source_name,
-            "raw": {},
-            "source_status": "skipped_source_disabled",
-            "skipped_reason": disabled_reason,
-            "error": disabled_reason,
-        }
-        return (copy.deepcopy(skipped_result), "skipped") if include_cache_status else copy.deepcopy(skipped_result)
+    if _current_stats_round_id and key in _resolved_request_keys_this_round:
+        memory_entry = _request_cache.get(key)
+        if memory_entry is not None:
+            _record_hit(source_name)
+            safe_log(f"[本轮池命中] {key[:4]} 已解析入池,整轮内不重复执行")
+            cached_result = copy.deepcopy(memory_entry.get("result"))
+            return (cached_result, "cache") if include_cache_status else cached_result
 
     skipped_result = _source_preflight_skip(
         source,
@@ -349,6 +407,8 @@ def cached_fetch(
         if memory_entry and _fresh(memory_entry.get("fetched_at"), ttl_seconds):
             _record_hit(source_name)
             safe_log(f"[缓存命中] {key[:4]} 复用已有结果,不重复调API")
+            if _current_stats_round_id:
+                _resolved_request_keys_this_round.add(key)
             cached_result = copy.deepcopy(memory_entry.get("result"))
             return (cached_result, "cache") if include_cache_status else cached_result
 
@@ -361,16 +421,36 @@ def cached_fetch(
                     "fetched_at": datetime.now().isoformat(timespec="seconds"),
                     "result": copy.deepcopy(persisted),
                 }
+                if _current_stats_round_id:
+                    _resolved_request_keys_this_round.add(key)
                 cached_result = copy.deepcopy(persisted)
                 return (cached_result, "cache") if include_cache_status else cached_result
     else:
         safe_log(f"[缓存绕过] {key[:4]} force_fresh=True,执行真实API请求")
 
+    disabled_reason = _source_circuit_breakers.get(source_name)
+    if disabled_reason:
+        _record_skip(source_name)
+        safe_log(
+            f"[源熔断] 源={source_name} 原因={disabled_reason} 生效范围=本进程 "
+            f"航线={key[1]}->{key[2]} 日期={key[3]}"
+        )
+        skipped_result = {
+            "flights": [],
+            "source": source_name,
+            "raw": {},
+            "source_status": "skipped_source_disabled",
+            "skipped_reason": disabled_reason,
+            "error": disabled_reason,
+        }
+        return (copy.deepcopy(skipped_result), "skipped") if include_cache_status else copy.deepcopy(skipped_result)
+
     safe_log(
         f"[API\u8c03\u7528] \u6e90={source_name} \u822a\u7ebf={key[1]}->{key[2]} \u65e5\u671f={key[3]} "
         f"\u4e58\u5ba2={key[4]} \u65f6\u95f4={time.time()}"
     )
-    _record_actual(source_name)
+    _actual_request_keys_this_round.add(key)
+    _record_actual(source_name, plan_scope)
     route_type = str(getattr(source, "route_type", None) or "unknown")
     trigger_key = (route_type, source_name, key[1], key[2], key[3])
     trigger_count = _fetch_trigger_counts.get(trigger_key, 0) + 1
@@ -379,10 +459,36 @@ def cached_fetch(
         f"[\u91c7\u96c6\u89e6\u53d1] route_type={route_type} \u822a\u7ebf={key[1]}->{key[2]} "
         f"\u65e5\u671f={key[3]} \u6e90={source_name} \u7b2c{trigger_count}\u6b21"
     )
-    result = source.fetch(origin, dest, date_str, cabin_class)
+    try:
+        result = source.fetch(origin, dest, date_str, cabin_class)
+    except Exception as exc:
+        result = {
+            "flights": [],
+            "source": source_name,
+            "raw": {},
+            "source_status": "failed",
+            "error": _redact_error_text(f"{type(exc).__name__}: {exc}"),
+        }
+        _request_cache[key] = {
+            "fetched_at": datetime.now().isoformat(timespec="seconds"),
+            "result": copy.deepcopy(result),
+        }
+        if _current_stats_round_id:
+            _resolved_request_keys_this_round.add(key)
+        safe_log(
+            f"[采集失败入池] 源={source_name} 航线={key[1]}->{key[2]} "
+            f"日期={key[3]} 原因={result['error']}"
+        )
+        return (copy.deepcopy(result), "fresh") if include_cache_status else copy.deepcopy(result)
     quota_reason = _quota_failure_reason(result)
     if quota_reason:
         _source_circuit_breakers[source_name] = quota_reason
+        _request_cache[key] = {
+            "fetched_at": datetime.now().isoformat(timespec="seconds"),
+            "result": copy.deepcopy(result),
+        }
+        if _current_stats_round_id:
+            _resolved_request_keys_this_round.add(key)
         safe_log(f"[源熔断] 源={source_name} 原因={quota_reason} 生效范围=本进程")
         return (copy.deepcopy(result), "fresh") if include_cache_status else copy.deepcopy(result)
     _record_equipment_summary(source_name, result)
@@ -392,6 +498,8 @@ def cached_fetch(
         "fetched_at": datetime.now().isoformat(timespec="seconds"),
         "result": stored,
     }
+    if _current_stats_round_id:
+        _resolved_request_keys_this_round.add(key)
     if persist:
         _write_persistent(key, stored, cache_dir)
     fresh_result = copy.deepcopy(result)
@@ -406,17 +514,74 @@ def get_process_request_cache_stats() -> dict:
     return copy.deepcopy(_process_stats)
 
 
-def start_request_cache_round(round_id: str) -> None:
+def start_request_cache_round(
+    round_id: str,
+    *,
+    track_usage: bool = False,
+    usage_path: str | Path | None = None,
+    quota_budgets: dict[str, int] | None = None,
+) -> None:
     """开始新的采集轮，只清本轮统计，不清请求缓存和进程累计。"""
     global _current_stats_round_id
+    global _track_usage_for_round, _usage_path_for_round, _quota_budgets_for_round
+    global _usage_flushed_for_round
     _stats.clear()
     _stats.update(_empty_stats())
     _equipment_summary.clear()
     _current_stats_round_id = str(round_id or "") or None
+    _track_usage_for_round = bool(track_usage)
+    _usage_path_for_round = Path(usage_path) if usage_path else None
+    _quota_budgets_for_round = {
+        str(source): int(value or 0)
+        for source, value in (quota_budgets or {}).items()
+    }
+    _usage_flushed_for_round = False
+    _actual_request_keys_this_round.clear()
+    _resolved_request_keys_this_round.clear()
+
+
+def _flush_api_usage_ledger() -> None:
+    global _usage_flushed_for_round
+    if not _track_usage_for_round or _usage_flushed_for_round:
+        return
+    from api_usage import DEFAULT_USAGE_PATH, load_usage, record_actual_requests, usage_snapshot
+
+    path = _usage_path_for_round or DEFAULT_USAGE_PATH
+    actual_by_source = {
+        source: int(values.get("actual", 0) or 0)
+        for source, values in (_stats.get("by_source") or {}).items()
+        if int(values.get("actual", 0) or 0) > 0
+    }
+    try:
+        payload = record_actual_requests(actual_by_source, path=path)
+    except OSError as exc:
+        safe_log(f"[配额台账失败] round={_current_stats_round_id or 'unknown'} 原因={exc}")
+        _usage_flushed_for_round = True
+        return
+    snapshot = usage_snapshot(payload)
+    for source, budget in _quota_budgets_for_round.items():
+        today_count = int((snapshot.get("today") or {}).get(source, 0) or 0)
+        cumulative = int((snapshot.get("cumulative") or {}).get(source, 0) or 0)
+        remaining = int(budget) - cumulative
+        safe_log(
+            f"[配额台账] {source} 今日={today_count} 累计={cumulative} "
+            f"预算={budget} 余量估算={remaining} "
+            f"(本地估算,以聚合数据控制台为准)"
+        )
+    _usage_flushed_for_round = True
 
 
 def print_request_cache_stats() -> None:
     _flush_equipment_summary(_current_stats_round_id)
+    classified_ok = int(_stats.get("actual", 0)) == (
+        int(_stats.get("planned_actual", 0)) + int(_stats.get("outside_actual", 0))
+    ) if _active_collection_plan_keys is not None else True
+    unique_actual_ok = (
+        int(_stats.get("actual", 0)) == len(_actual_request_keys_this_round)
+        if _active_collection_plan_keys is not None
+        else True
+    )
+    invariant_ok = classified_ok and unique_actual_ok
     safe_log(
         "[API统计] "
         f"round={_current_stats_round_id or 'unknown'}, "
@@ -424,6 +589,10 @@ def print_request_cache_stats() -> None:
         f"缓存命中={_stats.get('hits', 0)}, "
         f"源级跳过={_stats.get('skipped', 0)}, "
         f"实际API请求={_stats.get('actual', 0)}, "
+        f"计划唯一={_active_collection_plan_unique}, "
+        f"计划内实际={_stats.get('planned_actual', 0)}, "
+        f"计划外补充={_stats.get('outside_actual', 0)}, "
+        f"恒等式成立={invariant_ok}, "
         f"各源: {_stats.get('by_source', {})}"
     )
     safe_log(
@@ -434,15 +603,25 @@ def print_request_cache_stats() -> None:
         f"实际API请求={_process_stats.get('actual', 0)}, "
         f"各源: {_process_stats.get('by_source', {})}"
     )
+    _flush_api_usage_ledger()
 
 
 def reset_request_cache(*, clear_memory: bool = True, reset_stats: bool = True) -> None:
     global _current_stats_round_id
+    global _track_usage_for_round, _usage_path_for_round, _quota_budgets_for_round
+    global _usage_flushed_for_round
     if clear_memory:
         _request_cache.clear()
         _disabled_persistent_dirs.clear()
         _fetch_trigger_counts.clear()
-        _source_circuit_breakers.clear()
+    _source_circuit_breakers.clear()
+    _actual_request_keys_this_round.clear()
+    _resolved_request_keys_this_round.clear()
+    deactivate_collection_plan()
+    _track_usage_for_round = False
+    _usage_path_for_round = None
+    _quota_budgets_for_round = {}
+    _usage_flushed_for_round = False
     if reset_stats:
         _stats.clear()
         _stats.update(_empty_stats())
