@@ -227,6 +227,33 @@ class PriceCalendarTest(unittest.TestCase):
         calendar = {"route": "PVG-PEK", "dates": {"2026-06-10": {"min_price": 527}}}
         self.assertEqual(analyze_weekday_pattern(calendar), {"data_insufficient": True})
 
+    def test_weekday_pattern_uses_median_and_iqr_instead_of_mean(self):
+        from price_calendar import analyze_weekday_pattern
+
+        start = date.today() + timedelta(days=14)
+        monday = start + timedelta(days=(0 - start.weekday()) % 7)
+        calendar_dates = {}
+        for week, price in enumerate((100, 100, 1000)):
+            calendar_dates[(monday + timedelta(days=week * 7)).isoformat()] = {
+                "min_price": price
+            }
+        for week, price in enumerate((200, 200, 200)):
+            calendar_dates[(monday + timedelta(days=week * 7 + 1)).isoformat()] = {
+                "min_price": price
+            }
+
+        pattern = analyze_weekday_pattern(
+            {"route": "PVG-PEK", "dates": calendar_dates},
+            min_samples=6,
+        )
+
+        self.assertEqual(pattern["cheapest_weekday"], "周一")
+        self.assertEqual(pattern["by_weekday"]["周一"], 100)
+        self.assertEqual(pattern["iqr_by_weekday"]["周一"], [100, 550])
+        self.assertEqual(pattern["sample_count_by_weekday"]["周一"], 3)
+        self.assertIn("中位数", pattern["tip"])
+        self.assertIn("n=3", pattern["tip"])
+
 
 if __name__ == "__main__":
     unittest.main()

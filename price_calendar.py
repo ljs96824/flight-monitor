@@ -8,6 +8,7 @@ stale.
 from __future__ import annotations
 
 import json
+import statistics
 import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -197,41 +198,6 @@ def analyze_date_savings(
     return savings[:limit]
 
 
-def analyze_weekday_pattern(calendar: dict, *, min_samples: int = 7) -> dict | None:
-    """Summarize which weekday tends to be cheaper, if enough samples exist."""
-    by_weekday = {i: [] for i in range(7)}
-    for date_str, info in (calendar.get("dates") or {}).items():
-        if not isinstance(info, dict) or not _valid_price(info.get("min_price")):
-            continue
-        weekday = parse_date(date_str).weekday()
-        by_weekday[weekday].append(float(info["min_price"]))
-
-    sample_count = sum(len(values) for values in by_weekday.values())
-    if sample_count < min_samples:
-        return {"data_insufficient": True}
-
-    averages = {
-        WEEKDAY_NAMES[index]: round(sum(values) / len(values))
-        for index, values in by_weekday.items()
-        if values
-    }
-    minimums = {
-        WEEKDAY_NAMES[index]: min(values)
-        for index, values in by_weekday.items()
-        if values
-    }
-    if not averages:
-        return {"data_insufficient": True}
-    cheapest = min(averages, key=averages.get)
-    return {
-        "cheapest_weekday": cheapest,
-        "by_weekday": averages,
-        "min_by_weekday": minimums,
-        "sample_count": sample_count,
-        "tip": f"本航线{cheapest}通常更便宜",
-    }
-
-
 def analyze_date_savings(
     calendar: dict,
     target_date: str,
@@ -296,38 +262,60 @@ def analyze_weekday_pattern(calendar: dict, *, min_samples: int = 7) -> dict | N
     if sample_count < min_samples or not dated_prices:
         return {"data_insufficient": True}
 
-    averages = {
-        WEEKDAY_NAMES[index]: round(sum(values) / len(values))
+    medians = {
+        WEEKDAY_NAMES[index]: round(statistics.median(values))
         for index, values in by_weekday.items()
         if values
     }
+    iqrs = {}
+    sample_counts = {}
+    for index, values in by_weekday.items():
+        if not values:
+            continue
+        weekday_name = WEEKDAY_NAMES[index]
+        if len(values) == 1:
+            p25 = p75 = values[0]
+        else:
+            p25, _median, p75 = statistics.quantiles(
+                values,
+                n=4,
+                method="inclusive",
+            )
+        iqrs[weekday_name] = [round(p25), round(p75)]
+        sample_counts[weekday_name] = len(values)
     minimums = {
         WEEKDAY_NAMES[index]: min(values)
         for index, values in by_weekday.items()
         if values
     }
-    if not averages:
+    if not medians:
         return {"data_insufficient": True}
 
     min_day, min_price = min(dated_prices, key=lambda item: item[1])
     min_weekday = WEEKDAY_NAMES[min_day.weekday()]
-    sorted_averages = sorted(averages.items(), key=lambda item: item[1])
-    avg_cheapest = sorted_averages[0][0]
+    sorted_medians = sorted(medians.items(), key=lambda item: item[1])
+    median_cheapest = sorted_medians[0][0]
     usual_tip = ""
-    if len(sorted_averages) >= 2:
-        avg_cheapest_index = WEEKDAY_NAMES.index(avg_cheapest)
-        avg_cheapest_count = len(by_weekday[avg_cheapest_index])
-        avg_gap = sorted_averages[1][1] - sorted_averages[0][1]
-        if avg_cheapest_count >= 3 and avg_gap >= max(50, sorted_averages[1][1] * 0.05):
-            usual_tip = f"；{avg_cheapest}平均更低"
+    if len(sorted_medians) >= 2:
+        median_cheapest_count = sample_counts[median_cheapest]
+        median_gap = sorted_medians[1][1] - sorted_medians[0][1]
+        if median_cheapest_count >= 3 and median_gap >= max(50, sorted_medians[1][1] * 0.05):
+            p25, p75 = iqrs[median_cheapest]
+            usual_tip = (
+                f"；{median_cheapest}中位数更低"
+                f"(n={median_cheapest_count},IQR CNY{p25:,.0f}-CNY{p75:,.0f})"
+            )
     print(
         f"[周几统计] 最低价日={min_day.isoformat()}({min_weekday}) CNY{min_price:,.0f}, "
-        f"各星期平均={averages}"
+        f"各星期中位={medians} IQR={iqrs} 样本={sample_counts}"
     )
     return {
-        "cheapest_weekday": avg_cheapest,
-        "usual_cheapest_weekday": avg_cheapest if usual_tip else "",
-        "by_weekday": averages,
+        "cheapest_weekday": median_cheapest,
+        "usual_cheapest_weekday": median_cheapest if usual_tip else "",
+        "by_weekday": medians,
+        "median_by_weekday": medians,
+        "iqr_by_weekday": iqrs,
+        "sample_count_by_weekday": sample_counts,
         "min_by_weekday": minimums,
         "min_date": min_day.isoformat(),
         "min_weekday": min_weekday,

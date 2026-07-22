@@ -41,7 +41,7 @@ from email_notifier import render_email, send_email
 from filename_utils import sanitize_filename
 from health_check import system_health_check
 from log_utils import safe_log
-from observations_store import clear_current_round, set_current_round
+from observations_store import clear_current_round, get_current_round, set_current_round
 from notifier import (
     build_notification_payload,
     persist_notification_payload,
@@ -79,6 +79,7 @@ from subscription_preflight import (
     shanghai_today as _shanghai_today,
 )
 from tracker import log_signal
+from tcurve import build_notification_tcurve
 
 
 # 日志配置
@@ -1460,6 +1461,16 @@ def collect_nearby_dates(
             break
     return results
 
+def _notification_tcurve(route_info: dict) -> dict:
+    """只读生成邮件曲线；统计失败不得中断订阅交付。"""
+    try:
+        _round_id, db_path = get_current_round()
+        return build_notification_tcurve(route_info, db_path=db_path)
+    except Exception as exc:
+        safe_log(f"[T曲线] 读取失败 跳过渲染 原因={type(exc).__name__}:{exc}")
+        return {}
+
+
 def process_subscription(
     sub: dict,
     ensure_db: bool = True,
@@ -1977,6 +1988,9 @@ def process_subscription(
             "source_stats": data.get("source_stats"),
             "price_insights": data.get("price_insights"),
         }
+        message_kwargs["route_info"]["tcurve"] = _notification_tcurve(
+            message_kwargs["route_info"]
+        )
         print(f"[DEBUG] 传给notifier的参数keys: {list(message_kwargs.keys())}")
         if not _deliver_notification(sub, route, message_kwargs):
             logging.warning(f"{route} 未能完成任何主动推送")

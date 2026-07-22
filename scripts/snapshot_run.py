@@ -36,7 +36,7 @@ from analyzer import (
     compute_same_day_windows,
 )
 from log_utils import safe_log
-from price_calendar import analyze_row_savings, roundtrip_calendar_rows
+from price_calendar import analyze_row_savings, analyze_weekday_pattern, roundtrip_calendar_rows
 from price_estimator import passenger_price_factor
 from pricing import budget_to_pp, itinerary_price_pp, price_in_scope
 
@@ -617,6 +617,15 @@ def calendar_snapshot(passenger_factor: float) -> dict:
         updated["price_scope"] = "3人往返参考价"
         updated["passenger_factor"] = passenger_factor
         passenger_rows.append(updated)
+    weekday_start = selected_date - timedelta(days=14)
+    weekday_calendar = {
+        "dates": {
+            (weekday_start + timedelta(days=offset)).isoformat(): {
+                "min_price": 500 + (weekday_start + timedelta(days=offset)).weekday() * 100
+            }
+            for offset in range(21)
+        }
+    }
     return {
         "route": "SHA-PKX + PKX-SHA",
         "scope": "3人往返参考价",
@@ -633,7 +642,38 @@ def calendar_snapshot(passenger_factor: float) -> dict:
         "selected_price_scope": "3人往返参考价",
         "rows": passenger_rows,
         "savings": analyze_row_savings(passenger_rows, DEPART_DATE, threshold=100, limit=3),
+        "weekday_pattern": analyze_weekday_pattern(weekday_calendar, min_samples=7),
         "note": "每行=该出发日单人单程最低+固定返程日单人单程最低，再按3名成人换算。",
+    }
+
+
+def tcurve_snapshot() -> dict:
+    current_t = (date.fromisoformat(DEPART_DATE) - date.today()).days
+    t_values = [current_t - 7, current_t, current_t + 7]
+    points = [
+        {
+            "t": t_value,
+            "n": 5,
+            "median": 700 + index * 40,
+            "p25": 650 + index * 40,
+            "p75": 760 + index * 40,
+            "sufficient": True,
+            "status": "ok",
+        }
+        for index, t_value in enumerate(t_values)
+    ]
+    return {
+        "route": "上海-北京",
+        "price_caliber": "单人单程CNY含税",
+        "method_version": "tcurve_v1",
+        "min_sample": 5,
+        "include_degraded": False,
+        "degraded_count": 1,
+        "degraded_excluded_count": 1,
+        "coverage": {"t_min": min(t_values), "t_max": max(t_values)},
+        "current_t": current_t,
+        "points": points,
+        "qualified_cell_count": 3,
     }
 
 
@@ -998,6 +1038,7 @@ def _build_payload(subscription: dict, outbound_analysis: dict, return_analysis:
             "max_budget_scope": MAX_BUDGET_SCOPE,
             "target_price_scope": TARGET_PRICE_SCOPE,
             "price_calendar": calendar,
+            "tcurve": tcurve_snapshot(),
         }
         payload = notifier.build_notification_payload(
             analysis_result,
@@ -1016,6 +1057,8 @@ def _build_payload(subscription: dict, outbound_analysis: dict, return_analysis:
                 "email_subject": subject,
                 "email_html_chars": len(email_html),
                 "pushplus_chars": len(pushplus),
+                "email_contains_tcurve": "提前购买参考(同航线历史观测)" in email_html,
+                "email_contains_weekday_median": "中位数" in email_html,
             },
         }
     finally:

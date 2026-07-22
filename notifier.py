@@ -61,6 +61,7 @@ from price_estimator import (
 )
 from pricing import assert_same_caliber, budget_to_pp, caliber_label, itinerary_price_pp, passenger_rate_sum, price_in_scope
 from sources.aggregator import MERGE_PRICE_STRATEGY, PRICE_GAP_DISCLOSE_PCT
+from tcurve import TCURVE_MIN_CELLS, select_anchor_points
 from storage import (
     get_lowest_price_history,
     get_last_push_price,
@@ -7629,6 +7630,7 @@ def build_notification_payload(
         "frequency": frequency,
         "nearby_date_prices": _payload_nearby_date_rows(route_info, analysis_result, is_roundtrip),
         "price_calendar": price_calendar_payload,
+        "tcurve": route_info.get("tcurve") or {},
         "airport_cost_comparison": analysis_result.get("airport_cost_comparison") or [],
         "cabin_policy_summary": cabin_policy_summary,
         "same_day_no_feasible_note": (
@@ -12019,6 +12021,53 @@ def _email_price_calendar_body(payload: dict) -> str:
     return "".join(table)
 
 
+def _email_tcurve_body(payload: dict) -> str:
+    curve = payload.get("tcurve") or {}
+    if not isinstance(curve, dict) or not curve:
+        return ""
+    points = curve.get("points") or []
+    qualified_count = sum(1 for point in points if point.get("sufficient"))
+    if qualified_count < TCURVE_MIN_CELLS:
+        safe_log(f"[T曲线] 样本不足 n合格格数={qualified_count} 跳过渲染")
+        return ""
+
+    current_t = curve.get("current_t")
+    anchors = select_anchor_points(points, current_t, limit=5)
+    if not anchors:
+        safe_log("[T曲线] 样本不足 n合格格数=0 跳过渲染")
+        return ""
+    coverage = curve.get("coverage") or {}
+    lines = [
+        "<div style='margin-bottom:8px;color:#374151;'>"
+        f"本订阅当前 T={html.escape(str(current_t))} 天"
+        "</div>",
+        "<div style='margin-bottom:8px;color:#666;font-size:12px;'>"
+        f"观测覆盖 T={html.escape(str(coverage.get('t_min')))} 至 "
+        f"T={html.escape(str(coverage.get('t_max')))} 天；仅描述该范围内的历史观测，不外推未覆盖区间。"
+        "</div>",
+    ]
+    for point in anchors:
+        lines.append(
+            "<div>"
+            f"T={int(point['t'])}天：中位{_price_text(point.get('median'))}，"
+            f"IQR {_price_text(point.get('p25'))}-{_price_text(point.get('p75'))}"
+            f"（n={int(point.get('n') or 0)}，同航线历史观测）"
+            "</div>"
+        )
+    degraded_count = int(curve.get("degraded_count") or 0)
+    if degraded_count:
+        if curve.get("include_degraded"):
+            disclosure = f"本节包含{degraded_count}个源覆盖不完整日格，结果可能受数据源缺失影响。"
+        else:
+            disclosure = f"已剔除{degraded_count}个源覆盖不完整日格。"
+        lines.append(
+            "<div style='margin-top:8px;color:#666;font-size:12px;'>"
+            f"{html.escape(disclosure)}"
+            "</div>"
+        )
+    return "".join(lines)
+
+
 
 def _price_calendar_insight_text(payload: dict) -> str:
     calendar = payload.get("price_calendar") or {}
@@ -12320,6 +12369,9 @@ def render_email(payload: dict) -> tuple[str, str]:
     if status_text:
         cards.append(_email_card("上次推荐方案追踪", html.escape(status_text)))
     cards.append(_email_card("价格走势", _email_trend_card_body(payload)))
+    tcurve_body = _email_tcurve_body(payload)
+    if tcurve_body:
+        cards.append(_email_card("提前购买参考(同航线历史观测)", tcurve_body))
     if (payload.get("price_calendar") or {}).get("rows"):
         cards.append(_email_card("低价日历", _email_price_calendar_body(payload)))
 
