@@ -86,6 +86,20 @@ IATA_CITY_NAMES = {
 }
 
 
+def _positive_int_env(name: str, default: int) -> int:
+    try:
+        value = int(str(os.environ.get(name, default)).strip())
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
+MIN_SAMPLE_FOR_PRICE_SIGNAL = _positive_int_env(
+    "MIN_SAMPLE_FOR_PRICE_SIGNAL",
+    5,
+)
+
+
 def city_name(iata_code: str) -> str:
     return IATA_CITY_NAMES.get(iata_code, iata_code)
 
@@ -7342,6 +7356,14 @@ def _history_reference_suffix(prices) -> str:
     return f"（近{len(prices)}次同条件采集）" if prices else ""
 
 
+def _insufficient_history_copy(prices) -> str:
+    sample_count = len(prices or [])
+    return (
+        f"同条件样本不足（当前n={sample_count}），继续积累中，"
+        f"暂不给出价格位置判断{_history_reference_suffix(prices)}"
+    )
+
+
 def determine_push_type(
     current_price,
     target_price=None,
@@ -8091,7 +8113,9 @@ def determine_push_type(
             reasons.append("与上次提醒价格持平（上次同口径提醒）")
     if percentile is not None:
         history_suffix = _history_reference_suffix(prices)
-        if percentile <= 0:
+        if len(prices) < MIN_SAMPLE_FOR_PRICE_SIGNAL:
+            reasons.append(_insufficient_history_copy(prices))
+        elif percentile <= 0:
             reasons.append(f"当前搜索价低于所有相似采集记录，处于近期低位{history_suffix}")
         elif percentile <= 30:
             reasons.append(f"当前搜索价处于相似历史样本低价区间{history_suffix}")
@@ -8140,8 +8164,12 @@ def build_price_signal(display_price, target_price=None, price_history=None) -> 
         }
 
     if percentile is not None and percentile <= 30:
-        label = "强"
-        summary = f"搜索参考价处于近期低位{_history_reference_suffix(prices)}"
+        if len(prices) < MIN_SAMPLE_FOR_PRICE_SIGNAL:
+            label = "待积累"
+            summary = _insufficient_history_copy(prices)
+        else:
+            label = "强"
+            summary = f"搜索参考价处于近期低位{_history_reference_suffix(prices)}"
     elif target is not None and display <= target:
         label = "强"
         summary = "搜索参考价已进入理想入手区间（你的设置）"

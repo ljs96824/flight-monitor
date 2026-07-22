@@ -555,7 +555,11 @@ def _flush_api_usage_ledger() -> None:
         if int(values.get("actual", 0) or 0) > 0
     }
     try:
-        payload = record_actual_requests(actual_by_source, path=path)
+        payload = record_actual_requests(
+            actual_by_source,
+            path=path,
+            round_id=_current_stats_round_id,
+        )
     except OSError as exc:
         safe_log(f"[配额台账失败] round={_current_stats_round_id or 'unknown'} 原因={exc}")
         _usage_flushed_for_round = True

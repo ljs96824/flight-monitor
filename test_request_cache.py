@@ -51,6 +51,21 @@ class QuotaFailureSource:
         }
 
 
+class PreflightSkipSource:
+    name = "skipped"
+
+    def preflight_skip(self, origin, dest, date_str, cabin_class="economy"):
+        return {
+            "flights": [],
+            "source": self.name,
+            "source_status": "skipped_preflight",
+            "skipped_reason": "测试前置跳过",
+        }
+
+    def fetch(self, origin, dest, date_str, cabin_class="economy"):
+        raise AssertionError("源级跳过不得进入 fetch")
+
+
 class RequestCacheTest(unittest.TestCase):
     def setUp(self):
         from request_cache import reset_for_tests
@@ -476,6 +491,42 @@ class RequestCacheTest(unittest.TestCase):
 
         today_counts = next(iter(usage["dates"].values()))
         self.assertEqual(today_counts, {"fake": 1})
+
+    def test_usage_ledger_records_only_actual_and_appends_round_entry(self):
+        from api_usage import load_usage
+        from request_cache import (
+            cached_fetch,
+            print_request_cache_stats,
+            start_request_cache_round,
+        )
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            usage_path = Path(tmp) / "api_usage.json"
+            source = CountingSource()
+            start_request_cache_round(
+                "audit-round",
+                track_usage=True,
+                usage_path=usage_path,
+            )
+            cached_fetch(source, "SHA", "PEK", "2099-08-20", persist=False)
+            cached_fetch(source, "SHA", "PEK", "2099-08-20", persist=False)
+            cached_fetch(
+                PreflightSkipSource(),
+                "SHA",
+                "PKX",
+                "2099-08-20",
+                persist=False,
+            )
+            print_request_cache_stats()
+            usage = load_usage(usage_path)
+
+        today_counts = next(iter(usage["dates"].values()))
+        self.assertEqual(today_counts, {"fake": 1})
+        self.assertEqual(len(usage["entries"]), 1)
+        entry = usage["entries"][0]
+        self.assertEqual(entry["round_id"], "audit-round")
+        self.assertEqual(entry["counts"], {"fake": 1})
+        self.assertRegex(entry["recorded_at"], r"^\d{4}-\d{2}-\d{2}T")
 
     def test_tracked_round_flushes_actual_usage_once(self):
         from api_usage import load_usage

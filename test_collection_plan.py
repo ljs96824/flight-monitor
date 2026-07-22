@@ -232,18 +232,53 @@ class CollectionPlanTest(unittest.TestCase):
 
     def test_api_usage_ledger_accumulates_actual_requests(self):
         from api_usage import load_usage, record_actual_requests, usage_snapshot
+        from request_cache import reset_for_tests
 
         with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "api_usage.json"
-            record_actual_requests({"juhe": 2, "hasdata": 1}, path=path, day="2026-07-22")
-            record_actual_requests({"juhe": 1}, path=path, day="2026-07-23")
+            root = Path(tmp)
+            reset_for_tests(root / "cache")
+            try:
+                path = root / "api_usage.json"
+                record_actual_requests(
+                    {"juhe": 2, "hasdata": 1},
+                    path=path,
+                    day="2026-07-22",
+                    round_id="round-a",
+                    recorded_at="2026-07-22T10:00:00+08:00",
+                )
+                record_actual_requests(
+                    {"juhe": 1},
+                    path=path,
+                    day="2026-07-23",
+                    round_id="round-b",
+                    recorded_at="2026-07-23T10:00:00+08:00",
+                )
 
-            raw = load_usage(path)
-            snapshot = usage_snapshot(raw, day="2026-07-23")
+                raw = load_usage(path)
+                snapshot = usage_snapshot(raw, day="2026-07-23")
+            finally:
+                reset_for_tests(None)
 
         self.assertEqual(raw["dates"]["2026-07-22"], {"juhe": 2, "hasdata": 1})
         self.assertEqual(snapshot["today"], {"juhe": 1})
         self.assertEqual(snapshot["cumulative"], {"juhe": 3, "hasdata": 1})
+        self.assertEqual(
+            raw["entries"],
+            [
+                {
+                    "recorded_at": "2026-07-22T10:00:00+08:00",
+                    "round_id": "round-a",
+                    "day": "2026-07-22",
+                    "counts": {"juhe": 2, "hasdata": 1},
+                },
+                {
+                    "recorded_at": "2026-07-23T10:00:00+08:00",
+                    "round_id": "round-b",
+                    "day": "2026-07-23",
+                    "counts": {"juhe": 1},
+                },
+            ],
+        )
 
     def test_subscription_builder_expands_roundtrip_and_deduplicates_passengers(self):
         from collection_plan import build_collection_plan

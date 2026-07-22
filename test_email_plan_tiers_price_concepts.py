@@ -14,7 +14,7 @@ class EmailPlanTiersPriceConceptsTest(unittest.TestCase):
         price_signal = build_price_signal(
             display_price=6521,
             target_price=7800,
-            price_history=[6971, 6530, 6527, 6521],
+            price_history=[6971, 6700, 6530, 6527, 6521],
         )
         execution_advice = build_execution_advice(
             display_price=6521,
