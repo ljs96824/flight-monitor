@@ -4752,7 +4752,7 @@ def run_single_subscription(subscription: dict) -> None:
         )
 
         print("[后台] 开始采集、分析并推送")
-        ok = process_subscription(normalized_subscription, ensure_db=True)
+        ok = process_subscription(normalized_subscription, ensure_db=True, web_trigger=True)
         print(f"[后台] 采集分析推送结束: ok={ok}")
     except Exception as exc:
         print(f"[后台] 执行失败: {exc}")

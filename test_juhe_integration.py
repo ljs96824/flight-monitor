@@ -160,6 +160,35 @@ class JuheIntegrationTest(unittest.TestCase):
         self.assertEqual(result["source_status"], "invalid_date")
         self.assertEqual(result["skipped_reason"], "日期无效或已过期")
 
+    def test_juhe_quota_response_is_source_failure_not_empty_success(self):
+        source = JuheSource()
+        future = (date.today() + timedelta(days=5)).isoformat()
+
+        class FakeResponse:
+            status_code = 200
+            text = '{"resultcode":"112","error_code":10012,"reason":"超过每日可允许请求次数"}'
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "resultcode": "112",
+                    "error_code": 10012,
+                    "reason": "超过每日可允许请求次数",
+                }
+
+        fake_requests = types.SimpleNamespace(get=lambda *args, **kwargs: FakeResponse())
+        with patch.dict(os.environ, {"JUHE_FLIGHT_KEY": "test-key"}, clear=True):
+            with patch.dict(sys.modules, {"requests": fake_requests}):
+                result = source.fetch("PVG", "PEK", future)
+
+        self.assertEqual(result["flights"], [])
+        self.assertEqual(result["source_status"], "failed_quota")
+        self.assertEqual(result["error"], "配额不足(112)")
+        self.assertEqual(result["resultcode"], "112")
+        self.assertEqual(result["error_code"], "10012")
+
 
 if __name__ == "__main__":
     unittest.main()

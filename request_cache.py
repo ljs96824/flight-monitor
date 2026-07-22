@@ -26,6 +26,7 @@ _request_cache: dict[tuple, dict] = {}
 _disabled_persistent_dirs: set[str] = set()
 _fetch_trigger_counts: dict[tuple, int] = {}
 _equipment_summary: dict[tuple[str, str], dict] = {}
+_source_circuit_breakers: dict[str, str] = {}
 
 
 def _empty_stats() -> dict:
@@ -112,6 +113,15 @@ def _record_skip(source_name: str) -> None:
     for stats in (_stats, _process_stats):
         stats["skipped"] += 1
         _source_stats_bucket(stats, source_name)["skipped"] += 1
+
+
+def _quota_failure_reason(result) -> str | None:
+    if not isinstance(result, dict):
+        return None
+    status = str(result.get("source_status") or "").lower()
+    if "quota" not in status and str(result.get("quota_code") or "").strip() not in {"112", "10012"}:
+        return None
+    return str(result.get("error") or result.get("skipped_reason") or "配额不足").strip()
 
 
 def _source_preflight_skip(source, origin, dest, date_str, cabin_class):
@@ -300,6 +310,23 @@ def cached_fetch(
     source_name = key[0]
     _record_request(source_name)
 
+    disabled_reason = _source_circuit_breakers.get(source_name)
+    if disabled_reason:
+        _record_skip(source_name)
+        safe_log(
+            f"[源熔断] 源={source_name} 原因={disabled_reason} 生效范围=本进程 "
+            f"航线={key[1]}->{key[2]} 日期={key[3]}"
+        )
+        skipped_result = {
+            "flights": [],
+            "source": source_name,
+            "raw": {},
+            "source_status": "skipped_source_disabled",
+            "skipped_reason": disabled_reason,
+            "error": disabled_reason,
+        }
+        return (copy.deepcopy(skipped_result), "skipped") if include_cache_status else copy.deepcopy(skipped_result)
+
     skipped_result = _source_preflight_skip(
         source,
         origin,
@@ -353,6 +380,11 @@ def cached_fetch(
         f"\u65e5\u671f={key[3]} \u6e90={source_name} \u7b2c{trigger_count}\u6b21"
     )
     result = source.fetch(origin, dest, date_str, cabin_class)
+    quota_reason = _quota_failure_reason(result)
+    if quota_reason:
+        _source_circuit_breakers[source_name] = quota_reason
+        safe_log(f"[源熔断] 源={source_name} 原因={quota_reason} 生效范围=本进程")
+        return (copy.deepcopy(result), "fresh") if include_cache_status else copy.deepcopy(result)
     _record_equipment_summary(source_name, result)
     _record_observations_after_fetch(source, key, result, cabin_class)
     stored = copy.deepcopy(result)
@@ -410,6 +442,7 @@ def reset_request_cache(*, clear_memory: bool = True, reset_stats: bool = True) 
         _request_cache.clear()
         _disabled_persistent_dirs.clear()
         _fetch_trigger_counts.clear()
+        _source_circuit_breakers.clear()
     if reset_stats:
         _stats.clear()
         _stats.update(_empty_stats())

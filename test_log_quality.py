@@ -119,7 +119,7 @@ class AnalysisDiagnosticTest(unittest.TestCase):
         lines = [line for line in stdout.getvalue().splitlines() if line]
         self.assertEqual(len(lines), 1)
         self.assertLessEqual(len(lines[0]), 300)
-        for field in ("候选数=", "去重=", "min=", "max=", "低于上限=", "最低5="):
+        for field in ("候选数=", "去重后=", "min=", "max=", "低于上限=", "最低5="):
             self.assertIn(field, lines[0])
         self.assertNotIn("完整数组", lines[0])
 

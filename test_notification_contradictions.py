@@ -281,6 +281,34 @@ class NotificationContradictionsTest(unittest.TestCase):
         self.assertNotEqual(result["type"], "价格下降")
         self.assertIn("无法计算完整单人往返价", result["reasons"][0])
 
+    def test_source_set_change_degrades_bare_price_up_signal(self):
+        from notifier import _apply_source_degradation_to_push_meta
+
+        push_meta = {
+            "type": "涨价风险",
+            "price_change": {
+                "last": 9049,
+                "current": 19183,
+                "diff": 10134,
+                "direction": "up",
+                "scope": "per_person_roundtrip",
+            },
+            "reasons": ["同组合单人往返上涨¥10,134"],
+        }
+        result = _apply_source_degradation_to_push_meta(
+            push_meta,
+            current_sources={"hasdata"},
+            previous_sources={"hasdata", "juhe"},
+            source_errors=[
+                {"source": "juhe", "error": "配额不足(112)"},
+            ],
+        )
+
+        self.assertEqual(result["type"], "数据源受限")
+        self.assertIsNone(result.get("price_change"))
+        self.assertIn("本轮OTA交叉源不可用(配额不足)", result["reasons"][0])
+        self.assertNotIn("上涨¥10,134", " ".join(result["reasons"]))
+
     def test_rising_over_budget_caps_verify_price_and_waits(self):
         analysis = {
             "recommendations": [

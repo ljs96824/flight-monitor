@@ -162,7 +162,7 @@ def _source_error_items(aggregator=None, data=None) -> list[dict]:
     return unique
 
 
-def _log_subscription_failure(sub: dict, *, source_errors=None, reason: str | None = None) -> None:
+def _format_source_failure_reason(source_errors=None, reason: str | None = None) -> str:
     parts = []
     for item in source_errors or []:
         source = str(item.get("source") or "source")
@@ -170,10 +170,52 @@ def _log_subscription_failure(sub: dict, *, source_errors=None, reason: str | No
         parts.append(f"{source}:{detail}")
     if not parts:
         parts.append(_redact_api_key(str(reason or "采集未返回有效航班")))
+    return "; ".join(parts)
+
+
+def _log_subscription_failure(sub: dict, *, source_errors=None, reason: str | None = None) -> None:
+    message = _format_source_failure_reason(source_errors, reason)
     safe_log(
         f"[订阅处理失败] 订阅={_subscription_label(sub)} "
-        f"航线={_subscription_route_label(sub)} 原因={'; '.join(parts)}"
+        f"航线={_subscription_route_label(sub)} 原因={message}"
     )
+
+
+def _notify_subscription_failure(sub: dict, *, source_errors=None, reason: str | None = None) -> bool:
+    notification_goals = sub.get("notification_goals", {}) or {}
+    method = str(notification_goals.get("method") or "pushplus")
+    email = str(notification_goals.get("email") or "").strip()
+    failure_reason = _format_source_failure_reason(source_errors, reason)
+    route_label = _subscription_route_label(sub)
+    content = (
+        f"本次采集失败: {route_label}<br>"
+        f"原因: {failure_reason}<br>"
+        "订阅已保留,下轮自动重试。"
+    )
+    sent = False
+    try:
+        if method in {"email", "both"} and email:
+            sent = send_email(
+                email,
+                f"【航班监控采集失败】{route_label}",
+                content,
+                {},
+            ) or sent
+        if method in {"pushplus", "both"}:
+            sent = send(
+                content,
+                title=f"【航班监控采集失败】{route_label}",
+            ) or sent
+    except Exception as exc:
+        safe_log(f"[失败通知] 发送失败: {type(exc).__name__}: {exc}")
+    if not sent:
+        sub["last_failure"] = {
+            "route": route_label,
+            "reason": failure_reason,
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+        }
+        safe_log(f"[失败通知] 未发送,已记录状态 订阅={_subscription_label(sub)} 原因={failure_reason}")
+    return sent
 
 
 
@@ -1312,6 +1354,7 @@ def process_subscription(
     sub: dict,
     ensure_db: bool = True,
     preflight_result: dict | None = None,
+    web_trigger: bool = False,
 ) -> bool:
     """Process one subscription once and send the generated notification."""
     preflight = preflight_result or evaluate_subscription_preflight(
@@ -1320,6 +1363,7 @@ def process_subscription(
     )
     if preflight.get("skip"):
         _log_preflight_skip(sub, preflight)
+        safe_log("[订阅前置校验] 本轮检查=1 跳过=1")
         return True
 
     if ensure_db:
@@ -1365,11 +1409,18 @@ def process_subscription(
 
         if data is None or not data.get("flights"):
             logging.error(f"{route} 采集返回空")
+            source_errors = _source_error_items(agg, data)
             _log_subscription_failure(
                 sub,
-                source_errors=_source_error_items(agg, data),
+                source_errors=source_errors,
                 reason="采集未返回有效航班",
             )
+            if web_trigger:
+                _notify_subscription_failure(
+                    sub,
+                    source_errors=source_errors,
+                    reason="采集未返回有效航班",
+                )
             return False
 
         run_collected_at = data.get("collected_at") or datetime.now().isoformat(timespec="seconds")
@@ -1477,6 +1528,7 @@ def process_subscription(
         if price_calendar_result:
             analysis["price_calendar"] = price_calendar_result
         analysis["source_stats"] = data.get("source_stats", {})
+        analysis["source_errors"] = data.get("source_errors", [])
         analysis["dual_source_price_anomalies"] = data.get(
             "dual_source_price_anomalies", []
         )
@@ -1509,6 +1561,10 @@ def process_subscription(
                 cabin_classes=sub.get("cabin_classes"),
                 route_type=route_type,
                 passengers=request_passengers,
+            )
+            _merge_source_errors(
+                analysis["source_errors"],
+                _source_error_items(agg, return_data),
             )
             return_collected_at = (return_data or {}).get("collected_at") or datetime.now().isoformat(timespec="seconds")
             normalized_return_flights = [
@@ -1565,6 +1621,13 @@ def process_subscription(
                 return_analysis["dual_source_price_anomalies"] = (
                     return_data or {}
                 ).get("dual_source_price_anomalies", [])
+                return_analysis["source_errors"] = (return_data or {}).get(
+                    "source_errors", []
+                )
+                _merge_source_errors(
+                    analysis["source_errors"],
+                    return_analysis.get("source_errors", []),
+                )
                 return_min_price = (
                     return_analysis.get("price_range", [0])[0]
                     if return_analysis.get("price_range")
@@ -1780,6 +1843,7 @@ def process_subscription(
                 "previous_prices": previous_prices,
                 "lowest_price_history": lowest_price_history,
                 "source_stats": data.get("source_stats", {}),
+                "source_errors": analysis.get("source_errors", []),
                 "collected_at": run_collected_at,
             },
             "source_stats": data.get("source_stats"),

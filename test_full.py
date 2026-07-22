@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import json
 import sys
+import unittest
 from datetime import date, datetime
 from pathlib import Path
 
-import yaml
+try:
+    import yaml
+except ModuleNotFoundError as exc:
+    raise unittest.SkipTest("PyYAML is required for test_full smoke tests") from exc
+
 from dotenv import load_dotenv
 
 from analyzer import analyze, analyze_all_flights

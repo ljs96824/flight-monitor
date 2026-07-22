@@ -171,6 +171,43 @@ class ExpiredSubscriptionGuardTest(unittest.TestCase):
         self.assertIn("duffel:HTTP 422 invalid departure date", failure_line)
         self.assertNotIn("未知", failure_line)
 
+    def test_single_subscription_path_prints_preflight_summary(self):
+        with (
+            patch.object(main, "_shanghai_today", return_value=date(2026, 7, 21), create=True),
+            patch("main.safe_log") as log,
+        ):
+            ok = main.process_subscription(_subscription(), ensure_db=False)
+
+        self.assertTrue(ok)
+        lines = [str(call.args[0]) for call in log.call_args_list]
+        self.assertTrue(
+            any(line.startswith("[订阅前置校验] 本轮检查=1 跳过=1") for line in lines)
+        )
+
+    def test_failed_web_trigger_sends_short_failure_notification(self):
+        subscription = _subscription(
+            depart_date="2026-08-03",
+            date_flexibility=0,
+            notification_goals={"method": "pushplus"},
+        )
+        with (
+            patch.object(main, "_shanghai_today", return_value=date(2026, 7, 21), create=True),
+            patch("main.build_default_sources", return_value=([object()], [])),
+            patch("main.FlightAggregator", _ErrorAggregator),
+            patch("main.set_current_round"),
+            patch("main.start_request_cache_round"),
+            patch("main.clear_current_round"),
+            patch("main.print_request_cache_stats"),
+            patch("main.send", return_value=True) as push_send,
+        ):
+            ok = main.process_subscription(subscription, ensure_db=False, web_trigger=True)
+
+        self.assertFalse(ok)
+        content = push_send.call_args.args[0]
+        self.assertIn("本次采集失败", content)
+        self.assertIn("hasdata:HTTP 422 api_key=***", content)
+        self.assertIn("订阅已保留,下轮自动重试", content)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -113,6 +113,55 @@ class SourceWeightingTest(unittest.TestCase):
         self.assertEqual(prices, {"hasdata": 1000.0, "juhe": 1200.0})
         self.assertTrue(result["price_anomalies"])
 
+    def test_collect_treats_quota_status_as_source_error_not_empty(self):
+        from request_cache import reset_request_cache
+
+        reset_request_cache()
+        self.addCleanup(reset_request_cache)
+
+        class FailedSource(DummySource):
+            def fetch(self, origin, dest, date_str, cabin_class="economy"):
+                return {
+                    "source_status": "failed_quota",
+                    "error": "配额不足(112)",
+                    "flights": [],
+                }
+
+        aggregator = FlightAggregator([FailedSource("juhe")], [], route_type="domestic")
+        result = aggregator.collect("SHA", "PEK", "2026-08-20")
+
+        self.assertIsNone(result)
+        self.assertEqual(
+            aggregator.last_source_errors,
+            [{"source": "juhe", "cabin_class": "economy", "error": "配额不足(112)"}],
+        )
+
+    def test_collect_skips_enrichment_when_search_pool_is_empty(self):
+        from request_cache import reset_request_cache
+
+        reset_request_cache()
+        self.addCleanup(reset_request_cache)
+
+        class EmptySource(DummySource):
+            def fetch(self, origin, dest, date_str, cabin_class="economy"):
+                return {"source_status": "success", "flights": []}
+
+        class EnrichmentSource(DummySource):
+            def __init__(self, name):
+                super().__init__(name)
+                self.calls = []
+
+            def fetch(self, origin, dest, date_str, cabin_class="economy"):
+                self.calls.append((origin, dest, date_str, cabin_class))
+                return {"source_status": "success", "flights": []}
+
+        enrichment = EnrichmentSource("duffel")
+        aggregator = FlightAggregator([EmptySource("juhe")], [enrichment], route_type="domestic")
+        result = aggregator.collect("SHA", "PEK", "2026-08-20")
+
+        self.assertIsNone(result)
+        self.assertEqual(enrichment.calls, [])
+
     def test_collect_uses_juhe_when_it_is_the_global_min_price(self):
         class FetchSource(DummySource):
             def __init__(self, name, price):
@@ -217,6 +266,21 @@ class SourceWeightingTest(unittest.TestCase):
         self.assertIn("主源:聚合数据(Juhe)—12个方案", body)
         self.assertNotIn("Google Flights", body)
         self.assertIn("国内航线按当前源策略以聚合数据为搜索源", body)
+
+    def test_email_source_body_shows_source_degradation_warning(self):
+        body = _email_source_body(
+            {
+                "route_type": "international",
+                "source_stats": {},
+                "source_degradation": {
+                    "reason": "本轮OTA交叉源不可用(配额不足),入池仅Google,与上次价格不可直接比"
+                },
+                "collected_at": "2026-06-06T12:00:00",
+            }
+        )
+
+        self.assertIn("本轮OTA交叉源不可用", body)
+        self.assertIn("与上次价格不可直接比", body)
 
 
 if __name__ == "__main__":

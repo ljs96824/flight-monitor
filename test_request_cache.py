@@ -34,6 +34,23 @@ class EquipmentSource:
         return {"flights": [dict(item) for item in self.flights], "source": self.name}
 
 
+class QuotaFailureSource:
+    name = "juhe"
+
+    def __init__(self):
+        self.calls = []
+
+    def fetch(self, origin, dest, date_str, cabin_class="economy"):
+        self.calls.append((origin, dest, date_str, cabin_class))
+        return {
+            "flights": [],
+            "source": self.name,
+            "source_status": "failed_quota",
+            "error": "配额不足(112)",
+            "quota_code": "112",
+        }
+
+
 class RequestCacheTest(unittest.TestCase):
     def test_cached_fetch_reports_fresh_then_cache_without_changing_payload(self):
         from request_cache import cached_fetch, reset_request_cache
@@ -184,6 +201,43 @@ class RequestCacheTest(unittest.TestCase):
         self.assertEqual(stats["by_source"]["juhe"]["actual"], 0)
         self.assertEqual(stats["by_source"]["juhe"]["skipped"], 1)
 
+    def test_quota_failure_disables_same_source_for_process(self):
+        from request_cache import cached_fetch, get_request_cache_stats, reset_request_cache
+
+        reset_request_cache()
+        self.addCleanup(reset_request_cache)
+        source = QuotaFailureSource()
+
+        first, first_status = cached_fetch(
+            source,
+            "SHA",
+            "PEK",
+            "2026-08-20",
+            {"adult": 1},
+            "economy",
+            persist=False,
+            include_cache_status=True,
+        )
+        second, second_status = cached_fetch(
+            source,
+            "SHA",
+            "PKX",
+            "2026-08-20",
+            {"adult": 1},
+            "economy",
+            persist=False,
+            include_cache_status=True,
+        )
+
+        stats = get_request_cache_stats()["by_source"]["juhe"]
+        self.assertEqual(first["source_status"], "failed_quota")
+        self.assertEqual(first_status, "fresh")
+        self.assertEqual(second_status, "skipped")
+        self.assertEqual(second["source_status"], "skipped_source_disabled")
+        self.assertEqual(second["skipped_reason"], "配额不足(112)")
+        self.assertEqual(source.calls, [("SHA", "PEK", "2026-08-20", "economy")])
+        self.assertEqual(stats["actual"], 1)
+        self.assertEqual(stats["skipped"], 1)
 
 
     def test_stats_requested_counts_real_fetch_not_cache_hits(self):

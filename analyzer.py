@@ -10640,7 +10640,7 @@ def _log_excluded_price_diagnostics(
     max_price = max(prices) if prices else None
     summary = (
         f"[排除诊断] 推荐方案价={recommended_total} 最高可接受价={max_budget} "
-        f"候选数={len(prices)} 去重={len(unique_keys)} min={min_price} max={max_price} "
+        f"候选数={len(prices)} 去重后={len(unique_keys)} min={min_price} max={max_price} "
         f"低于上限={below_limit if budget is not None else '不适用'} 最低5={lowest_five}"
     )
     safe_log(summary)

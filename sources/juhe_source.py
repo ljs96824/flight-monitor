@@ -21,6 +21,11 @@ from subscription_preflight import shanghai_today
 
 
 CACHE_TTL_MINUTES = 15
+QUOTA_CODES = {
+    code.strip()
+    for code in os.getenv("JUHE_QUOTA_CODES", "112,10012").split(",")
+    if code.strip()
+}
 
 AIRCRAFT_NAMES = {
     "73U": "波音737",
@@ -119,15 +124,35 @@ def _parse_departure_date(date_str: str) -> date | None:
 def _is_success_response(raw) -> bool:
     if not isinstance(raw, dict):
         return False
-    if "error_code" not in raw:
-        return True
-    return str(raw.get("error_code")) == "0"
+    if "error_code" in raw and str(raw.get("error_code")) != "0":
+        return False
+    if "resultcode" in raw and str(raw.get("resultcode")) not in {"0", "200"}:
+        return False
+    return True
 
 
 def _is_invalid_date_response(raw) -> bool:
     if not isinstance(raw, dict):
         return False
     return str(raw.get("error_code")) == "281801"
+
+
+def _response_codes(raw: dict) -> tuple[str, str]:
+    resultcode = str((raw or {}).get("resultcode") or "").strip()
+    error_code = str((raw or {}).get("error_code") or "").strip()
+    return resultcode, error_code
+
+
+def _is_quota_response(raw) -> bool:
+    if not isinstance(raw, dict):
+        return False
+    return any(code in QUOTA_CODES for code in _response_codes(raw) if code)
+
+
+def _quota_error_text(raw: dict) -> str:
+    resultcode, error_code = _response_codes(raw)
+    code = resultcode if resultcode in QUOTA_CODES else error_code
+    return f"配额不足({code or 'unknown'})"
 
 
 def _combine_date_time(date_value, time_value) -> str:
@@ -226,6 +251,38 @@ class JuheSource(FlightSource):
                 "raw": raw,
                 "source_status": "invalid_date",
                 "skipped_reason": "日期无效或已过期",
+                "collected_at": collected_at,
+            }
+        if _is_quota_response(raw):
+            resultcode, error_code = _response_codes(raw)
+            error = _quota_error_text(raw)
+            safe_log(f"[juhe] failed quota {date_str}: {error}")
+            return {
+                "flights": [],
+                "source": self.name,
+                "raw": raw,
+                "source_status": "failed_quota",
+                "error": error,
+                "resultcode": resultcode,
+                "error_code": error_code,
+                "reason": raw.get("reason") or raw.get("message") or "",
+                "quota_code": resultcode or error_code,
+                "collected_at": collected_at,
+            }
+        if not _is_success_response(raw):
+            resultcode, error_code = _response_codes(raw)
+            reason = raw.get("reason") or raw.get("message") or "返回失败"
+            error = f"{reason}({resultcode or error_code or 'unknown'})"
+            safe_log(f"[juhe] failed {date_str}: {error}")
+            return {
+                "flights": [],
+                "source": self.name,
+                "raw": raw,
+                "source_status": "failed",
+                "error": error,
+                "resultcode": resultcode,
+                "error_code": error_code,
+                "reason": reason,
                 "collected_at": collected_at,
             }
         if _is_success_response(raw):

@@ -194,6 +194,20 @@ def _valid_price(value) -> bool:
         return False
 
 
+def _source_status_is_failure(status) -> bool:
+    text = str(status or "").lower()
+    return text.startswith("failed") or text in {"error", "failure", "failed"}
+
+
+def _source_result_error(result: dict, fallback: str = "返回失败") -> str:
+    return str(
+        (result or {}).get("error")
+        or (result or {}).get("skipped_reason")
+        or (result or {}).get("reason")
+        or fallback
+    )
+
+
 def _source_raw_departure_time(flight: dict, source_name: str) -> str:
     traced = flight.get("_source_raw_departure_time")
     if traced not in (None, ""):
@@ -757,6 +771,19 @@ class FlightAggregator:
                         raw_by_source[f"{source_name}:{cabin_class}"] = result.get("raw")
                         safe_log(f"[{source_name}] {cabin_class} skipped: {source_status}")
                         continue
+                    if _source_status_is_failure(source_status):
+                        cabin_counts[cabin_class] = 0
+                        raw_by_source[f"{source_name}:{cabin_class}"] = result.get("raw")
+                        error = _redact_api_key(_source_result_error(result))
+                        source_errors.append(
+                            {
+                                "source": source_name,
+                                "cabin_class": cabin_class,
+                                "error": error,
+                            }
+                        )
+                        safe_log(f"[{source_name}] {cabin_class} 失败：{error}")
+                        continue
 
                     for flight in flights:
                         flight["collected_at"] = (
@@ -831,6 +858,8 @@ class FlightAggregator:
                 status = "not_configured"
             elif any(str(value).startswith("skipped") for value in source_statuses):
                 status = "skipped"
+            elif any(_source_status_is_failure(value) for value in source_statuses):
+                status = "失败"
             elif "cache" in source_statuses or "success" in source_statuses:
                 status = "empty"
             elif source_optional:
@@ -918,7 +947,11 @@ class FlightAggregator:
         dual_source_price_anomalies = _log_dual_source_price_checks(unique_flights)
 
         enrichment_data = {}
+        if not unique_flights and self.enrichment_sources:
+            safe_log("[enrichment跳过] 原因=无列表候选")
         for source in self.enrichment_sources:
+            if not unique_flights:
+                break
             source_name = getattr(source, "name", type(source).__name__)
             enrichment_count = 0
             enrichment_succeeded = False

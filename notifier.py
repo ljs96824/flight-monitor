@@ -6523,6 +6523,106 @@ def _apply_plan_tracking_change(
     return result
 
 
+def _source_set_from_plan(plan: dict | None) -> set[str]:
+    sources: set[str] = set()
+    if not isinstance(plan, dict):
+        return sources
+    legs = []
+    if plan.get("is_roundtrip"):
+        legs.extend([plan.get("outbound_flight"), plan.get("return_flight")])
+    else:
+        legs.append(plan.get("flight"))
+    for leg in legs:
+        if not isinstance(leg, dict):
+            continue
+        for value in (
+            leg.get("data_source"),
+            leg.get("source"),
+            leg.get("price_source"),
+        ):
+            for part in str(value or "").split("+"):
+                part = part.strip().lower()
+                if part:
+                    sources.add(part)
+        for entry in _source_price_entries_for_display(leg):
+            source = str(entry.get("source") or "").strip().lower()
+            if source:
+                sources.add(source)
+    return sources
+
+
+def _parse_snapshot_sources(snapshot: dict | None) -> set[str]:
+    if not isinstance(snapshot, dict):
+        return set()
+    raw = snapshot.get("source_set") or snapshot.get("channels") or []
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            raw = [raw]
+    sources = set()
+    for item in raw or []:
+        for part in str(item or "").split("+"):
+            part = part.strip().lower()
+            if part in {"juhe", "hasdata", "serpapi", "searchapi"}:
+                sources.add(part)
+    return sources
+
+
+def _source_error_text(source_errors: list[dict] | None, source_name: str) -> str:
+    source_name = source_name.lower()
+    for item in source_errors or []:
+        if str(item.get("source") or "").strip().lower() != source_name:
+            continue
+        text = str(item.get("error") or item.get("reason") or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _apply_source_degradation_to_push_meta(
+    push_meta: dict | None,
+    *,
+    current_sources: set[str],
+    previous_sources: set[str],
+    source_errors: list[dict] | None = None,
+) -> dict:
+    result = dict(push_meta or {})
+    if not previous_sources or not current_sources:
+        return result
+    missing_sources = previous_sources - current_sources
+    if "juhe" not in missing_sources:
+        return result
+    juhe_error = _source_error_text(source_errors, "juhe")
+    if juhe_error and not any(marker in juhe_error for marker in ("配额", "112", "10012")):
+        return result
+    reason = "本轮OTA交叉源不可用"
+    if juhe_error:
+        if "配额" in juhe_error:
+            reason += "(配额不足)"
+        else:
+            reason += f"({juhe_error})"
+    reason += ",入池仅Google,与上次价格不可直接比"
+    reasons = [
+        str(item)
+        for item in (result.get("reasons") or [])
+        if not _is_previous_price_reason(str(item or ""))
+        and "上涨" not in str(item)
+        and "下降" not in str(item)
+    ]
+    reasons.insert(0, reason)
+    result["type"] = "数据源受限"
+    result["price_change"] = None
+    result["source_degradation"] = {
+        "previous_sources": sorted(previous_sources),
+        "current_sources": sorted(current_sources),
+        "missing_sources": sorted(missing_sources),
+        "reason": reason,
+    }
+    result["reasons"] = _payload_dedupe_text(reasons)[:4]
+    return result
+
+
 def _price_change_scope_suffix(change: dict | None) -> str:
     change = change if isinstance(change, dict) else {}
     scope = str(change.get("scope") or "").strip()
@@ -6887,6 +6987,11 @@ def build_notification_payload(
     return_analysis = return_analysis or analysis_result.get("return_analysis") or {}
     is_roundtrip = bool(route_info.get("round_trip"))
     source_stats = source_stats or route_info.get("source_stats") or analysis_result.get("source_stats")
+    source_errors = (
+        analysis_result.get("source_errors")
+        or route_info.get("source_errors")
+        or []
+    )
     decision, confidence, current, target, max_budget = _decision_context(
         analysis_result,
         route_info,
@@ -7190,7 +7295,19 @@ def build_notification_payload(
     if price_policy.get("reason"):
         push_meta["reasons"] = _payload_dedupe_text([price_policy["reason"]] + (push_meta.get("reasons") or []))[:4]
     push_meta = _apply_plan_tracking_change(push_meta, plan_status_change, is_roundtrip)
-    if plan_status_change and plan_status_change.get("status") == "sold_out":
+    current_source_set = _source_set_from_plan(primary_plan)
+    previous_source_set = _parse_snapshot_sources(last_snapshot)
+    push_meta = _apply_source_degradation_to_push_meta(
+        push_meta,
+        current_sources=current_source_set,
+        previous_sources=previous_source_set,
+        source_errors=source_errors,
+    )
+    if (
+        plan_status_change
+        and plan_status_change.get("status") == "sold_out"
+        and push_meta.get("type") != "数据源受限"
+    ):
         push_meta["type"] = "涨价风险"
 
     change = (push_meta or {}).get("price_change") or {}
@@ -7529,13 +7646,16 @@ def build_notification_payload(
         "form_url": form_url,
         "feedback_url": feedback_url,
         "source_stats": source_stats or {},
+        "source_errors": source_errors,
+        "source_degradation": (push_meta or {}).get("source_degradation") or {},
         "collected_at": _message_collected_time(analysis_result, route_info),
         "snapshot": {
             "route": route_key,
             "subscription_id": route_info.get("subscription_id") or subscription.get("id"),
             "depart_date": depart_key,
             "return_date": return_key,
-            "channels": _snapshot_channels(primary_flight),
+            "channels": sorted(current_source_set) or _snapshot_channels(primary_flight),
+            "source_set": sorted(current_source_set),
             "fare_status": _snapshot_fare_status(primary_flight),
         },
     }
@@ -11073,6 +11193,14 @@ def _email_source_rows(payload: dict) -> list[str]:
 def _email_source_body(payload: dict) -> str:
     rows = _email_source_rows(payload)
     rows.append("<div>🔹 候选方案:已去重并筛选</div>")
+    degradation = payload.get("source_degradation") or {}
+    degradation_reason = str(degradation.get("reason") or "").strip()
+    if degradation_reason:
+        rows.append(
+            "<div style='margin-top:6px;color:#b45309;font-size:13px;'>"
+            f"⚠ {html.escape(degradation_reason)}"
+            "</div>"
+        )
     rows.append(f"<div style='margin-top:8px;color:#666;font-size:12px;'>采集时间:{html.escape(_payload_freshness_text(payload))}</div>")
     rows.append("<div style='color:#666;font-size:12px;'>说明:技术明细见网页详情页,价格以平台支付页为准。</div>")
     return "".join(rows)
