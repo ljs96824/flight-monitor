@@ -52,6 +52,80 @@ class QuotaFailureSource:
 
 
 class RequestCacheTest(unittest.TestCase):
+    def setUp(self):
+        from request_cache import reset_for_tests
+
+        self._request_cache_tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self._request_cache_dir = (
+            Path(self._request_cache_tmp.name) / self._testMethodName
+        )
+        reset_for_tests(self._request_cache_dir)
+        self.addCleanup(self._cleanup_request_cache)
+
+    def _cleanup_request_cache(self):
+        from request_cache import reset_for_tests
+
+        reset_for_tests(None)
+        self._request_cache_tmp.cleanup()
+
+    def test_reset_for_tests_redirects_persistent_cache_away_from_default_dir(self):
+        from request_cache import cached_fetch, reset_for_tests
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            production_cache = root / "production"
+            isolated_cache = root / self._testMethodName
+
+            with patch("request_cache.DEFAULT_CACHE_DIR", production_cache):
+                reset_for_tests(None)
+                source = CountingSource()
+                cached_fetch(source, "SHA", "PEK", "2099-08-20")
+                self.assertEqual(len(source.calls), 1)
+
+                reset_for_tests(isolated_cache)
+                isolated_source = CountingSource()
+                _, status = cached_fetch(
+                    isolated_source,
+                    "SHA",
+                    "PEK",
+                    "2099-08-20",
+                    include_cache_status=True,
+                )
+
+                self.assertEqual(status, "fresh")
+                self.assertEqual(len(isolated_source.calls), 1)
+                self.assertTrue(list(isolated_cache.glob("api_*.json")))
+
+    def test_reset_for_tests_clears_runtime_pool_circuit_stats_and_plan_state(self):
+        from request_cache import (
+            activate_collection_plan,
+            cache_key,
+            cached_fetch,
+            get_process_request_cache_stats,
+            get_request_cache_stats,
+            reset_for_tests,
+            start_request_cache_round,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = Path(tmp) / self._testMethodName
+            quota_source = QuotaFailureSource()
+            planned_key = cache_key(quota_source, "SHA", "PEK", "2099-08-20")
+            start_request_cache_round("dirty-round")
+            activate_collection_plan({planned_key})
+            cached_fetch(quota_source, "SHA", "PEK", "2099-08-20", persist=False)
+
+            reset_for_tests(cache_dir)
+
+            self.assertEqual(get_request_cache_stats()["total"], 0)
+            self.assertEqual(get_process_request_cache_stats()["total"], 0)
+
+            healthy_source = CountingSource()
+            healthy_source.name = "juhe"
+            cached_fetch(healthy_source, "SHA", "PEK", "2099-08-20", persist=False)
+            self.assertEqual(len(healthy_source.calls), 1)
+            self.assertEqual(get_request_cache_stats()["outside_unique"], 0)
+
     def test_cached_fetch_reports_fresh_then_cache_without_changing_payload(self):
         from request_cache import cached_fetch, reset_request_cache
 

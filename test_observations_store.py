@@ -37,6 +37,22 @@ class ObservationSource:
 
 
 class ObservationsStoreTest(unittest.TestCase):
+    def setUp(self):
+        from request_cache import reset_for_tests
+
+        self._request_cache_tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self._request_cache_dir = (
+            Path(self._request_cache_tmp.name) / self._testMethodName
+        )
+        reset_for_tests(self._request_cache_dir)
+        self.addCleanup(self._cleanup_request_cache)
+
+    def _cleanup_request_cache(self):
+        from request_cache import reset_for_tests
+
+        reset_for_tests(None)
+        self._request_cache_tmp.cleanup()
+
     def test_append_observations_is_idempotent_and_records_single_person_oneway_price(self):
         from observations_store import append_observations, count_observations, init_observations_db
 

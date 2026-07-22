@@ -24,6 +24,7 @@ DEFAULT_CACHE_DIR = Path(__file__).parent / "data" / "cache"
 DEFAULT_TTL_SECONDS = 15 * 60
 
 _request_cache: dict[tuple, dict] = {}
+_persistent_cache_dir_override: Path | None = None
 _disabled_persistent_dirs: set[str] = set()
 _fetch_trigger_counts: dict[tuple, int] = {}
 _equipment_summary: dict[tuple[str, str], dict] = {}
@@ -99,7 +100,8 @@ def cache_key(source, origin, dest, date_str, passengers=None, cabin_class="econ
 def _cache_path(key: tuple, cache_dir: Path | None = None) -> Path:
     source, origin, dest, date_str, pax, cabin_class = key
     safe = sanitize_filename("_".join([source, f"{origin}-{dest}", date_str, pax, cabin_class]))
-    return Path(cache_dir or DEFAULT_CACHE_DIR) / f"api_{safe}.json"
+    root = cache_dir or _persistent_cache_dir_override or DEFAULT_CACHE_DIR
+    return Path(root) / f"api_{safe}.json"
 
 
 def _fresh(fetched_at: str | None, ttl_seconds: int) -> bool:
@@ -629,3 +631,11 @@ def reset_request_cache(*, clear_memory: bool = True, reset_stats: bool = True) 
         _process_stats.update(_empty_stats())
         _equipment_summary.clear()
         _current_stats_round_id = None
+
+
+def reset_for_tests(cache_dir: str | Path | None) -> None:
+    """隔离测试缓存目录并清空所有请求缓存运行态。"""
+    global _persistent_cache_dir_override
+    _persistent_cache_dir_override = Path(cache_dir) if cache_dir is not None else None
+    reset_request_cache(clear_memory=True, reset_stats=True)
+    observations_store.clear_current_round()
