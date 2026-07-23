@@ -16,6 +16,7 @@ from pathlib import Path
 
 from domestic_fare_rules import AIRCRAFT_NAMES, re_match_aircraft_code
 from filename_utils import sanitize_filename
+from flight_combo_utils import normalize_combo
 from log_utils import safe_log
 import observations_store
 
@@ -42,6 +43,7 @@ def _empty_stats() -> dict:
     return {
         "total": 0,
         "hits": 0,
+        "panel_reused": 0,
         "actual": 0,
         "skipped": 0,
         "planned_actual": 0,
@@ -55,7 +57,10 @@ _stats = _empty_stats()
 _process_stats = _empty_stats()
 _current_stats_round_id: str | None = None
 _active_collection_plan_keys: set[tuple] | None = None
+_active_panel_only_keys: set[tuple] = set()
 _active_collection_plan_unique = 0
+_active_panel_freshness_hours = 6.0
+_active_fresh_scope = "primary_only"
 _outside_plan_seen: set[tuple] = set()
 _actual_request_keys_this_round: set[tuple] = set()
 _resolved_request_keys_this_round: set[tuple] = set()
@@ -116,10 +121,20 @@ def _fresh(fetched_at: str | None, ttl_seconds: int) -> bool:
 
 
 def _source_stats_bucket(stats: dict, source_name: str) -> dict:
-    return stats.setdefault("by_source", {}).setdefault(
+    bucket = stats.setdefault("by_source", {}).setdefault(
         source_name,
-        {"requested": 0, "actual": 0, "hits": 0, "skipped": 0, "calls": 0},
+        {
+            "requested": 0,
+            "actual": 0,
+            "hits": 0,
+            "panel_reused": 0,
+            "skipped": 0,
+            "calls": 0,
+        },
     )
+    for key in ("requested", "actual", "hits", "panel_reused", "skipped", "calls"):
+        bucket.setdefault(key, 0)
+    return bucket
 
 
 def _record_request(source_name: str) -> None:
@@ -132,6 +147,12 @@ def _record_hit(source_name: str) -> None:
     for stats in (_stats, _process_stats):
         stats["hits"] += 1
         _source_stats_bucket(stats, source_name)["hits"] += 1
+
+
+def _record_panel_reuse(source_name: str) -> None:
+    for stats in (_stats, _process_stats):
+        stats["panel_reused"] += 1
+        _source_stats_bucket(stats, source_name)["panel_reused"] += 1
 
 
 def _record_actual(source_name: str, plan_scope: str | None = None) -> None:
@@ -152,17 +173,34 @@ def _record_skip(source_name: str) -> None:
         _source_stats_bucket(stats, source_name)["skipped"] += 1
 
 
-def activate_collection_plan(request_keys) -> None:
+def activate_collection_plan(
+    request_keys,
+    *,
+    panel_only_keys=None,
+    freshness_hours: float = 6,
+    fresh_scope: str = "primary_only",
+) -> None:
     global _active_collection_plan_keys, _active_collection_plan_unique
+    global _active_panel_freshness_hours, _active_fresh_scope
     _active_collection_plan_keys = set(request_keys or [])
+    _active_panel_only_keys.clear()
+    _active_panel_only_keys.update(panel_only_keys or [])
     _active_collection_plan_unique = len(_active_collection_plan_keys)
+    _active_panel_freshness_hours = max(0.0, float(freshness_hours or 0))
+    _active_fresh_scope = (
+        "all" if str(fresh_scope or "").strip().lower() == "all" else "primary_only"
+    )
     _outside_plan_seen.clear()
 
 
 def deactivate_collection_plan() -> None:
     global _active_collection_plan_keys, _active_collection_plan_unique
+    global _active_panel_freshness_hours, _active_fresh_scope
     _active_collection_plan_keys = None
+    _active_panel_only_keys.clear()
     _active_collection_plan_unique = 0
+    _active_panel_freshness_hours = 6.0
+    _active_fresh_scope = "primary_only"
     _outside_plan_seen.clear()
 
 
@@ -203,7 +241,7 @@ def _source_preflight_skip(source, origin, dest, date_str, cabin_class):
     return result if isinstance(result, dict) else None
 
 
-def _read_persistent(key: tuple, ttl_seconds: int, cache_dir: Path | None = None):
+def _read_persistent_payload(key: tuple, cache_dir: Path | None = None) -> dict | None:
     path = _cache_path(key, cache_dir)
     if not path.exists():
         return None
@@ -211,9 +249,147 @@ def _read_persistent(key: tuple, ttl_seconds: int, cache_dir: Path | None = None
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _read_persistent(key: tuple, ttl_seconds: int, cache_dir: Path | None = None):
+    payload = _read_persistent_payload(key, cache_dir)
+    if payload is None:
+        return None
     if not _fresh(payload.get("fetched_at"), ttl_seconds):
         return None
     return payload.get("result")
+
+
+def _parse_cache_time(value) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone().replace(tzinfo=None)
+    return parsed
+
+
+def _panel_label(observed_at: str) -> str:
+    parsed = _parse_cache_time(observed_at)
+    return f"面板复用{parsed.strftime('%H:%M')}" if parsed else "面板复用"
+
+
+def _panel_snapshot_for_key(key: tuple, freshness_hours: float) -> dict | None:
+    if key[0] not in {"juhe", "hasdata"}:
+        return None
+    _round_id, db_path = observations_store.get_current_round()
+    return observations_store.load_fresh_observation_snapshot(
+        source=key[0],
+        origin_airport=key[1],
+        dest_airport=key[2],
+        depart_date=key[3],
+        cabin_class=key[5],
+        freshness_hours=freshness_hours,
+        db_path=db_path,
+    )
+
+
+def _rebuild_panel_result(
+    key: tuple,
+    snapshot: dict,
+    *,
+    cache_dir: Path | None = None,
+    freshness_hours: float,
+) -> dict | None:
+    """以面板价格为准，用同键完整缓存补足航段结构。"""
+    persisted = _read_persistent_payload(key, cache_dir)
+    if persisted is None or not _fresh(
+        persisted.get("fetched_at"),
+        max(1, int(float(freshness_hours) * 60 * 60)),
+    ):
+        return None
+    result = persisted.get("result")
+    if not isinstance(result, dict):
+        return None
+    observed_at = str(snapshot.get("observed_at") or "")
+    cache_time = _parse_cache_time(persisted.get("fetched_at"))
+    observed_time = _parse_cache_time(observed_at)
+    if cache_time is None or observed_time is None:
+        return None
+    if cache_time + timedelta(minutes=2) < observed_time:
+        return None
+
+    cached_by_combo = {}
+    for flight in result.get("flights") or []:
+        if not isinstance(flight, dict):
+            continue
+        combo = normalize_combo(flight.get("flight_combo") or flight.get("flight_no"))
+        if combo and combo not in cached_by_combo:
+            cached_by_combo[combo] = flight
+
+    rebuilt = []
+    for row in snapshot.get("rows") or []:
+        combo = normalize_combo(row.get("flight_combo"))
+        cached_flight = cached_by_combo.get(combo)
+        if not combo or cached_flight is None:
+            return None
+        flight = copy.deepcopy(cached_flight)
+        flight["flight_combo"] = combo
+        flight["price"] = float(row["price_cny"])
+        flight["collected_at"] = observed_at
+        flight["collection_state"] = "panel_reused"
+        flight["collection_label"] = _panel_label(observed_at)
+        flight["observation_round_id"] = snapshot.get("round_id")
+        rebuilt.append(flight)
+    if not rebuilt:
+        return None
+
+    panel_result = copy.deepcopy(result)
+    panel_result["flights"] = rebuilt
+    panel_result["collected_at"] = observed_at
+    panel_result["collection_state"] = "panel_reused"
+    panel_result["collection_label"] = _panel_label(observed_at)
+    panel_result["observation_round_id"] = snapshot.get("round_id")
+    return panel_result
+
+
+def panel_reuse_result(
+    source,
+    origin: str,
+    dest: str,
+    date_str: str,
+    passengers=None,
+    cabin_class: str = "economy",
+    *,
+    freshness_hours: float = 6,
+    cache_dir: Path | None = None,
+) -> dict | None:
+    key = cache_key(source, origin, dest, date_str, passengers, cabin_class)
+    snapshot = _panel_snapshot_for_key(key, freshness_hours)
+    if snapshot is None:
+        return None
+    return _rebuild_panel_result(
+        key,
+        snapshot,
+        cache_dir=cache_dir,
+        freshness_hours=freshness_hours,
+    )
+
+
+def _request_is_panel_only(
+    key: tuple,
+    *,
+    explicit: bool | None,
+    force_fresh: bool,
+    reason: str | None,
+) -> bool:
+    if force_fresh:
+        return False
+    if explicit is not None:
+        return bool(explicit)
+    if key in _active_panel_only_keys:
+        return True
+    if _active_fresh_scope != "primary_only":
+        return False
+    reason_text = str(reason or "")
+    return "弹性日期" in reason_text or "低价日历" in reason_text
 
 
 def _write_persistent(key: tuple, result, cache_dir: Path | None = None) -> None:
@@ -366,6 +542,7 @@ def cached_fetch(
     force_fresh: bool = False,
     include_cache_status: bool = False,
     request_reason: str | None = None,
+    panel_only: bool | None = None,
 ):
     """Fetch through an in-run and short persistent cache.
 
@@ -377,6 +554,12 @@ def cached_fetch(
     key = cache_key(source, origin, dest, date_str, passengers, cabin_class)
     source_name = key[0]
     plan_scope = _plan_scope_for_request(key, source_name, request_reason)
+    panel_only_request = _request_is_panel_only(
+        key,
+        explicit=panel_only,
+        force_fresh=force_fresh,
+        reason=request_reason,
+    )
     _record_request(source_name)
 
     if _current_stats_round_id and key in _resolved_request_keys_this_round:
@@ -403,6 +586,59 @@ def cached_fetch(
         )
         fresh_result = copy.deepcopy(skipped_result)
         return (fresh_result, "skipped") if include_cache_status else fresh_result
+
+    if not force_fresh and source_name in {"juhe", "hasdata"}:
+        panel_result = panel_reuse_result(
+            source,
+            origin,
+            dest,
+            date_str,
+            passengers,
+            cabin_class,
+            freshness_hours=_active_panel_freshness_hours,
+            cache_dir=cache_dir,
+        )
+        if panel_result is not None:
+            _record_panel_reuse(source_name)
+            _request_cache[key] = {
+                "fetched_at": panel_result.get("collected_at"),
+                "result": copy.deepcopy(panel_result),
+                "cache_status": "panel",
+            }
+            if _current_stats_round_id:
+                _resolved_request_keys_this_round.add(key)
+            safe_log(
+                f"[面板复用] 源={source_name} 航线={key[1]}->{key[2]} "
+                f"日期={key[3]} 采集于={panel_result.get('collected_at')} 不发API"
+            )
+            copied = copy.deepcopy(panel_result)
+            return (copied, "panel") if include_cache_status else copied
+
+    if panel_only_request:
+        _record_skip(source_name)
+        skipped_result = {
+            "flights": [],
+            "source": source_name,
+            "raw": {},
+            "source_status": "skipped_panel_only",
+            "skipped_reason": "今日未采",
+            "collection_state": "panel_missing",
+            "collection_label": "今日未采",
+            "collected_at": None,
+        }
+        _request_cache[key] = {
+            "fetched_at": datetime.now().isoformat(timespec="seconds"),
+            "result": copy.deepcopy(skipped_result),
+            "cache_status": "skipped",
+        }
+        if _current_stats_round_id:
+            _resolved_request_keys_this_round.add(key)
+        safe_log(
+            f"[面板只读] 源={source_name} 航线={key[1]}->{key[2]} "
+            f"日期={key[3]} 结果=今日未采 不补采"
+        )
+        copied = copy.deepcopy(skipped_result)
+        return (copied, "skipped") if include_cache_status else copied
 
     if not force_fresh:
         memory_entry = _request_cache.get(key)
@@ -474,6 +710,7 @@ def cached_fetch(
         _request_cache[key] = {
             "fetched_at": datetime.now().isoformat(timespec="seconds"),
             "result": copy.deepcopy(result),
+            "cache_status": "fresh",
         }
         if _current_stats_round_id:
             _resolved_request_keys_this_round.add(key)
@@ -488,17 +725,29 @@ def cached_fetch(
         _request_cache[key] = {
             "fetched_at": datetime.now().isoformat(timespec="seconds"),
             "result": copy.deepcopy(result),
+            "cache_status": "fresh",
         }
         if _current_stats_round_id:
             _resolved_request_keys_this_round.add(key)
         safe_log(f"[源熔断] 源={source_name} 原因={quota_reason} 生效范围=本进程")
         return (copy.deepcopy(result), "fresh") if include_cache_status else copy.deepcopy(result)
+    collected_at = str(result.get("collected_at") or datetime.now().isoformat(timespec="seconds"))
+    result["collected_at"] = collected_at
+    result["collection_state"] = "fresh"
+    result["collection_label"] = f"实时采集{_panel_label(collected_at).removeprefix('面板复用')}"
+    for flight in result.get("flights") or []:
+        if not isinstance(flight, dict):
+            continue
+        flight["collected_at"] = flight.get("collected_at") or collected_at
+        flight["collection_state"] = "fresh"
+        flight["collection_label"] = result["collection_label"]
     _record_equipment_summary(source_name, result)
     _record_observations_after_fetch(source, key, result, cabin_class)
     stored = copy.deepcopy(result)
     _request_cache[key] = {
         "fetched_at": datetime.now().isoformat(timespec="seconds"),
         "result": stored,
+        "cache_status": "fresh",
     }
     if _current_stats_round_id:
         _resolved_request_keys_this_round.add(key)
@@ -593,6 +842,7 @@ def print_request_cache_stats() -> None:
         f"round={_current_stats_round_id or 'unknown'}, "
         f"本轮总调用={_stats.get('total', 0)}, "
         f"缓存命中={_stats.get('hits', 0)}, "
+        f"面板复用={_stats.get('panel_reused', 0)}, "
         f"源级跳过={_stats.get('skipped', 0)}, "
         f"实际API请求={_stats.get('actual', 0)}, "
         f"计划唯一={_active_collection_plan_unique}, "
@@ -605,6 +855,7 @@ def print_request_cache_stats() -> None:
         "[API统计-进程累计] "
         f"总调用={_process_stats.get('total', 0)}, "
         f"缓存命中={_process_stats.get('hits', 0)}, "
+        f"面板复用={_process_stats.get('panel_reused', 0)}, "
         f"源级跳过={_process_stats.get('skipped', 0)}, "
         f"实际API请求={_process_stats.get('actual', 0)}, "
         f"各源: {_process_stats.get('by_source', {})}"
@@ -642,4 +893,10 @@ def reset_for_tests(cache_dir: str | Path | None) -> None:
     global _persistent_cache_dir_override
     _persistent_cache_dir_override = Path(cache_dir) if cache_dir is not None else None
     reset_request_cache(clear_memory=True, reset_stats=True)
-    observations_store.clear_current_round()
+    if cache_dir is None:
+        observations_store.clear_current_round()
+    else:
+        observations_store.set_current_round(
+            "",
+            Path(cache_dir).parent / "observations.sqlite3",
+        )

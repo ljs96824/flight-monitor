@@ -3,6 +3,13 @@ from datetime import date
 from unittest.mock import MagicMock, call, patch
 
 
+def _import_main_without_log_side_effect():
+    with patch("logging.basicConfig"):
+        import main
+
+    return main
+
+
 def _subscription(index):
     return {
         "_index": index,
@@ -18,6 +25,9 @@ def _subscription(index):
 
 class FakePlan:
     request_keys = {("juhe", "SHA", "PEK", "2026-08-20", "1_0_0_0", "economy")}
+    panel_only_keys = set()
+    freshness_hours = 6.0
+    fresh_scope = "primary_only"
 
     def __init__(self, events):
         self.events = events
@@ -32,7 +42,7 @@ class FakePlan:
 
 class CollectionOrchestrationTest(unittest.TestCase):
     def test_main_plans_all_active_subscriptions_before_processing_any(self):
-        import main
+        main = _import_main_without_log_side_effect()
 
         subscriptions = [_subscription(1), _subscription(2)]
         preflight = {"skip": False, "collection_dates": [date(2026, 8, 20)]}
@@ -71,12 +81,17 @@ class CollectionOrchestrationTest(unittest.TestCase):
 
         build_plan.assert_called_once()
         self.assertEqual(build_plan.call_args.kwargs["subscriptions"], subscriptions)
-        activate.assert_called_once_with(plan.request_keys)
+        activate.assert_called_once_with(
+            plan.request_keys,
+            panel_only_keys=plan.panel_only_keys,
+            freshness_hours=plan.freshness_hours,
+            fresh_scope=plan.fresh_scope,
+        )
         deactivate.assert_called_once()
         self.assertEqual([event[0] for event in events], ["summary", "execute", "process", "process"])
 
     def test_single_subscription_path_prepares_its_own_plan(self):
-        import main
+        main = _import_main_without_log_side_effect()
 
         plan = FakePlan([])
         empty_data = {"flights": []}
@@ -100,11 +115,16 @@ class CollectionOrchestrationTest(unittest.TestCase):
 
         self.assertFalse(ok)
         build_plan.assert_called_once()
-        activate.assert_called_once_with(plan.request_keys)
+        activate.assert_called_once_with(
+            plan.request_keys,
+            panel_only_keys=plan.panel_only_keys,
+            freshness_hours=plan.freshness_hours,
+            fresh_scope=plan.fresh_scope,
+        )
         deactivate.assert_called_once()
 
     def test_preflight_failure_isolated_before_plan_build(self):
-        import main
+        main = _import_main_without_log_side_effect()
 
         subscriptions = [_subscription(1), _subscription(2)]
         plan = FakePlan([])

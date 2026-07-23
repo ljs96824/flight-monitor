@@ -1,6 +1,8 @@
 source_quota_budget:
   juhe: 550
 source_quota_low_remaining_threshold: 50
+FRESHNESS_HOURS: 6
+SUB_ROUND_FRESH_SCOPE: primary_only
 
 subscriptions:
   - name: "奥兰多暑期行"

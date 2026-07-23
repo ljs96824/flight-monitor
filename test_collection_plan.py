@@ -22,10 +22,18 @@ class FakeSource:
 
 class CollectionPlanTest(unittest.TestCase):
     def setUp(self):
-        from request_cache import reset_request_cache
+        from request_cache import reset_for_tests
 
-        reset_request_cache()
-        self.addCleanup(reset_request_cache)
+        self._cache_tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self._cache_dir = Path(self._cache_tmp.name) / self._testMethodName
+        reset_for_tests(self._cache_dir)
+        self.addCleanup(self._cleanup_cache)
+
+    def _cleanup_cache(self):
+        from request_cache import reset_for_tests
+
+        reset_for_tests(None)
+        self._cache_tmp.cleanup()
 
     def test_three_subscriptions_share_one_real_search_request(self):
         from collection_plan import CollectionPlan

@@ -270,6 +270,14 @@ class ProvenanceTest(unittest.TestCase):
             "sources": ["hasdata", "juhe"],
             "degraded_excluded": 1,
             "dual_source_agreement": agreement,
+            "price_cells": [
+                {
+                    "depart_date": "2026-10-01",
+                    "observed_day": "2026-07-22",
+                    "min_price": 1771,
+                    "sources": ["juhe"],
+                }
+            ],
         }
 
         enriched = attach_payload_provenance(
@@ -308,11 +316,15 @@ class ProvenanceTest(unittest.TestCase):
         )
         self.assertEqual(
             enriched["price_calendar"]["rows"][0]["provenance"]["sources"],
-            [],
+            ["juhe"],
         )
         self.assertEqual(
             enriched["price_calendar"]["rows"][0]["provenance"]["sample_n"],
-            0,
+            1,
+        )
+        self.assertEqual(
+            enriched["price_calendar"]["rows"][0]["provenance"]["window"],
+            ["2026-07-22", "2026-07-22"],
         )
         self.assertEqual(
             enriched["price_signal"]["provenance"]["sources"],
@@ -326,6 +338,35 @@ class ProvenanceTest(unittest.TestCase):
             enriched["tcurve"]["points"][0]["provenance"]["method_version"],
             METHOD_VERSIONS["tcurve"],
         )
+
+    def test_calendar_zero_sample_has_no_apparent_observation_window(self):
+        from provenance import attach_payload_provenance
+
+        payload = {
+            "route": "上海 → 大阪",
+            "depart_date": "2026-10-01",
+            "route_type": "international",
+            "price_calendar": {
+                "scope": "oneway",
+                "rows": [{"date": "2026-10-01", "min_price": 1771}],
+            },
+        }
+        context = {
+            "window": ["2026-06-24", "2026-07-23"],
+            "sources": ["hasdata", "juhe"],
+            "price_cells": [],
+        }
+
+        enriched = attach_payload_provenance(
+            payload,
+            context=context,
+            computed_at="2026-07-23T10:00:00+08:00",
+        )
+        envelope = enriched["price_calendar"]["rows"][0]["provenance"]
+
+        self.assertEqual(envelope["sample_n"], 0)
+        self.assertEqual(envelope["sources"], [])
+        self.assertEqual(envelope["window"], [None, None])
 
     def test_panel_calendar_latest_value_has_one_day_cell_sample(self):
         from provenance import build_panel_report_payload

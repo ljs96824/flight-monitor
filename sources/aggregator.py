@@ -165,6 +165,10 @@ def _merge_flight_fields(target: dict, source: dict) -> dict:
             target[key] = value
 
     _merge_booking_options(target, source)
+    target_collection = target.setdefault("source_collection", {})
+    source_collection = source.get("source_collection") or {}
+    if isinstance(target_collection, dict) and isinstance(source_collection, dict):
+        target_collection.update(source_collection)
     for entry in source.get("source_price_details") or []:
         _append_source_price(target, entry.get("source"), entry.get("price"))
     return target
@@ -703,6 +707,7 @@ class FlightAggregator:
         all_flights = []
         successful_results = []
         source_errors = []
+        collection_freshness = []
         price_insights = None
         raw_by_source = {}
         request_cache_statuses = []
@@ -754,6 +759,32 @@ class FlightAggregator:
                         result = cached_response
                         request_cache_status = "unknown"
                     request_cache_statuses.append(request_cache_status)
+                    collection_state = str(
+                        result.get("collection_state")
+                        or (
+                            "fresh"
+                            if request_cache_status == "fresh"
+                            else "cache_reused"
+                            if request_cache_status == "cache"
+                            else "panel_reused"
+                            if request_cache_status == "panel"
+                            else request_cache_status
+                        )
+                        or "unknown"
+                    )
+                    source_collected_at = result.get("collected_at")
+                    collection_freshness.append(
+                        {
+                            "source": str(source_name).lower(),
+                            "cabin_class": cabin_class,
+                            "state": collection_state,
+                            "label": result.get("collection_label"),
+                            "collected_at": source_collected_at,
+                            "origin": origin,
+                            "destination": dest,
+                            "depart_date": date_str,
+                        }
+                    )
                     source_status = result.get("source_status")
                     if source_status:
                         source_statuses.append(source_status)
@@ -797,6 +828,13 @@ class FlightAggregator:
                             flight["source"] = source_name
                         if not flight.get("data_source"):
                             flight["data_source"] = source_name
+                        flight.setdefault("source_collection", {})[
+                            str(source_name).lower()
+                        ] = {
+                            "state": collection_state,
+                            "label": result.get("collection_label"),
+                            "collected_at": flight.get("collected_at"),
+                        }
                         raw_combo = flight.get("flight_combo") or flight.get("flight_no")
                         normalized_combo = normalize_combo(raw_combo)
                         if normalized_combo:
@@ -877,6 +915,11 @@ class FlightAggregator:
                 "role": source_role,
                 "weight": source_weight,
                 "route_type": resolved_route_type,
+                "collection": [
+                    item
+                    for item in collection_freshness
+                    if item.get("source") == str(source_name).lower()
+                ],
             }
 
         total_raw = len(all_flights)
@@ -1031,8 +1074,20 @@ class FlightAggregator:
         }
         source_stats["enriched_count"] = enriched_count
 
-        if not request_cache_statuses or "unknown" in request_cache_statuses:
+        resolved_collection_states = {
+            str(item.get("state") or "")
+            for item in collection_freshness
+            if isinstance(item, dict)
+        }
+        if (
+            resolved_collection_states
+            and resolved_collection_states == {"panel_reused"}
+        ):
+            request_cache_status = "panel"
+        elif not request_cache_statuses or "unknown" in request_cache_statuses:
             request_cache_status = "unknown"
+        elif all(status == "panel" for status in request_cache_statuses):
+            request_cache_status = "panel"
         elif all(status == "cache" for status in request_cache_statuses):
             request_cache_status = "cache"
         else:
@@ -1066,6 +1121,7 @@ class FlightAggregator:
             "raw_by_source": raw_by_source,
             "collected_at": run_collected_at,
             "request_cache_status": request_cache_status,
+            "collection_freshness": collection_freshness,
         }
 
     def _ordered_search_sources(

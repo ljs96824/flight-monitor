@@ -790,6 +790,26 @@ def _sources_for_value(cells: list[dict], value) -> list[str]:
     )
 
 
+def _calendar_cell_for_row(
+    cells: list[dict],
+    row_date: str,
+    value,
+) -> dict | None:
+    """匹配日历实际引用的日格，优先使用最近观测日。"""
+    price = _valid_price(value)
+    if len(str(row_date or "")) != 10 or price is None:
+        return None
+    matches = [
+        cell
+        for cell in cells
+        if str(cell.get("depart_date") or "")[:10] == row_date
+        and _valid_price(cell.get("min_price")) == price
+    ]
+    if not matches:
+        return None
+    return max(matches, key=lambda cell: str(cell.get("observed_day") or ""))
+
+
 def _history_item_price(item):
     if isinstance(item, dict):
         return _valid_price(
@@ -901,6 +921,11 @@ def attach_payload_provenance(
 
     calendar = payload.get("price_calendar") or {}
     calendar_provenance = {}
+    calendar_scope = str(calendar.get("scope") or "").lower()
+    calendar_cells = _price_cells_for_scope(
+        context,
+        roundtrip=calendar_scope == "roundtrip",
+    )
     for row in calendar.get("rows") or []:
         if not isinstance(row, dict):
             continue
@@ -909,14 +934,26 @@ def attach_payload_provenance(
         if len(row_date) != 10 or price is None:
             continue
         stat_key = f"calendar.{row_date}.min"
-        row_sources = row.get("sources") or _sources_from_rows([row])
+        matching_cell = _calendar_cell_for_row(calendar_cells, row_date, price)
+        row_sources = (
+            row.get("sources")
+            or _sources_from_rows([row])
+            or _sources_from_rows([matching_cell] if matching_cell else [])
+        )
         row_sample_n = row.get("sample_n")
         if row_sample_n is None:
             row_sample_n = row.get("count")
+        if row_sample_n is None and matching_cell:
+            row_sample_n = 1
+        row_window = _observation_window([row], [None, None])
+        if row_window == [None, None] and matching_cell:
+            observed_day = str(matching_cell.get("observed_day") or "")[:10]
+            if len(observed_day) == 10:
+                row_window = [observed_day, observed_day]
         envelope = build_envelope(
             stat_key,
             sample_n=row_sample_n,
-            window=_observation_window([row], fallback_window),
+            window=row_window,
             sources=row_sources,
             degraded_excluded=row.get("degraded_excluded", 0),
             bucket=f"{base_bucket}·日历日期={row_date}·口径={calendar.get('scope') or 'oneway'}",

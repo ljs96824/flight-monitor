@@ -5965,6 +5965,32 @@ def _payload_price_calendar(route_info: dict, analysis_result: dict) -> dict:
     if not isinstance(calendar, dict):
         return {}
     rows = calendar.get("rows") or []
+    row_dates = {
+        str(row.get("date") or "")[:10]
+        for row in rows
+        if isinstance(row, dict) and row.get("date")
+    }
+    route = (
+        f"{route_info.get('origin') or ''}-{route_info.get('destination') or ''}"
+    ).strip("-")
+    nearby_calendar = _nearby_dates_as_calendar(
+        route,
+        route_info.get("nearby_dates") or analysis_result.get("nearby_dates") or [],
+    )
+    uncollected_by_date = {}
+    for row in [
+        *(calendar.get("uncollected_rows") or []),
+        *(nearby_calendar.get("uncollected_rows") or []),
+    ]:
+        if not isinstance(row, dict):
+            continue
+        row_date = str(row.get("date") or "")[:10]
+        if len(row_date) != 10 or row_date in row_dates:
+            continue
+        uncollected_by_date[row_date] = {**row, "date": row_date}
+    uncollected_rows = [
+        uncollected_by_date[key] for key in sorted(uncollected_by_date)
+    ]
     savings = calendar.get("savings") or []
     today = date.today()
     def is_future_row(row: dict) -> bool:
@@ -5977,12 +6003,17 @@ def _payload_price_calendar(route_info: dict, analysis_result: dict) -> dict:
 
     if isinstance(rows, list):
         rows = [row for row in rows if is_future_row(row)]
+    if isinstance(uncollected_rows, list):
+        uncollected_rows = [row for row in uncollected_rows if is_future_row(row)]
     if isinstance(savings, list):
         savings = [row for row in savings if is_future_row(row)]
     weekday_pattern = calendar.get("weekday_pattern") or {}
     return {
         "route": calendar.get("route"),
         "rows": rows if isinstance(rows, list) else [],
+        "uncollected_rows": (
+            uncollected_rows if isinstance(uncollected_rows, list) else []
+        ),
         "savings": savings if isinstance(savings, list) else [],
         "weekday_pattern": weekday_pattern if isinstance(weekday_pattern, dict) else {},
         "scope": calendar.get("scope") or "oneway",
@@ -5995,12 +6026,24 @@ def _payload_price_calendar(route_info: dict, analysis_result: dict) -> dict:
 def _nearby_dates_as_calendar(route: str, nearby) -> dict:
     items = list(nearby.values()) if isinstance(nearby, dict) else list(nearby or [])
     dates = {}
+    uncollected_rows = []
     for item in items:
         if not isinstance(item, dict):
             continue
         date_text = str(item.get("date") or item.get("label") or "").strip()[:10]
         price = _to_float(item.get("min_price") or item.get("price") or item.get("value"))
         if not date_text or price is None or price <= 0:
+            if date_text and item.get("today_uncollected"):
+                uncollected_rows.append(
+                    {
+                        "date": date_text,
+                        "selected": bool(item.get("selected")),
+                        "status": "今日未采",
+                        "sources": [],
+                        "sample_n": 0,
+                        "observed_at": None,
+                    }
+                )
             continue
         existing = _to_float((dates.get(date_text) or {}).get("min_price"))
         if existing is not None and existing <= price:
@@ -6010,8 +6053,11 @@ def _nearby_dates_as_calendar(route: str, nearby) -> dict:
             "count": item.get("count"),
             "selected": bool(item.get("selected")),
             "source_scope": "merged_search_pool",
+            "sources": item.get("sources") or [],
+            "updated_at": item.get("collected_at"),
+            "collection_state": item.get("collection_state"),
         }
-    return {"route": route, "dates": dates}
+    return {"route": route, "dates": dates, "uncollected_rows": uncollected_rows}
 
 
 def _price_calendar_from_nearby_dates(route_info: dict, analysis_result: dict) -> dict:
@@ -6019,7 +6065,15 @@ def _price_calendar_from_nearby_dates(route_info: dict, analysis_result: dict) -
     route = f"{route_info.get('origin') or ''}-{route_info.get('destination') or ''}".strip("-")
     outbound_calendar = _nearby_dates_as_calendar(route, outbound_nearby)
     if not outbound_calendar.get("dates"):
-        return {}
+        return {
+            "route": route,
+            "rows": [],
+            "savings": [],
+            "weekday_pattern": {},
+            "scope": "oneway",
+            "uncollected_rows": outbound_calendar.get("uncollected_rows") or [],
+            "note": "弹性日期仅评估今日面板；标记“今日未采”的日期未发起补采。",
+        }
 
     depart_date = str(route_info.get("depart_date") or "")[:10]
     selected_info = (outbound_calendar.get("dates") or {}).get(depart_date) or {}
@@ -6059,7 +6113,7 @@ def _price_calendar_from_nearby_dates(route_info: dict, analysis_result: dict) -
                 },
             }
 
-    return analyze_price_calendar(
+    result = analyze_price_calendar(
         outbound_calendar,
         depart_date,
         current_price,
@@ -6067,6 +6121,8 @@ def _price_calendar_from_nearby_dates(route_info: dict, analysis_result: dict) -
         return_calendar=return_calendar,
         return_date=return_date or None,
     )
+    result["uncollected_rows"] = outbound_calendar.get("uncollected_rows") or []
+    return result
 
 
 def _payload_plan_chart_description(plan: dict) -> str:
@@ -7819,6 +7875,7 @@ def build_notification_payload(
         "source_stats": source_stats or {},
         "source_errors": source_errors,
         "source_degradation": (push_meta or {}).get("source_degradation") or {},
+        "data_freshness": route_info.get("data_freshness") or {},
         "collected_at": _message_collected_time(analysis_result, route_info),
         "snapshot": {
             "route": route_key,
@@ -8867,14 +8924,19 @@ def _pushplus_plan_brief_lines(payload: dict) -> list[str]:
 
 def _pushplus_calendar_summary_lines(payload: dict) -> list[str]:
     insight = _price_calendar_insight_text(payload)
+    calendar = payload.get("price_calendar") or {}
     rows = [
         row
-        for row in ((payload.get("price_calendar") or {}).get("rows") or [])
+        for row in (calendar.get("rows") or [])
         if isinstance(row, dict) and _to_float(row.get("min_price")) is not None
     ]
-    if not insight and not rows:
+    uncollected_rows = [
+        row
+        for row in (calendar.get("uncollected_rows") or [])
+        if isinstance(row, dict) and row.get("date")
+    ]
+    if not insight and not rows and not uncollected_rows:
         return []
-    calendar = payload.get("price_calendar") or {}
     is_roundtrip_scope, _unit = _calendar_scope_unit(calendar)
     primary_plan = ((payload.get("recommended_plans") or [{}]) or [{}])[0] or {}
     passenger_pricing = payload.get("passenger_pricing") or primary_plan.get("passenger_pricing") or {}
@@ -8908,12 +8970,16 @@ def _pushplus_calendar_summary_lines(payload: dict) -> list[str]:
             lines.append(f"{date_text} {_price_text_with_caliber(row.get('min_price'), row_scope, passengers, route_type)}{breakdown}")
         else:
             lines.append(f"{date_text} {_price_text_with_caliber(row.get('min_price'), 'per_person_oneway', passengers, route_type)}")
+    if uncollected_rows:
+        dates = "、".join(str(row.get("date"))[5:10] for row in uncollected_rows[:5])
+        lines.append(f"弹性日期:{dates} 今日未采(未发起补采)")
     return [html.escape(str(line)) for line in lines if str(line).strip()]
 
 def render_pushplus(payload: dict) -> str:
     """Render the strictly short PushPlus message from the unified payload."""
     payload = payload or {}
     feedback_ack = str(payload.get("feedback_ack") or "").strip()
+    freshness_headline = _data_freshness_headline(payload)
     no_primary = _no_primary_plan_state(payload)
     alternatives = payload.get("same_day_alternatives") or []
     if no_primary:
@@ -8930,6 +8996,7 @@ def render_pushplus(payload: dict) -> str:
         price_hint = _candidate_price_summary_text(payload)
         lines = [
             f"<b>【无符合方案】{route} 提供{len(alternatives[:3])}个备选</b>",
+            html.escape(freshness_headline) if freshness_headline else "",
             "",
             "当前判断:❌ 未找到完全符合条件的方案",
             f"主因:{reason}",
@@ -8988,6 +9055,7 @@ def render_pushplus(payload: dict) -> str:
     trigger_evidence = _cheaper_date_trigger_evidence(payload)
     lines = [
         f"<b>【{push_type}】{route}</b>",
+        html.escape(freshness_headline) if freshness_headline else "",
         "",
         f"当前判断:{recommendation}",
         reason_line,
@@ -11364,8 +11432,106 @@ def _email_source_rows(payload: dict) -> list[str]:
     return rows
 
 
+def _freshness_source_name(source) -> str:
+    key = str(source or "").strip().lower()
+    return {
+        "hasdata": "HasData",
+        "juhe": "聚合数据",
+        "duffel": "Duffel",
+        "serpapi": "SerpAPI",
+        "searchapi": "SearchAPI",
+    }.get(key, key or "来源待确认")
+
+
+def _freshness_timestamp(value) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone()
+    return parsed
+
+
+def _data_freshness_legs(payload: dict) -> list[dict]:
+    freshness = (
+        payload.get("data_freshness")
+        or (payload.get("route_info") or {}).get("data_freshness")
+        or {}
+    )
+    legs = freshness.get("legs") if isinstance(freshness, dict) else []
+    result = []
+    seen = set()
+    for item in legs or []:
+        if not isinstance(item, dict):
+            continue
+        normalized = {
+            "direction": str(item.get("direction") or "航段"),
+            "source": str(item.get("source") or "").strip().lower(),
+            "state": str(item.get("state") or "").strip().lower(),
+            "collected_at": item.get("collected_at"),
+            "origin": str(item.get("origin") or "").strip().upper(),
+            "destination": str(item.get("destination") or "").strip().upper(),
+            "depart_date": str(item.get("depart_date") or "")[:10],
+        }
+        key = tuple(normalized.values())
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(normalized)
+    return result
+
+
+def _freshness_state_text(item: dict) -> str:
+    state = str(item.get("state") or "").lower()
+    collected = _freshness_timestamp(item.get("collected_at"))
+    time_text = collected.strftime("%H:%M") if collected else ""
+    if state == "panel_reused":
+        return f"面板复用{time_text}"
+    if state in {"fresh", "realtime"}:
+        return f"实时采集{time_text}"
+    if state in {"cache", "cache_reused"}:
+        return f"缓存复用{time_text}"
+    if state in {"panel_missing", "skipped", "skipped_panel_only"}:
+        return "今日未采"
+    return str(item.get("state") or "时点待确认")
+
+
+def _data_freshness_source_rows(payload: dict) -> list[str]:
+    rows = []
+    for item in _data_freshness_legs(payload):
+        route = ""
+        if item.get("origin") and item.get("destination"):
+            route = f"({item['origin']}→{item['destination']})"
+        rows.append(
+            "<div>🔹 "
+            f"{html.escape(item['direction'])}:"
+            f"{html.escape(_freshness_source_name(item.get('source')))} "
+            f"{html.escape(_freshness_state_text(item))}"
+            f"{html.escape(route)}</div>"
+        )
+    return rows
+
+
+def _data_freshness_headline(payload: dict) -> str:
+    reused = [
+        (parsed, item)
+        for item in _data_freshness_legs(payload)
+        if item.get("state") == "panel_reused"
+        and (parsed := _freshness_timestamp(item.get("collected_at"))) is not None
+    ]
+    if not reused:
+        return ""
+    oldest, _item = min(reused, key=lambda pair: pair[0])
+    return f"数据时点:含面板复用，最旧为{oldest.strftime('%Y-%m-%d %H:%M')}"
+
+
 def _email_source_body(payload: dict) -> str:
     rows = _email_source_rows(payload)
+    rows.extend(_data_freshness_source_rows(payload))
     rows.append("<div>🔹 候选方案:已去重并筛选</div>")
     agreement = payload.get("dual_source_agreement") or {}
     agreement_window = agreement.get("window") or [None, None]
@@ -12077,8 +12243,29 @@ def _calendar_display_savings(
 def _email_price_calendar_body(payload: dict) -> str:
     calendar = payload.get("price_calendar") or {}
     rows = calendar.get("rows") or []
-    if not rows:
+    uncollected_rows = [
+        row
+        for row in (calendar.get("uncollected_rows") or [])
+        if isinstance(row, dict) and row.get("date")
+    ]
+    if not rows and not uncollected_rows:
         return "<div style='color:#888;font-size:12px;'>暂无低价日历数据。</div>"
+    if not rows:
+        items = "".join(
+            "<div>"
+            f"{html.escape(str(row.get('date'))[:10])}: "
+            "<span style='color:#888;'>今日未采</span>"
+            "</div>"
+            for row in uncollected_rows[:10]
+        )
+        return (
+            "<div style='font-weight:600;margin-bottom:8px;color:#111;'>"
+            "弹性日期面板评估</div>"
+            "<div style='margin-bottom:8px;color:#666;font-size:12px;'>"
+            "本轮按面板评估弹性日期；以下日期今日无可复用观测，未发起补采。"
+            "</div>"
+            f"{items}"
+        )
     is_roundtrip_scope, _unit = _calendar_scope_unit(calendar)
     primary_plan = ((payload.get("recommended_plans") or [{}]) or [{}])[0] or {}
     is_roundtrip_monitor = bool(payload.get("is_roundtrip") or primary_plan.get("is_roundtrip"))
@@ -12198,6 +12385,13 @@ def _email_price_calendar_body(payload: dict) -> str:
             "</tr>"
         )
     table.append("</tbody></table>")
+    if uncollected_rows:
+        dates = "、".join(str(row.get("date"))[:10] for row in uncollected_rows[:10])
+        table.append(
+            "<div style='margin-top:8px;color:#888;font-size:12px;'>"
+            f"今日未采(未发起补采):{html.escape(dates)}"
+            "</div>"
+        )
 
     savings = _calendar_display_savings(
         calendar,
@@ -12474,8 +12668,19 @@ def render_email(payload: dict) -> tuple[str, str]:
         if "确认" in str(primary_plan.get("baggage_line")) or "不含" in str(primary_plan.get("baggage_line")):
             baggage_line += "<div style='color:#666;font-size:12px;'>当前价格可能不含托运行李；若支付页加行李后超过本次方案验证价，则不建议购买。</div>"
     heading_push_type = "无符合方案" if no_primary else _email_headline_type(payload)
+    freshness_headline = _data_freshness_headline(payload)
+    heading_html = (
+        f"<h2 style='font-size:18px;color:#111;margin:0 0 12px;'>"
+        f"【{html.escape(heading_push_type)}】"
+        f"{html.escape(str(payload.get('route') or '航班监控'))}</h2>"
+    )
+    if freshness_headline:
+        heading_html += (
+            "<div style='margin:-4px 0 12px;color:#666;font-size:12px;'>"
+            f"{html.escape(freshness_headline)}</div>"
+        )
     cards = [
-        f"<h2 style='font-size:18px;color:#111;margin:0 0 12px;'>【{html.escape(heading_push_type)}】{html.escape(str(payload.get('route') or '航班监控'))}</h2>",
+        heading_html,
         _email_card(
             "行动面板",
             _email_action_panel_body(payload, primary_plan, verify_text, price_reason),
@@ -12634,7 +12839,8 @@ def render_email(payload: dict) -> tuple[str, str]:
     tcurve_body = _email_tcurve_body(payload)
     if tcurve_body:
         cards.append(_email_card("提前购买参考(同航线历史观测)", tcurve_body))
-    if (payload.get("price_calendar") or {}).get("rows"):
+    calendar_payload = payload.get("price_calendar") or {}
+    if calendar_payload.get("rows") or calendar_payload.get("uncollected_rows"):
         cards.append(_email_card("低价日历", _email_price_calendar_body(payload)))
 
     action_rows = [
@@ -12728,8 +12934,18 @@ def render_detail_html(payload: dict) -> str:
         "compact_refs": 0,
         "full_identity_counts": {},
     }
+    freshness_headline = _data_freshness_headline(payload)
+    heading_html = (
+        f"<h2 style='font-size:18px;color:#111;margin:0 0 12px;'>"
+        f"{html.escape(subject)}</h2>"
+    )
+    if freshness_headline:
+        heading_html += (
+            "<div style='margin:-4px 0 12px;color:#666;font-size:12px;'>"
+            f"{html.escape(freshness_headline)}</div>"
+        )
     cards = [
-        f"<h2 style='font-size:18px;color:#111;margin:0 0 12px;'>{html.escape(subject)}</h2>",
+        heading_html,
         _email_card(
             "行动面板",
             _email_action_panel_body(
@@ -12811,7 +13027,8 @@ def render_detail_html(payload: dict) -> str:
 
     cards.append(_detail_section("展开:价格走势详情", _email_trend_card_body(payload) + _email_detail_charts_body(payload)))
 
-    if (payload.get("price_calendar") or {}).get("rows"):
+    calendar_payload = payload.get("price_calendar") or {}
+    if calendar_payload.get("rows") or calendar_payload.get("uncollected_rows"):
         cards.append(_detail_section("展开:低价日历", _email_price_calendar_body(payload)))
 
     checklist = payload.get("checklist") or []

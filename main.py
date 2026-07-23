@@ -257,6 +257,8 @@ def _collection_plan_log_options() -> dict:
             "source_quota_low_remaining_threshold"
         ],
         "usage_snapshot": usage_snapshot(load_usage(API_USAGE_PATH)),
+        "freshness_hours": settings["freshness_hours"],
+        "fresh_scope": settings["sub_round_fresh_scope"],
     }
 
 def _first_airport(codes, fallback):
@@ -1293,6 +1295,7 @@ def collect_for_airport_matrix(
         "sources_used": "",
         "source": "",
         "collected_at": datetime.now().isoformat(timespec="seconds"),
+        "collection_freshness": [],
     }
     sources_used = []
     primary_cache_status = None
@@ -1303,6 +1306,7 @@ def collect_for_airport_matrix(
             source_label = {
                 "fresh": "新鲜",
                 "cache": "缓存",
+                "panel": "面板复用",
             }.get(primary_cache_status, "未知")
             should_skip = current_count >= AIRPORT_COMBINATION_MIN_OPTIONS
             action = (
@@ -1355,6 +1359,7 @@ def collect_for_airport_matrix(
             data.get("dual_source_price_anomalies", []) or []
         )
         merged["raw_by_source"].update(data.get("raw_by_source", {}))
+        merged["collection_freshness"].extend(data.get("collection_freshness", []) or [])
         for source in str(data.get("sources_used") or data.get("source") or "").split("+"):
             if source and source not in sources_used:
                 sources_used.append(source)
@@ -1374,6 +1379,7 @@ def collect_nearby_dates(
     sub: dict,
     cabin_classes=None,
     target_min_price=None,
+    fresh_scope: str = "all",
 ) -> list[dict]:
     try:
         days_range = int(sub.get("date_flexibility") or 0)
@@ -1398,6 +1404,9 @@ def collect_nearby_dates(
         sub,
         _subscription_airports(sub, "origin_airports_active", "origin_airports", "origin"),
         _subscription_airports(sub, "destination_airports_active", "destination_airports", "destination"),
+    )
+    panel_only_evaluation = (
+        str(fresh_scope or "").strip().lower() == "primary_only"
     )
     primary_aggregator = FlightAggregator(calendar_sources, [], route_type=route_type)
 
@@ -1432,6 +1441,30 @@ def collect_nearby_dates(
                     for flight in flights
                     if _valid_price(flight.get("price"))
                 ]
+                freshness_rows = [
+                    item
+                    for item in ((data or {}).get("collection_freshness") or [])
+                    if isinstance(item, dict)
+                    and item.get("state") not in {"panel_missing", "skipped"}
+                ]
+                contributed_sources = sorted(
+                    {
+                        str(source).lower()
+                        for flight in flights
+                        for source in str(
+                            flight.get("data_source") or flight.get("source") or ""
+                        ).split("+")
+                        if source
+                    }
+                )
+                collected_values = [
+                    str(item.get("collected_at"))
+                    for item in freshness_rows
+                    if item.get("collected_at")
+                ]
+                reused = any(
+                    item.get("state") == "panel_reused" for item in freshness_rows
+                )
                 stage_results.append(
                     {
                         "date": date_str,
@@ -1439,6 +1472,11 @@ def collect_nearby_dates(
                         "min_price": min(prices) if prices else None,
                         "count": len(flights),
                         "selected": False,
+                        "sources": contributed_sources,
+                        "collected_at": min(collected_values) if collected_values else None,
+                        "collection_state": "panel_reused" if reused else "fresh",
+                        "today_uncollected": not bool(prices),
+                        "note": "今日未采" if not prices else "",
                     }
                 )
             except Exception as exc:
@@ -1450,12 +1488,17 @@ def collect_nearby_dates(
                         "min_price": None,
                         "count": 0,
                         "selected": False,
+                        "sources": [],
+                        "collected_at": None,
+                        "collection_state": "panel_missing",
+                        "today_uncollected": True,
+                        "note": "今日未采",
                     }
                 )
         results.extend(stage_results)
-        if target_min_price is None:
+        if target_min_price is None and not panel_only_evaluation:
             break
-        if not any(
+        if not panel_only_evaluation and not any(
             item.get("min_price") is not None and item["min_price"] < target_min_price
             for item in stage_results
         ):
@@ -1508,20 +1551,31 @@ def process_subscription(
     logging.info(f"开始处理 {route}")
     agg = None
     managed_plan_active = False
+    collection_options = _collection_plan_log_options()
 
     try:
         if manage_collection_round:
             print(f"[\u89c2\u6d4b\u8f6e\u6b21] round_id={round_id}")
             set_current_round(round_id)
-            log_options = _collection_plan_log_options()
+            log_options = collection_options
             start_request_cache_round(
                 round_id,
                 track_usage=True,
                 usage_path=API_USAGE_PATH,
                 quota_budgets=log_options.get("quota_budgets"),
             )
-            collection_plan = build_collection_plan(subscriptions=[sub], basket_requests=[])
-            activate_collection_plan(collection_plan.request_keys)
+            collection_plan = build_collection_plan(
+                subscriptions=[sub],
+                basket_requests=[],
+                freshness_hours=log_options.get("freshness_hours", 6),
+                fresh_scope=log_options.get("fresh_scope", "primary_only"),
+            )
+            activate_collection_plan(
+                collection_plan.request_keys,
+                panel_only_keys=collection_plan.panel_only_keys,
+                freshness_hours=collection_plan.freshness_hours,
+                fresh_scope=collection_plan.fresh_scope,
+            )
             managed_plan_active = True
             collection_plan.log_summary(**log_options)
             collection_plan.execute()
@@ -1661,6 +1715,7 @@ def process_subscription(
             sub,
             cabin_classes=sub.get("cabin_classes"),
             target_min_price=current_min_price,
+            fresh_scope=collection_options.get("fresh_scope", "primary_only"),
         )
         price_history = (data.get("price_insights") or {}).get("price_history")
         analysis["days_to_dept"] = days_to_dept
@@ -1677,6 +1732,7 @@ def process_subscription(
             analysis["price_calendar"] = price_calendar_result
         analysis["source_stats"] = data.get("source_stats", {})
         analysis["source_errors"] = data.get("source_errors", [])
+        analysis["collection_freshness"] = data.get("collection_freshness", [])
         analysis["dual_source_price_anomalies"] = data.get(
             "dual_source_price_anomalies", []
         )
@@ -1772,6 +1828,9 @@ def process_subscription(
                 return_analysis["source_errors"] = (return_data or {}).get(
                     "source_errors", []
                 )
+                return_analysis["collection_freshness"] = (return_data or {}).get(
+                    "collection_freshness", []
+                )
                 _merge_source_errors(
                     analysis["source_errors"],
                     return_analysis.get("source_errors", []),
@@ -1833,6 +1892,10 @@ def process_subscription(
                     return_sub,
                     cabin_classes=sub.get("cabin_classes"),
                     target_min_price=return_min_price,
+                    fresh_scope=collection_options.get(
+                        "fresh_scope",
+                        "primary_only",
+                    ),
                 )
                 return_analysis["days_to_dept"] = (
                     date.fromisoformat(return_date) - date.today()
@@ -1941,6 +2004,19 @@ def process_subscription(
             print("[推送] 当前价格未进入低价区间，按订阅策略跳过推送")
             return True
 
+        data_freshness_legs = [
+            {**item, "direction": "去程"}
+            for item in (analysis.get("collection_freshness") or [])
+            if isinstance(item, dict)
+        ]
+        data_freshness_legs.extend(
+            {
+                **item,
+                "direction": "返程",
+            }
+            for item in ((return_analysis or {}).get("collection_freshness") or [])
+            if isinstance(item, dict)
+        )
         message_kwargs = {
             "analysis_result": analysis,
             "outbound_analysis": analysis,
@@ -1995,6 +2071,7 @@ def process_subscription(
                 "source_stats": data.get("source_stats", {}),
                 "source_errors": analysis.get("source_errors", []),
                 "collected_at": run_collected_at,
+                "data_freshness": {"legs": data_freshness_legs},
             },
             "source_stats": data.get("source_stats"),
             "price_insights": data.get("price_insights"),
@@ -2090,8 +2167,15 @@ def run(sync_remote: bool = True):
         collection_plan = build_collection_plan(
             subscriptions=[sub for sub, _ in ready],
             basket_requests=[],
+            freshness_hours=log_options.get("freshness_hours", 6),
+            fresh_scope=log_options.get("fresh_scope", "primary_only"),
         )
-        activate_collection_plan(collection_plan.request_keys)
+        activate_collection_plan(
+            collection_plan.request_keys,
+            panel_only_keys=collection_plan.panel_only_keys,
+            freshness_hours=collection_plan.freshness_hours,
+            fresh_scope=collection_plan.fresh_scope,
+        )
         plan_active = True
         collection_plan.log_summary(**log_options)
         collection_plan.execute()

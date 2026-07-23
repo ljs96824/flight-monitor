@@ -220,8 +220,15 @@ def run_basket(
             subscriptions=[],
             basket_requests=_basket_requests(state),
             source_builder=source_builder,
+            freshness_hours=settings.get("freshness_hours", 6),
+            fresh_scope=settings.get("sub_round_fresh_scope", "primary_only"),
         )
-        activate_collection_plan(plan.request_keys)
+        activate_collection_plan(
+            plan.request_keys,
+            panel_only_keys=plan.panel_only_keys,
+            freshness_hours=plan.freshness_hours,
+            fresh_scope=plan.fresh_scope,
+        )
         plan_active = True
         plan.log_summary(
             quota_budgets=settings["source_quota_budget"],
@@ -229,6 +236,8 @@ def run_basket(
                 "source_quota_low_remaining_threshold"
             ],
             usage_snapshot=usage_snapshot(load_usage(usage_path)),
+            freshness_hours=settings.get("freshness_hours", 6),
+            fresh_scope=settings.get("sub_round_fresh_scope", "primary_only"),
         )
         plan.execute()
 

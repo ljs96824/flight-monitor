@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import sqlite3
 from contextlib import contextmanager
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Iterable, Iterator
 
@@ -48,6 +48,113 @@ def clear_current_round() -> None:
 
 def get_current_round() -> tuple[str | None, Path]:
     return _current_round_id, _current_db_path
+
+
+def _parse_observed_at(value: str) -> datetime | None:
+    try:
+        return datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _observation_age(latest: datetime, now: datetime | None = None) -> timedelta:
+    if latest.tzinfo is not None:
+        current = now or datetime.now(latest.tzinfo)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=latest.tzinfo)
+        else:
+            current = current.astimezone(latest.tzinfo)
+        return current - latest
+    current = now or datetime.now()
+    if current.tzinfo is not None:
+        current = current.astimezone().replace(tzinfo=None)
+    return current - latest
+
+
+def load_fresh_observation_snapshot(
+    *,
+    source: str,
+    origin_airport: str,
+    dest_airport: str,
+    depart_date: str,
+    cabin_class: str,
+    freshness_hours: float = 6,
+    now: datetime | None = None,
+    db_path: str | Path | None = None,
+) -> dict | None:
+    """只读返回某请求键最近一批面板观测；不建库、不写库。"""
+    path = Path(db_path or _current_db_path)
+    if not path.exists() or float(freshness_hours or 0) <= 0:
+        return None
+    uri = f"file:{path.resolve().as_posix()}?mode=ro"
+    try:
+        connection = sqlite3.connect(uri, uri=True, timeout=2)
+    except sqlite3.Error:
+        return None
+    try:
+        key = (
+            str(source or "").lower(),
+            str(origin_airport or "").upper(),
+            str(dest_airport or "").upper(),
+            str(depart_date or ""),
+            str(cabin_class or "economy"),
+        )
+        latest_row = connection.execute(
+            """
+            SELECT observed_at, round_id
+            FROM observations
+            WHERE source=? AND origin_airport=? AND dest_airport=?
+              AND depart_date=? AND cabin_class=?
+            ORDER BY observed_at DESC, id DESC
+            LIMIT 1
+            """,
+            key,
+        ).fetchone()
+        if not latest_row:
+            return None
+        latest = _parse_observed_at(latest_row[0])
+        if latest is None or _observation_age(latest, now) > timedelta(
+            hours=float(freshness_hours)
+        ):
+            return None
+        rows = connection.execute(
+            """
+            SELECT flight_combo, airline, stops, duration_min, price_cny,
+                   method_version
+            FROM observations
+            WHERE source=? AND origin_airport=? AND dest_airport=?
+              AND depart_date=? AND cabin_class=?
+              AND observed_at=? AND round_id=?
+            ORDER BY price_cny, flight_combo
+            """,
+            (*key, latest_row[0], latest_row[1]),
+        ).fetchall()
+        if not rows:
+            return None
+        return {
+            "source": key[0],
+            "origin_airport": key[1],
+            "dest_airport": key[2],
+            "depart_date": key[3],
+            "cabin_class": key[4],
+            "observed_at": str(latest_row[0]),
+            "round_id": str(latest_row[1] or ""),
+            "rows": [
+                {
+                    "flight_combo": str(row[0]),
+                    "airline": row[1],
+                    "stops": row[2],
+                    "duration_min": row[3],
+                    "price_cny": float(row[4]),
+                    "method_version": row[5],
+                }
+                for row in rows
+            ],
+        }
+    except sqlite3.Error:
+        return None
+    finally:
+        connection.close()
 
 
 SCHEMA = """

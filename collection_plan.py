@@ -8,7 +8,12 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from log_utils import safe_log
-from request_cache import cache_key, cached_fetch, get_request_cache_stats
+from request_cache import (
+    cache_key,
+    cached_fetch,
+    get_request_cache_stats,
+    panel_reuse_result,
+)
 
 
 @dataclass
@@ -20,6 +25,7 @@ class PlannedRequest:
     passengers: dict | None = None
     cabin_class: str = "economy"
     force_fresh: bool = False
+    panel_only: bool = False
     persist: bool = True
     ttl_seconds: int = 15 * 60
     conditional: str | None = None
@@ -44,6 +50,7 @@ class PlannedRequest:
 class PlanExecutionReport:
     actual_requests: int
     cache_hits: int
+    panel_reused: int
     source_skips: int
     conditional_skipped: int
 
@@ -64,9 +71,20 @@ def _positive_flights(result) -> list[dict]:
 
 
 class CollectionPlan:
-    def __init__(self, *, subscription_count: int = 0, basket_date_count: int = 0):
+    def __init__(
+        self,
+        *,
+        subscription_count: int = 0,
+        basket_date_count: int = 0,
+        freshness_hours: float = 6,
+        fresh_scope: str = "primary_only",
+    ):
         self.subscription_count = int(subscription_count or 0)
         self.basket_date_count = int(basket_date_count or 0)
+        self.freshness_hours = max(0.0, float(freshness_hours or 0))
+        self.fresh_scope = (
+            "all" if str(fresh_scope or "").strip().lower() == "all" else "primary_only"
+        )
         self.expanded_total = 0
         self._requests: dict[tuple, PlannedRequest] = {}
         self._results: dict[tuple, dict] = {}
@@ -82,6 +100,14 @@ class CollectionPlan:
     @property
     def request_keys(self) -> set[tuple]:
         return set(self._requests)
+
+    @property
+    def panel_only_keys(self) -> set[tuple]:
+        return {
+            key
+            for key, request in self._requests.items()
+            if request.panel_only and not request.force_fresh
+        }
 
     @property
     def source_counts(self) -> dict[str, int]:
@@ -101,6 +127,7 @@ class CollectionPlan:
         cabin_class: str = "economy",
         *,
         force_fresh: bool = False,
+        panel_only: bool = False,
         persist: bool = True,
         ttl_seconds: int = 15 * 60,
         conditional: str | None = None,
@@ -117,6 +144,7 @@ class CollectionPlan:
             passengers=passengers,
             cabin_class=str(cabin_class or "economy"),
             force_fresh=bool(force_fresh),
+            panel_only=bool(panel_only),
             persist=bool(persist),
             ttl_seconds=max(0, int(ttl_seconds)),
             conditional=conditional,
@@ -130,6 +158,8 @@ class CollectionPlan:
             self._requests[candidate.key] = existing
         else:
             existing.force_fresh = existing.force_fresh or candidate.force_fresh
+            # 同一请求只要被主日期或篮子消费，就不能被弹性日期降成只读。
+            existing.panel_only = existing.panel_only and candidate.panel_only
             existing.persist = existing.persist or candidate.persist
             existing.ttl_seconds = max(existing.ttl_seconds, candidate.ttl_seconds)
             if existing.conditional and not candidate.conditional:
@@ -142,14 +172,40 @@ class CollectionPlan:
             existing.reasons.add(str(reason))
         return existing
 
+    def _panel_reuse_keys(self) -> set[tuple]:
+        reusable = set()
+        for key, request in self._requests.items():
+            if request.force_fresh or key[0] not in {"juhe", "hasdata"}:
+                continue
+            if panel_reuse_result(
+                request.source,
+                request.origin,
+                request.dest,
+                request.date_str,
+                request.passengers,
+                request.cabin_class,
+                freshness_hours=self.freshness_hours,
+            ) is not None:
+                reusable.add(key)
+        return reusable
+
     def log_summary(
         self,
         *,
         quota_budgets: dict[str, int] | None = None,
         quota_low_remaining_threshold: int = 50,
         usage_snapshot: dict | None = None,
+        freshness_hours: float | None = None,
+        fresh_scope: str | None = None,
     ) -> None:
         counts = self.source_counts
+        panel_reuse_keys = self._panel_reuse_keys()
+        panel_reuse_by_source = Counter(key[0] for key in panel_reuse_keys)
+        panel_only_missing_by_source = Counter(
+            key[0]
+            for key in self.panel_only_keys
+            if key not in panel_reuse_keys
+        )
         safe_log(
             "[采集计划] "
             f"唯一请求={self.unique_count} "
@@ -157,13 +213,19 @@ class CollectionPlan:
             f"hasdata={counts.get('hasdata', 0)} "
             f"duffel={counts.get('duffel', 0)} "
             f"订阅数={self.subscription_count} 篮子日期={self.basket_date_count} "
-            f"复用节省={self.reuse_saved} 条件项={self.conditional_count}"
+            f"复用节省={self.reuse_saved} 条件项={self.conditional_count} "
+            f"预计面板复用={len(panel_reuse_keys)}"
         )
         snapshot = usage_snapshot or {"today": {}, "cumulative": {}}
         for source, raw_budget in (quota_budgets or {}).items():
             budget = int(raw_budget or 0)
             cumulative = int((snapshot.get("cumulative") or {}).get(source, 0) or 0)
-            planned = int(counts.get(source, 0) or 0)
+            planned = max(
+                0,
+                int(counts.get(source, 0) or 0)
+                - int(panel_reuse_by_source.get(source, 0) or 0)
+                - int(panel_only_missing_by_source.get(source, 0) or 0),
+            )
             remaining_after = budget - cumulative - planned
             if cumulative + planned > budget:
                 safe_log(
@@ -195,6 +257,8 @@ class CollectionPlan:
                 persist=request.persist,
                 ttl_seconds=request.ttl_seconds,
                 force_fresh=request.force_fresh,
+                request_reason="/".join(sorted(request.reasons)),
+                panel_only=request.panel_only,
             )
 
         groups_with_candidates = {
@@ -233,24 +297,30 @@ class CollectionPlan:
                 persist=request.persist,
                 ttl_seconds=request.ttl_seconds,
                 force_fresh=request.force_fresh,
+                request_reason="/".join(sorted(request.reasons)),
+                panel_only=request.panel_only,
             )
 
         after = get_request_cache_stats()
         report = PlanExecutionReport(
             actual_requests=int(after.get("actual", 0)) - int(before.get("actual", 0)),
             cache_hits=int(after.get("hits", 0)) - int(before.get("hits", 0)),
+            panel_reused=int(after.get("panel_reused", 0))
+            - int(before.get("panel_reused", 0)),
             source_skips=int(after.get("skipped", 0)) - int(before.get("skipped", 0)),
             conditional_skipped=conditional_skipped,
         )
         accounted = (
             report.actual_requests
             + report.cache_hits
+            + report.panel_reused
             + report.source_skips
             + report.conditional_skipped
         )
         safe_log(
             f"[采集执行] 计划唯一={self.unique_count} 实际请求={report.actual_requests} "
-            f"缓存命中={report.cache_hits} 源级跳过={report.source_skips} "
+            f"缓存命中={report.cache_hits} 面板复用={report.panel_reused} "
+            f"源级跳过={report.source_skips} "
             f"条件跳过={report.conditional_skipped} "
             f"计划恒等式={accounted == self.unique_count}"
         )
@@ -346,6 +416,7 @@ def _add_direction_requests(
     group_prefix: str,
     flex_dates: list[str],
     include_calendar: bool,
+    fresh_scope: str,
 ) -> None:
     for cabin in cabins:
         group = f"{group_prefix}:{origin}:{dest}:{depart_date}:{cabin}"
@@ -384,6 +455,7 @@ def _add_direction_requests(
                     passengers,
                     cabin,
                     conditional="search_has_candidates",
+                    panel_only=fresh_scope == "primary_only",
                     group=group,
                     consumer=consumer,
                     reason="弹性日期",
@@ -399,6 +471,7 @@ def _add_direction_requests(
                     passengers,
                     cabin,
                     conditional="search_has_candidates",
+                    panel_only=fresh_scope == "primary_only",
                     ttl_seconds=6 * 60 * 60,
                     group=group,
                     consumer=consumer,
@@ -412,6 +485,8 @@ def build_collection_plan(
     basket_requests: list[dict] | None = None,
     source_builder=None,
     include_calendars: bool = True,
+    freshness_hours: float = 6,
+    fresh_scope: str = "primary_only",
 ) -> CollectionPlan:
     if source_builder is None:
         from sources.aggregator import build_default_sources
@@ -423,6 +498,8 @@ def build_collection_plan(
     plan = CollectionPlan(
         subscription_count=len(subscriptions),
         basket_date_count=len(basket_requests),
+        freshness_hours=freshness_hours,
+        fresh_scope=fresh_scope,
     )
 
     for index, subscription in enumerate(subscriptions):
@@ -468,6 +545,7 @@ def build_collection_plan(
             group_prefix=f"sub:{consumer}:outbound",
             flex_dates=_flex_dates(depart_date, _value(subscription, "date_flexibility")),
             include_calendar=domestic_calendar,
+            fresh_scope=plan.fresh_scope,
         )
 
         same_day = _as_bool(_value(subscription, "same_day_round_trip"))
@@ -490,6 +568,7 @@ def build_collection_plan(
                     _value(subscription, "return_date_flexibility"),
                 ),
                 include_calendar=domestic_calendar,
+                fresh_scope=plan.fresh_scope,
             )
 
     for index, item in enumerate(basket_requests):
@@ -529,7 +608,12 @@ def load_collection_settings(path: str | Path) -> dict:
     try:
         import yaml
     except ModuleNotFoundError:
-        return {"source_quota_budget": {}, "source_quota_low_remaining_threshold": 50}
+        return {
+            "source_quota_budget": {},
+            "source_quota_low_remaining_threshold": 50,
+            "freshness_hours": 6.0,
+            "sub_round_fresh_scope": "primary_only",
+        }
     try:
         payload = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
     except (OSError, ValueError):
@@ -538,5 +622,11 @@ def load_collection_settings(path: str | Path) -> dict:
         "source_quota_budget": dict(payload.get("source_quota_budget") or {}),
         "source_quota_low_remaining_threshold": int(
             payload.get("source_quota_low_remaining_threshold") or 50
+        ),
+        "freshness_hours": max(0.0, float(payload.get("FRESHNESS_HOURS") or 6)),
+        "sub_round_fresh_scope": (
+            "all"
+            if str(payload.get("SUB_ROUND_FRESH_SCOPE") or "").strip().lower() == "all"
+            else "primary_only"
         ),
     }
