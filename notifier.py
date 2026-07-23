@@ -60,6 +60,13 @@ from price_estimator import (
     round_display_price,
 )
 from pricing import assert_same_caliber, budget_to_pp, caliber_label, itinerary_price_pp, passenger_rate_sum, price_in_scope
+from provenance import (
+    attach_payload_provenance,
+    format_dual_source_agreement,
+    format_micro_provenance,
+    history_observation_window,
+    replace_micro_provenance,
+)
 from sources.aggregator import MERGE_PRICE_STRATEGY, PRICE_GAP_DISCLOSE_PCT
 from tcurve import TCURVE_MIN_CELLS, select_anchor_points
 from storage import (
@@ -3661,6 +3668,57 @@ def _price_history_for_push(price_insights: dict | None, analysis_result: dict, 
     return (price_insights or {}).get("price_history") or analysis_result.get("price_history") or []
 
 
+def _price_signal_provenance_metadata(
+    signal_history,
+    price_insights: dict | None,
+    analysis_result: dict,
+    is_round_trip: bool,
+) -> dict:
+    """描述 price signal 实际使用的完整历史，不借图表14条截断猜样本。"""
+    if is_round_trip:
+        round_trip = (analysis_result or {}).get("round_trip_analysis") or {}
+        raw_history = (
+            round_trip.get("history")
+            or round_trip.get("price_history")
+            or signal_history
+            or []
+        )
+    else:
+        raw_history = (
+            (price_insights or {}).get("price_history")
+            or (analysis_result or {}).get("price_history")
+            or signal_history
+            or []
+        )
+
+    def history_price(value):
+        if isinstance(value, dict):
+            value = value.get("total") or value.get("price") or value.get("min_price")
+        elif isinstance(value, (list, tuple)) and len(value) >= 2:
+            value = value[1]
+        return _to_float(value)
+
+    valid_count = sum(
+        1
+        for value in (signal_history or [])
+        if (history_price(value) or 0) > 0
+    )
+    sources = set()
+    for item in raw_history:
+        if not isinstance(item, dict):
+            continue
+        for key in ("sources", "source", "price_source", "data_source"):
+            raw_sources = item.get(key)
+            values = raw_sources if isinstance(raw_sources, (list, tuple, set)) else str(raw_sources or "").replace("|", "+").split("+")
+            sources.update(str(source).strip().lower() for source in values if str(source).strip())
+    return {
+        "sample_n": valid_count,
+        "window": history_observation_window(raw_history),
+        "sources": sorted(sources),
+        "_provenance_history": list(raw_history),
+    }
+
+
 def _push_title_text(push_meta: dict, route_info: dict, current, is_round_trip: bool) -> str:
     push_type = (push_meta or {}).get("type") or "价格提醒"
     origin = route_info.get("origin_city") or get_airport_city(route_info.get("origin", "")) or route_info.get("origin", "")
@@ -6088,6 +6146,72 @@ def _normalize_chart_history(history) -> list[dict]:
     return rows[-14:]
 
 
+def _normalize_own_history_for_refs(route_info: dict) -> list[dict]:
+    """把订阅自身历史统一为参考价函数既有的字典格式。"""
+    raw_history = (
+        (route_info or {}).get("own_history")
+        or (route_info or {}).get("lowest_price_history")
+        or []
+    )
+    normalized = []
+    for item in raw_history:
+        if isinstance(item, dict):
+            price = _to_float(item.get("price") or item.get("min_price"))
+            observed_at = item.get("date") or item.get("timestamp") or item.get("observed_at")
+        elif isinstance(item, (list, tuple)) and len(item) >= 2:
+            observed_at, raw_price = item[0], item[1]
+            price = _to_float(raw_price)
+        else:
+            observed_at = None
+            price = _to_float(item)
+        if price is None or price <= 0:
+            continue
+        normalized.append({"date": observed_at, "price": price})
+    return normalized
+
+
+def _normalize_price_history_for_refs(history) -> list[tuple[float | None, float]]:
+    """把不同历史结构收敛为五档参考价函数接受的(时间戳,价格)。"""
+
+    def timestamp_of(value) -> float | None:
+        if isinstance(value, datetime):
+            parsed = value
+        elif isinstance(value, date):
+            parsed = datetime.combine(value, datetime.min.time())
+        elif isinstance(value, (int, float)):
+            return float(value)
+        else:
+            text = str(value or "").strip()
+            if not text:
+                return None
+            try:
+                return float(text)
+            except ValueError:
+                try:
+                    parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+                except ValueError:
+                    return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=datetime.now().astimezone().tzinfo)
+        return parsed.timestamp()
+
+    normalized = []
+    for item in history or []:
+        if isinstance(item, dict):
+            observed_at = item.get("date") or item.get("timestamp") or item.get("observed_at")
+            price = _to_float(item.get("price") or item.get("min_price") or item.get("total"))
+        elif isinstance(item, (list, tuple)) and len(item) >= 2:
+            observed_at, raw_price = item[0], item[1]
+            price = _to_float(raw_price)
+        else:
+            observed_at = None
+            price = _to_float(item)
+        if price is None or price <= 0:
+            continue
+        normalized.append((timestamp_of(observed_at), price))
+    return normalized
+
+
 def _chart_history_for_message(route_info: dict, analysis_result: dict, price_insights: dict | None, is_roundtrip: bool):
     if is_roundtrip:
         round_trip = (analysis_result or {}).get("round_trip_analysis") or {}
@@ -7213,11 +7337,28 @@ def build_notification_payload(
         price_scope=budget_compare_scope,
         budget_decision=purchase_budget_decision,
     )
+    signal_history = _price_history_for_push(
+        price_insights,
+        analysis_result,
+        is_roundtrip,
+    )
     price_signal = build_price_signal(
         policy_compare_price,
         compare_target,
-        _price_history_for_push(price_insights, analysis_result, is_roundtrip),
+        signal_history,
     )
+    signal_metadata = _price_signal_provenance_metadata(
+        signal_history,
+        price_insights,
+        analysis_result,
+        is_roundtrip,
+    )
+    signal_metadata["sample_n"] = int(
+        price_signal.get("sample_n")
+        if price_signal.get("sample_n") is not None
+        else signal_metadata.get("sample_n") or 0
+    )
+    price_signal.update(signal_metadata)
     execution_advice = build_execution_advice(
         policy_compare_price,
         policy_compare_price,
@@ -7490,6 +7631,32 @@ def build_notification_payload(
     fallback_passenger_pricing["passenger_count"] = total_passengers
     fallback_passenger_pricing["applies"] = _passenger_pricing_applies(fallback_passenger_pricing)
     payload_passenger_pricing = primary_plan.get("passenger_pricing") or fallback_passenger_pricing
+    if is_roundtrip:
+        raw_price_references = (
+            ((analysis_result.get("round_trip_analysis") or {}).get("price_analysis") or {}).get("references")
+            or {}
+        )
+    else:
+        reference_current = _to_float((analysis_result.get("price_range") or [None])[0])
+        reference_history = _normalize_price_history_for_refs(
+            (price_insights or {}).get("price_history") or price_history or []
+        )
+        raw_price_references = (
+            calculate_price_references(
+                reference_current,
+                reference_history,
+                _normalize_own_history_for_refs(route_info),
+                analysis_result.get("days_to_dept") or 0,
+                analysis_result.get("all_flights") or [],
+            )
+            if reference_current is not None
+            else {}
+        )
+    price_references = {
+        str(name): dict(reference)
+        for name, reference in raw_price_references.items()
+        if isinstance(reference, dict)
+    }
     payload = {
         "push_type": payload_push_type,
         "route": _payload_route_text(route_info),
@@ -7549,6 +7716,7 @@ def build_notification_payload(
         "recommendation": price_policy.get("conclusion") or decision.get("conclusion") or "可以观察",
         "price_policy_reason": price_policy.get("reason") or "",
         "price_signal": price_signal,
+        "price_references": price_references,
         "execution_advice": execution_advice,
         "no_primary_diagnosis": no_primary_diagnosis.get("counts") or {},
         "no_primary_reason": no_primary_reason,
@@ -7631,6 +7799,7 @@ def build_notification_payload(
         "nearby_date_prices": _payload_nearby_date_rows(route_info, analysis_result, is_roundtrip),
         "price_calendar": price_calendar_payload,
         "tcurve": route_info.get("tcurve") or {},
+        "days_to_dept": analysis_result.get("days_to_dept"),
         "airport_cost_comparison": analysis_result.get("airport_cost_comparison") or [],
         "cabin_policy_summary": cabin_policy_summary,
         "same_day_no_feasible_note": (
@@ -7662,7 +7831,10 @@ def build_notification_payload(
         },
     }
     print(f"[场景调试] 推送将显示 = {payload.get('travel_scenarios')}")
-    return payload
+    return attach_payload_provenance(
+        payload,
+        context=route_info.get("provenance_context") or {},
+    )
 
 
 def _payload_price(value) -> str:
@@ -11195,6 +11367,16 @@ def _email_source_rows(payload: dict) -> list[str]:
 def _email_source_body(payload: dict) -> str:
     rows = _email_source_rows(payload)
     rows.append("<div>🔹 候选方案:已去重并筛选</div>")
+    agreement = payload.get("dual_source_agreement") or {}
+    agreement_window = agreement.get("window") or [None, None]
+    window_text = ""
+    if len(agreement_window) >= 2 and agreement_window[0] and agreement_window[1]:
+        window_text = f"（窗口{agreement_window[0]}~{agreement_window[1]}）"
+    rows.append(
+        "<div>🔹 双源历史一致度:"
+        f"{html.escape(format_dual_source_agreement(agreement))}"
+        f"{html.escape(window_text)}</div>"
+    )
     degradation = payload.get("source_degradation") or {}
     degradation_reason = str(degradation.get("reason") or "").strip()
     if degradation_reason:
@@ -11231,6 +11413,74 @@ def _email_technical_source_body(payload: dict) -> str:
         else:
             rows.append(f"<div>- {html.escape(str(key))}: {html.escape(str(value))}</div>")
     return _email_source_body(payload) + "<hr style='border:0;border-top:1px solid #eee;margin:10px 0;'>" + "".join(rows)
+
+
+def _provenance_value_text(stat_key: str, value) -> str:
+    if isinstance(value, dict):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    if isinstance(value, (int, float)):
+        if str(stat_key).startswith("price_signal."):
+            return f"{value:g}%" if isinstance(value, float) else f"{value}%"
+        return f"CNY{float(value):,.2f}".rstrip("0").rstrip(".")
+    return str(value)
+
+
+def _mark_provenance_reference(payload: dict, stat_key: str) -> dict:
+    """在统计值真正进入渲染时登记引用，并让缺口立即可见。"""
+    provenance = payload.setdefault("provenance", {})
+    referenced = provenance.setdefault("referenced_stat_keys", [])
+    if stat_key not in referenced:
+        referenced.append(stat_key)
+        referenced.sort()
+    entry = (provenance.get("statistics") or {}).get(stat_key)
+    if isinstance(entry, dict):
+        return entry
+    missing_logged = provenance.setdefault("missing_stat_keys", [])
+    if stat_key not in missing_logged:
+        missing_logged.append(stat_key)
+        safe_log(f"[依据缺失] stat={stat_key}")
+    return {}
+
+
+def _price_signal_summary_with_provenance(payload: dict) -> str:
+    signal = payload.get("price_signal") or {}
+    summary = str(signal.get("summary") or "")
+    statistics = ((payload.get("provenance") or {}).get("statistics") or {})
+    has_envelope = "price_signal.history_position" in statistics
+    if signal.get("percentile") is None and not int(signal.get("sample_n") or 0) and not has_envelope:
+        return summary
+    envelope = _mark_provenance_reference(payload, "price_signal.history_position")
+    return replace_micro_provenance(summary, envelope) if envelope else summary
+
+
+def _detail_provenance_body(payload: dict) -> str:
+    provenance = payload.get("provenance") or {}
+    statistics = provenance.get("statistics") or {}
+    referenced = provenance.get("referenced_stat_keys") or []
+    if not referenced:
+        return "<div style='color:#888;font-size:12px;'>本次未引用历史统计值。</div>"
+
+    rows = []
+    for stat_key in referenced:
+        entry = _mark_provenance_reference(payload, str(stat_key))
+        if not entry:
+            rows.append((str(stat_key), "<span style='color:#b91c1c;'>依据缺失</span>"))
+            continue
+        window = entry.get("window") or [None, None]
+        window_text = "~".join(str(item or "未标明") for item in window[:2])
+        sources = "+".join(entry.get("sources") or []) or "未标明"
+        agreement = format_dual_source_agreement(entry.get("dual_source_agreement"))
+        value_text = _provenance_value_text(str(stat_key), entry.get("value"))
+        detail = (
+            f"值={value_text}<br>"
+            f"版本={entry.get('method_version') or '未标明'} · n={int(entry.get('sample_n') or 0)} · "
+            f"窗口={window_text}<br>"
+            f"源={sources} · 剔除退化={int(entry.get('degraded_excluded') or 0)} · "
+            f"一致度={agreement}<br>"
+            f"桶={entry.get('bucket') or '未标明'}"
+        )
+        rows.append((str(stat_key), html.escape(detail).replace("&lt;br&gt;", "<br>")))
+    return _email_table(rows)
 
 
 def _source_stat_is_usable(status: str) -> bool:
@@ -11910,6 +12160,9 @@ def _email_price_calendar_body(payload: dict) -> str:
     for row in rows:
         if not isinstance(row, dict):
             continue
+        row_date_key = str(row.get("date") or "")[:10]
+        if len(row_date_key) == 10:
+            _mark_provenance_reference(payload, f"calendar.{row_date_key}.min")
         date_text = f"{str(row.get('date') or '')[5:]} {row.get('weekday') or ''}".strip()
         tags = []
         if row.get("lowest"):
@@ -11963,8 +12216,14 @@ def _email_price_calendar_body(payload: dict) -> str:
 
     weekday = calendar.get("weekday_pattern") or {}
     if weekday and not weekday.get("data_insufficient") and weekday.get("tip"):
+        weekday_provenance = weekday.get("provenance") or {}
+        minimum_envelope = _mark_provenance_reference(payload, "weekday.minimum")
+        if not minimum_envelope:
+            minimum_envelope = weekday_provenance.get("weekday.minimum")
+        provenance_note = format_micro_provenance(minimum_envelope) if minimum_envelope else ""
         table.append(
-            f"<div style='margin-top:8px;color:#374151;'>{html.escape(str(weekday.get('tip')))}</div>"
+            f"<div style='margin-top:8px;color:#374151;'>"
+            f"{html.escape(str(weekday.get('tip')))}{html.escape(provenance_note)}</div>"
         )
     elif weekday and weekday.get("data_insufficient"):
         table.append("<div style='margin-top:8px;color:#888;font-size:12px;'>周几更便宜：数据积累中。</div>")
@@ -12047,11 +12306,14 @@ def _email_tcurve_body(payload: dict) -> str:
         "</div>",
     ]
     for point in anchors:
+        stat_key = f"tcurve.T{int(point['t'])}.median"
+        point_envelope = _mark_provenance_reference(payload, stat_key)
+        provenance_note = format_micro_provenance(point_envelope or point.get("provenance"))
         lines.append(
             "<div>"
             f"T={int(point['t'])}天：中位{_price_text(point.get('median'))}，"
             f"IQR {_price_text(point.get('p25'))}-{_price_text(point.get('p75'))}"
-            f"（n={int(point.get('n') or 0)}，同航线历史观测）"
+            f"{html.escape(provenance_note)}，同航线历史观测"
             "</div>"
         )
     degraded_count = int(curve.get("degraded_count") or 0)
@@ -12228,7 +12490,7 @@ def render_email(payload: dict) -> tuple[str, str]:
                     "价格口径与信号",
                     _email_table(
                         [
-                            ("价格信号", html.escape(f"{price_signal.get('label') or '待确认'} - {price_signal.get('summary') or '搜索参考价用于判断便不便宜'}")),
+                            ("价格信号", html.escape(f"{price_signal.get('label') or '待确认'} - {_price_signal_summary_with_provenance(payload) or '搜索参考价用于判断便不便宜'}")),
                             ("执行建议", html.escape(f"{execution_advice.get('label') or '待确认'} - {execution_advice.get('summary') or price_reason}")),
                             (
                                 "搜索参考价",
@@ -12382,8 +12644,7 @@ def render_email(payload: dict) -> tuple[str, str]:
     ]
     action = payload.get("action_range") or {}
     if action.get("current_label"):
-        signal = payload.get("price_signal") or {}
-        action_rows.append(("价格信号", html.escape(str(signal.get("summary") or action.get("current_label")))))
+        action_rows.append(("价格信号", html.escape(_price_signal_summary_with_provenance(payload) or str(action.get("current_label")))))
     if not no_primary:
         cards.append(
             _email_card(
@@ -12572,6 +12833,7 @@ def render_detail_html(payload: dict) -> str:
         confidence_body = "<div style='color:#888;font-size:12px;'>暂无置信度拆解。</div>"
     cards.append(_detail_section("展开:置信度拆解", confidence_body))
 
+    cards.append(_detail_section("数据依据", _detail_provenance_body(payload)))
     cards.append(_detail_section("展开:详细数据来源", _email_technical_source_body(payload)))
 
     cards.append(

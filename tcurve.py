@@ -12,12 +12,14 @@ from pathlib import Path
 from typing import Iterator
 
 from airports import get_airport_city
+from method_registry import method_version
+from provenance import build_envelope
 from source_profiles import get_source_profile, normalize_route_type
 
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_DB_PATH = BASE_DIR / "data" / "observations.sqlite3"
-METHOD_VERSION = "tcurve_v1"
+METHOD_VERSION = method_version("tcurve")
 
 
 def _positive_int_env(name: str, default: int) -> int:
@@ -191,6 +193,7 @@ def fold_tcurve_daily_cells(rows: list[dict]) -> list[dict]:
             key,
             {
                 "prices": [],
+                "priced_sources": [],
                 "sources": set(),
                 "route_types": set(),
                 "stored_t_values": set(),
@@ -200,6 +203,7 @@ def fold_tcurve_daily_cells(rows: list[dict]) -> list[dict]:
         source = str(row.get("source") or "").strip().lower()
         if source:
             cell["sources"].add(source)
+            cell["priced_sources"].append((price, source))
         route_type = normalize_route_type(row.get("route_type")) or str(
             row.get("route_type") or "international"
         ).strip().lower()
@@ -216,6 +220,7 @@ def fold_tcurve_daily_cells(rows: list[dict]) -> list[dict]:
         for route_type in values["route_types"]:
             expected.update(expected_search_sources(route_type))
         coverage = set(values["sources"])
+        minimum = min(values["prices"])
         computed_t = int(values["computed_t"])
         stored_t_values = values["stored_t_values"]
         cells.append(
@@ -226,7 +231,14 @@ def fold_tcurve_daily_cells(rows: list[dict]) -> list[dict]:
                 "observed_day": observed_day,
                 "days_to_departure": computed_t,
                 "stored_t_matches": not stored_t_values or stored_t_values == {computed_t},
-                "min_price": _clean_number(min(values["prices"])),
+                "min_price": _clean_number(minimum),
+                "min_sources": sorted(
+                    {
+                        source
+                        for price, source in values["priced_sources"]
+                        if price == minimum
+                    }
+                ),
                 "source_coverage": sorted(coverage),
                 "expected_sources": sorted(expected),
                 "route_types": sorted(values["route_types"]),
@@ -289,15 +301,41 @@ def build_tcurve(
         cell for cell in all_cells if include_degraded or not cell["degraded"]
     ]
 
-    by_t: dict[int, list[float]] = {}
+    by_t: dict[int, list[dict]] = {}
     for cell in included_cells:
-        by_t.setdefault(int(cell["days_to_departure"]), []).append(
-            float(cell["min_price"])
-        )
+        by_t.setdefault(int(cell["days_to_departure"]), []).append(cell)
     points = []
     for t_value in sorted(by_t):
-        prices = by_t[t_value]
+        t_cells = by_t[t_value]
+        prices = [float(cell["min_price"]) for cell in t_cells]
         sufficient = len(prices) >= min_sample
+        observed_days = sorted({cell["observed_day"] for cell in t_cells})
+        sources = sorted(
+            {
+                source
+                for cell in t_cells
+                for source in (cell.get("min_sources") or [])
+            }
+        )
+        excluded_at_t = sum(
+            1
+            for cell in all_cells
+            if int(cell["days_to_departure"]) == t_value
+            and cell.get("degraded")
+            and not include_degraded
+        )
+        stat_key = f"tcurve.T{t_value}.median"
+        bucket = f"航线={origin_city}-{dest_city}·T={t_value}天"
+        if pair:
+            bucket += f"·机场对={pair[0]}-{pair[1]}"
+        envelope = build_envelope(
+            stat_key,
+            sample_n=len(prices),
+            window=[observed_days[0], observed_days[-1]] if observed_days else [None, None],
+            sources=sources,
+            degraded_excluded=excluded_at_t,
+            bucket=bucket,
+        )
         points.append(
             {
                 "t": t_value,
@@ -307,6 +345,7 @@ def build_tcurve(
                 "p75": _clean_number(percentile_linear(prices, 0.75)) if sufficient else None,
                 "sufficient": sufficient,
                 "status": "ok" if sufficient else "样本不足",
+                "provenance": envelope,
             }
         )
 

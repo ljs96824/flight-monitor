@@ -60,7 +60,7 @@ class PriceReferenceTierTextTest(unittest.TestCase):
 
         self.assertEqual(
             signal["summary"],
-            "同条件样本不足（当前n=1），继续积累中，暂不给出价格位置判断（近1次同条件采集）",
+            "同条件样本不足（当前n=1），继续积累中，暂不给出价格位置判断（n=1）",
         )
         self.assertEqual(signal["label"], "待积累")
 
@@ -78,7 +78,7 @@ class PriceReferenceTierTextTest(unittest.TestCase):
             result["reasons"],
         )
         self.assertIn(
-            "同条件样本不足（当前n=1），继续积累中，暂不给出价格位置判断（近1次同条件采集）",
+            "同条件样本不足（当前n=1），继续积累中，暂不给出价格位置判断（n=1）",
             result["reasons"],
         )
 
@@ -100,10 +100,10 @@ class PriceReferenceTierTextTest(unittest.TestCase):
 
         self.assertEqual(
             signal["summary"],
-            "搜索参考价处于近期低位（近5次同条件采集）",
+            "搜索参考价处于近期低位（n=5）",
         )
         self.assertIn(
-            "当前搜索价高于大多数相似历史样本（近5次同条件采集）",
+            "当前搜索价高于大多数相似历史样本（n=5）",
             result["reasons"],
         )
 
@@ -125,10 +125,10 @@ class PriceReferenceTierTextTest(unittest.TestCase):
 
         self.assertEqual(
             signal["summary"],
-            "搜索参考价处于近期低位（近20次同条件采集）",
+            "搜索参考价处于近期低位（n=20）",
         )
         self.assertIn(
-            "当前搜索价高于大多数相似历史样本（近20次同条件采集）",
+            "当前搜索价高于大多数相似历史样本（n=20）",
             result["reasons"],
         )
 

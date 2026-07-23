@@ -57,6 +57,7 @@ from request_cache import (
     start_request_cache_round,
 )
 from plan_tracker import feedback_acknowledgement
+from provenance import build_route_provenance_context_from_info
 from source_profiles import get_source_profile
 from sources.aggregator import (
     FlightAggregator,
@@ -1471,6 +1472,16 @@ def _notification_tcurve(route_info: dict) -> dict:
         return {}
 
 
+def _notification_provenance_context(route_info: dict) -> dict:
+    """只读加载本次通知所需的统计依据；失败时保留原通知交付。"""
+    try:
+        _round_id, db_path = get_current_round()
+        return build_route_provenance_context_from_info(route_info, db_path=db_path)
+    except Exception as exc:
+        safe_log(f"[依据] 读取失败 跳过附着 原因={type(exc).__name__}:{exc}")
+        return {}
+
+
 def process_subscription(
     sub: dict,
     ensure_db: bool = True,
@@ -1990,6 +2001,9 @@ def process_subscription(
         }
         message_kwargs["route_info"]["tcurve"] = _notification_tcurve(
             message_kwargs["route_info"]
+        )
+        message_kwargs["route_info"]["provenance_context"] = (
+            _notification_provenance_context(message_kwargs["route_info"])
         )
         print(f"[DEBUG] 传给notifier的参数keys: {list(message_kwargs.keys())}")
         if not _deliver_notification(sub, route, message_kwargs):

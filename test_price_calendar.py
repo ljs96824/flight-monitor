@@ -74,6 +74,8 @@ class PriceCalendarTest(unittest.TestCase):
             self.assertIn(today.isoformat(), called_dates)
             self.assertIn((target + timedelta(days=14)).isoformat(), called_dates)
             self.assertEqual(calendar["dates"][stale_date]["airline"], "KN")
+            self.assertEqual(calendar["dates"][stale_date]["sources"], ["fakesource"])
+            self.assertEqual(calendar["dates"][stale_date]["count"], 2)
 
     def test_calendar_rows_hide_past_dates(self):
         from price_calendar import calendar_rows

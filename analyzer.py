@@ -5032,6 +5032,31 @@ def calculate_price_references(
     """计算五层历史最低价参考。"""
     result = {}
 
+    def timestamp_window(items):
+        dates = []
+        for item in items or []:
+            value = item[0] if isinstance(item, (list, tuple)) and item else None
+            if value is None:
+                continue
+            try:
+                dates.append(datetime.fromtimestamp(float(value)).date().isoformat())
+            except (OSError, OverflowError, TypeError, ValueError):
+                continue
+        return [min(dates), max(dates)] if dates else None
+
+    def record_window(items):
+        dates = []
+        for item in items or []:
+            if not isinstance(item, dict):
+                continue
+            value = item.get("date") or item.get("observed_at") or item.get("timestamp")
+            text = str(value or "")[:10]
+            try:
+                dates.append(datetime.fromisoformat(text).date().isoformat())
+            except (TypeError, ValueError):
+                continue
+        return [min(dates), max(dates)] if dates else None
+
     if price_history:
         if isinstance(price_history[0], (list, tuple)):
             all_prices = [price for _, price in price_history if price and price > 0]
@@ -5043,18 +5068,20 @@ def calculate_price_references(
                 "price": min(all_prices),
                 "label": "历史最低（所有条件）",
                 "note": "可能出现在淡季或特殊促销，当前条件下不一定可达",
+                "sample_size": len(all_prices),
+                "window": timestamp_window(price_history),
             }
 
     if price_history and isinstance(price_history[0], (list, tuple)):
-        from datetime import datetime
-
         relevant = []
+        relevant_rows = []
         for timestamp, price in price_history:
             if price and price > 0 and timestamp:
                 try:
                     hist_days = abs(timestamp - datetime.now().timestamp()) / 86400
                     if abs(hist_days - days_to_dept) <= 7:
                         relevant.append(price)
+                        relevant_rows.append((timestamp, price))
                 except Exception:
                     pass
 
@@ -5064,6 +5091,7 @@ def calculate_price_references(
                 "label": f"同条件最低（提前{days_to_dept}天±7天）",
                 "note": "在类似购买时间点下的历史最低",
                 "sample_size": len(relevant),
+                "window": timestamp_window(relevant_rows),
             }
 
     if own_history:
@@ -5078,6 +5106,7 @@ def calculate_price_references(
                 "label": "近期最低（你关注以来）",
                 "note": f"基于{len(recent_prices)}次采集数据",
                 "sample_size": len(recent_prices),
+                "window": record_window(own_history),
             }
 
     if current_flights:
@@ -5091,6 +5120,7 @@ def calculate_price_references(
                 "price": min(current_prices),
                 "label": "当前可买最低",
                 "note": "此刻市场上满足条件的最低价",
+                "sample_size": len(current_prices),
             }
 
     for ref in result.values():
@@ -6282,11 +6312,16 @@ def analyze_roundtrip_price_calendar(
         )
         return fallback
 
+    return_info = ((return_calendar or {}).get("dates") or {}).get(str(return_date)[:10]) or {}
+
     rows = _roundtrip_calendar_rows(
         outbound_calendar or {},
         target_date,
         return_low=return_low,
         return_date=return_date,
+        return_sources=return_info.get("sources") or return_info.get("source"),
+        return_observed_at=return_info.get("updated_at"),
+        return_sample_n=return_info.get("count"),
     )
     savings = _calendar_row_savings(rows, target_date)
     return {
@@ -7353,7 +7388,8 @@ def _flatten_price_history(price_history) -> list[float]:
 
 
 def _history_reference_suffix(prices) -> str:
-    return f"（近{len(prices)}次同条件采集）" if prices else ""
+    # 日期窗口由标准依据信封在通知层补入，这里只保留真实样本数。
+    return f"（n={len(prices)}）" if prices else ""
 
 
 def _insufficient_history_copy(prices) -> str:
@@ -8161,6 +8197,7 @@ def build_price_signal(display_price, target_price=None, price_history=None) -> 
             "label": "未知",
             "summary": "搜索参考价暂未确认",
             "percentile": percentile,
+            "sample_n": len(prices),
         }
 
     if percentile is not None and percentile <= 30:
@@ -8187,6 +8224,7 @@ def build_price_signal(display_price, target_price=None, price_history=None) -> 
         "label": label,
         "summary": summary,
         "percentile": percentile,
+        "sample_n": len(prices),
     }
 
 
@@ -10006,6 +10044,23 @@ def analyze_roundtrip_prices(
     if current_total is None:
         return {"available": False}
 
+    def rows_window(items):
+        dates = []
+        for row in items or []:
+            if not isinstance(row, dict):
+                continue
+            text = str(
+                row.get("date")
+                or row.get("observed_at")
+                or row.get("timestamp")
+                or ""
+            )[:10]
+            try:
+                dates.append(date.fromisoformat(text).isoformat())
+            except (TypeError, ValueError):
+                continue
+        return [min(dates), max(dates)] if dates else None
+
     totals = [
         _roundtrip_row_value(row, "total")
         for row in rows
@@ -10044,23 +10099,29 @@ def analyze_roundtrip_prices(
             "price": current_total,
             "outbound": outbound_current,
             "return": return_current,
+            "sample_size": 1,
+            "window": rows_window(chart_rows[-1:]),
         },
     }
     if totals:
         references["absolute_min"] = {
             "price": min(totals),
             "label": "历史往返最低",
+            "sample_size": len(totals),
+            "window": rows_window(chart_rows),
         }
         references["recent_min"] = {
             "price": min(totals[-14:]),
             "label": "近期往返最低（你关注以来）",
             "sample_size": len(totals[-14:]),
+            "window": rows_window(chart_rows[-14:]),
         }
     if totals and days_to_dept is not None:
         references["conditional_min"] = {
             "price": min(totals),
             "label": f"同条件往返最低（提前{days_to_dept}天±7天）",
             "sample_size": len(totals),
+            "window": rows_window(chart_rows),
         }
 
     short_term = {}

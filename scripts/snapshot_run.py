@@ -36,6 +36,7 @@ from analyzer import (
     compute_same_day_windows,
 )
 from log_utils import safe_log
+from method_registry import method_version
 from price_calendar import analyze_row_savings, analyze_weekday_pattern, roundtrip_calendar_rows
 from price_estimator import passenger_price_factor
 from pricing import budget_to_pp, itinerary_price_pp, price_in_scope
@@ -665,7 +666,7 @@ def tcurve_snapshot() -> dict:
     return {
         "route": "上海-北京",
         "price_caliber": "单人单程CNY含税",
-        "method_version": "tcurve_v1",
+        "method_version": method_version("tcurve"),
         "min_sample": 5,
         "include_degraded": False,
         "degraded_count": 1,
@@ -1059,6 +1060,9 @@ def _build_payload(subscription: dict, outbound_analysis: dict, return_analysis:
                 "pushplus_chars": len(pushplus),
                 "email_contains_tcurve": "提前购买参考(同航线历史观测)" in email_html,
                 "email_contains_weekday_median": "中位数" in email_html,
+                "versions": payload.get("versions") or {},
+                "dual_source_agreement": payload.get("dual_source_agreement") or {},
+                "provenance": payload.get("provenance") or {},
             },
         }
     finally:

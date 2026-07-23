@@ -14,6 +14,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from filename_utils import sanitize_filename
+from method_registry import method_version
 from request_cache import cached_fetch
 
 DEFAULT_DATA_DIR = Path(__file__).parent / "data" / "price_calendar"
@@ -112,6 +113,20 @@ def _valid_price(value) -> bool:
         return False
 
 
+def _source_names(value) -> list[str]:
+    if isinstance(value, (list, tuple, set)):
+        values = value
+    else:
+        values = str(value or "").replace("|", "+").split("+")
+    return sorted(
+        {
+            str(source).strip().lower()
+            for source in values
+            if str(source).strip()
+        }
+    )
+
+
 def update_calendar(
     route: str,
     origin: str,
@@ -139,10 +154,19 @@ def update_calendar(
         priced = [flight for flight in flights if isinstance(flight, dict) and _valid_price(flight.get("price"))]
         if priced:
             cheapest = min(priced, key=lambda flight: float(flight.get("price") or 10**9))
+            source_names = _source_names(
+                cheapest.get("price_source")
+                or cheapest.get("data_source")
+                or cheapest.get("source")
+                or getattr(source, "name", None)
+                or type(source).__name__
+            )
             dates[date_str] = {
                 "min_price": float(cheapest.get("price")),
                 "airline": cheapest.get("airline") or cheapest.get("airline_code") or cheapest.get("airline_name"),
                 "flight_no": cheapest.get("flight_no") or cheapest.get("flight_combo"),
+                "count": len(priced),
+                "sources": source_names,
                 "updated_at": now_iso(),
             }
         if sleep_seconds:
@@ -321,6 +345,7 @@ def analyze_weekday_pattern(calendar: dict, *, min_samples: int = 7) -> dict | N
         "min_weekday": min_weekday,
         "min_price": min_price,
         "sample_count": sample_count,
+        "method_version": method_version("weekday"),
         "tip": f"近期最低出现在{min_weekday}({min_day.isoformat()},单程¥{min_price:,.0f}){usual_tip}",
     }
 
@@ -347,6 +372,9 @@ def calendar_rows(calendar: dict, target_date: str) -> list[dict]:
                 "weekday": WEEKDAY_NAMES[d.weekday()],
                 "min_price": price,
                 "airline": info.get("airline"),
+                "sample_n": info.get("count"),
+                "sources": _source_names(info.get("sources") or info.get("source")),
+                "observed_at": info.get("updated_at"),
                 "selected": d == target,
                 "lowest": lowest is not None and price == lowest,
                 "scope": "oneway",
@@ -375,6 +403,9 @@ def roundtrip_calendar_rows(
     *,
     return_low,
     return_date: str,
+    return_sources=None,
+    return_observed_at=None,
+    return_sample_n=None,
 ) -> list[dict]:
     """Build fixed-return-date roundtrip reference rows.
 
@@ -393,6 +424,15 @@ def roundtrip_calendar_rows(
         outbound_price = float(outbound_price)
         combined = outbound_price + return_price
         updated = dict(row)
+        combined_sources = sorted(
+            set(_source_names(row.get("sources")))
+            | set(_source_names(return_sources))
+        )
+        observed_values = [
+            str(value)[:10]
+            for value in (row.get("observed_at"), return_observed_at)
+            if value and len(str(value)) >= 10
+        ]
         updated.update(
             {
                 "outbound_min_price": outbound_price,
@@ -401,6 +441,15 @@ def roundtrip_calendar_rows(
                 "min_price": combined,
                 "value": combined,
                 "scope": "roundtrip",
+                "sources": combined_sources,
+                "sample_n": int(row.get("sample_n") or row.get("count") or 0)
+                + int(return_sample_n or 0),
+                "observed_at": min(observed_values) if observed_values else row.get("observed_at"),
+                "observation_window": (
+                    [min(observed_values), max(observed_values)]
+                    if observed_values
+                    else None
+                ),
                 "breakdown": f"去¥{outbound_price:,.0f}+返¥{return_price:,.0f}",
             }
         )

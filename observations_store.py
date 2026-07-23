@@ -11,11 +11,12 @@ from typing import Iterable, Iterator
 
 from flight_combo_utils import normalize_combo
 from log_utils import safe_log
+from method_registry import method_version
 
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_DB_PATH = BASE_DIR / "data" / "observations.sqlite3"
-METHOD_VERSION = "v1"
+METHOD_VERSION = method_version("obs_store")
 
 _current_round_id: str | None = None
 _current_db_path: Path = DEFAULT_DB_PATH
