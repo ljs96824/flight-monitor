@@ -1,7 +1,9 @@
 import ast
+from datetime import datetime, timedelta, timezone
 import re
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parent
@@ -35,6 +37,51 @@ def _literal_mode(call, *, builtin_open):
 
 
 class CiPortabilityTest(unittest.TestCase):
+    def test_project_timezone_falls_back_without_system_tzdata(self):
+        import project_time
+        from zoneinfo import ZoneInfoNotFoundError
+
+        with patch.object(
+            project_time,
+            "ZoneInfo",
+            side_effect=ZoneInfoNotFoundError("Asia/Shanghai"),
+        ):
+            shanghai_tz = project_time.load_project_timezone()
+
+        self.assertEqual(
+            shanghai_tz.utcoffset(datetime(2026, 7, 24)),
+            timedelta(hours=8),
+        )
+
+    def test_freshness_rendering_is_independent_of_runner_timezone(self):
+        import notifier
+
+        class UtcRunnerDateTime(datetime):
+            @classmethod
+            def fromisoformat(cls, value):
+                parsed = datetime.fromisoformat(value)
+                return cls(
+                    parsed.year,
+                    parsed.month,
+                    parsed.day,
+                    parsed.hour,
+                    parsed.minute,
+                    parsed.second,
+                    parsed.microsecond,
+                    tzinfo=parsed.tzinfo,
+                )
+
+            def astimezone(self, tz=None):
+                return super().astimezone(tz or timezone.utc)
+
+        with patch.object(notifier, "datetime", UtcRunnerDateTime):
+            parsed = notifier._freshness_timestamp(
+                "2026-07-23T10:35:00+08:00"
+            )
+
+        self.assertEqual(parsed.strftime("%H:%M"), "10:35")
+        self.assertEqual(parsed.utcoffset(), timedelta(hours=8))
+
     def test_offline_dual_os_workflow_replaces_legacy_monitor(self):
         workflow = ROOT / ".github" / "workflows" / "tests.yml"
         legacy = ROOT / ".github" / "workflows" / "monitor.yml"

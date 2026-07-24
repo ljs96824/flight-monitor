@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
-from zoneinfo import ZoneInfo
 
+from project_time import SHANGHAI_TZ
 
-SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 FLEX_STAGES = (1, 3, 7)
 
 

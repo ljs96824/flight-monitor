@@ -60,6 +60,7 @@ from price_estimator import (
     round_display_price,
 )
 from pricing import assert_same_caliber, budget_to_pp, caliber_label, itinerary_price_pp, passenger_rate_sum, price_in_scope
+from project_time import SHANGHAI_TZ
 from provenance import (
     attach_payload_provenance,
     format_dual_source_agreement,
@@ -11452,7 +11453,7 @@ def _freshness_timestamp(value) -> datetime | None:
     except ValueError:
         return None
     if parsed.tzinfo is not None:
-        parsed = parsed.astimezone()
+        parsed = parsed.astimezone(SHANGHAI_TZ)
     return parsed
 
 

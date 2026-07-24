@@ -10,17 +10,16 @@ from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Iterator
-from zoneinfo import ZoneInfo
 
 from airports import get_airport_city
 from flight_combo_utils import normalize_combo
 from method_registry import METHOD_VERSIONS, method_version, method_version_for_stat
+from project_time import SHANGHAI_TZ as PROJECT_TIMEZONE
 from source_profiles import get_source_profile, normalize_route_type
 
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_DB_PATH = BASE_DIR / "data" / "observations.sqlite3"
-PROJECT_TIMEZONE = ZoneInfo("Asia/Shanghai")
 
 
 def _positive_int_env(name: str, default: int) -> int:
