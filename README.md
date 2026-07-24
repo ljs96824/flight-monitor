@@ -1,5 +1,7 @@
 # Flight Monitor
 
+[![tests](https://github.com/ljs96824/flight-monitor/actions/workflows/tests.yml/badge.svg)](https://github.com/ljs96824/flight-monitor/actions/workflows/tests.yml)
+
 定时监控 `config.yaml` 中配置的航班价格，使用 SerpAPI Google Flights 获取数据，并通过 PushPlus 推送通知。
 
 ## 本地运行

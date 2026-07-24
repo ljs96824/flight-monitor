@@ -7,6 +7,89 @@ from unittest.mock import patch
 
 
 class ApiUsageConcurrencyTest(unittest.TestCase):
+    def test_platform_backends_share_retry_and_conflict_audit_path(self):
+        import api_usage
+
+        self.assertTrue(
+            hasattr(api_usage, "_build_lock_backend"),
+            "api_usage 尚未提供跨平台锁后端工厂",
+        )
+
+        class FakeMsvcrt:
+            LK_NBLCK = 1
+            LK_UNLCK = 2
+
+            def __init__(self):
+                self.calls = []
+
+            def locking(self, _fileno, mode, _length):
+                self.calls.append(mode)
+                raise OSError("windows lock busy")
+
+        class FakeFcntl:
+            LOCK_EX = 1
+            LOCK_NB = 2
+            LOCK_UN = 4
+
+            def __init__(self):
+                self.calls = []
+
+            def flock(self, _fileno, operation):
+                self.calls.append(operation)
+                raise BlockingIOError("posix lock busy")
+
+        cases = [
+            ("windows", FakeMsvcrt(), None),
+            ("posix", None, FakeFcntl()),
+        ]
+        for platform_name, msvcrt_module, fcntl_module in cases:
+            with self.subTest(platform=platform_name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    usage_path = root / "api_usage.json"
+                    conflict_path = root / "api_usage_conflict.log"
+                    backend = api_usage._build_lock_backend(
+                        msvcrt_module=msvcrt_module,
+                        fcntl_module=fcntl_module,
+                    )
+                    with (
+                        patch("api_usage._LOCK_BACKEND", backend),
+                        patch("api_usage.safe_log") as log_mock,
+                    ):
+                        payload = api_usage.record_actual_requests(
+                            {"juhe": 1},
+                            path=usage_path,
+                            day="2026-07-24",
+                            round_id=f"{platform_name}-conflict",
+                            lock_timeout=0,
+                            lock_retries=1,
+                            conflict_log_path=conflict_path,
+                        )
+
+                    rows = [
+                        json.loads(line)
+                        for line in conflict_path.read_text(
+                            encoding="utf-8"
+                        ).splitlines()
+                        if line.strip()
+                    ]
+                    platform_calls = (
+                        msvcrt_module.calls
+                        if msvcrt_module is not None
+                        else fcntl_module.calls
+                    )
+
+                self.assertEqual(payload["dates"], {})
+                self.assertEqual(len(platform_calls), 2)
+                self.assertEqual(rows[-1]["round_id"], f"{platform_name}-conflict")
+                self.assertEqual(rows[-1]["status"], "write_conflict")
+                self.assertTrue(
+                    any(
+                        "[配额台账] 写入冲突" in str(call.args[0])
+                        for call in log_mock.call_args_list
+                    )
+                )
+
     def test_two_threads_record_one_hundred_entries_each_without_loss(self):
         from api_usage import load_usage, record_actual_requests
 

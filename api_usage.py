@@ -14,7 +14,13 @@ import uuid
 from datetime import date, datetime
 from pathlib import Path
 
-import msvcrt
+try:
+    import msvcrt as _msvcrt
+except ImportError:
+    _msvcrt = None
+    import fcntl as _fcntl
+else:
+    _fcntl = None
 
 from log_utils import safe_log
 
@@ -32,6 +38,64 @@ _thread_locks: dict[str, threading.Lock] = {}
 _thread_locks_guard = threading.Lock()
 
 
+class _FileLockBackend:
+    """把 Windows/POSIX 文件锁收敛到相同的非阻塞接口。"""
+
+    def __init__(self, name, try_lock, unlock):
+        self.name = str(name)
+        self.try_lock = try_lock
+        self.unlock = unlock
+
+
+def _build_lock_backend(*, msvcrt_module=None, fcntl_module=None):
+    if msvcrt_module is not None:
+        def try_lock(lock_file):
+            lock_file.seek(0)
+            try:
+                msvcrt_module.locking(
+                    lock_file.fileno(),
+                    msvcrt_module.LK_NBLCK,
+                    1,
+                )
+            except OSError:
+                return False
+            return True
+
+        def unlock(lock_file):
+            lock_file.seek(0)
+            msvcrt_module.locking(
+                lock_file.fileno(),
+                msvcrt_module.LK_UNLCK,
+                1,
+            )
+
+        return _FileLockBackend("windows", try_lock, unlock)
+
+    if fcntl_module is not None:
+        def try_lock(lock_file):
+            try:
+                fcntl_module.flock(
+                    lock_file.fileno(),
+                    fcntl_module.LOCK_EX | fcntl_module.LOCK_NB,
+                )
+            except OSError:
+                return False
+            return True
+
+        def unlock(lock_file):
+            fcntl_module.flock(lock_file.fileno(), fcntl_module.LOCK_UN)
+
+        return _FileLockBackend("posix", try_lock, unlock)
+
+    raise RuntimeError("当前平台没有可用的文件锁后端")
+
+
+_LOCK_BACKEND = _build_lock_backend(
+    msvcrt_module=_msvcrt,
+    fcntl_module=_fcntl,
+)
+
+
 def _thread_lock_for(path: Path) -> threading.Lock:
     key = str(path.resolve())
     with _thread_locks_guard:
@@ -39,12 +103,7 @@ def _thread_lock_for(path: Path) -> threading.Lock:
 
 
 def _try_lock_file(lock_file) -> bool:
-    lock_file.seek(0)
-    try:
-        msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
-    except OSError:
-        return False
-    return True
+    return _LOCK_BACKEND.try_lock(lock_file)
 
 
 @contextmanager
@@ -53,7 +112,7 @@ def _usage_lock(
     *,
     timeout: float = DEFAULT_LOCK_TIMEOUT_SECONDS,
 ):
-    """用进程内锁和 Windows 字节锁覆盖完整读改写临界区。"""
+    """用进程内锁和平台文件锁覆盖完整读改写临界区。"""
 
     path = Path(usage_path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -86,8 +145,7 @@ def _usage_lock(
         if lock_file is not None:
             if os_locked:
                 try:
-                    lock_file.seek(0)
-                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+                    _LOCK_BACKEND.unlock(lock_file)
                 except OSError:
                     pass
             lock_file.close()
