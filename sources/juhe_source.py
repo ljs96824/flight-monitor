@@ -313,9 +313,6 @@ class JuheSource(FlightSource):
         normalized = []
         collected_at = collected_at or datetime.now().isoformat(timespec="seconds")
         for item in parsed or []:
-            if _is_codeshare(item.get("isCodeShare")):
-                continue
-
             flight_no = str(_first(item, "flightNo", "flight_no", "flightNumber")).strip()
             price = _to_float(_first(item, "ticketPrice", "price", "adultPrice"))
             if price <= 0:
@@ -344,6 +341,17 @@ class JuheSource(FlightSource):
                 "arr_time": arrival_time,
                 "aircraft": aircraft,
             }
+            operating_airline = _first(
+                item,
+                "opAirline",
+                "op_airline",
+                "operatingAirline",
+                "operating_airline",
+            )
+            if operating_airline:
+                segment["operating_airline"] = operating_airline
+            if _is_codeshare(item.get("isCodeShare")):
+                segment["is_codeshare"] = True
             row = {
                 "flight_no": flight_no,
                 "flight_combo": flight_no,

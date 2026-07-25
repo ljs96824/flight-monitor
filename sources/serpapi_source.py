@@ -347,6 +347,16 @@ def parse_google_flights(
                     "duration_min": segment.get("duration", 0) or 0,
                     "cabin_class": cabin_class,
                 }
+                operating_airline = (
+                    segment.get("operating_airline")
+                    or segment.get("op_airline")
+                    or segment.get("operated_by")
+                    or segment.get("operating_carrier")
+                )
+                if operating_airline:
+                    segment_info["operating_airline"] = operating_airline
+                if segment.get("is_codeshare") or segment.get("codeshare"):
+                    segment_info["is_codeshare"] = True
                 parsed_segments.append(segment_info)
 
                 if index < len(segments) - 1:

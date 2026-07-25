@@ -25,6 +25,7 @@ from airports import (
     resolve_location,
 )
 from analyzer import apply_default_rules, build_price_hint_from_calendar
+from airlines import LCC_POLICIES, resolve_lcc_policy
 from filename_utils import sanitize_filename
 from log_utils import safe_log
 from price_calendar import load_calendar
@@ -1430,6 +1431,13 @@ FORM_TEMPLATE = """
               <label><input type="checkbox" name="blocked_airlines_common" value="乐桃航空"> 乐桃航空</label>
             </div>
           </div>
+          <label>廉价航空</label>
+          <div class="choice">
+            <label><input type="radio" name="lcc_policy" value="any" checked> 不限</label>
+            <label><input type="radio" name="lcc_policy" value="exclude_lcc"> 排除廉航</label>
+            <label><input type="radio" name="lcc_policy" value="lcc_only"> 仅看廉航</label>
+          </div>
+          <p class="hint">按执飞航司识别；“仅看廉航”要求全部航段均由廉航执飞。</p>
           </div>
 
           <div class="module-heading">
@@ -3176,6 +3184,7 @@ FORM_TEMPLATE = """
       if (soft.refund_flexibility) setRadio('refund_flexibility', soft.refund_flexibility);
       if (soft.price_sensitivity) setRadio('price_sensitivity', soft.price_sensitivity);
       if (soft.airline_policy) setRadio('airline_policy', soft.airline_policy);
+      setRadio('lcc_policy', data.lcc_policy || hard.lcc_policy || 'any');
       if (soft.exclude_airlines) form.exclude_airlines.value = (soft.exclude_airlines || []).join(', ');
       if (hard.accept_self_transfer !== undefined) setRadio('accept_self_transfer', String(Boolean(hard.accept_self_transfer)));
       if (hard.accept_overnight_transfer !== undefined) setRadio('accept_overnight_transfer', String(Boolean(hard.accept_overnight_transfer)));
@@ -3707,6 +3716,7 @@ FORM_TEMPLATE = """
         no_late_arrival: precise && Boolean(document.querySelector('input[name="no_late_arrival"]')?.checked),
         prefer_daytime_arrival: precise && Boolean(document.querySelector('input[name="prefer_daytime_arrival"]')?.checked),
         airline_policy: precise ? checkedValue('airline_policy') : 'any',
+        lcc_policy: checkedValue('lcc_policy') || 'any',
         notification_method: checkedValue('notification_method'),
         notification_frequency: checkedValue('notification_frequency'),
         secondary_goals: precise ? checkedValues('secondary_goals') : [],
@@ -3754,6 +3764,7 @@ FORM_TEMPLATE = """
         'travel_scenario',
         'companions',
         'airline_policy',
+        'lcc_policy',
         'notification_method',
         'notification_frequency',
         'short_transfer_limit',
@@ -4466,6 +4477,27 @@ def migrate_budget_scopes(subscriptions: list[dict]) -> tuple[list[dict], list[d
     return subscriptions, migrated
 
 
+def migrate_lcc_policies(subscriptions: list[dict]) -> tuple[list[dict], list[dict]]:
+    """为旧订阅补显式的廉航筛选口径，默认不限制。"""
+    migrated = []
+    for index, sub in enumerate(subscriptions):
+        if not isinstance(sub, dict):
+            continue
+        existing = resolve_lcc_policy(sub)
+        if existing:
+            sub["lcc_policy"] = str(existing).strip()
+            continue
+        sub["lcc_policy"] = "any"
+        migrated.append(
+            {
+                "index": index,
+                "id": sub.get("id") or sub.get("subscription_id") or "",
+                "route": _subscription_route_label(sub),
+            }
+        )
+    return subscriptions, migrated
+
+
 def load_subscriptions() -> list[dict]:
     if not SUBSCRIPTIONS_PATH.exists():
         return []
@@ -4475,13 +4507,23 @@ def load_subscriptions() -> list[dict]:
         return []
     if not isinstance(data, list):
         return []
-    data, migrated = migrate_budget_scopes(data)
-    if migrated:
+    data, budget_migrated = migrate_budget_scopes(data)
+    data, lcc_migrated = migrate_lcc_policies(data)
+    if budget_migrated or lcc_migrated:
         SUBSCRIPTIONS_PATH.write_text(
             json.dumps(data, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-        print(f"[预算口径迁移] 已为{len(migrated)}条旧订阅补默认scope=per_person: {migrated}")
+    if budget_migrated:
+        print(
+            f"[预算口径迁移] 已为{len(budget_migrated)}条旧订阅补默认scope=per_person: "
+            f"{budget_migrated}"
+        )
+    if lcc_migrated:
+        safe_log(
+            f"[口径迁移] 已为{len(lcc_migrated)}条旧订阅补lcc_policy=any: "
+            f"{lcc_migrated}"
+        )
     return data
 
 
@@ -5239,6 +5281,9 @@ def build_subscription(form) -> dict:
         if item and item not in blocked_airlines:
             blocked_airlines.append(item)
     airline_policy = form.get("airline_policy", "any")
+    lcc_policy = str(form.get("lcc_policy") or "any").strip()
+    if lcc_policy not in LCC_POLICIES:
+        raise ValueError(f"lcc_policy取值无效: {lcc_policy}")
     if monitor_mode != "precise":
         airline_policy = "any"
         blocked_airlines = []
@@ -5426,6 +5471,7 @@ def build_subscription(form) -> dict:
             "date_flexibility_days": parse_int(form.get("date_flexibility"), 0),
             "transfer_policy": transfer_policy,
             "checked_baggage_required": form.get("baggage", "required") == "required",
+            "lcc_policy": lcc_policy,
             "same_day_round_trip": same_day_round_trip,
             "day_trip_period": day_trip_period if same_day_round_trip else "",
             "business_start": business_start if same_day_round_trip else "",
@@ -5506,6 +5552,7 @@ def build_subscription(form) -> dict:
             "airlines": {
                 "preference": airline_policy,
                 "blocked": blocked_airlines,
+                "lcc_policy": lcc_policy,
             },
             "alerts": {
                 "frequency": notification_frequency,
@@ -5532,6 +5579,7 @@ def build_subscription(form) -> dict:
             else form.get("return_date", "").strip() if round_trip else None
         ),
         "round_trip": round_trip,
+        "lcc_policy": lcc_policy,
         "same_day_round_trip": same_day_round_trip,
         "passenger_count": passenger_count,
         "date_flexibility": parse_int(form.get("date_flexibility"), 0),
@@ -5589,6 +5637,7 @@ def build_subscription(form) -> dict:
             "time_preference": time_mode,
             **time_constraints,
             "baggage": form.get("baggage", "required"),
+            "lcc_policy": lcc_policy,
             "origin_airport_preference": form.get("origin_airport_preference", "all"),
             "accept_overnight_transfer": accept_overnight_transfer,
             "accept_self_transfer": accept_self_transfer,

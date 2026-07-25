@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 
 from project_time import SHANGHAI_TZ
+from airlines import LCC_POLICIES, resolve_lcc_policy
 
 FLEX_STAGES = (1, 3, 7)
 
@@ -98,6 +99,16 @@ def evaluate_subscription_preflight(
     *,
     today: date | None = None,
 ) -> dict:
+    lcc_policy = str(resolve_lcc_policy(subscription, "any")).strip()
+    if lcc_policy not in LCC_POLICIES:
+        return {
+            "skip": True,
+            "reason_code": "invalid_lcc_policy",
+            "reason": f"lcc_policy取值无效({lcc_policy})",
+            "today": today or shanghai_today(),
+            "collection_dates": [],
+            "latest_date": None,
+        }
     invalid_reason = str(subscription.get("invalid_reason") or "").strip()
     if subscription.get("validation_status") == "invalid" or invalid_reason:
         return {

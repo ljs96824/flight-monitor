@@ -13,6 +13,7 @@ except ModuleNotFoundError:  # Optional: only needed for PythonAnywhere payload 
     httpx = None
 from dotenv import load_dotenv
 from airports import AIRPORTS, location_error_message, resolve_location
+from airlines import resolve_lcc_policy
 
 
 BASE_DIR = Path(__file__).parent
@@ -145,11 +146,12 @@ def _estimated_saved_api_calls(sub: dict) -> int:
 
 
 def _log_preflight_skip(sub: dict, preflight: dict) -> None:
-    if preflight.get("reason_code") == "invalid_location":
+    reason_code = str(preflight.get("reason_code") or "")
+    if reason_code != "expired":
         safe_log(
             f"[订阅前置校验] 订阅={_subscription_label(sub)} "
             f"航线={_subscription_route_label(sub)} 结果=跳过 "
-            f"原因={preflight.get('reason') or sub.get('invalid_reason') or '地点无法解析'} "
+            f"原因={preflight.get('reason') or sub.get('invalid_reason') or reason_code or '订阅无效'} "
             f"省API={_estimated_saved_api_calls(sub)}"
         )
         return
@@ -557,6 +559,14 @@ def _normalize_subscription(item: dict) -> dict:
     constraints = dict(item.get("constraints") or {})
     preferences = dict(item.get("preferences") or {})
     advanced_rules = dict(item.get("advanced_rules") or {})
+    lcc_policy = resolve_lcc_policy(item)
+    if not lcc_policy:
+        lcc_policy = "any"
+        safe_log(
+            "[口径迁移] "
+            f"订阅={item.get('name') or item.get('_index') or item.get('index') or '未知'} "
+            "缺少lcc_policy，按any处理"
+        )
     passenger_count, passengers = get_total_passengers(item)
     basic["passenger_count"] = passenger_count
     preferences["passenger_count"] = passenger_count
@@ -781,6 +791,7 @@ def _normalize_subscription(item: dict) -> dict:
             "airline_policy",
             hard_constraints.get("airline_policy", item.get("airline_policy", "any")),
         ),
+        "lcc_policy": str(lcc_policy).strip(),
         "exclude_airlines": exclude_airlines if isinstance(exclude_airlines, list) else [],
         "trip_type": soft_preferences.get("trip_type", item.get("trip_type", "tourism")),
         "companions": soft_preferences.get("companions", item.get("companions", "solo")),
@@ -1171,6 +1182,7 @@ def subscription_preferences(sub: dict) -> dict:
         ),
         "time_source": hard.get("time_source") or constraints.get("time_source") or sub.get("time_source"),
         "airline_policy": sub.get("airline_policy", "any"),
+        "lcc_policy": sub.get("lcc_policy", "any"),
         "exclude_airlines": sub.get("exclude_airlines", []),
         "max_extra_duration_hours": sub.get("max_extra_duration_hours"),
         "max_total_duration_hours": sub.get("max_total_duration_hours"),

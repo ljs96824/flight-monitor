@@ -19,6 +19,13 @@ _METHOD_VERSIONS = {
 METHOD_VERSIONS = MappingProxyType(_METHOD_VERSIONS)
 EXPECTED_METHOD_KEYS = frozenset(_METHOD_VERSIONS)
 
+_REGISTRY_VERSIONS = {
+    "lcc_registry": "lcc_v1",
+}
+REGISTRY_VERSIONS = MappingProxyType(_REGISTRY_VERSIONS)
+EXPECTED_REGISTRY_KEYS = frozenset(_REGISTRY_VERSIONS)
+_ALL_VERSIONS = MappingProxyType({**_METHOD_VERSIONS, **_REGISTRY_VERSIONS})
+
 _STAT_FAMILY_METHODS = {
     "reftier": "reftier",
     "calendar": "calendar",
@@ -31,7 +38,7 @@ _STAT_FAMILY_METHODS = {
 def method_version(method_key: str) -> str:
     """返回已登记的方法版本；未知方法必须显式失败。"""
     try:
-        return METHOD_VERSIONS[str(method_key)]
+        return _ALL_VERSIONS[str(method_key)]
     except KeyError as exc:
         raise KeyError(f"未登记的方法版本: {method_key}") from exc
 

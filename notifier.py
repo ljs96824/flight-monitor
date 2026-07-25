@@ -25,6 +25,7 @@ from airports import (
 )
 from channels import CHANNEL_INFO
 from domestic_fare_rules import get_aircraft_name
+from airlines import classify_itinerary, classify_segment
 from flight_combo_utils import normalize_combo
 from log_utils import safe_log
 from analyzer import (
@@ -597,11 +598,44 @@ def _time_only(value) -> str:
     return match.group(1) if match else text
 
 
+def _append_status_tag(text: str, tag: str) -> str:
+    parts = [part.strip() for part in str(text or "").split("|") if part.strip()]
+    if tag and tag not in parts:
+        parts.append(tag)
+    return " | ".join(parts)
+
+
+def _flight_lcc_summary(flight: dict | None) -> dict:
+    return classify_itinerary(flight or {})
+
+
+def _combo_lcc_summary(*flights: dict | None) -> dict:
+    segments = []
+    for flight in flights:
+        if not isinstance(flight, dict) or not flight:
+            continue
+        flight_segments = flight.get("segments")
+        if isinstance(flight_segments, list) and flight_segments:
+            segments.extend(
+                segment for segment in flight_segments if isinstance(segment, dict)
+            )
+        else:
+            segments.append(flight)
+    return classify_itinerary({"segments": segments})
+
+
+def _lcc_status_tag_for_flight(flight: dict | None) -> str:
+    return "含廉航段" if _flight_lcc_summary(flight).get("has_lcc") else ""
+
+
 def _flight_status_tags(flight: dict | None, route_info: dict | None = None, analysis_result: dict | None = None) -> str:
     flight = flight or {}
     domestic_tags = [str(tag) for tag in flight.get("domestic_tags") or [] if tag]
     if domestic_tags:
-        return " | ".join(domestic_tags[:4])
+        return _append_status_tag(
+            " | ".join(domestic_tags[:4]),
+            _lcc_status_tag_for_flight(flight),
+        )
     price = _to_float(flight.get("price"))
     target = _to_float(_preference_value(route_info, analysis_result, "target_price")) if route_info or analysis_result else None
     if target and price:
@@ -614,7 +648,10 @@ def _flight_status_tags(flight: dict | None, route_info: dict | None = None, ana
     confidence_tag = "置信度中"
     risk = (flight.get("execution_risk") or {}).get("level") or (flight.get("transfer_risk") or {}).get("level")
     risk_tag = {"low": "风险低", "medium": "风险中", "high": "风险高"}.get(risk, "风险待确认")
-    return f"{price_tag} | {buy_tag} | {confidence_tag} | {risk_tag}"
+    return _append_status_tag(
+        f"{price_tag} | {buy_tag} | {confidence_tag} | {risk_tag}",
+        _lcc_status_tag_for_flight(flight),
+    )
 
 
 def _status_risk_label(flight: dict | None) -> str:
@@ -3401,13 +3438,18 @@ def _combo_transaction_total(combo: dict) -> float | None:
 
 def _round_trip_combo_tags(combo: dict, route_info: dict, confidence: dict | None) -> str:
     legs = [combo.get("outbound") or {}, combo.get("return") or {}]
+    lcc_tag = (
+        "含廉航段"
+        if _combo_lcc_summary(*legs).get("has_lcc")
+        else ""
+    )
     domestic_tags = []
     for flight in legs:
         for tag in flight.get("domestic_tags") or []:
             if tag and tag not in domestic_tags:
                 domestic_tags.append(str(tag))
     if domestic_tags:
-        return " | ".join(domestic_tags[:4])
+        return _append_status_tag(" | ".join(domestic_tags[:4]), lcc_tag)
 
     total = _to_float(combo.get("total_price"))
     target = _to_float(route_info.get("target_price"))
@@ -3459,7 +3501,17 @@ def _round_trip_combo_tags(combo: dict, route_info: dict, confidence: dict | Non
     else:
         risk = "风险低"
 
-    return " | ".join([price_label, availability, f"置信度{(confidence or {}).get('overall', '中')}", risk])
+    return _append_status_tag(
+        " | ".join(
+            [
+                price_label,
+                availability,
+                f"置信度{(confidence or {}).get('overall', '中')}",
+                risk,
+            ]
+        ),
+        lcc_tag,
+    )
 
 def _combo_direct_first_key(combo: dict) -> tuple[int, float]:
     legs = [combo.get("outbound") or {}, combo.get("return") or {}]
@@ -4213,6 +4265,8 @@ _FILTER_REASON_LABELS = {
     "time_preference": "起降时间不符合设置",
     "airline_policy": "航司类型不符合设置",
     "exclude_airlines": "命中你排除的航司",
+    "lcc_excluded": "命中你设置的排除廉航条件",
+    "lcc_only_unmet": "并非全部航段均由廉航执飞",
     "max_total_duration": "总行程时长超过设置",
     "allow_overnight_transfer": "包含不接受的过夜中转",
     "allow_self_transfer": "包含不接受的非联程中转",
@@ -5405,7 +5459,7 @@ def _payload_combo_plan(combo: dict, route_info: dict, index: int, variant: str)
         _payload_source_channel_rows(outbound, "outbound")
         + _payload_source_channel_rows(return_flight, "return")
     )
-    return {
+    plan = {
         "label": f"方案{chr(65 + index)}",
         "variant": variant,
         "is_roundtrip": True,
@@ -5441,11 +5495,21 @@ def _payload_combo_plan(combo: dict, route_info: dict, index: int, variant: str)
         },
         "channel_prices": source_channel_rows or _payload_roundtrip_channel_rows(combo),
     }
+    lcc_summary = _combo_lcc_summary(outbound, return_flight)
+    if lcc_summary.get("has_lcc"):
+        plan["lcc_summary"] = lcc_summary
+        plan["need_baggage"] = _preference_value(
+            route_info,
+            None,
+            "need_baggage",
+            "unknown",
+        )
+    return plan
 
 
 def _payload_single_plan(flight: dict, route_info: dict, analysis_result: dict, index: int, variant: str) -> dict:
     source_channel_rows = _payload_source_channel_rows(flight, "main")
-    return {
+    plan = {
         "label": f"方案{chr(65 + index)}",
         "variant": variant,
         "is_roundtrip": False,
@@ -5461,6 +5525,16 @@ def _payload_single_plan(flight: dict, route_info: dict, analysis_result: dict, 
         "links": {"main": _payload_booking_links_for_flight(flight, route_info, route_info.get("depart_date"), 6)},
         "channel_prices": source_channel_rows or _payload_channel_rows(flight),
     }
+    lcc_summary = _flight_lcc_summary(flight)
+    if lcc_summary.get("has_lcc"):
+        plan["lcc_summary"] = lcc_summary
+        plan["need_baggage"] = _preference_value(
+            route_info,
+            analysis_result,
+            "need_baggage",
+            "unknown",
+        )
+    return plan
 
 
 def _plan_feasibility_rank(plan: dict) -> int:
@@ -5655,6 +5729,23 @@ def _plan_flights(plan: dict) -> list[dict]:
         if isinstance(flight, dict) and flight:
             flights.append(flight)
     return flights
+
+
+def _plan_lcc_summary(plan: dict | None) -> dict:
+    plan = plan or {}
+    existing = plan.get("lcc_summary")
+    if isinstance(existing, dict):
+        return existing
+    return _combo_lcc_summary(*_plan_flights(plan))
+
+
+def _plan_lcc_baggage_warning(plan: dict | None) -> str:
+    plan = plan or {}
+    if str(plan.get("need_baggage") or "").strip() != "required":
+        return ""
+    if not _plan_lcc_summary(plan).get("has_lcc"):
+        return ""
+    return "⚠ 含廉航段:票价通常不含托运行李,请以支付页为准"
 
 
 def _tracking_current_flights(
@@ -8026,6 +8117,40 @@ def _pushplus_transfer_point(flight: dict) -> str:
     return ""
 
 
+def _lcc_segment_display_labels(flight: dict | None) -> list[str]:
+    flight = flight or {}
+    segments = [
+        item
+        for item in (flight.get("segments") or [])
+        if isinstance(item, dict)
+    ] or [flight]
+    labels = []
+    for segment in segments:
+        result = classify_segment(segment)
+        if not result.get("is_lcc"):
+            continue
+        marker = (
+            "廉航(按市场承运)"
+            if result.get("basis") == "marketing_fallback"
+            else "廉航"
+        )
+        flight_no = str(
+            segment.get("flight_no")
+            or segment.get("flight_number")
+            or segment.get("flightNo")
+            or ""
+        ).strip()
+        label = f"{flight_no} {marker}".strip() if len(segments) > 1 else marker
+        if label not in labels:
+            labels.append(label)
+    return labels
+
+
+def _lcc_flight_display_suffix(flight: dict | None) -> str:
+    labels = _lcc_segment_display_labels(flight)
+    return " / ".join(labels)
+
+
 def _flight_local_time_summary(flight: dict | None, label: str, compact: bool = False) -> str:
     flight = flight or {}
     segments = _email_plan_segments(flight)
@@ -8037,6 +8162,9 @@ def _flight_local_time_summary(flight: dict | None, label: str, compact: bool = 
     last = segments[-1] if segments else {}
     flight_numbers = _compact_flight_numbers(flight)
     airline_name = _flight_airline_name(flight)
+    lcc_suffix = _lcc_flight_display_suffix(flight)
+    if lcc_suffix:
+        airline_name = f"{airline_name}｜{lcc_suffix}"
     aircraft = _pushplus_aircraft_text(flight)
     dep_airport = str(first.get("dep_airport") or "").strip().upper()
     arr_airport = str(last.get("arr_airport") or "").strip().upper()
@@ -8919,6 +9047,9 @@ def _pushplus_plan_brief_lines(payload: dict) -> list[str]:
     baggage = str(plan.get("baggage_line") or "").strip()
     if baggage:
         lines.append(f"\u884c\u674e/\u9000\u6539:{baggage}")
+    lcc_baggage_warning = _plan_lcc_baggage_warning(plan)
+    if lcc_baggage_warning:
+        lines.append(lcc_baggage_warning)
     lines.append("\u5b8c\u6574\u7968\u89c4/\u6210\u672c/\u53ef\u884c\u6027 \u2192 \u89c1\u7f51\u9875\u8be6\u60c5")
     return [html.escape(str(line)) for line in lines if str(line).strip()]
 
@@ -9410,6 +9541,9 @@ def _render_payload_plan_card(plan: dict, compact: bool = False, primary_plan: d
             rows.append(("验证此方案", _layered_channel_links(links) or links))
     if plan.get("tags"):
         rows.append(("状态", html.escape(str(plan.get("tags") or ""))))
+    lcc_baggage_warning = _plan_lcc_baggage_warning(plan)
+    if lcc_baggage_warning:
+        rows.append(("廉航行李提醒", html.escape(lcc_baggage_warning)))
     feasibility_line = _plan_feasibility_line(plan)
     if feasibility_line:
         rows.append(("可行性分析", feasibility_line))
@@ -9917,7 +10051,11 @@ def _email_plan_transfer_text(flight: dict | None) -> str:
 
 def _email_plan_flight_text(flight: dict | None) -> str:
     flight = flight or {}
-    return html.escape(f"{_compact_flight_numbers(flight)} {_flight_airline_name(flight)}")
+    text = f"{_compact_flight_numbers(flight)} {_flight_airline_name(flight)}"
+    lcc_suffix = _lcc_flight_display_suffix(flight)
+    if lcc_suffix:
+        text += f" | {lcc_suffix}"
+    return html.escape(text)
 
 
 def _email_plan_leg_group(title: str, flight: dict | None, fallback: str = "") -> str:
@@ -10889,6 +11027,13 @@ def _plan_for_render(plan: dict, payload: dict) -> dict:
         rendered["route_type"] = payload.get("route_type")
     if payload.get("invoice_preferences") and not rendered.get("invoice_preferences"):
         rendered["invoice_preferences"] = payload.get("invoice_preferences")
+    if (
+        not rendered.get("need_baggage")
+        and _plan_lcc_summary(rendered).get("has_lcc")
+    ):
+        need_baggage = _preference_value(payload, None, "need_baggage")
+        if need_baggage:
+            rendered["need_baggage"] = need_baggage
     rendered["_meeting_context"] = _plan_has_meeting_context(rendered) or _payload_has_meeting_context(payload)
     return rendered
 
@@ -11124,6 +11269,9 @@ def _render_domestic_payload_plan_card(plan: dict, compact: bool = False, primar
         ("行李", _domestic_baggage_line(plan)),
         ("退改签", _domestic_refund_line(plan)),
     ])
+    lcc_baggage_warning = _plan_lcc_baggage_warning(plan)
+    if lcc_baggage_warning:
+        rows.append(("廉航行李提醒", html.escape(lcc_baggage_warning)))
     invoice_line = _invoice_reimbursement_line(plan)
     if invoice_line:
         rows.append(("开票/报销", invoice_line))

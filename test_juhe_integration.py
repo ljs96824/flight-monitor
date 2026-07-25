@@ -82,7 +82,7 @@ class JuheIntegrationTest(unittest.TestCase):
         with patch("sources.juhe_source.safe_log") as log:
             flights = source.normalize(source.parse(raw), collected_at="2026-06-06T12:00:00")
 
-        self.assertEqual(len(flights), 1)
+        self.assertEqual(len(flights), 2)
         self.assertFalse(
             any(str(call.args[0]).startswith("[机型码收集]") for call in log.call_args_list)
         )
@@ -106,6 +106,10 @@ class JuheIntegrationTest(unittest.TestCase):
         self.assertTrue(flight["domestic_realtime_quote"])
         self.assertEqual(flight["price_note"], "票面价，实付以支付页为准")
         self.assertEqual(flight["segments"][0]["aircraft"], "\u6ce2\u97f3737-800")
+        codeshare = flights[1]
+        self.assertEqual(codeshare["flight_no"], "HO7715")
+        self.assertTrue(codeshare["is_codeshare"])
+        self.assertTrue(codeshare["segments"][0]["is_codeshare"])
 
     def test_juhe_request_params_use_documented_departure_date_fields(self):
         source = JuheSource()

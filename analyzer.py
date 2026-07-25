@@ -41,6 +41,12 @@ from price_calendar import (
     roundtrip_calendar_rows as _roundtrip_calendar_rows,
 )
 from domestic_fare_rules import get_aircraft_name
+from airlines import (
+    LCC_POLICIES,
+    classify_itinerary,
+    lcc_filter_value,
+    resolve_lcc_policy,
+)
 from log_utils import safe_log
 from observations_store import get_current_round
 from storage import get_all_history, get_latest_alternatives, get_target_history
@@ -3793,6 +3799,7 @@ def migrate_old_subscription(subscription: dict) -> dict:
                 or hard.get("exclude_airlines")
                 or sub.get("exclude_airlines")
                 or [],
+                "lcc_policy": resolve_lcc_policy(sub, "any"),
             },
             "alerts": {
                 "frequency": goals.get("frequency") or sub.get("notification_frequency"),
@@ -3884,6 +3891,7 @@ def migrate_old_subscription(subscription: dict) -> dict:
     sub["hard_constraints"] = hard
     sub["soft_preferences"] = soft
     sub["notification_goals"] = goals
+    sub["lcc_policy"] = resolve_lcc_policy(sub, "any")
     return sub
 
 
@@ -8609,6 +8617,18 @@ def _filter_constraint_detail(flight: dict, preferences: dict) -> tuple[str, str
         return "airline_policy", f"airlines={_filter_detail_airlines(flight)}"
     if reason == "命中用户排除航司":
         return "exclude_airlines", f"airlines={_filter_detail_airlines(flight)}"
+    if reason == "命中廉价航空排除策略":
+        return "lcc_excluded", lcc_filter_value(flight.get("lcc_summary"))
+    if reason == "并非全部航段均为廉价航空":
+        summary = flight.get("lcc_summary") or {}
+        return (
+            "lcc_only_unmet",
+            (
+                f"{lcc_filter_value(summary)},"
+                f"all_lcc={bool(summary.get('all_lcc'))},"
+                f"segments={len(summary.get('segment_results') or [])}"
+            ),
+        )
     if "最长可接受总行程时间" in reason:
         return "max_total_duration", f"total_duration_min={flight.get('total_duration_min')}"
     if "过夜中转" in reason:
@@ -9138,6 +9158,40 @@ def _apply_user_preferences(
     return kept, excluded, {"fallback": False}
 
 
+def _apply_lcc_policy(
+    flights: list[dict],
+    preferences: dict | None,
+) -> tuple[list[dict], list[dict]]:
+    """在既有航司与约束管线之后执行廉航硬过滤，不参与评分。"""
+    policy = str((preferences or {}).get("lcc_policy") or "any").strip()
+    if policy not in LCC_POLICIES or policy == "any":
+        return list(flights or []), []
+    kept = []
+    excluded = []
+    for flight in flights or []:
+        summary = classify_itinerary(flight)
+        if policy == "exclude_lcc" and summary["has_lcc"]:
+            excluded.append(
+                {
+                    **flight,
+                    "exclude_reason": "命中廉价航空排除策略",
+                    "lcc_summary": summary,
+                }
+            )
+            continue
+        if policy == "lcc_only" and not summary["all_lcc"]:
+            excluded.append(
+                {
+                    **flight,
+                    "exclude_reason": "并非全部航段均为廉价航空",
+                    "lcc_summary": summary,
+                }
+            )
+            continue
+        kept.append(flight)
+    return kept, excluded
+
+
 def _excluded_flight_summary_legacy(flights: list[dict]) -> list[dict]:
     summaries = []
     for flight in flights or []:
@@ -9507,6 +9561,12 @@ def analyze_all_flights(
     usable_flights, preference_excluded, preference_summary = _apply_user_preferences(
         usable_flights, merged_preferences
     )
+    scoring_reference_flights = list(usable_flights)
+    usable_flights, lcc_excluded = _apply_lcc_policy(
+        usable_flights,
+        merged_preferences,
+    )
+    preference_excluded.extend(lcc_excluded)
     excluded_flights = direct_policy_excluded + preference_excluded
     _attach_filter_reason_details(excluded_flights, merged_preferences)
     _log_low_price_filter_rejections(
@@ -9529,6 +9589,11 @@ def analyze_all_flights(
     by_duration = sorted(usable_flights, key=lambda f: f["total_duration_min"])
 
     # 3. 鎸夋€т环姣旀帓鍚嶏紙缁煎悎寰楀垎锛?
+    scoring_prices = [
+        float(f["price"])
+        for f in scoring_reference_flights
+        if (_to_float(f.get("price")) or 0) > 0
+    ]
     valid_prices = [
         float(f["price"])
         for f in usable_flights
@@ -9547,8 +9612,12 @@ def analyze_all_flights(
         }
     prices = valid_prices
     durations = [f["total_duration_min"] for f in usable_flights]
-    min_p, max_p = min(prices), max(prices)
-    min_d, max_d = min(durations), max(durations)
+    scoring_durations = [
+        f["total_duration_min"]
+        for f in scoring_reference_flights
+    ]
+    min_p, max_p = min(scoring_prices), max(scoring_prices)
+    min_d, max_d = min(scoring_durations), max(scoring_durations)
     price_anomalies = detect_price_anomalies(usable_flights, price_insights)
     budget_strategy = (merged_preferences or {}).get("budget_strategy", "explicit")
     target_price_mode = (merged_preferences or {}).get("target_price_mode", "auto")
@@ -9585,11 +9654,20 @@ def analyze_all_flights(
             price_score * 0.5 + duration_score * 0.3 + stops_score * 0.2,
             3,
         )
-        flight["scores"] = overall_score(flight, prices, durations, mode)
+        flight["scores"] = overall_score(
+            flight,
+            scoring_prices,
+            scoring_durations,
+            mode,
+        )
         flight["transfer_risk"] = transfer_risk(flight)
         flight["fare_verification"] = verify_fare_rules(flight, merged_preferences)
         enrich_travel_risk_and_cost(flight, merged_preferences)
-        flight["domestic_tags"] = make_domestic_tags(flight, travel_profile, lowest_price)
+        flight["domestic_tags"] = make_domestic_tags(
+            flight,
+            travel_profile,
+            lowest_price,
+        )
         flight["price_estimate"] = calc_transaction_price(flight, merged_preferences)
         flight["availability"] = estimate_availability(
             flight,
@@ -9896,6 +9974,10 @@ def _all_roundtrip_flights_for_same_day(analysis: dict) -> list[dict]:
     ):
         for flight in analysis.get(source_key) or []:
             add(flight)
+    candidates, _ = _apply_lcc_policy(
+        candidates,
+        analysis.get("user_preferences") or {},
+    )
     return candidates
 
 
