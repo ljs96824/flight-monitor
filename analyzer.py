@@ -4628,15 +4628,8 @@ def generate_trend_summary(price_history_data, current_price) -> dict:
 
 def price_position_description(current_price, price_history):
     """鐢ㄥ巻鍙叉暟鎹绠楀綋鍓嶄环鏍肩殑浣嶇疆鎻忚堪"""
-    if not price_history or len(price_history) < 5:
-        return None
-
-    if isinstance(price_history[0], (list, tuple)):
-        prices = [price for _, price in price_history if price and price > 0]
-    else:
-        prices = [price for price in price_history if price and price > 0]
-
-    if not prices:
+    prices = _flatten_price_history(price_history)
+    if len(prices) < 5:
         return None
 
     below = sum(1 for price in prices if price < current_price)
@@ -4675,14 +4668,7 @@ def price_position_description(current_price, price_history):
 
 def waiting_risk_description(price_history, current_price, days_to_dept):
     """璁＄畻缁х画绛夊緟涓€鍛ㄧ殑椋庨櫓鏀剁泭"""
-    if not price_history or len(price_history) < 10:
-        return None
-
-    if isinstance(price_history[0], (list, tuple)):
-        prices = [price for _, price in price_history if price and price > 0]
-    else:
-        prices = [price for price in price_history if price and price > 0]
-
+    prices = _flatten_price_history(price_history)
     if len(prices) < 10:
         return None
 
@@ -4730,10 +4716,7 @@ def calc_buy_vs_wait_risk(
     """Compare the practical risk of buying now versus waiting."""
     current = _to_float(current_price)
     target = _to_float(target_price)
-    if price_history and isinstance(price_history[0], (list, tuple)):
-        prices = [price for _, price in price_history if price and price > 0]
-    else:
-        prices = [price for price in (price_history or []) if price and price > 0]
+    prices = _flatten_price_history(price_history)
     try:
         days = int(days_to_dept) if days_to_dept is not None else None
     except (TypeError, ValueError):
@@ -7388,7 +7371,14 @@ def _flatten_price_history(price_history) -> list[float]:
     if isinstance(price_history, dict):
         price_history = price_history.get("price_history") or price_history.get("history") or []
     for item in price_history or []:
-        value = item[1] if isinstance(item, (list, tuple)) and len(item) >= 2 else item
+        if isinstance(item, dict):
+            value = (
+                item.get("price")
+                if item.get("price") is not None
+                else item.get("total")
+            )
+        else:
+            value = item[1] if isinstance(item, (list, tuple)) and len(item) >= 2 else item
         price = _to_float(value)
         if price and price > 0:
             prices.append(price)
@@ -10599,6 +10589,11 @@ def _roundtrip_exclusion_basis(
     baggage = str(constraints.get("need_baggage") or constraints.get("baggage") or "").strip()
     if baggage in {"required", "must", "checked_required", "必须托运"}:
         basis.append("必须含托运")
+    lcc_policy = str(constraints.get("lcc_policy") or "any").strip()
+    if lcc_policy == "exclude_lcc":
+        basis.append("排除廉航")
+    elif lcc_policy == "lcc_only":
+        basis.append("仅看廉航(全段)")
     max_budget_value = _to_float(max_budget)
     if max_budget_value is not None:
         max_scope = normalize_budget_scope(

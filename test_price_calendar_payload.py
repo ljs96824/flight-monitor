@@ -1,7 +1,9 @@
 import sys
+import tempfile
 import types
 import unittest
 from datetime import date, timedelta
+from pathlib import Path
 from unittest.mock import patch
 
 
@@ -9,9 +11,23 @@ sys.modules.setdefault(
     "httpx",
     types.SimpleNamespace(get=lambda *args, **kwargs: None, post=lambda *args, **kwargs: None),
 )
+import storage
 
 
 class PriceCalendarPayloadTest(unittest.TestCase):
+    def setUp(self):
+        self._storage_tmp = tempfile.TemporaryDirectory()
+        self._storage_patch = patch.object(
+            storage,
+            "DB_PATH",
+            Path(self._storage_tmp.name) / "prices.db",
+        )
+        self._storage_patch.start()
+
+    def tearDown(self):
+        self._storage_patch.stop()
+        self._storage_tmp.cleanup()
+
     def test_payload_carries_price_calendar_and_detail_renders_it(self):
         from notifier import build_notification_payload, render_detail_html
 

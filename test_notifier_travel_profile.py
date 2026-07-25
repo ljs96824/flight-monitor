@@ -1,12 +1,29 @@
 import unittest
 import sys
+import tempfile
 import types
+from pathlib import Path
+from unittest.mock import patch
 
 sys.modules.setdefault("httpx", types.SimpleNamespace(post=lambda *a, **k: None))
 from notifier import build_notification_payload, render_email, render_pushplus
+import storage
 
 
 class NotifierTravelProfileTest(unittest.TestCase):
+    def setUp(self):
+        self._storage_tmp = tempfile.TemporaryDirectory()
+        self._storage_patch = patch.object(
+            storage,
+            "DB_PATH",
+            Path(self._storage_tmp.name) / "prices.db",
+        )
+        self._storage_patch.start()
+
+    def tearDown(self):
+        self._storage_patch.stop()
+        self._storage_tmp.cleanup()
+
     def test_pushplus_and_email_show_travel_profile_basis(self):
         payload = {
             "push_type": "值得验证",

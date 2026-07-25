@@ -1,6 +1,9 @@
 import sys
+import tempfile
 import types
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 
 sys.modules.setdefault("httpx", types.SimpleNamespace(get=lambda *a, **k: None, post=lambda *a, **k: None))
@@ -19,9 +22,23 @@ from notifier import (
     render_email,
     render_pushplus,
 )
+import storage
 
 
 class NotificationNumericScopesTest(unittest.TestCase):
+    def setUp(self):
+        self._storage_tmp = tempfile.TemporaryDirectory()
+        self._storage_patch = patch.object(
+            storage,
+            "DB_PATH",
+            Path(self._storage_tmp.name) / "prices.db",
+        )
+        self._storage_patch.start()
+
+    def tearDown(self):
+        self._storage_patch.stop()
+        self._storage_tmp.cleanup()
+
     def _over_budget_payload(self):
         plan = {
             "label": "\u65b9\u6848A",

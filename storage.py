@@ -41,6 +41,8 @@ FLIGHT_DETAIL_COLUMNS = [
     "layover_summary",
     "segments_json",
     "data_source",
+    "price_source",
+    "constraint_fingerprint",
 ]
 
 
@@ -105,10 +107,24 @@ def init_db() -> None:
                 route_summary TEXT,
                 layover_summary TEXT,
                 segments_json TEXT,
-                data_source TEXT
+                data_source TEXT,
+                price_source TEXT,
+                constraint_fingerprint TEXT
             )
             """
         )
+        flight_detail_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(flight_details)")
+        }
+        if "constraint_fingerprint" not in flight_detail_columns:
+            connection.execute(
+                "ALTER TABLE flight_details ADD COLUMN constraint_fingerprint TEXT"
+            )
+        if "price_source" not in flight_detail_columns:
+            connection.execute(
+                "ALTER TABLE flight_details ADD COLUMN price_source TEXT"
+            )
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS roundtrip_price_history (
@@ -119,10 +135,24 @@ def init_db() -> None:
                 snapshot_time TEXT,
                 outbound_lowest REAL,
                 return_lowest REAL,
-                roundtrip_lowest REAL
+                roundtrip_lowest REAL,
+                constraint_fingerprint TEXT,
+                sources_json TEXT
             )
             """
         )
+        roundtrip_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(roundtrip_price_history)")
+        }
+        if "constraint_fingerprint" not in roundtrip_columns:
+            connection.execute(
+                "ALTER TABLE roundtrip_price_history ADD COLUMN constraint_fingerprint TEXT"
+            )
+        if "sources_json" not in roundtrip_columns:
+            connection.execute(
+                "ALTER TABLE roundtrip_price_history ADD COLUMN sources_json TEXT"
+            )
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS last_push_prices (
@@ -150,7 +180,38 @@ def init_db() -> None:
                 confidence TEXT,
                 channels TEXT,
                 fare_status TEXT,
-                push_type TEXT
+                push_type TEXT,
+                constraint_fingerprint TEXT,
+                constraint_sample_n INTEGER
+            )
+            """
+        )
+        push_snapshot_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(push_snapshots)")
+        }
+        if "constraint_fingerprint" not in push_snapshot_columns:
+            connection.execute(
+                "ALTER TABLE push_snapshots ADD COLUMN constraint_fingerprint TEXT"
+            )
+        if "constraint_sample_n" not in push_snapshot_columns:
+            connection.execute(
+                "ALTER TABLE push_snapshots ADD COLUMN constraint_sample_n INTEGER"
+            )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_flight_details_constraint_history
+            ON flight_details (
+                route, depart_date, constraint_fingerprint, snapshot_time
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_roundtrip_constraint_history
+            ON roundtrip_price_history (
+                route, depart_date, return_date,
+                constraint_fingerprint, snapshot_time
             )
             """
         )
@@ -244,7 +305,13 @@ def get_all_history(route: str, depart_date: str) -> list[dict]:
     return _rows_to_dicts(rows)
 
 
-def save_flight_details(route: str, depart_date: str, flights: list[dict]) -> None:
+def save_flight_details(
+    route: str,
+    depart_date: str,
+    flights: list[dict],
+    *,
+    constraint_fingerprint: str | None = None,
+) -> None:
     """Save detailed flight options for one route/date snapshot."""
     if not flights:
         return
@@ -269,6 +336,8 @@ def save_flight_details(route: str, depart_date: str, flights: list[dict]) -> No
                     flight.get("segments", []), ensure_ascii=False
                 ),
                 "data_source": flight.get("data_source"),
+                "price_source": flight.get("price_source"),
+                "constraint_fingerprint": constraint_fingerprint,
             }
         )
 
@@ -323,37 +392,51 @@ def get_latest_flights(route: str, depart_date: str) -> list[dict]:
     return [_decode_segments(row) for row in _rows_to_dicts(rows)]
 
 
-def get_previous_snapshot_prices(route: str, depart_date: str) -> dict:
-    """Get flight prices from the previous collection snapshot."""
+def get_previous_snapshot_prices(
+    route: str,
+    depart_date: str,
+    constraint_fingerprint: str | None = None,
+) -> dict:
+    """Get flight prices from the latest completed collection snapshot."""
     init_db()
 
     with _connect() as connection:
+        fingerprint_clause = ""
+        parameters: list = [route, depart_date]
+        if constraint_fingerprint is not None:
+            fingerprint_clause = " AND constraint_fingerprint = ?"
+            parameters.append(constraint_fingerprint)
         snapshot_row = connection.execute(
-            """
+            f"""
             SELECT snapshot_time
             FROM flight_details
             WHERE route = ?
               AND depart_date = ?
+              {fingerprint_clause}
             GROUP BY snapshot_time
             ORDER BY snapshot_time DESC
-            LIMIT 1 OFFSET 1
+            LIMIT 1
             """,
-            (route, depart_date),
+            parameters,
         ).fetchone()
 
         if snapshot_row is None:
             return {}
 
+        row_parameters: list = [route, depart_date, snapshot_row["snapshot_time"]]
+        if constraint_fingerprint is not None:
+            row_parameters.append(constraint_fingerprint)
         rows = connection.execute(
-            """
+            f"""
             SELECT flight_combo, price
             FROM flight_details
             WHERE route = ?
               AND depart_date = ?
               AND snapshot_time = ?
+              {fingerprint_clause}
               AND flight_combo IS NOT NULL
             """,
-            (route, depart_date, snapshot_row["snapshot_time"]),
+            row_parameters,
         ).fetchall()
 
     return {
@@ -363,33 +446,91 @@ def get_previous_snapshot_prices(route: str, depart_date: str) -> dict:
     }
 
 
+def _source_names(value) -> set[str]:
+    return {
+        item.strip().lower()
+        for item in str(value or "").replace("|", "+").split("+")
+        if item.strip()
+    }
+
+
 def get_lowest_price_history(
-    route: str, depart_date: str, limit: int = 14
-) -> list[tuple[str, float]]:
+    route: str,
+    depart_date: str,
+    limit: int = 14,
+    constraint_fingerprint: str | None = None,
+    *,
+    include_metadata: bool = False,
+) -> list:
     """Get the lowest flight price for each recent collection snapshot."""
     init_db()
 
     with _connect() as connection:
+        fingerprint_clause = ""
+        parameters: list = [route, depart_date]
+        if constraint_fingerprint is not None:
+            fingerprint_clause = " AND constraint_fingerprint = ?"
+            parameters.append(constraint_fingerprint)
         rows = connection.execute(
-            """
-            SELECT snapshot_time, MIN(price) AS min_price
+            f"""
+            SELECT
+                snapshot_time, price, data_source, price_source,
+                constraint_fingerprint, id
             FROM flight_details
             WHERE route = ?
               AND depart_date = ?
+              {fingerprint_clause}
               AND price IS NOT NULL
-            GROUP BY snapshot_time
-            ORDER BY snapshot_time DESC
-            LIMIT ?
+            ORDER BY snapshot_time DESC, id ASC
             """,
-            (route, depart_date, limit),
+            parameters,
         ).fetchall()
 
-    history = [
-        (row["snapshot_time"], row["min_price"])
-        for row in rows
-        if row["snapshot_time"] and row["min_price"] is not None
-    ]
-    return list(reversed(history))
+    snapshots: dict[str, dict] = {}
+    for row in rows:
+        snapshot_time = row["snapshot_time"]
+        price = row["price"]
+        if not snapshot_time or price is None:
+            continue
+        if snapshot_time not in snapshots:
+            if len(snapshots) >= limit:
+                continue
+            snapshots[snapshot_time] = {
+                "price": float(price),
+                "sources": set(
+                    _source_names(row["price_source"] or row["data_source"])
+                ),
+                "constraint_fingerprint": row["constraint_fingerprint"],
+            }
+            continue
+        current = snapshots[snapshot_time]
+        numeric_price = float(price)
+        if numeric_price < current["price"]:
+            current["price"] = numeric_price
+            current["sources"] = set(
+                _source_names(row["price_source"] or row["data_source"])
+            )
+        elif numeric_price == current["price"]:
+            current["sources"].update(
+                _source_names(row["price_source"] or row["data_source"])
+            )
+
+    history = []
+    for snapshot_time, item in reversed(list(snapshots.items())):
+        if include_metadata:
+            history.append(
+                {
+                    "date": snapshot_time[:10],
+                    "timestamp": snapshot_time,
+                    "price": item["price"],
+                    "min_price": item["price"],
+                    "sources": sorted(item["sources"]),
+                    "constraint_fingerprint": item["constraint_fingerprint"],
+                }
+            )
+        else:
+            history.append((snapshot_time, item["price"]))
+    return history
 
 
 def get_flight_price_history(
@@ -421,6 +562,8 @@ def save_roundtrip_price_history(
     outbound_lowest,
     return_lowest,
     roundtrip_lowest,
+    constraint_fingerprint: str | None = None,
+    sources: list[str] | None = None,
 ) -> None:
     """Save one round-trip lowest-price snapshot."""
     save_roundtrip_snapshot(
@@ -431,6 +574,8 @@ def save_roundtrip_price_history(
         return_lowest,
         roundtrip_lowest,
         datetime.now().isoformat(),
+        constraint_fingerprint=constraint_fingerprint,
+        sources=sources,
     )
 
 
@@ -442,6 +587,9 @@ def save_roundtrip_snapshot(
     return_lowest,
     roundtrip_total,
     collected_at,
+    *,
+    constraint_fingerprint: str | None = None,
+    sources: list[str] | None = None,
 ) -> None:
     """Save one normalized round-trip lowest-price snapshot."""
     roundtrip_lowest = roundtrip_total
@@ -453,8 +601,9 @@ def save_roundtrip_snapshot(
             """
             INSERT INTO roundtrip_price_history (
                 route, depart_date, return_date, snapshot_time,
-                outbound_lowest, return_lowest, roundtrip_lowest
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                outbound_lowest, return_lowest, roundtrip_lowest,
+                constraint_fingerprint, sources_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 route,
@@ -464,31 +613,48 @@ def save_roundtrip_snapshot(
                 outbound_lowest,
                 return_lowest,
                 roundtrip_lowest,
+                constraint_fingerprint,
+                json.dumps(sorted(set(sources or [])), ensure_ascii=False),
             ),
         )
 
 
 def get_roundtrip_price_history(
-    route: str, depart_date: str, return_date: str, limit: int = 14
+    route: str,
+    depart_date: str,
+    return_date: str,
+    limit: int = 14,
+    constraint_fingerprint: str | None = None,
 ) -> list[dict]:
     """Get recent round-trip lowest-price snapshots."""
     init_db()
     with _connect() as connection:
+        fingerprint_clause = ""
+        parameters: list = [route, depart_date, return_date]
+        if constraint_fingerprint is not None:
+            fingerprint_clause = " AND constraint_fingerprint = ?"
+            parameters.append(constraint_fingerprint)
+        parameters.append(limit)
         rows = connection.execute(
-            """
+            f"""
             SELECT *
             FROM roundtrip_price_history
             WHERE route = ?
               AND depart_date = ?
               AND return_date = ?
+              {fingerprint_clause}
             ORDER BY snapshot_time DESC
             LIMIT ?
             """,
-            (route, depart_date, return_date, limit),
+            parameters,
         ).fetchall()
     normalized = []
     for row in reversed(_rows_to_dicts(rows)):
         snapshot_time = row.get("snapshot_time") or ""
+        try:
+            sources = json.loads(row.get("sources_json") or "[]")
+        except (TypeError, json.JSONDecodeError):
+            sources = []
         normalized.append(
             {
                 "date": snapshot_time[:10],
@@ -499,24 +665,44 @@ def get_roundtrip_price_history(
                 "outbound_lowest": row.get("outbound_lowest"),
                 "return_lowest": row.get("return_lowest"),
                 "roundtrip_lowest": row.get("roundtrip_lowest"),
+                "sources": sorted(
+                    {
+                        source
+                        for value in (sources if isinstance(sources, list) else [sources])
+                        for source in _source_names(value)
+                    }
+                ),
+                "constraint_fingerprint": row.get("constraint_fingerprint"),
             }
         )
     return normalized
 
 
-def _last_push_key(route: str, depart_date: str, return_date: str | None = None) -> str:
+def _last_push_key(
+    route: str,
+    depart_date: str,
+    return_date: str | None = None,
+    subscription_id: str | None = None,
+) -> str:
     """Build a stable key for the latest pushed price of one subscription."""
-    return "|".join([route or "", depart_date or "", return_date or ""])
+    parts = [route or "", depart_date or "", return_date or ""]
+    if subscription_id is not None and str(subscription_id).strip():
+        parts.insert(0, f"subscription:{subscription_id}")
+    return "|".join(parts)
 
 
 def get_last_push_price(
-    route: str, depart_date: str, return_date: str | None = None
+    route: str,
+    depart_date: str,
+    return_date: str | None = None,
+    *,
+    subscription_id: str | None = None,
 ) -> dict | None:
     """Get the most recent pushed price for one subscription."""
     if not route or not depart_date:
         return None
     init_db()
-    key = _last_push_key(route, depart_date, return_date)
+    key = _last_push_key(route, depart_date, return_date, subscription_id)
     with _connect() as connection:
         row = connection.execute(
             """
@@ -537,6 +723,8 @@ def save_last_push_price(
     price,
     push_type: str | None = None,
     pushed_at: str | None = None,
+    *,
+    subscription_id: str | None = None,
 ) -> None:
     """Persist the price used in the latest notification."""
     if not route or not depart_date or price is None:
@@ -549,7 +737,7 @@ def save_last_push_price(
         return
 
     init_db()
-    key = _last_push_key(route, depart_date, return_date)
+    key = _last_push_key(route, depart_date, return_date, subscription_id)
     pushed_at = pushed_at or datetime.now().isoformat(timespec="seconds")
     with _connect() as connection:
         existing = connection.execute(
@@ -583,13 +771,17 @@ def save_last_push_price(
 
 
 def get_last_push_snapshot(
-    route: str, depart_date: str, return_date: str | None = None
+    route: str,
+    depart_date: str,
+    return_date: str | None = None,
+    *,
+    subscription_id: str | None = None,
 ) -> dict | None:
     """Get the latest notification snapshot for one subscription."""
     if not route or not depart_date:
         return None
     init_db()
-    key = _last_push_key(route, depart_date, return_date)
+    key = _last_push_key(route, depart_date, return_date, subscription_id)
     with _connect() as connection:
         row = connection.execute(
             """
@@ -614,6 +806,9 @@ def save_push_snapshot(
     fare_status: str | None = None,
     push_type: str | None = None,
     pushed_at: str | None = None,
+    constraint_fingerprint: str | None = None,
+    constraint_sample_n: int | None = None,
+    subscription_id: str | None = None,
 ) -> None:
     """Save one notification snapshot for comparing with the next push."""
     if not route or not depart_date or price is None:
@@ -626,7 +821,7 @@ def save_push_snapshot(
         return
 
     init_db()
-    key = _last_push_key(route, depart_date, return_date)
+    key = _last_push_key(route, depart_date, return_date, subscription_id)
     pushed_at = pushed_at or datetime.now().isoformat(timespec="seconds")
     channels_text = json.dumps(channels or [], ensure_ascii=False)
     with _connect() as connection:
@@ -634,8 +829,9 @@ def save_push_snapshot(
             """
             INSERT INTO push_snapshots (
                 subscription_key, route, depart_date, return_date,
-                pushed_at, price, confidence, channels, fare_status, push_type
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                pushed_at, price, confidence, channels, fare_status, push_type,
+                constraint_fingerprint, constraint_sample_n
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 key,
@@ -648,5 +844,7 @@ def save_push_snapshot(
                 channels_text,
                 fare_status,
                 push_type,
+                constraint_fingerprint,
+                constraint_sample_n,
             ),
         )

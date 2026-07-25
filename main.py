@@ -29,6 +29,7 @@ from analyzer import (
     analyze_price_calendar,
     analyze_round_trip,
     build_price_hint_from_calendar,
+    calc_buy_vs_wait_risk,
     determine_cabins,
     get_total_passengers,
     migrate_old_subscription,
@@ -38,6 +39,7 @@ from analyzer import (
 from collector import _normalize_detail_flight, save_raw_response
 from api_usage import load_usage, usage_snapshot
 from collection_plan import build_collection_plan, load_collection_settings
+from constraint_fingerprint import constraint_fingerprint
 from email_notifier import render_email, send_email
 from filename_utils import sanitize_filename
 from health_check import system_health_check
@@ -964,12 +966,14 @@ def _collect_same_day_fallback_flights(
 
 
 def _subscription_identifier(sub: dict, route: str) -> str:
-    return str(
-        sub.get("subscription_id")
-        or sub.get("id")
-        or sub.get("_index")
-        or f"{route}|{sub.get('depart_date', '')}|{sub.get('return_date', '')}"
-    )
+    for value in (
+        sub.get("subscription_id"),
+        sub.get("id"),
+        sub.get("_index"),
+    ):
+        if value is not None and str(value).strip():
+            return str(value)
+    return f"{route}|{sub.get('depart_date', '')}|{sub.get('return_date', '')}"
 
 
 def _deliver_notification(sub: dict, route: str, message_kwargs: dict) -> bool:
@@ -1417,6 +1421,7 @@ def collect_nearby_dates(
         _subscription_airports(sub, "origin_airports_active", "origin_airports", "origin"),
         _subscription_airports(sub, "destination_airports_active", "destination_airports", "destination"),
     )
+
     panel_only_evaluation = (
         str(fresh_scope or "").strip().lower() == "primary_only"
     )
@@ -1517,6 +1522,53 @@ def collect_nearby_dates(
             break
     return results
 
+
+def _sources_for_price(flights: list[dict], price) -> list[str]:
+    """返回恰好贡献指定入池价的源集合。"""
+    try:
+        expected = float(price)
+    except (TypeError, ValueError):
+        return []
+    sources = set()
+    for flight in flights or []:
+        try:
+            current = float(flight.get("price"))
+        except (TypeError, ValueError):
+            continue
+        if current != expected:
+            continue
+        source_value = (
+            flight.get("price_source")
+            or flight.get("data_source")
+            or flight.get("source")
+        )
+        for source in str(source_value or "").replace("|", "+").split("+"):
+            source = source.strip().lower()
+            if source:
+                sources.add(source)
+    return sorted(sources)
+
+
+def _constraint_history_flights(analysis: dict | None) -> list[dict]:
+    """仅返回当前硬约束过滤后可用于同条件价格历史的候选。"""
+    return [
+        flight
+        for flight in ((analysis or {}).get("all_flights") or [])
+        if isinstance(flight, dict) and _valid_price(flight.get("price"))
+    ]
+
+
+def _merge_constraint_history_trend(
+    previous_risk: dict | None,
+    constraint_risk: dict | None,
+) -> dict:
+    """只替换历史趋势字段，不改变既有购买/等待风险判定。"""
+    result = dict(previous_risk or {})
+    if isinstance(constraint_risk, dict) and "trend" in constraint_risk:
+        result["trend"] = constraint_risk["trend"]
+    return result
+
+
 def _notification_tcurve(route_info: dict) -> dict:
     """只读生成邮件曲线；统计失败不得中断订阅交付。"""
     try:
@@ -1560,6 +1612,7 @@ def process_subscription(
 
     round_id = collection_round_id or _make_round_id(sub)
     route = f"{sub['origin']}-{sub['destination']}"
+    constraint_fp = constraint_fingerprint(sub)
     logging.info(f"开始处理 {route}")
     agg = None
     managed_plan_active = False
@@ -1660,10 +1713,10 @@ def process_subscription(
         data["flights"] = flights
         data["total_count"] = len(flights)
 
-        save_flight_details(route, sub["depart_date"], flights)
-        previous_prices = get_previous_snapshot_prices(route, sub["depart_date"])
-        lowest_price_history = get_lowest_price_history(
-            route, sub["depart_date"], limit=14
+        previous_prices = get_previous_snapshot_prices(
+            route,
+            sub["depart_date"],
+            constraint_fingerprint=constraint_fp,
         )
         for flight in flights:
             combo = flight.get("flight_combo")
@@ -1680,6 +1733,20 @@ def process_subscription(
             priorities=sub.get("priorities"),
             user_preferences=preferences,
             hard_constraints=sub.get("hard_constraints", {}),
+        )
+        constraint_history_flights = _constraint_history_flights(analysis)
+        save_flight_details(
+            route,
+            sub["depart_date"],
+            constraint_history_flights,
+            constraint_fingerprint=constraint_fp,
+        )
+        lowest_price_history = get_lowest_price_history(
+            route,
+            sub["depart_date"],
+            limit=14,
+            constraint_fingerprint=constraint_fp,
+            include_metadata=True,
         )
         days_to_dept = (date.fromisoformat(sub["depart_date"]) - date.today()).days
         current_min_price = (
@@ -1729,7 +1796,6 @@ def process_subscription(
             target_min_price=current_min_price,
             fresh_scope=collection_options.get("fresh_scope", "primary_only"),
         )
-        price_history = (data.get("price_insights") or {}).get("price_history")
         analysis["days_to_dept"] = days_to_dept
         analysis["budget"] = sub.get("budget")
         analysis["budget_mode"] = sub.get("budget_mode", "fixed")
@@ -1745,14 +1811,26 @@ def process_subscription(
         analysis["source_stats"] = data.get("source_stats", {})
         analysis["source_errors"] = data.get("source_errors", [])
         analysis["collection_freshness"] = data.get("collection_freshness", [])
+        analysis["constraint_fingerprint"] = constraint_fp
+        analysis["constraint_price_history"] = lowest_price_history
         analysis["dual_source_price_anomalies"] = data.get(
             "dual_source_price_anomalies", []
         )
         analysis["price_position"] = price_position_description(
-            current_min_price, price_history
+            current_min_price, lowest_price_history
         )
         analysis["waiting_risk"] = waiting_risk_description(
-            price_history, current_min_price, days_to_dept
+            lowest_price_history, current_min_price, days_to_dept
+        )
+        constraint_buy_wait_risk = calc_buy_vs_wait_risk(
+            current_min_price,
+            lowest_price_history,
+            days_to_dept,
+            analysis.get("target_price_effective"),
+        )
+        analysis["buy_vs_wait_risk"] = _merge_constraint_history_trend(
+            analysis.get("buy_vs_wait_risk"),
+            constraint_buy_wait_risk,
         )
 
         raw_round_trip = sub.get("round_trip", False)
@@ -1808,7 +1886,6 @@ def process_subscription(
             print(f"[往返] 返程采集结果={len(return_flights)}个航班")
             print(f"[DEBUG] 返程采集完成: {len(return_flights)}个航班")
             if return_flights:
-                save_flight_details(return_route, return_date, return_flights)
                 save_raw_response(return_route, return_date, return_data)
                 return_preferences = {
                     **preferences,
@@ -1833,6 +1910,15 @@ def process_subscription(
                     priorities=sub.get("priorities"),
                     user_preferences=return_preferences,
                     hard_constraints=return_constraints,
+                )
+                return_constraint_history_flights = _constraint_history_flights(
+                    return_analysis
+                )
+                save_flight_details(
+                    return_route,
+                    return_date,
+                    return_constraint_history_flights,
+                    constraint_fingerprint=constraint_fp,
                 )
                 return_analysis["dual_source_price_anomalies"] = (
                     return_data or {}
@@ -1971,9 +2057,38 @@ def process_subscription(
                     round_trip_analysis.get("return_min"),
                     round_trip_analysis.get("total_min"),
                     datetime.now().isoformat(),
+                    constraint_fingerprint=constraint_fp,
+                    sources=sorted(
+                        set(
+                            _sources_for_price(
+                                constraint_history_flights,
+                                round_trip_analysis.get("outbound_min"),
+                            )
+                        )
+                        | set(
+                            _sources_for_price(
+                                return_constraint_history_flights,
+                                round_trip_analysis.get("return_min"),
+                            )
+                        )
+                    ),
                 )
                 roundtrip_history = get_roundtrip_price_history(
-                    route, sub["depart_date"], return_date, 14
+                    route,
+                    sub["depart_date"],
+                    return_date,
+                    14,
+                    constraint_fingerprint=constraint_fp,
+                )
+                roundtrip_current = round_trip_analysis.get("total_min")
+                analysis["price_position"] = price_position_description(
+                    roundtrip_current,
+                    roundtrip_history,
+                )
+                analysis["waiting_risk"] = waiting_risk_description(
+                    roundtrip_history,
+                    roundtrip_current,
+                    days_to_dept,
                 )
                 analysis["round_trip_analysis"] = analyze_round_trip(
                     analysis,
@@ -2084,6 +2199,7 @@ def process_subscription(
                 "source_errors": analysis.get("source_errors", []),
                 "collected_at": run_collected_at,
                 "data_freshness": {"legs": data_freshness_legs},
+                "constraint_fingerprint": constraint_fp,
             },
             "source_stats": data.get("source_stats"),
             "price_insights": data.get("price_insights"),

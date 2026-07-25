@@ -2,8 +2,10 @@ import sys
 import types
 import unittest
 import io
+import tempfile
 from contextlib import redirect_stdout
 from datetime import date, timedelta
+from pathlib import Path
 from unittest.mock import patch
 
 
@@ -56,6 +58,7 @@ from notifier import (
     _render_payload_plan_card,
     build_notification_payload,
 )
+import storage
 
 
 class _Form(dict):
@@ -92,6 +95,19 @@ def _base_form(**overrides):
 
 
 class PassengerPriceScopesTest(unittest.TestCase):
+    def setUp(self):
+        self._storage_tmp = tempfile.TemporaryDirectory()
+        self._storage_patch = patch.object(
+            storage,
+            "DB_PATH",
+            Path(self._storage_tmp.name) / "prices.db",
+        )
+        self._storage_patch.start()
+
+    def tearDown(self):
+        self._storage_patch.stop()
+        self._storage_tmp.cleanup()
+
     def test_domestic_passenger_total_uses_child_and_infant_factors(self):
         passengers = {"adult": 2, "child": 1, "elderly": 0, "infant": 1}
 

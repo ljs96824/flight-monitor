@@ -11,7 +11,7 @@ _METHOD_VERSIONS = {
     "weekday": "weekday_v2",
     "reftier": "reftier_v1",
     "calendar": "calendar_v1",
-    "price_signal": "price_signal_v1",
+    "price_signal": "price_signal_v2",
     "dual_source_agreement": "agreement_v1",
     "provenance": "provenance_v1",
 }

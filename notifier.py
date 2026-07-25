@@ -24,6 +24,10 @@ from airports import (
     get_airport_timezone,
 )
 from channels import CHANNEL_INFO
+from constraint_fingerprint import (
+    constraint_fingerprint,
+    short_constraint_fingerprint,
+)
 from domestic_fare_rules import get_aircraft_name
 from airlines import classify_itinerary, classify_segment
 from flight_combo_utils import normalize_combo
@@ -3207,6 +3211,8 @@ def _history_count_for_limits(
         round_trip_analysis = analysis_result.get("round_trip_analysis") or {}
         history = round_trip_analysis.get("history") or round_trip_analysis.get("trend_history") or []
         return len(history)
+    if "constraint_price_history" in analysis_result:
+        return len(analysis_result.get("constraint_price_history") or [])
     history = (price_insights or {}).get("price_history") or []
     return len(history)
 
@@ -3712,12 +3718,30 @@ def _last_push_route_parts(route_info: dict, is_round_trip: bool) -> tuple[str, 
     return route, depart_date, return_date
 
 
+def _first_nonempty_identity(*values):
+    for value in values:
+        if value is not None and str(value).strip():
+            return value
+    return None
+
+
+def _notification_subscription_id(route_info: dict, subscription: dict):
+    return _first_nonempty_identity(
+        (route_info or {}).get("subscription_id"),
+        (subscription or {}).get("id"),
+        (subscription or {}).get("subscription_id"),
+        (subscription or {}).get("_index"),
+    )
+
+
 def _price_history_for_push(price_insights: dict | None, analysis_result: dict, is_round_trip: bool):
     if is_round_trip:
         round_trip = analysis_result.get("round_trip_analysis") or {}
-        history = round_trip.get("history") or round_trip.get("price_history") or []
-        if history:
-            return [item.get("total") if isinstance(item, dict) else item for item in history]
+        for key in ("history", "price_history"):
+            if key in round_trip:
+                return round_trip.get(key) or []
+    if "constraint_price_history" in analysis_result:
+        return analysis_result.get("constraint_price_history") or []
     return (price_insights or {}).get("price_history") or analysis_result.get("price_history") or []
 
 
@@ -3728,19 +3752,20 @@ def _price_signal_provenance_metadata(
     is_round_trip: bool,
 ) -> dict:
     """描述 price signal 实际使用的完整历史，不借图表14条截断猜样本。"""
-    if is_round_trip:
+    if signal_history is not None:
+        raw_history = signal_history or []
+    elif is_round_trip:
         round_trip = (analysis_result or {}).get("round_trip_analysis") or {}
         raw_history = (
             round_trip.get("history")
             or round_trip.get("price_history")
-            or signal_history
             or []
         )
     else:
         raw_history = (
-            (price_insights or {}).get("price_history")
+            (analysis_result or {}).get("constraint_price_history")
+            or (price_insights or {}).get("price_history")
             or (analysis_result or {}).get("price_history")
-            or signal_history
             or []
         )
 
@@ -6265,14 +6290,78 @@ def _plan_leg_stops(flight: dict | None) -> int:
 def _payload_plan_price_rows(plans: list[dict]) -> list[dict]:
     rows = []
     for plan in plans or []:
-        price = _to_float(plan.get("price"))
+        passengers, route_type = _plan_price_context(plan)
+        passenger_pricing = plan.get("passenger_pricing") or {}
+        all_passengers = _passenger_pricing_applies(passenger_pricing)
+        is_roundtrip = bool(plan.get("is_roundtrip"))
+        tiers = plan.get("price_tiers") or {}
+        if is_roundtrip:
+            outbound_price = _to_float(
+                plan.get("outbound_price")
+                or (plan.get("outbound_flight") or {}).get("price")
+            )
+            return_price = _to_float(
+                plan.get("return_price")
+                or (plan.get("return_flight") or {}).get("price")
+            )
+            display_tree = (
+                build_display_prices(
+                    outbound_price,
+                    return_price,
+                    passengers,
+                    route_type,
+                )
+                if outbound_price is not None and return_price is not None
+                else {}
+            )
+            price = _to_float(
+                display_tree.get("total")
+                if all_passengers
+                else tiers.get("unit_roundtrip")
+            )
+            if price is None:
+                price = _to_float(
+                    tiers.get("total_roundtrip_ref")
+                    if all_passengers
+                    else plan.get("single_adult_price")
+                )
+            scope = (
+                "all_passengers_roundtrip"
+                if all_passengers
+                else "per_person_roundtrip"
+            )
+        else:
+            unit_price = _to_float(
+                plan.get("outbound_price")
+                or (plan.get("main_flight") or {}).get("price")
+                or plan.get("price")
+            )
+            display_tree = (
+                build_display_prices(unit_price, None, passengers, route_type)
+                if unit_price is not None
+                else {}
+            )
+            price = _to_float(
+                (display_tree.get("outbound") or {}).get("total")
+                if all_passengers
+                else unit_price
+            )
+            scope = (
+                "all_passengers_oneway"
+                if all_passengers
+                else "per_person_oneway"
+            )
+        if price is None:
+            price = _to_float(plan.get("price"))
         if not price:
             continue
         rows.append(
             {
                 "label": plan.get("label"),
                 "value": price,
-                "scope": "roundtrip" if plan.get("is_roundtrip") else "oneway",
+                "scope": scope,
+                "passengers": passengers,
+                "route_type": route_type,
                 "description": _payload_plan_chart_description(plan),
             }
         )
@@ -6364,8 +6453,10 @@ def _chart_history_for_message(route_info: dict, analysis_result: dict, price_in
     if is_roundtrip:
         round_trip = (analysis_result or {}).get("round_trip_analysis") or {}
         for key in ("price_history", "history", "roundtrip_history"):
-            if round_trip.get(key):
-                return round_trip.get(key)
+            if key in round_trip:
+                return round_trip.get(key) or []
+    if "constraint_price_history" in (analysis_result or {}):
+        return (analysis_result or {}).get("constraint_price_history") or []
     if price_insights and price_insights.get("price_history"):
         return price_insights.get("price_history")
     if analysis_result and analysis_result.get("price_history"):
@@ -6853,6 +6944,92 @@ def _source_error_text(source_errors: list[dict] | None, source_name: str) -> st
     return ""
 
 
+def _constraint_change_context(
+    current_fingerprint: str | None,
+    last_snapshot: dict | None,
+) -> dict:
+    current = str(current_fingerprint or "").strip()
+    previous = str((last_snapshot or {}).get("constraint_fingerprint") or "").strip()
+    try:
+        previous_sample_n = int((last_snapshot or {}).get("constraint_sample_n") or 0)
+    except (TypeError, ValueError):
+        previous_sample_n = 0
+    changed = bool(current and previous and current != previous)
+    disclosure = ""
+    if changed:
+        disclosure = (
+            "筛选条件已变更，"
+            f"旧条件样本(n={previous_sample_n})不再计入，"
+            "同条件样本重新积累"
+        )
+    return {
+        "changed": changed,
+        "current_fingerprint": current,
+        "previous_fingerprint": previous,
+        "previous_sample_n": previous_sample_n,
+        "disclosure": disclosure,
+    }
+
+
+def _constraint_history_reason(text: str) -> bool:
+    value = str(text or "")
+    return any(
+        marker in value
+        for marker in (
+            "较上次提醒",
+            "上次同口径",
+            "上涨",
+            "下降",
+            "价格持平",
+            "历史样本",
+            "相似采集记录",
+            "近期低位",
+            "高于大多数",
+            "低于所有",
+        )
+    )
+
+
+def _apply_constraint_change_to_push_meta(
+    push_meta: dict | None,
+    change: dict | None,
+) -> dict:
+    result = dict(push_meta or {})
+    change = change or {}
+    if not change.get("changed"):
+        return result
+    disclosure = str(change.get("disclosure") or "").strip()
+    reasons = [
+        str(item)
+        for item in (result.get("reasons") or [])
+        if not _constraint_history_reason(str(item))
+    ]
+    if disclosure:
+        reasons.insert(0, disclosure)
+    result["type"] = "筛选条件已变更"
+    result["price_change"] = None
+    result["percentile"] = None
+    result["historical_30_price"] = None
+    result["constraint_change"] = dict(change)
+    result["reasons"] = _payload_dedupe_text(reasons)[:4]
+    return result
+
+
+def _apply_constraint_change_to_price_signal(
+    price_signal: dict | None,
+    change: dict | None,
+) -> dict:
+    result = dict(price_signal or {})
+    change = change or {}
+    if not change.get("changed"):
+        return result
+    result["label"] = "待积累"
+    result["summary"] = str(change.get("disclosure") or "同条件样本重新积累")
+    result["percentile"] = None
+    result["constraint_change"] = dict(change)
+    return result
+
+
 def _apply_source_degradation_to_push_meta(
     push_meta: dict | None,
     *,
@@ -7254,7 +7431,9 @@ def build_notification_payload(
     route_info = dict(route_info or {})
     subscription = subscription or {}
     if subscription:
-        route_info.setdefault("subscription_id", subscription.get("subscription_id") or subscription.get("id") or subscription.get("_index"))
+        subscription_id = _notification_subscription_id(route_info, subscription)
+        if subscription_id is not None:
+            route_info.setdefault("subscription_id", subscription_id)
     analysis_result = analysis_result or outbound_analysis or {}
     outbound_analysis = outbound_analysis or analysis_result
     return_analysis = return_analysis or analysis_result.get("return_analysis") or {}
@@ -7273,12 +7452,40 @@ def build_notification_payload(
         is_roundtrip,
     )
     route_key, depart_key, return_key = _last_push_route_parts(route_info, is_roundtrip)
-    last_push = get_last_push_price(route_key, depart_key, return_key)
-    last_snapshot = get_last_push_snapshot(route_key, depart_key, return_key)
+    subscription_snapshot_id = _notification_subscription_id(
+        route_info,
+        subscription,
+    )
+    last_push = get_last_push_price(
+        route_key,
+        depart_key,
+        return_key,
+        subscription_id=subscription_snapshot_id,
+    )
+    last_snapshot = get_last_push_snapshot(
+        route_key,
+        depart_key,
+        return_key,
+        subscription_id=subscription_snapshot_id,
+    )
+    current_constraint_fingerprint = str(
+        route_info.get("constraint_fingerprint")
+        or analysis_result.get("constraint_fingerprint")
+        or (constraint_fingerprint(subscription) if subscription else "")
+    ).strip()
+    constraint_change = _constraint_change_context(
+        current_constraint_fingerprint,
+        last_snapshot,
+    )
     history = (
-        _chart_history_for_message(route_info, analysis_result, price_insights, is_roundtrip)
-        if is_roundtrip
-        else price_history or _chart_history_for_message(route_info, analysis_result, price_insights, is_roundtrip)
+        _chart_history_for_message(
+            route_info,
+            analysis_result,
+            price_insights,
+            is_roundtrip,
+        )
+        if is_roundtrip or price_history is None
+        else price_history
     )
     risk = (
         (analysis_result.get("round_trip_analysis") or {}).get("buy_vs_wait_risk")
@@ -7390,7 +7597,11 @@ def build_notification_payload(
         )
     )
     plan_status_change = track_plan_status(
-        route_info.get("subscription_id") or subscription.get("id") or route_key,
+        _first_nonempty_identity(
+            route_info.get("subscription_id"),
+            subscription.get("id"),
+            route_key,
+        ),
         _tracking_current_items(
             analysis_result,
             all_items,
@@ -7506,7 +7717,13 @@ def build_notification_payload(
         if price_signal.get("sample_n") is not None
         else signal_metadata.get("sample_n") or 0
     )
+    if not signal_metadata.get("sources"):
+        signal_metadata["sources"] = sorted(_source_set_from_plan(primary_plan))
     price_signal.update(signal_metadata)
+    price_signal = _apply_constraint_change_to_price_signal(
+        price_signal,
+        constraint_change,
+    )
     execution_advice = build_execution_advice(
         policy_compare_price,
         policy_compare_price,
@@ -7593,16 +7810,29 @@ def build_notification_payload(
         previous_sources=previous_source_set,
         source_errors=source_errors,
     )
+    push_meta = _apply_constraint_change_to_push_meta(
+        push_meta,
+        constraint_change,
+    )
     if (
         plan_status_change
         and plan_status_change.get("status") == "sold_out"
         and push_meta.get("type") != "数据源受限"
+        and not constraint_change.get("changed")
     ):
         push_meta["type"] = "涨价风险"
 
     change = (push_meta or {}).get("price_change") or {}
-    fallback_line = _trend_fallback_line(history)
-    trend_summary = _trend_linechart_summary(history, target, display_price, None) if history else ""
+    fallback_line = (
+        ""
+        if constraint_change.get("changed")
+        else _trend_fallback_line(history)
+    )
+    trend_summary = (
+        str(constraint_change.get("disclosure") or "")
+        if constraint_change.get("changed")
+        else (_trend_linechart_summary(history, target, display_price, None) if history else "")
+    )
     goals = (
         route_info.get("notification_goals")
         or analysis_result.get("notification_goals")
@@ -7786,8 +8016,13 @@ def build_notification_payload(
         )
     else:
         reference_current = _to_float((analysis_result.get("price_range") or [None])[0])
+        oneway_history = (
+            analysis_result.get("constraint_price_history") or []
+            if "constraint_price_history" in analysis_result
+            else (price_insights or {}).get("price_history") or price_history or []
+        )
         reference_history = _normalize_price_history_for_refs(
-            (price_insights or {}).get("price_history") or price_history or []
+            oneway_history
         )
         raw_price_references = (
             calculate_price_references(
@@ -7808,7 +8043,11 @@ def build_notification_payload(
     payload = {
         "push_type": payload_push_type,
         "route": _payload_route_text(route_info),
-        "subscription_id": route_info.get("subscription_id") or subscription.get("id"),
+        "subscription_id": _first_nonempty_identity(
+            route_info.get("subscription_id"),
+            subscription.get("id"),
+            subscription.get("_index"),
+        ),
         "route_airports": _payload_route_airports(route_info),
         "origin_airports_active": route_info.get("origin_airports_active"),
         "destination_airports_active": route_info.get("destination_airports_active"),
@@ -7823,6 +8062,11 @@ def build_notification_payload(
         "depart_date": route_info.get("depart_date"),
         "return_date": route_info.get("return_date"),
         "route_type": payload_route_type,
+        "constraint_fingerprint": current_constraint_fingerprint,
+        "constraint_fingerprint_short": short_constraint_fingerprint(
+            current_constraint_fingerprint
+        ),
+        "constraint_change": constraint_change if constraint_change.get("changed") else {},
         "invoice_preferences": {
             "invoice_needed": bool((subscription.get("preferences") or {}).get("invoice_needed")),
             "invoice_special_vat": bool((subscription.get("preferences") or {}).get("invoice_special_vat")),
@@ -7936,10 +8180,15 @@ def build_notification_payload(
         "checklist": _purchase_checklist_items(route_info, analysis_result, primary_plan, verify_limit) if all_items else [],
         "sorting_logic": _sorting_logic_items(route_info, is_roundtrip),
         "diff_from_last": {
-            "last_price": change.get("last") or (last_push or {}).get("price"),
+            "last_price": (
+                None
+                if constraint_change.get("changed")
+                else change.get("last") or (last_push or {}).get("price")
+            ),
             "diff": change.get("diff") if all_items else None,
             "scope": change.get("scope"),
             "last_snapshot": last_snapshot or {},
+            "comparable": not constraint_change.get("changed"),
         },
         "freshness_minutes": ((primary_flight or {}).get("availability") or {}).get("age_minutes"),
         "source_count": ((primary_flight or {}).get("availability") or {}).get("source_count"),
@@ -7971,12 +8220,14 @@ def build_notification_payload(
         "collected_at": _message_collected_time(analysis_result, route_info),
         "snapshot": {
             "route": route_key,
-            "subscription_id": route_info.get("subscription_id") or subscription.get("id"),
+            "subscription_id": subscription_snapshot_id,
             "depart_date": depart_key,
             "return_date": return_key,
             "channels": sorted(current_source_set) or _snapshot_channels(primary_flight),
             "source_set": sorted(current_source_set),
             "fare_status": _snapshot_fare_status(primary_flight),
+            "constraint_fingerprint": current_constraint_fingerprint,
+            "constraint_sample_n": int(price_signal.get("sample_n") or 0),
         },
     }
     print(f"[场景调试] 推送将显示 = {payload.get('travel_scenarios')}")
@@ -8402,6 +8653,12 @@ def _same_day_reserve_text(windows: dict | None) -> str:
 
 
 def _plan_status_change_text(payload: dict) -> str:
+    constraint_change = payload.get("constraint_change") or {}
+    if constraint_change.get("changed"):
+        return str(
+            constraint_change.get("disclosure")
+            or "筛选条件已变更，同条件样本重新积累"
+        ).strip()
     status = payload.get("plan_status_change") or {}
     return str(status.get("msg") or "").strip() if isinstance(status, dict) else ""
 
@@ -10537,7 +10794,19 @@ def _email_primary_plan_line(payload: dict, primary_plan: dict) -> str:
     route_kind = "直飞往返" if primary_plan.get("is_roundtrip") and _plan_total_stops(primary_plan) == 0 else (
         "往返方案" if primary_plan.get("is_roundtrip") else "单程方案"
     )
-    price = _price_text(primary_plan.get("price") or payload.get("display_price") or payload.get("current_price"))
+    price_rows = _payload_plan_price_rows([primary_plan])
+    price_row = price_rows[0] if price_rows else {}
+    price = _price_text(
+        price_row.get("value")
+        or primary_plan.get("price")
+        or payload.get("display_price")
+        or payload.get("current_price")
+    )
+    if str(price_row.get("scope") or "").startswith("all_passengers_"):
+        pricing = primary_plan.get("passenger_pricing") or {}
+        factor = _to_float(pricing.get("factor"))
+        factor_text = f"（费率合计{factor:g}×单人）" if factor is not None else ""
+        return f"{label},{route_kind},全员参考价{price}{factor_text}"
     return f"{label},{route_kind},搜索参考价{price}"
 
 
@@ -12149,6 +12418,15 @@ def _email_trend_card_body(payload: dict) -> str:
             return "<div style='color:#666;font-size:12px;'>上次方案航班本次未获报价,趋势暂缺。</div>"
         return "<div style='color:#666;font-size:12px;'>当前无符合方案，价格趋势仅作候选池参考。</div>"
 
+    constraint_change = payload.get("constraint_change") or {}
+    if constraint_change.get("changed"):
+        disclosure = str(constraint_change.get("disclosure") or "").strip()
+        return (
+            "<div style='color:#666;font-size:12px;'>"
+            f"{html.escape(disclosure or '筛选条件已变更,同条件样本重新积累')}"
+            "</div>"
+        )
+
     history_rows = payload.get("price_history") or []
     unique_prices = {
         round(float(row.get("price")), 2)
@@ -13227,6 +13505,10 @@ def persist_notification_payload(payload: dict) -> None:
     if not route or not depart_date:
         return
     now = datetime.now().isoformat(timespec="seconds")
+    subscription_id = _first_nonempty_identity(
+        snapshot.get("subscription_id"),
+        payload.get("subscription_id"),
+    )
     save_last_push_price(
         route,
         depart_date,
@@ -13234,6 +13516,7 @@ def persist_notification_payload(payload: dict) -> None:
         payload.get("current_price"),
         payload.get("push_type"),
         now,
+        subscription_id=subscription_id,
     )
     save_push_snapshot(
         route,
@@ -13245,12 +13528,17 @@ def persist_notification_payload(payload: dict) -> None:
         snapshot.get("fare_status") or "",
         payload.get("push_type"),
         now,
+        constraint_fingerprint=snapshot.get("constraint_fingerprint"),
+        constraint_sample_n=snapshot.get("constraint_sample_n"),
+        subscription_id=subscription_id,
     )
     save_pushed_plans(
-        payload.get("snapshot", {}).get("subscription_id")
-        or payload.get("subscription_id")
-        or snapshot.get("subscription_id")
-        or route,
+        _first_nonempty_identity(
+            payload.get("snapshot", {}).get("subscription_id"),
+            payload.get("subscription_id"),
+            snapshot.get("subscription_id"),
+            route,
+        ),
         payload.get("recommended_plans") or [],
     )
 

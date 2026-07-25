@@ -746,6 +746,13 @@ def _base_bucket(payload: dict) -> str:
         parts.append(f"出发日={payload.get('depart_date')}")
     if payload.get("return_date"):
         parts.append(f"返程日={payload.get('return_date')}")
+    constraint_short = str(
+        payload.get("constraint_fingerprint_short")
+        or payload.get("constraint_fingerprint")
+        or ""
+    ).strip()[:8]
+    if constraint_short:
+        parts.append(f"约束={constraint_short}")
     return "·".join(parts)
 
 

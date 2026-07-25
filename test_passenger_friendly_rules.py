@@ -1,6 +1,9 @@
 import sys
+import tempfile
 import types
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 sys.modules.setdefault("httpx", types.SimpleNamespace(get=lambda *a, **k: None, post=lambda *a, **k: None))
 
@@ -12,9 +15,23 @@ from analyzer import (
     calc_final_score,
 )
 from notifier import build_notification_payload
+import storage
 
 
 class PassengerFriendlyRulesTest(unittest.TestCase):
+    def setUp(self):
+        self._storage_tmp = tempfile.TemporaryDirectory()
+        self._storage_patch = patch.object(
+            storage,
+            "DB_PATH",
+            Path(self._storage_tmp.name) / "prices.db",
+        )
+        self._storage_patch.start()
+
+    def tearDown(self):
+        self._storage_patch.stop()
+        self._storage_tmp.cleanup()
+
     def test_passenger_profile_derives_child_elderly_needs(self):
         profile = build_passenger_profile(
             {"adult": 2, "child": 1, "elderly": 1, "infant": 0},
