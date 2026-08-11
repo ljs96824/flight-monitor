@@ -401,6 +401,26 @@ def build_tcurve(
     }
 
 
+def load_tcurve_daily_cells(
+    db_path: str | Path = DEFAULT_DB_PATH,
+    *,
+    route: str,
+    airport_pair=None,
+    timeout: float = 3.0,
+) -> list[dict]:
+    """读取并折叠 P4 日格；调用方自行决定是否保留退化日。"""
+    origin_city, dest_city = _split_route(route)
+    pair = _normalize_pair(airport_pair)
+    rows = _load_route_rows(
+        db_path,
+        origin_city=origin_city,
+        dest_city=dest_city,
+        airport_pair=pair,
+        timeout=timeout,
+    )
+    return fold_tcurve_daily_cells(rows)
+
+
 def route_cities_from_info(route_info: dict) -> tuple[str, str]:
     """从通知路由信息推导城市，IATA 显示名仍以 airports.py 为准。"""
     route_info = route_info or {}
