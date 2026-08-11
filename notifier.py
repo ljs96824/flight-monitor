@@ -12951,6 +12951,48 @@ def _email_tcurve_body(payload: dict) -> str:
     return "".join(lines)
 
 
+def _email_forecast_body(payload: dict) -> str:
+    forecast = payload.get("forecast") or {}
+    if not isinstance(forecast, dict) or not forecast.get("eligible"):
+        return ""
+    predictions = forecast.get("predictions") or []
+    if not predictions:
+        return ""
+    backtest = forecast.get("backtest") or {}
+    model = backtest.get("model") or {}
+    naive = backtest.get("naive") or {}
+    plan_price = _valid_price_float(
+        ((payload.get("price_tiers") or {}).get("unit_roundtrip"))
+        or payload.get("unit_roundtrip_price")
+    )
+    market = _valid_price_float((forecast.get("current_market_reference") or {}).get("median"))
+    lines = [
+        "<div style='margin-bottom:8px;color:#374151;'>预测对象为该航线市场最低参考价，与你的筛选条件无关。</div>",
+    ]
+    if plan_price is not None and market is not None:
+        lines.append(
+            "<div style='margin-bottom:8px;color:#666;font-size:12px;'>"
+            f"你的筛选后方案价(当前单人往返 {_price_text(plan_price)})可能持续高于此曲线；"
+            f"当前市场单人单程参考下限约 {_price_text(market)}。"
+            "</div>"
+        )
+    for item in predictions:
+        lines.append(
+            "<div>"
+            f"{html.escape(str(item.get('target_day')))}：中位 {_price_text(item.get('median'))}，"
+            f"IQR {_price_text(item.get('p25'))}-{_price_text(item.get('p75'))}，"
+            f"P10-P90 {_price_text(item.get('p10'))}-{_price_text(item.get('p90'))}"
+            "</div>"
+        )
+    lines.append(
+        "<div style='margin-top:8px;color:#666;font-size:12px;'>"
+        f"基于历史规律的统计估计，非承诺；累计走前回测 k=3 MAPE={html.escape(str(model.get('mape')))}%，"
+        f"朴素基线={html.escape(str(naive.get('mape')))}%。"
+        "</div>"
+    )
+    return "".join(lines)
+
+
 
 def _price_calendar_insight_text(payload: dict) -> str:
     calendar = payload.get("price_calendar") or {}
@@ -13266,6 +13308,9 @@ def render_email(payload: dict) -> tuple[str, str]:
     tcurve_body = _email_tcurve_body(payload)
     if tcurve_body:
         cards.append(_email_card("提前购买参考(同航线历史观测)", tcurve_body))
+    forecast_body = _email_forecast_body(payload)
+    if forecast_body:
+        cards.append(_email_card("价格预测参考(实验)", forecast_body))
     calendar_payload = payload.get("price_calendar") or {}
     if calendar_payload.get("rows") or calendar_payload.get("uncollected_rows"):
         cards.append(_email_card("低价日历", _email_price_calendar_body(payload)))

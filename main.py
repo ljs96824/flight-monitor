@@ -84,6 +84,7 @@ from subscription_preflight import (
 )
 from tracker import log_signal
 from tcurve import build_notification_tcurve
+from forecast import build_notification_forecast
 
 
 # 日志配置
@@ -1579,6 +1580,19 @@ def _notification_tcurve(route_info: dict) -> dict:
         return {}
 
 
+def _notification_forecast(route_info: dict) -> dict:
+    """只读计算预测闸门；未通过时不向通知 payload 写空结构。"""
+    try:
+        _round_id, db_path = get_current_round()
+        result = build_notification_forecast(route_info, db_path=db_path)
+        if not result.get("eligible"):
+            safe_log(f"[预测] {result.get('reason')} 跳过渲染")
+        return result
+    except Exception as exc:
+        safe_log(f"[预测] 读取失败 跳过渲染 原因={type(exc).__name__}:{exc}")
+        return {"eligible": False, "reason": "读取失败"}
+
+
 def _notification_provenance_context(route_info: dict) -> dict:
     """只读加载本次通知所需的统计依据；失败时保留原通知交付。"""
     try:
@@ -2207,6 +2221,9 @@ def process_subscription(
         message_kwargs["route_info"]["tcurve"] = _notification_tcurve(
             message_kwargs["route_info"]
         )
+        forecast_result = _notification_forecast(message_kwargs["route_info"])
+        if forecast_result.get("eligible"):
+            message_kwargs["route_info"]["forecast"] = forecast_result
         message_kwargs["route_info"]["provenance_context"] = (
             _notification_provenance_context(message_kwargs["route_info"])
         )

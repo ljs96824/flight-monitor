@@ -1124,6 +1124,13 @@ def attach_payload_provenance(
         if point.get("median") is not None:
             _add_stat(statistics, point.get("median"), envelope)
 
+    forecast = payload.get("forecast") or {}
+    if isinstance(forecast, dict) and forecast.get("eligible"):
+        envelope = forecast.get("provenance") or {}
+        for item in forecast.get("predictions") or []:
+            if item.get("median") is not None:
+                _add_stat(statistics, item.get("median"), envelope)
+
     payload["versions"] = dict(METHOD_VERSIONS)
     payload["dual_source_agreement"] = dict(payload_agreement)
     payload["provenance"] = {

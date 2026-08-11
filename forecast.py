@@ -9,7 +9,8 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from method_registry import method_version
-from tcurve import _clean_number, percentile_linear
+from provenance import build_envelope
+from tcurve import DEFAULT_DB_PATH, _clean_number, load_tcurve_daily_cells, percentile_linear, route_cities_from_info
 
 
 METHOD_VERSION = method_version("forecast")
@@ -172,3 +173,44 @@ def write_backtest_report(report, path):
     temporary = target.with_suffix(target.suffix + ".tmp")
     temporary.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(temporary, target)
+
+
+def build_notification_forecast(route_info, *, db_path=DEFAULT_DB_PATH, as_of_day=None):
+    """构建三重闸门结果；调用方仅在 eligible 时写入 payload。"""
+    origin_city, dest_city = route_cities_from_info(route_info)
+    route = f"{origin_city}-{dest_city}"
+    all_cells = load_tcurve_daily_cells(db_path, route=route)
+    cells = [item for item in all_cells if not item.get("degraded")]
+    if not cells:
+        return {"eligible": False, "reason": "无可用非退化日格"}
+    as_of = str(as_of_day or max(item["observed_day"] for item in cells))
+    depart_date = str(route_info.get("depart_date") or "")
+    if not depart_date:
+        return {"eligible": False, "reason": "缺少出发日期"}
+    shape = build_shape(cells, cutoff_day=as_of)
+    level = estimate_level(cells, shape, depart_date=depart_date, cutoff_day=as_of)
+    current_t = (date.fromisoformat(depart_date) - date.fromisoformat(as_of)).days
+    current_prediction = predict_price(level, shape, target_t=current_t)
+    backtest = walk_forward_backtest(cells)
+    gate = backtest["horizons"].get("3", {}).get("skill_gate") or {"passed": False}
+    if not gate.get("passed"):
+        return {"eligible": False, "reason": f"技能门未过(MAPE={backtest['horizons']['3']['model']['mape']}% vs 基线={backtest['horizons']['3']['naive']['mape']}%)", "backtest": backtest}
+    if not level.get("reliable"):
+        return {"eligible": False, "reason": f"level不可靠(n={level.get('n', 0)})", "backtest": backtest}
+    if current_prediction.get("status") != "ok":
+        return {"eligible": False, "reason": f"当前T={current_t}不在shape覆盖内", "backtest": backtest}
+    predictions = []
+    for offset in range(1, 8):
+        target_day = date.fromisoformat(as_of) + timedelta(days=offset)
+        target_t = (date.fromisoformat(depart_date) - target_day).days
+        item = predict_price(level, shape, target_t=target_t)
+        if item.get("status") == "ok":
+            predictions.append({"target_day": target_day.isoformat(), **item})
+    if not predictions:
+        return {"eligible": False, "reason": "未来7天无精确shape T", "backtest": backtest}
+    used = [item for item in cells if str(item["observed_day"]) <= as_of]
+    window = [min(item["observed_day"] for item in used), max(item["observed_day"] for item in used)]
+    sources = sorted({source for item in used for source in item.get("min_sources") or []})
+    envelope = build_envelope("forecast.market_min", sample_n=len(used), window=window, sources=sources, degraded_excluded=sum(1 for item in all_cells if item.get("degraded")), bucket="市场最低参考价·单人单程·与用户筛选无关")
+    envelope["backtest"] = {"horizon": 3, **backtest["horizons"]["3"]}
+    return {"eligible": True, "reason": "ok", "method_version": METHOD_VERSION, "price_caliber": "市场最低参考价·单人单程CNY·与用户筛选无关", "as_of_day": as_of, "depart_date": depart_date, "current_t": current_t, "current_market_reference": current_prediction, "level": level, "predictions": predictions, "backtest": backtest["horizons"]["3"], "provenance": envelope}
