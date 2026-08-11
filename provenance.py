@@ -108,7 +108,7 @@ def load_route_observations(
     columns = (
         "observed_at, round_id, route_type, origin_airport, dest_airport, "
         "depart_date, days_to_departure, cabin_class, source, flight_combo, "
-        "stops, duration_min, price_cny, method_version"
+        "airline, stops, duration_min, price_cny, method_version"
     )
     with readonly_connection(db_path, timeout=timeout) as connection:
         available = {
