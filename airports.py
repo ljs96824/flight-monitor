@@ -25,6 +25,7 @@ AIRPORTS = {
         "city": "上海",
         "city_en": "Shanghai",
         "tz": "北京",
+        "country": "中国大陆",
     },
     "SHA": {
         "name": "上海虹桥",
@@ -32,6 +33,7 @@ AIRPORTS = {
         "city": "上海",
         "city_en": "Shanghai",
         "tz": "北京",
+        "country": "中国大陆",
     },
     "PEK": {
         "name": "北京首都",
@@ -39,6 +41,7 @@ AIRPORTS = {
         "city": "北京",
         "city_en": "Beijing",
         "tz": "北京",
+        "country": "中国大陆",
     },
     "PKX": {
         "name": "北京大兴",
@@ -46,6 +49,7 @@ AIRPORTS = {
         "city": "北京",
         "city_en": "Beijing",
         "tz": "北京",
+        "country": "中国大陆",
     },
     "NRT": {
         "name": "东京成田",
@@ -53,6 +57,7 @@ AIRPORTS = {
         "city": "东京",
         "city_en": "Tokyo",
         "tz": "日本",
+        "country": "日本",
     },
     "HND": {
         "name": "东京羽田",
@@ -60,6 +65,7 @@ AIRPORTS = {
         "city": "东京",
         "city_en": "Tokyo",
         "tz": "日本",
+        "country": "日本",
     },
     "KIX": {
         "name": "关西国际机场",
@@ -67,6 +73,7 @@ AIRPORTS = {
         "city": "大阪",
         "city_en": "Osaka",
         "tz": "日本",
+        "country": "日本",
     },
     "ITM": {
         "name": "大阪伊丹",
@@ -74,6 +81,7 @@ AIRPORTS = {
         "city": "大阪",
         "city_en": "Osaka",
         "tz": "日本",
+        "country": "日本",
     },
     "ICN": {
         "name": "首尔仁川",
@@ -81,6 +89,7 @@ AIRPORTS = {
         "city": "首尔",
         "city_en": "Seoul",
         "tz": "韩国",
+        "country": "韩国",
     },
     "GMP": {
         "name": "首尔金浦",
@@ -88,6 +97,7 @@ AIRPORTS = {
         "city": "首尔",
         "city_en": "Seoul",
         "tz": "韩国",
+        "country": "韩国",
     },
     "JFK": {
         "name": "纽约肯尼迪",
@@ -95,6 +105,7 @@ AIRPORTS = {
         "city": "纽约",
         "city_en": "New York",
         "tz": "美东",
+        "country": "美国",
     },
     "EWR": {
         "name": "纽约纽瓦克",
@@ -102,6 +113,7 @@ AIRPORTS = {
         "city": "纽约",
         "city_en": "New York",
         "tz": "美东",
+        "country": "美国",
     },
     "LGA": {
         "name": "纽约拉瓜迪亚",
@@ -109,6 +121,7 @@ AIRPORTS = {
         "city": "纽约",
         "city_en": "New York",
         "tz": "美东",
+        "country": "美国",
     },
     "LAX": {
         "name": "洛杉矶",
@@ -116,6 +129,7 @@ AIRPORTS = {
         "city": "洛杉矶",
         "city_en": "Los Angeles",
         "tz": "美西",
+        "country": "美国",
     },
     "SFO": {
         "name": "旧金山",
@@ -123,6 +137,7 @@ AIRPORTS = {
         "city": "旧金山",
         "city_en": "San Francisco",
         "tz": "美西",
+        "country": "美国",
     },
     "OAK": {
         "name": "奥克兰",
@@ -130,6 +145,7 @@ AIRPORTS = {
         "city": "旧金山",
         "city_en": "San Francisco",
         "tz": "美西",
+        "country": "美国",
     },
     "SJC": {
         "name": "圣何塞",
@@ -137,6 +153,7 @@ AIRPORTS = {
         "city": "旧金山",
         "city_en": "San Francisco",
         "tz": "美西",
+        "country": "美国",
     },
     "LHR": {
         "name": "伦敦希思罗",
@@ -144,6 +161,7 @@ AIRPORTS = {
         "city": "伦敦",
         "city_en": "London",
         "tz": "伦敦",
+        "country": "英国",
     },
     "LGW": {
         "name": "伦敦盖特威克",
@@ -151,6 +169,7 @@ AIRPORTS = {
         "city": "伦敦",
         "city_en": "London",
         "tz": "伦敦",
+        "country": "英国",
     },
     "STN": {
         "name": "伦敦斯坦斯特德",
@@ -158,6 +177,7 @@ AIRPORTS = {
         "city": "伦敦",
         "city_en": "London",
         "tz": "伦敦",
+        "country": "英国",
     },
     "CDG": {
         "name": "巴黎戴高乐",
@@ -165,6 +185,7 @@ AIRPORTS = {
         "city": "巴黎",
         "city_en": "Paris",
         "tz": "巴黎",
+        "country": "法国",
     },
     "ORY": {
         "name": "巴黎奥利",
@@ -172,6 +193,7 @@ AIRPORTS = {
         "city": "巴黎",
         "city_en": "Paris",
         "tz": "巴黎",
+        "country": "法国",
     },
     "HKG": {
         "name": "香港",
@@ -179,6 +201,7 @@ AIRPORTS = {
         "city": "香港",
         "city_en": "Hong Kong",
         "tz": "香港",
+        "country": "中国香港",
     },
     "TPE": {
         "name": "台北桃园",
@@ -186,6 +209,7 @@ AIRPORTS = {
         "city": "台北",
         "city_en": "Taipei",
         "tz": "台北",
+        "country": "中国台湾",
     },
     "TSA": {
         "name": "台北松山",
@@ -193,6 +217,7 @@ AIRPORTS = {
         "city": "台北",
         "city_en": "Taipei",
         "tz": "台北",
+        "country": "中国台湾",
     },
     "SIN": {
         "name": "新加坡樟宜",
@@ -200,6 +225,7 @@ AIRPORTS = {
         "city": "新加坡",
         "city_en": "Singapore",
         "tz": "新加坡",
+        "country": "新加坡",
     },
     "BKK": {
         "name": "曼谷素万那普",
@@ -207,6 +233,7 @@ AIRPORTS = {
         "city": "曼谷",
         "city_en": "Bangkok",
         "tz": "曼谷",
+        "country": "泰国",
     },
     "DMK": {
         "name": "曼谷廊曼",
@@ -214,6 +241,7 @@ AIRPORTS = {
         "city": "曼谷",
         "city_en": "Bangkok",
         "tz": "曼谷",
+        "country": "泰国",
     },
     "CAN": {
         "name": "广州白云",
@@ -221,6 +249,7 @@ AIRPORTS = {
         "city": "广州",
         "city_en": "Guangzhou",
         "tz": "北京",
+        "country": "中国大陆",
     },
     "SZX": {
         "name": "深圳宝安",
@@ -228,6 +257,7 @@ AIRPORTS = {
         "city": "深圳",
         "city_en": "Shenzhen",
         "tz": "北京",
+        "country": "中国大陆",
     },
     "CTU": {
         "name": "成都双流",
@@ -235,6 +265,7 @@ AIRPORTS = {
         "city": "成都",
         "city_en": "Chengdu",
         "tz": "北京",
+        "country": "中国大陆",
     },
     "TFU": {
         "name": "成都天府",
@@ -242,6 +273,7 @@ AIRPORTS = {
         "city": "成都",
         "city_en": "Chengdu",
         "tz": "北京",
+        "country": "中国大陆",
     },
     "HGH": {
         "name": "杭州萧山",
@@ -249,6 +281,7 @@ AIRPORTS = {
         "city": "杭州",
         "city_en": "Hangzhou",
         "tz": "北京",
+        "country": "中国大陆",
     },
     "NKG": {
         "name": "南京禄口",
@@ -256,6 +289,7 @@ AIRPORTS = {
         "city": "南京",
         "city_en": "Nanjing",
         "tz": "北京",
+        "country": "中国大陆",
     },
     "MCO": {
         "name": "奥兰多",
@@ -263,6 +297,7 @@ AIRPORTS = {
         "city": "奥兰多",
         "city_en": "Orlando",
         "tz": "美东",
+        "country": "美国",
     },
     "SFB": {
         "name": "奥兰多桑福德",
@@ -270,6 +305,7 @@ AIRPORTS = {
         "city": "奥兰多",
         "city_en": "Orlando",
         "tz": "美东",
+        "country": "美国",
     },
     "ORD": {
         "name": "芝加哥奥黑尔",
@@ -277,6 +313,7 @@ AIRPORTS = {
         "city": "芝加哥",
         "city_en": "Chicago",
         "tz": "美中",
+        "country": "美国",
     },
     "MDW": {
         "name": "芝加哥中途",
@@ -284,6 +321,7 @@ AIRPORTS = {
         "city": "芝加哥",
         "city_en": "Chicago",
         "tz": "美中",
+        "country": "美国",
     },
     "IAD": {
         "name": "华盛顿杜勒斯",
@@ -291,6 +329,7 @@ AIRPORTS = {
         "city": "华盛顿",
         "city_en": "Washington",
         "tz": "美东",
+        "country": "美国",
     },
     "DCA": {
         "name": "华盛顿里根",
@@ -298,6 +337,7 @@ AIRPORTS = {
         "city": "华盛顿",
         "city_en": "Washington",
         "tz": "美东",
+        "country": "美国",
     },
     "MIA": {
         "name": "迈阿密",
@@ -305,6 +345,7 @@ AIRPORTS = {
         "city": "迈阿密",
         "city_en": "Miami",
         "tz": "美东",
+        "country": "美国",
     },
     "FLL": {
         "name": "劳德代尔堡",
@@ -312,6 +353,7 @@ AIRPORTS = {
         "city": "迈阿密",
         "city_en": "Miami",
         "tz": "美东",
+        "country": "美国",
     },
     "SEA": {
         "name": "西雅图",
@@ -319,6 +361,7 @@ AIRPORTS = {
         "city": "西雅图",
         "city_en": "Seattle",
         "tz": "美西",
+        "country": "美国",
     },
     "YYZ": {
         "name": "多伦多皮尔逊",
@@ -326,6 +369,7 @@ AIRPORTS = {
         "city": "多伦多",
         "city_en": "Toronto",
         "tz": "美东",
+        "country": "加拿大",
     },
     "YTZ": {
         "name": "多伦多岛",
@@ -333,6 +377,7 @@ AIRPORTS = {
         "city": "多伦多",
         "city_en": "Toronto",
         "tz": "美东",
+        "country": "加拿大",
     },
     "YVR": {
         "name": "温哥华",
@@ -340,6 +385,7 @@ AIRPORTS = {
         "city": "温哥华",
         "city_en": "Vancouver",
         "tz": "美西",
+        "country": "加拿大",
     },
     "DXB": {
         "name": "迪拜",
@@ -347,6 +393,7 @@ AIRPORTS = {
         "city": "迪拜",
         "city_en": "Dubai",
         "tz": "迪拜",
+        "country": "阿联酋",
     },
     "DWC": {
         "name": "迪拜世界中心",
@@ -354,6 +401,7 @@ AIRPORTS = {
         "city": "迪拜",
         "city_en": "Dubai",
         "tz": "迪拜",
+        "country": "阿联酋",
     },
     "ABQ": {
         "name": "阿尔伯克基",
@@ -361,6 +409,7 @@ AIRPORTS = {
         "city": "阿尔伯克基",
         "city_en": "Albuquerque",
         "tz": "美西",
+        "country": "美国",
     },
     "DFW": {
         "name": "达拉斯沃斯堡",
@@ -368,6 +417,7 @@ AIRPORTS = {
         "city": "达拉斯",
         "city_en": "Dallas",
         "tz": "美中",
+        "country": "美国",
     },
     "ATL": {
         "name": "亚特兰大",
@@ -375,6 +425,7 @@ AIRPORTS = {
         "city": "亚特兰大",
         "city_en": "Atlanta",
         "tz": "美东",
+        "country": "美国",
     },
     "FRA": {
         "name": "法兰克福",
@@ -382,6 +433,7 @@ AIRPORTS = {
         "city": "法兰克福",
         "city_en": "Frankfurt",
         "tz": "法兰克福",
+        "country": "德国",
     },
     "AMS": {
         "name": "阿姆斯特丹",
@@ -389,6 +441,7 @@ AIRPORTS = {
         "city": "阿姆斯特丹",
         "city_en": "Amsterdam",
         "tz": "阿姆斯特丹",
+        "country": "荷兰",
     },
     "DOH": {
         "name": "多哈",
@@ -396,6 +449,7 @@ AIRPORTS = {
         "city": "多哈",
         "city_en": "Doha",
         "tz": "多哈",
+        "country": "卡塔尔",
     },
 }
 
@@ -499,7 +553,7 @@ def validate_airports():
         f"got {len(AIRPORTS)}"
     )
 
-    required_fields = {"name", "short", "city", "city_en", "tz"}
+    required_fields = {"name", "short", "city", "city_en", "tz", "country"}
     for code, item in AIRPORTS.items():
         assert re.fullmatch(r"[A-Z]{2,4}", code), f"Invalid IATA code: {code}"
         missing = required_fields - set(item)
@@ -538,6 +592,14 @@ def get_airport_city(iata_code):
     if code in AIRPORT_TO_CITY:
         return AIRPORT_TO_CITY[code]
     return AIRPORT_CITY.get(code, code)
+
+
+def get_airport_country(iata_code):
+    """Return the country/region label from the canonical airport table."""
+    code = str(iata_code or "").strip().upper()
+    if not code:
+        return ""
+    return str((AIRPORTS.get(code) or {}).get("country") or "")
 
 
 def get_airport_city_en(iata_code):

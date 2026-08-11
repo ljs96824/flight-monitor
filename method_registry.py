@@ -14,6 +14,8 @@ _METHOD_VERSIONS = {
     "price_signal": "price_signal_v2",
     "dual_source_agreement": "agreement_v1",
     "provenance": "provenance_v1",
+    "forecast": "forecast_v1",
+    "patterns": "patterns_v1",
 }
 
 METHOD_VERSIONS = MappingProxyType(_METHOD_VERSIONS)
@@ -21,6 +23,7 @@ EXPECTED_METHOD_KEYS = frozenset(_METHOD_VERSIONS)
 
 _REGISTRY_VERSIONS = {
     "lcc_registry": "lcc_v1",
+    "holiday_calendar": "holiday_calendar_v1",
 }
 REGISTRY_VERSIONS = MappingProxyType(_REGISTRY_VERSIONS)
 EXPECTED_REGISTRY_KEYS = frozenset(_REGISTRY_VERSIONS)
@@ -32,6 +35,8 @@ _STAT_FAMILY_METHODS = {
     "weekday": "weekday",
     "price_signal": "price_signal",
     "tcurve": "tcurve",
+    "forecast": "forecast",
+    "patterns": "patterns",
 }
 
 

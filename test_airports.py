@@ -1,9 +1,22 @@
 import unittest
 
-from airports import get_airport_timezone, resolve_location
+from airports import (
+    AIRPORTS,
+    EXPECTED_AIRPORT_CODES,
+    get_airport_timezone,
+    resolve_location,
+    validate_airports,
+)
 
 
 class ResolveLocationTest(unittest.TestCase):
+    def test_all_airports_have_country(self):
+        self.assertEqual(set(AIRPORTS), set(EXPECTED_AIRPORT_CODES))
+        self.assertTrue(
+            all(str(item.get("country") or "").strip() for item in AIRPORTS.values())
+        )
+        validate_airports()
+
     def test_resolve_location_known_city(self):
         self.assertEqual(
             resolve_location("大阪"),
