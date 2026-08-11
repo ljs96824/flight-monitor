@@ -32,6 +32,15 @@ CREATE TABLE observations (
 
 
 class ProvenanceTest(unittest.TestCase):
+    def test_forecast_method_versions_are_registered(self):
+        from method_registry import METHOD_VERSIONS, REGISTRY_VERSIONS
+
+        self.assertEqual(METHOD_VERSIONS["forecast"], "forecast_v1")
+        self.assertEqual(METHOD_VERSIONS["patterns"], "patterns_v1")
+        self.assertEqual(
+            REGISTRY_VERSIONS["holiday_calendar"], "holiday_calendar_v1"
+        )
+
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.db_path = Path(self.temp_dir.name) / "observations.sqlite3"
@@ -686,6 +695,8 @@ class ProvenanceTest(unittest.TestCase):
             "price_signal",
             "dual_source_agreement",
             "provenance",
+            "forecast",
+            "patterns",
         }
         self.assertEqual(EXPECTED_METHOD_KEYS, expected)
         self.assertEqual(set(METHOD_VERSIONS), expected)
@@ -862,17 +873,26 @@ class ProvenanceTest(unittest.TestCase):
         self.assertEqual(statistics["calendar.2026-10-01.min"]["sources"], ["juhe"])
 
     def test_weekday_version_is_v2_without_value_change(self):
+        from datetime import date, timedelta
+
         from method_registry import METHOD_VERSIONS
         from price_calendar import analyze_weekday_pattern
 
+        today = date.today()
+        first_monday = today + timedelta(days=(7 - today.weekday()) % 7 or 7)
+        first_tuesday = first_monday + timedelta(days=1)
         calendar = {
             "dates": {
-                "2026-07-27": {"min_price": 100},
-                "2026-08-03": {"min_price": 100},
-                "2026-08-10": {"min_price": 1000},
-                "2026-07-28": {"min_price": 200},
-                "2026-08-04": {"min_price": 200},
-                "2026-08-11": {"min_price": 200},
+                (first_monday + timedelta(days=7 * week)).isoformat(): {
+                    "min_price": price
+                }
+                for week, price in enumerate((100, 100, 1000))
+            }
+            | {
+                (first_tuesday + timedelta(days=7 * week)).isoformat(): {
+                    "min_price": 200
+                }
+                for week in range(3)
             }
         }
         result = analyze_weekday_pattern(calendar, min_samples=6)
