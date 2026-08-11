@@ -314,7 +314,10 @@ class ProvenanceTest(unittest.TestCase):
             self.assertIn("bucket", entry)
             self.assertIn("dual_source_agreement", entry)
             self.assertEqual(entry["computed_at"], "2026-07-23T10:00:00+08:00")
-        self.assertEqual(enriched["versions"], dict(METHOD_VERSIONS))
+        expected_versions = dict(METHOD_VERSIONS)
+        expected_versions.pop("forecast")
+        expected_versions.pop("patterns")
+        self.assertEqual(enriched["versions"], expected_versions)
         self.assertEqual(
             enriched["price_signal"]["provenance"]["stat_key"],
             "price_signal.history_position",

@@ -111,7 +111,10 @@ class LccRegistryTest(unittest.TestCase):
         self.assertEqual(EXPECTED_LCC_CARRIER_CODES, expected)
         self.assertEqual(set(LCC_CARRIERS), expected)
         self.assertTrue(validate_lcc_carriers())
-        self.assertEqual(EXPECTED_REGISTRY_KEYS, {"lcc_registry"})
+        self.assertEqual(
+            EXPECTED_REGISTRY_KEYS,
+            {"lcc_registry", "holiday_calendar"},
+        )
         self.assertEqual(REGISTRY_VERSIONS["lcc_registry"], "lcc_v1")
         self.assertEqual(method_version("lcc_registry"), "lcc_v1")
         self.assertIn("GJ", HYBRID_NOTES)
