@@ -26,6 +26,16 @@ from airports import (
 )
 from analyzer import apply_default_rules, build_price_hint_from_calendar
 from airlines import LCC_POLICIES, resolve_lcc_policy
+from constraint_summary import build_constraint_summary, format_constraint_summary
+from form_structure import (
+    FORM_STATIONS,
+    build_default_chips,
+    form_structure_payload,
+    subscription_to_form_values,
+    summarize_stations,
+)
+from pricing import passenger_rate_sum
+
 from filename_utils import sanitize_filename
 from log_utils import safe_log
 from price_calendar import load_calendar
@@ -751,6 +761,65 @@ FORM_TEMPLATE = """
       .button-row { grid-template-columns: 1fr; }
       .step-nav-row { grid-template-columns: 1fr; }
     }
+    .station-legend {
+      align-items: flex-start;
+      display: flex;
+      gap: 12px;
+      justify-content: space-between;
+      width: 100%;
+    }
+    .station-title {
+      color: #17223b;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .station-summary {
+      color: #5f6b7a;
+      font-size: 13px;
+      font-weight: 400;
+      line-height: 1.45;
+      text-align: right;
+    }
+    #form-field-warehouse {
+      display: none;
+    }
+    .form-source-block {
+      border: 0;
+      margin: 0;
+      padding: 0;
+    }
+    .station-depth-note {
+      background: #f5f8fc;
+      border-left: 3px solid #1a73e8;
+      color: #435069;
+      margin: 10px 0 14px;
+      padding: 10px 12px;
+    }
+    .scenario-preset-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 8px 0 12px;
+      min-height: 34px;
+    }
+    .scenario-preset-chip {
+      background: #eef5ff;
+      border: 1px solid #b8cff3;
+      border-radius: 6px;
+      color: #174b8a;
+      cursor: pointer;
+      margin: 0;
+      padding: 7px 10px;
+      width: auto;
+    }
+    #constraint-summary-preview {
+      color: #435069;
+      line-height: 1.7;
+      margin-top: 8px;
+    }
+    #station-body-who #pref-detail-companions {
+      display: block;
+    }
   </style>
 </head>
 <body>
@@ -768,34 +837,49 @@ FORM_TEMPLATE = """
   </div>
 
   <div id="mobile-stepper">
-    <div class="step-dots" id="step-dots">● ○ ○ ○</div>
-    <div id="step-label">第1步/共4步：行程信息</div>
+    <div class="step-dots" id="step-dots">● ○ ○ ○ ○ ○</div>
+    <div id="step-label">第1站/共6站：去哪</div>
   </div>
 
-  <form id="subscription-form" method="post" action="{{ url_for('subscribe') }}">
+  <form
+    id="subscription-form"
+    method="post"
+    action="{{ url_for('subscribe') }}"
+    data-field-owners='{{ form_structure.field_owners|tojson }}'
+    data-visibility-rules='{{ form_structure.visibility_rules|tojson }}'
+  >
     <input type="hidden" id="subscription_index" name="subscription_index" value="{{ edit_index if edit_index is not none else '' }}">
+    <input type="hidden" id="monitor_mode" name="monitor_mode" value="quick">
     {% if form_error %}
       <div class="server-error">{{ form_error }}</div>
     {% endif %}
-    <div class="mode-toggle">
-      <div class="mode-toggle-title">模式</div>
-      <div class="choice">
-        <label><input type="radio" name="monitor_mode" value="quick" checked> 快速监控</label>
-        <label><input type="radio" name="monitor_mode" value="precise"> 精准监控</label>
-      </div>
-      <p class="hint">快速监控只填写基础信息；精准监控会展开补充偏好和筛选规则。</p>
-    </div>
-    <div id="quick-defaults-note" class="quick-defaults-note quick-mode-top">
-      快速模式已启用默认安全规则：避免红眼、优先含行李、不优先非联程、仅重要变化提醒。需要细调？
-      <button id="open-precise-mode" class="secondary-button" type="button">切换精准模式</button>
+    <div id="quick-defaults-note" class="station-depth-note">
+      先按六站填写事实即可；展开进阶设置后，系统自动保留为精准深度。
     </div>
     <div id="required-progress" class="required-progress incomplete">
       <div class="required-progress-title">还需填写：</div>
       <ul id="required-missing-list"></ul>
     </div>
 
-    <fieldset class="form-step active" data-step="1">
-      <legend>行程信息</legend>
+    <div id="form-station-flow">
+      {% for station in form_stations %}
+      <fieldset class="form-step{% if station.number == 1 %} active{% endif %}" data-step="{{ station.number }}" data-station-id="{{ station.id }}">
+        <legend class="station-legend">
+          <span class="station-title">{{ station.number }}. {{ station.title }}</span>
+          <span class="station-summary" data-station-summary="{{ station.id }}">尚未填写</span>
+        </legend>
+        {% if station.id == "flight_preferences" %}
+        <p class="hint">已按出行场景预设；展开后可逐项修改。</p>
+        <div id="scenario-preset-chips" class="scenario-preset-chips" aria-live="polite"></div>
+        <button id="advanced-depth-toggle" class="secondary-button" type="button" data-advanced-depth>展开完整飞行偏好</button>
+        {% endif %}
+        <div id="station-body-{{ station.id }}"></div>
+      </fieldset>
+      {% endfor %}
+    </div>
+
+    <div id="form-field-warehouse">
+    <section class="form-source-block" data-form-section="where">
 
       <label>航线类型</label>
       <div class="choice">
@@ -830,6 +914,9 @@ FORM_TEMPLATE = """
       <div id="destination-airport-tags" class="airport-tags"></div>
       <input id="destination_airports_active" name="destination_airports_active" type="hidden">
 
+    </section>
+    <section class="form-source-block" data-form-section="when">
+
       <label>单程 / 往返</label>
       <div class="choice">
         <label><input type="radio" name="round_trip" value="false" checked> 单程</label>
@@ -858,7 +945,7 @@ FORM_TEMPLATE = """
             <label>会议/办事开始时间 <input name="business_start" type="time" value="10:00"></label>
             <label>会议/办事结束时间 <input name="business_end" type="time" value="17:00"></label>
           </div>
-          <p class="hint">精准模式会按机场等级、车程估算和冗余设置精确反推航班窗口。</p>
+          <p class="hint">展开进阶设置后，可按机场等级、车程估算和冗余参数精确反推航班窗口。</p>
         </div>
         <label>会议地点/区域 <input name="meeting_location" type="text" placeholder="例如 国贸 / 陆家嘴 / 某酒店"></label>
         <label>会议重要程度</label>
@@ -867,14 +954,18 @@ FORM_TEMPLATE = """
           <label><input type="radio" name="meeting_importance" value="important" checked> 重要会议</label>
           <label><input type="radio" name="meeting_importance" value="critical"> 不可迟到</label>
         </div>
-        <p class="hint quick-only">快速模式只需填写会议事实；机场提前量、交通冗余、落地离场、延误和会前准备由系统自动计算。</p>
+        <p class="hint quick-only">基础填写只需提供会议事实；机场提前量、交通冗余、落地离场、延误和会前准备由系统自动计算。</p>
       </div>
+
+    </section>
+    <section class="form-source-block" data-form-section="who">
 
       <div id="trip-feasibility-fields" class="precise-only">
         <label>行程可行性分析(选填,填了才分析)</label>
         <div class="inline-grid">
-          <label>去程:计划动身前往机场的时间 <input name="outbound_set_off" type="time"></label>
-          <label data-show-if="round_trip=true">返程:计划动身前往机场的时间 <input name="return_set_off" type="time"></label>
+          <label>去程:最早几点能出门? <input name="outbound_set_off" type="time"></label>
+          <label data-show-if="round_trip=true">返程:最早几点能从目的地出发? <input name="return_set_off" type="time"></label>
+          <p class="hint">用于判断能否赶上早班机。</p>
         </div>
         <p id="airport-buffer-preview" class="hint">机场标准缓冲:系统按航线类型和机场等级自动设定</p>
         <label>机场车程(分钟,选填)
@@ -901,6 +992,9 @@ FORM_TEMPLATE = """
         <p class="hint" data-show-if="route_type=greater_china">港澳台:系统将叠加值机+出入境查验缓冲(120-150分钟)。</p>
       </div>
 
+    </section>
+    <section class="form-source-block" data-form-section="when">
+
       <div id="return-date-wrap" data-show-if="round_trip=true">
         <label for="return_date">返程日期</label>
         <input id="return_date" name="return_date" type="date">
@@ -924,10 +1018,9 @@ FORM_TEMPLATE = """
       </div>
       <p class="hint">用于寻找前后日期的低价航班</p>
 
-    </fieldset>
+    </section>
 
-    <fieldset class="form-step" data-step="2">
-      <legend>价格和中转</legend>
+    <section class="form-source-block" data-form-section="budget">
 
       <label>价格策略</label>
       <div class="choice">
@@ -964,6 +1057,9 @@ FORM_TEMPLATE = """
       <input id="price_tolerance_custom" name="price_tolerance_custom" type="hidden">
       <p class="hint">中转接受程度会影响是否推荐低价中转方案；托运行李会影响实际支付价，不含行李的低价会被降权。</p>
 
+    </section>
+    <section class="form-source-block" data-form-section="flight_preferences">
+
       <label>中转接受程度</label>
       <div class="choice">
         <label><input type="radio" name="transfer_policy" value="direct_only"> 必须直飞</label>
@@ -977,10 +1073,9 @@ FORM_TEMPLATE = """
         <label><input type="radio" name="baggage" value="not_needed"> 不需要</label>
         <label><input type="radio" name="baggage" value="unknown"> 不确定</label>
       </div>
-    </fieldset>
+    </section>
 
-    <fieldset class="form-step" data-step="3">
-      <legend>监控目标与提醒</legend>
+    <section class="form-source-block" data-form-section="notifications">
       <label>主目标</label>
       <div class="choice">
         <label><input type="radio" name="primary_goal" value="price_drop_alert" required> 找到合适价格时提醒我 <small style="color:gray">（适合还没急着买，等低价）</small></label>
@@ -996,7 +1091,7 @@ FORM_TEMPLATE = """
         <label><input type="radio" name="notification_method" value="both"> 邮箱 + 微信(PushPlus)都接收</label>
         <label><input type="radio" name="notification_method" value="page_only"> 暂时只在页面查看</label>
       </div>
-      <div id="email-reminder-wrap" data-show-if="notification_method=email|both">
+      <div id="email-reminder-wrap" data-show-if="email=true">
         <label for="notification_email">邮箱地址</label>
         <input id="notification_email" name="notification_email" type="email" placeholder="you@example.com">
         <p class="hint">支持任意邮箱。注意：Gmail在国内需翻墙才能查看，推荐用QQ/163/Outlook</p>
@@ -1012,7 +1107,7 @@ FORM_TEMPLATE = """
       </div>
       <p class="hint">提醒频率越高越及时，但打扰也更多。</p>
       <input id="notification_frequency_rule_shadow" type="hidden" name="notification_frequency_rule" value="important_only">
-      <div class="sub-options" data-show-if="notification_frequency=price_change">
+      <div class="sub-options" data-show-if="threshold=true">
         <label>什么算价格变化？</label>
         <div class="choice">
           <label><input type="radio" name="price_change_threshold" value="any"> 每次变化</label>
@@ -1021,7 +1116,7 @@ FORM_TEMPLATE = """
           <label><input type="radio" name="price_change_threshold" value="low_zone"> 进入低价区间</label>
         </div>
       </div>
-      <div class="sub-options" data-show-if="notification_frequency=daily_digest">
+      <div class="sub-options" data-show-if="digest=true">
         <label>汇总时间</label>
         <div class="choice">
           <label><input type="radio" name="digest_time" value="09:00" checked> 早9点</label>
@@ -1029,6 +1124,9 @@ FORM_TEMPLATE = """
           <label><input type="radio" name="digest_time" value="20:00"> 晚8点</label>
         </div>
       </div>
+
+    </section>
+    <section class="form-source-block" data-form-section="who">
 
       <div class="quick-only">
       <label>购票人数</label>
@@ -1048,6 +1146,9 @@ FORM_TEMPLATE = """
       </div>
       <p class="hint">出行场景用于自动调整价格、时间、风险和舒适度的权重。</p>
       <div id="travel-scenario-notice" class="auto-notice"></div>
+
+    </section>
+    <section class="form-source-block" data-form-section="flight_preferences">
 
       <button id="advanced-toggle" class="secondary-button precise-only" type="button">＋ 补充偏好，让推荐更准确</button>
       <div id="advanced-preferences" class="smart-panel precise-only">
@@ -1105,18 +1206,22 @@ FORM_TEMPLATE = """
           </div>
         </div>
         <div class="sub-options passenger-profile-extra">
+          <div data-show-if="has_elderly=true">
           <label>老人情况（选填）</label>
           <div class="choice">
             <label><input type="radio" name="elderly_condition" value="normal" checked> 普通</label>
             <label><input type="radio" name="elderly_condition" value="limited_walk_transfer"> 不适合长时间步行/换乘</label>
             <label><input type="radio" name="elderly_condition" value="no_redeye_early"> 不适合红眼/过早航班</label>
           </div>
+          </div>
+          <div data-show-if="has_child=true">
           <label>儿童类型（选填）</label>
           <div class="choice">
             <label><input type="radio" name="child_type" value="" checked> 未填写</label>
             <label><input type="radio" name="child_type" value="infant"> 婴儿</label>
             <label><input type="radio" name="child_type" value="preschool"> 学龄前</label>
             <label><input type="radio" name="child_type" value="school_age"> 学龄</label>
+          </div>
           </div>
           <p class="hint">只用于调整直飞、白天、行李和执行风险权重；不收集性别或精确年龄。</p>
         </div>
@@ -1252,7 +1357,7 @@ FORM_TEMPLATE = """
           <label><input type="radio" name="price_sensitivity" value="max"> 价格优先，只要显著便宜都可以看</label>
         </div>
 
-        <div id="domestic-invoice-trigger" data-show-if="route_type=domestic">
+        <div id="domestic-invoice-trigger" data-advanced-depth data-form-section="budget" data-show-if="route_type=domestic">
           <label>国内报销/开票需求</label>
           <div class="choice">
             <label><input type="checkbox" name="invoice_context" value="true"> 有发票、行程单或报销相关要求</label>
@@ -1260,7 +1365,7 @@ FORM_TEMPLATE = """
           <p class="hint">勾选后会展开商务/报销规则；具体开票能力仍以渠道支付页为准。</p>
         </div>
 
-        <div id="business-rules-module" data-show-if="business_context=true">
+        <div id="business-rules-module" data-advanced-depth data-form-section="who" data-show-if="business_context=true">
         <label>出行性质（可多选）</label>
         <div class="choice">
           <label><input type="checkbox" name="trip_natures" value="business"> 商务出差</label>
@@ -1271,6 +1376,7 @@ FORM_TEMPLATE = """
         <div data-show-if="trip_natures=business|meeting|team_building">
         <label>同行总人数</label>
         <input name="team_passenger_count" type="number" min="1" step="1" placeholder="例如 8">
+        <div id="business-cabin-fields" data-form-section="flight_preferences" data-show-if="trip_natures=business|meeting|team_building">
 
         <label>舱位安排</label>
         <div class="choice">
@@ -1280,7 +1386,7 @@ FORM_TEMPLATE = """
         </div>
         <div id="cabin-arrangement-warning" class="field-error">商务舱人数 + 经济舱人数应等于同行总人数</div>
 
-        <div data-show-if="cabin_arrangement=mixed">
+        <div data-show-if="mixed_cabin=true">
           <label>分舱位人数</label>
           <div class="inline-grid">
             <label>商务舱 <input type="number" name="business_seats" min="0" value="0"></label>
@@ -1296,6 +1402,7 @@ FORM_TEMPLATE = """
         </div>
         <p class="hint" data-show-if="cabin_policy=level_based">按职级报销时，系统会结合职级和分舱位人数判断是否需要查询商务舱。</p>
         </div>
+        </div>
 
         <div data-show-if="trip_natures=business">
           <label>你的职级</label>
@@ -1307,7 +1414,7 @@ FORM_TEMPLATE = """
           </div>
         </div>
 
-        <div data-show-if="trip_natures=meeting">
+        <div id="business-meeting-fields" data-advanced-depth data-form-section="when" data-show-if="trip_natures=meeting">
           <label>会议时间</label>
           <div class="inline-grid">
             <label>会议开始时间 <input name="meeting_start" type="time" value="10:00"></label>
@@ -1316,7 +1423,7 @@ FORM_TEMPLATE = """
           <p class="hint">系统会复用当天往返逻辑，按会议时间 + 车程 + 缓冲反推航班时间窗口。</p>
         </div>
 
-        <div data-show-if="trip_natures=team_building">
+        <div data-show-if="team_building=true">
           <label>团建日期弹性</label>
           <div class="choice">
             <label><input type="radio" name="team_date_flexibility" value="fixed" checked> 固定</label>
@@ -1328,6 +1435,7 @@ FORM_TEMPLATE = """
             <label><input type="radio" name="same_flight_required" value="false"> 否</label>
           </div>
         </div>
+        <div id="business-budget-fields" data-advanced-depth data-form-section="budget" data-show-if="business_context=true">
 
         <label>每人报销上限（可选）</label>
         <input name="reimburse_per_person" type="number" min="0" step="1" placeholder="例如 5000">
@@ -1340,6 +1448,7 @@ FORM_TEMPLATE = """
             <label><input type="checkbox" name="invoice_cabin_limit" value="true"> 报销有舱位限制</label>
           </div>
           <p class="hint">国内航线会优先提示航司官网、携程、飞猪、去哪儿等渠道的报销友好度，具体开票能力以平台支付页为准。</p>
+        </div>
         </div>
         </div>
         </div>
@@ -1421,7 +1530,7 @@ FORM_TEMPLATE = """
             <label><input type="radio" name="airline_policy" value="exclude_airlines"> 有不接受的航司吗？</label>
           </div>
 
-          <div data-show-if="airline_policy=exclude_airlines">
+          <div data-show-if="exclude_airlines=true">
             <label>不接受的航司</label>
             <input name="exclude_airlines" placeholder="选填，多个航司用逗号分隔，例如 Spirit, Frontier">
             <div class="choice">
@@ -1440,6 +1549,7 @@ FORM_TEMPLATE = """
           <p class="hint">按执飞航司识别；“仅看廉航”要求全部航段均由廉航执飞。</p>
           </div>
 
+          <div id="advanced-alert-settings" data-advanced-depth data-form-section="notifications" class="precise-only">
           <div class="module-heading">
             <label>提醒规则</label>
             <button class="reset-module" type="button" data-reset-module="alerts">恢复默认</button>
@@ -1453,16 +1563,13 @@ FORM_TEMPLATE = """
             <label><input type="checkbox" name="secondary_goals" value="better_same_day"> 同日更优方案提醒</label>
           </div>
           <p id="date-flex-warning" class="inline-warning">你选了不可调整，但仍可接收前后日期差价参考</p>
+          </div>
 
           <p class="hint">规则越严格，可能匹配的方案越少。如果没有结果，系统会提示你放宽哪些条件</p>
         </fieldset>
       </div>
-    </fieldset>
-
-    <fieldset class="form-step" data-step="4">
-      <legend>完成</legend>
-      <p class="hint">请确认下面的需求摘要，确认后系统会保存订阅并开始监控。</p>
-    </fieldset>
+    </section>
+    </div>
 
     <div id="step-nav">
       <div class="step-nav-row">
@@ -1483,6 +1590,7 @@ FORM_TEMPLATE = """
       <ul id="summary-list"></ul>
       <p class="hint">开始后，系统会立即生成当前购买判断，并在价格进入低价区间、涨价风险升高或出现异常低价时提醒你。</p>
       <div class="submit-preview">
+      <div id="constraint-summary-preview" aria-live="polite"></div>
         提交后将生成：当前是否值得买的判断、推荐方案与备选方案、价格置信度拆解、购买前检查清单，以及为什么排除更便宜方案的解释。
       </div>
       <div class="choice">
@@ -1544,6 +1652,43 @@ FORM_TEMPLATE = """
     const exactLocationAirports = {{ exact_location_airports|tojson }};
     const editSubscription = {{ edit_subscription|tojson }};
 
+    const formStructure = {{ form_structure|tojson }};
+    const stationNumberById = new Map(
+      (formStructure.stations || []).map(station => [station.id, Number(station.number)])
+    );
+
+    function stationNumberForField(fieldName, fallback = 1) {
+      const stationId = (formStructure.field_owners || {})[fieldName];
+      return stationNumberById.get(stationId) || fallback;
+    }
+
+    function mountFormStations() {
+      document.querySelectorAll('[data-form-section]').forEach(section => {
+        const stationId = section.dataset.formSection;
+        const target = document.getElementById(`station-body-${stationId}`);
+        if (target) target.appendChild(section);
+      });
+      const whoBody = document.getElementById('station-body-who');
+      const companionDetail = document.getElementById('pref-detail-companions');
+      if (whoBody && companionDetail) {
+        companionDetail.classList.add('precise-only');
+        whoBody.appendChild(companionDetail);
+      }
+      const preferenceBody = document.getElementById('station-body-flight_preferences');
+      if (preferenceBody) {
+        const depthContent = document.createElement('div');
+        depthContent.id = 'advanced-depth-content';
+        depthContent.hidden = true;
+        while (preferenceBody.firstChild) {
+          depthContent.appendChild(preferenceBody.firstChild);
+        }
+        preferenceBody.appendChild(depthContent);
+      }
+      document.getElementById('form-field-warehouse')?.remove();
+    }
+
+    mountFormStations();
+
     const form = document.getElementById('subscription-form');
     const modeRadios = document.querySelectorAll('input[name="monitor_mode"]');
     const budgetStrategyRadios = document.querySelectorAll('input[name="price_strategy"]');
@@ -1557,8 +1702,12 @@ FORM_TEMPLATE = """
     const missingRequiredWarning = document.getElementById('missing-required-warning');
     const strictRulesWarning = document.getElementById('strict-rules-warning');
     const quickDefaultsNote = document.getElementById('quick-defaults-note');
-    const openPreciseModeButton = document.getElementById('open-precise-mode');
-    const sameDayOpenPreciseButton = document.getElementById('same-day-open-precise');
+    const monitorModeInput = document.getElementById('monitor_mode');
+    const advancedDepthToggle = document.getElementById('advanced-depth-toggle');
+    const advancedDepthContent = document.getElementById('advanced-depth-content');
+    const scenarioPresetChips = document.getElementById('scenario-preset-chips');
+    const constraintSummaryPreview = document.getElementById('constraint-summary-preview');
+
     const originSelect = document.getElementById('origin');
     const originManual = document.querySelector('input[name="origin_manual"]');
     const originValidationError = document.getElementById('origin-validation-error');
@@ -1655,7 +1804,7 @@ FORM_TEMPLATE = """
     const prefCardButtons = document.querySelectorAll('.pref-card-button');
     const prefCardDetails = document.querySelectorAll('.pref-card-detail');
     const resetModuleButtons = document.querySelectorAll('.reset-module');
-    const stepTitles = ['行程信息', '价格底线', '监控目标', '完成'];
+    const stepTitles = formStructure.stations.map(station => station.title);
     const greaterChinaAirports = new Set(['HKG', 'MFM', 'TPE', 'TSA']);
     const domesticAirports = new Set([
       'PVG','SHA','PEK','PKX','CAN','SZX','CTU','TFU','HGH','NKG','XIY','CKG',
@@ -1663,6 +1812,9 @@ FORM_TEMPLATE = """
     ]);
     let currentStep = 1;
     let routeTypeTouched = false;
+    let advancedDepthExpanded = (
+      editSubscription && editSubscription.monitor_mode === 'precise'
+    );
 
     if (stepTimePreferences && customTimeOptions) {
       stepTimePreferences.appendChild(customTimeOptions);
@@ -1682,30 +1834,44 @@ FORM_TEMPLATE = """
       const field = document.querySelector(`[name="${name}"]:not(:disabled)`);
       return field ? field.value : '';
     }
-    function currentValues(name) {
-      if (name === 'business_context') {
-        const precise = checkedValue('monitor_mode') === 'precise';
-        const scenarios = selectedTravelScenarios();
-        const natures = checkedValues('trip_natures');
-        const domesticInvoiceContext = checkedValue('route_type') === 'domestic' && (
-          Boolean(document.querySelector('input[name="invoice_context"]')?.checked)
-          || ['invoice_needed', 'invoice_special_vat', 'invoice_cabin_limit'].some(fieldName =>
-            Boolean(document.querySelector(`input[name="${fieldName}"]`)?.checked)
-          )
-        );
-        const active = precise && (
-          scenarios.includes('business')
-          || natures.some(value => ['business', 'meeting', 'team_building'].includes(value))
-          || Boolean(sameDayRoundTrip?.checked)
-          || domesticInvoiceContext
-        );
-        return active ? ['true'] : [];
-      }
+    function rawCurrentValues(name) {
       const checked = Array.from(document.querySelectorAll(`input[name="${name}"]:checked`))
         .map(input => input.value);
       if (checked.length) return checked;
-      const value = checkedValue(name);
-      return value ? [value] : [];
+      const field = document.querySelector(`[name="${name}"]`);
+      if (field && field.type === 'checkbox') {
+        return field.checked ? [field.value] : [];
+      }
+      return field && field.value !== '' ? [field.value] : [];
+    }
+
+    function visibilityClauseMatches(clause) {
+      let values = rawCurrentValues(clause.field);
+      if (!values.length && clause.default !== undefined && clause.default !== '') {
+        values = [String(clause.default)];
+      }
+      if (clause.operator === 'gt') {
+        const threshold = Number(clause.value || 0);
+        return values.some(value => Number(value) > threshold);
+      }
+      const expected = new Set((clause.values || []).map(value => String(value).toLowerCase()));
+      return values.some(value => expected.has(String(value).toLowerCase()));
+    }
+
+    function visibilityRuleMatches(rule) {
+      const when = rule.when || {};
+      const allClauses = when.all || [];
+      const anyClauses = when.any || [];
+      return allClauses.every(visibilityClauseMatches)
+        && (!anyClauses.length || anyClauses.some(visibilityClauseMatches));
+    }
+
+    function currentValues(name) {
+      const rule = (formStructure.visibility_rules || []).find(item => item.id === name);
+      if (rule && rule.when) {
+        return visibilityRuleMatches(rule) ? ['true'] : [];
+      }
+      return rawCurrentValues(name);
     }
 
     function conditionalVisible(el) {
@@ -1883,7 +2049,7 @@ FORM_TEMPLATE = """
       stepDots.textContent = stepTitles
         .map((_, index) => index + 1 === currentStep ? '●' : '○')
         .join(' ');
-      stepLabel.textContent = `第${currentStep}步/共4步：${stepTitles[currentStep - 1]}`;
+      stepLabel.textContent = `第${currentStep}站/共${stepTitles.length}站：${stepTitles[currentStep - 1]}`;
       stepPrev.disabled = currentStep === 1;
       stepNext.style.display = currentStep === stepTitles.length ? 'none' : 'block';
       previewButton.classList.remove('step-final-visible');
@@ -2417,6 +2583,14 @@ FORM_TEMPLATE = """
 
     function applyMonitorMode() {
       const precise = checkedValue('monitor_mode') === 'precise';
+      if (advancedDepthContent) {
+        advancedDepthContent.hidden = !advancedDepthExpanded;
+      }
+      if (advancedDepthToggle) {
+        advancedDepthToggle.textContent = advancedDepthExpanded
+          ? '收起完整飞行偏好'
+          : '展开完整飞行偏好';
+      }
       document.querySelectorAll('.precise-only').forEach(el => {
         el.style.display = precise ? 'block' : 'none';
       });
@@ -3019,6 +3193,11 @@ FORM_TEMPLATE = """
     }
 
     function setRadio(name, value, mark = false) {
+      if (name === 'monitor_mode' && monitorModeInput) {
+        monitorModeInput.value = value;
+        if (mark) monitorModeInput.dataset.explicit = 'true';
+        return;
+      }
       const input = document.querySelector(`input[name="${name}"][value="${value}"]`);
       if (!input) return;
       input.checked = true;
@@ -3036,50 +3215,89 @@ FORM_TEMPLATE = """
       }
     }
 
-    const scenarioDefaults = {
-      personal: {
-        notice: '个人出行：默认按价格和便利性均衡处理，可接受合理中转和早晚班。',
-        radios: {price_sensitivity: 'medium', transfer_policy: 'reasonable'}
-      },
-      business: {
-        notice: '商务/会议：已默认提高准点、直飞、可改签和到达时间稳定性的权重。',
-        radios: {time_preference: 'daytime', transfer_policy: 'direct_only', refund_flexibility: 'preferred', airline_policy: 'prefer_full_service'}
-      },
-      tourism: {
-        notice: '旅游：已默认提高低价日期和合理中转权重，适合继续比较前后日期。',
-        radios: {price_sensitivity: 'high', transfer_policy: 'reasonable', date_flexibility: '3'}
-      },
-      family_visit: {
-        notice: '探亲/回家：已默认提高行李明确和合理价格权重，不推荐极端折腾方案。',
-        radios: {baggage: 'required', price_sensitivity: 'medium', transfer_policy: 'reasonable'}
-      },
-      family: {
-        notice: '家庭/亲子：已默认优先白天航班、直飞/短中转、行李明确，降低红眼和高风险中转推荐。',
-        radios: {companions: 'with_child', time_preference: 'no_redeye', transfer_policy: 'reasonable', short_transfer_limit: 'extra_3', baggage: 'required'},
-        constraints: ['direct_preferred', 'no_redeye', 'avoid_long_layover', 'need_baggage', 'daytime_arrival']
-      },
-      elderly: {
-        notice: '有老人同行：已默认优先直飞/短中转、白天到达、全服务航司和可退改方案。',
-        radios: {companions: 'with_elderly', time_preference: 'no_redeye', transfer_policy: 'reasonable', short_transfer_limit: 'extra_3', baggage: 'required', refund_flexibility: 'preferred', airline_policy: 'prefer_full_service'},
-        constraints: ['direct_preferred', 'no_redeye', 'avoid_long_layover', 'need_baggage', 'need_refund_change', 'daytime_arrival']
-      },
-      important: {
-        notice: '重要事项：已启用保守默认规则，优先提前/稳定到达、可退改，降低复杂中转、非联程和红眼风险。',
-        radios: {time_preference: 'no_redeye', transfer_policy: 'direct_only', refund_flexibility: 'required', accept_self_transfer: 'false', accept_overnight_transfer: 'false'},
-        constraints: ['direct_preferred', 'no_redeye', 'need_refund_change', 'daytime_arrival']
-      },
-      price_first: {
-        notice: '价格优先：已默认提高低价权重，允许中转和一定不便，系统仍会提示执行风险。',
-        radios: {price_sensitivity: 'max', transfer_policy: 'price_first'}
-      }
-    };
-
     function showPreciseCompanionSettings() {
       setRadio('monitor_mode', 'precise');
       applyMonitorMode();
-      setSmartPanel(advanced, true);
       togglePrefDetail('companions');
       document.getElementById('pref-detail-companions')?.scrollIntoView({behavior: 'smooth', block: 'center'});
+    }
+
+    function applyChipValue(chip) {
+      const matching = document.querySelector(
+        `input[name="${chip.field}"][value="${chip.value}"]`
+      );
+      if (matching?.type === 'checkbox') {
+        matching.checked = true;
+      } else if (matching) {
+        setRadio(chip.field, chip.value);
+      } else {
+        const field = document.querySelector(`[name="${chip.field}"]`);
+        if (field) field.value = chip.value;
+      }
+      if (matching) matching.dataset.explicit = 'true';
+      setRadio('monitor_mode', 'precise', true);
+      applyMonitorMode();
+      refreshDefaultsPreview();
+    }
+
+    function renderDefaultChips(chips) {
+      if (!scenarioPresetChips) return;
+      scenarioPresetChips.replaceChildren();
+      (chips || []).forEach(chip => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'scenario-preset-chip';
+        button.textContent = `${chip.label} ✓`;
+        button.dataset.field = chip.field;
+        button.dataset.value = chip.value;
+        button.addEventListener('click', () => applyChipValue(chip));
+        scenarioPresetChips.appendChild(button);
+      });
+    }
+
+    function renderStationSummaries(summaries) {
+      Object.entries(summaries || {}).forEach(([stationId, text]) => {
+        const target = document.querySelector(
+          `[data-station-summary="${stationId}"]`
+        );
+        if (target) target.textContent = text;
+      });
+    }
+
+    function renderConstraintSummary(text) {
+      if (!constraintSummaryPreview) return;
+      constraintSummaryPreview.textContent = text || '\u4f9d\u636e:\u672a\u8bbe\u7f6e\u786c\u7ea6\u675f';
+    }
+
+    async function refreshDefaultsPreview() {
+      try {
+        const response = await fetch('/defaults_preview', {
+          method: 'POST',
+          body: new FormData(form)
+        });
+        const data = await response.json();
+        renderStationSummaries(data.station_summaries);
+        if (!data.ok) return data;
+        renderDefaultChips(data.chips);
+        renderConstraintSummary(data.constraint_summary_text);
+        if (travelScenarioNotice) {
+          const lines = data.defaults_applied || [];
+          travelScenarioNotice.textContent = lines.length
+            ? `已预设：${lines.join('；')}`
+            : '';
+          travelScenarioNotice.style.display = lines.length ? 'block' : 'none';
+        }
+        return data;
+      } catch (error) {
+        console.warn('[表单预览] 本地默认预览失败', error);
+        return {ok: false};
+      }
+    }
+
+    let defaultsPreviewTimer = null;
+    function scheduleDefaultsPreview() {
+      window.clearTimeout(defaultsPreviewTimer);
+      defaultsPreviewTimer = window.setTimeout(refreshDefaultsPreview, 180);
     }
 
     function applyTravelScenarioDefaults() {
@@ -3093,111 +3311,52 @@ FORM_TEMPLATE = """
         setCheckbox('travel_scenario', 'personal', true);
         scenarios = ['personal'];
       }
-      const configs = scenarios.map(value => scenarioDefaults[value] || scenarioDefaults.personal);
-      clearAutoSuggestions();
-      document.querySelectorAll('input[name="companion_constraints"]').forEach(input => {
-        input.checked = false;
-        input.closest('label')?.classList.remove('auto-suggested');
-      });
-      configs.forEach(config => {
-        Object.entries(config.radios || {}).forEach(([name, value]) => setRadio(name, value, true));
-        (config.constraints || []).forEach(value => setCheckbox('companion_constraints', value, true, true));
-      });
-      toggleTimePreference();
-      toggleShortTransferOptions();
       updateConditionalFields();
-      syncPrefCards();
-      if (travelScenarioNotice) {
-        const scenarioText = selectedLabels('travel_scenario').join(' + ');
-        const notices = configs.map(config => config.notice).filter(Boolean);
-        const tradeoffs = [];
-        if (scenarios.includes('tourism') && scenarios.includes('family')) {
-          tradeoffs.push('说明：孩子出行的安全舒适要求会优先于纯价格考虑。');
-        }
-        if (scenarios.includes('elderly') && scenarios.includes('family_visit')) {
-          tradeoffs.push('说明：老人同行的直飞、白天到达和稳定性会优先于极致低价。');
-        }
-        if (scenarios.includes('price_first') && scenarios.includes('important')) {
-          tradeoffs.push('说明：重要事项会先保证可靠性，再在可靠方案中选择更低价格。');
-        }
-        travelScenarioNotice.innerHTML = `已按【${scenarioText}】组合启用规则：<br>${notices.map(item => `✓ ${item}`).join('<br>')}${tradeoffs.length ? '<br>' + tradeoffs.join('<br>') : ''} <button id="scenario-open-precise" class="link-button" type="button">想调整？进入精准设置</button>`;
-        travelScenarioNotice.style.display = 'block';
-        document.getElementById('scenario-open-precise')?.addEventListener('click', showPreciseCompanionSettings);
-      }
+      refreshDefaultsPreview();
       refreshSummaryIfFinalStep();
+    }
+
+    function hydrateFormValues(data) {
+      Object.entries(data || {}).forEach(([name, rawValue]) => {
+        const controls = Array.from(document.querySelectorAll(`[name="${name}"]`));
+        if (!controls.length || rawValue === undefined || rawValue === null) return;
+        const selectedValues = Array.isArray(rawValue)
+          ? rawValue.map(value => String(value))
+          : [String(rawValue)];
+        controls.forEach(control => {
+          if (control.type === 'radio') {
+            control.checked = selectedValues.includes(control.value);
+            return;
+          }
+          if (control.type === 'checkbox') {
+            control.checked = Array.isArray(rawValue)
+              ? selectedValues.includes(control.value)
+              : rawValue === true || ['1', 'true', 'yes', 'on'].includes(String(rawValue).toLowerCase());
+            return;
+          }
+          control.value = Array.isArray(rawValue) ? selectedValues.join(',') : String(rawValue);
+        });
+      });
     }
 
     function applyEditSubscription(data) {
       if (!data || !Object.keys(data).length) return;
-      document.getElementById('subscription_index').value = data._index ?? document.getElementById('subscription_index').value;
-      if (data.origin_type === 'city' && originSelect.querySelector(`option[value="${data.origin}"]`)) {
-        originSelect.value = data.origin;
-      } else {
-        originSelect.value = 'OTHER';
-        originManual.value = data.origin || '';
-      }
-      destinationInput.value = data.destination || '';
+      const indexInput = document.getElementById('subscription_index');
+      indexInput.value = data.subscription_index ?? indexInput.value;
+      if (data.route_type) routeTypeTouched = true;
+      applyLocationFromTemplate(data);
+      hydrateFormValues(data);
       updateOriginAirportHint(data.origin_airports_active || data.origin_airports);
       updateDestinationAirportHint(data.destination_airports_active || data.destination_airports || data.dest_airports);
-      const savedRouteType = (data.basic && data.basic.route_type) || data.route_type || '';
-      if (savedRouteType) {
-        routeTypeTouched = true;
-        setRadio('route_type', savedRouteType);
-      }
-      setRadio('round_trip', String(Boolean(data.round_trip)));
-      form.depart_date.value = data.depart_date || '';
-      if (data.return_date) {
-        returnDate.value = data.return_date;
-      }
-      setRadio('date_flexibility', String(data.date_flexibility ?? 0));
-      const hard = data.hard_constraints || {};
-      const soft = data.soft_preferences || {};
-      const goals = data.notification_goals || {};
-      if (data.monitor_mode) setRadio('monitor_mode', data.monitor_mode);
-      if (hard.budget_strategy) setRadio('price_strategy', hard.budget_strategy);
-      if (hard.max_budget) maxBudgetInput.value = hard.max_budget;
-      if (hard.target_price || soft.target_price) targetPriceInput.value = hard.target_price || soft.target_price;
-      setRadio('max_budget_scope', normalizePriceScopeForForm(hard.max_budget_scope || hard.budget_scope || data.max_budget_scope || data.budget_scope || 'per_person'));
-      setRadio('target_price_scope', normalizePriceScopeForForm(hard.target_price_scope || soft.target_price_scope || hard.budget_scope || data.target_price_scope || 'per_person'));
-      if (hard.transfer_policy) setRadio('transfer_policy', hard.transfer_policy);
-      if (hard.baggage) setRadio('baggage', hard.baggage);
-      const savedScenarios = Array.isArray(soft.travel_scenarios)
-        ? soft.travel_scenarios
-        : String(soft.travel_scenarios || soft.travel_scenario || '').split(',').map(item => item.trim()).filter(Boolean);
-      if (savedScenarios.length) {
-        document.querySelectorAll('input[name="travel_scenario"]').forEach(input => { input.checked = false; });
-        savedScenarios.forEach(value => setCheckbox('travel_scenario', value, true));
-      }
-      if (soft.companions) setRadio('companions', soft.companions);
-      const savedCompanionConstraints = Array.isArray(soft.companion_constraints)
-        ? soft.companion_constraints
-        : String(soft.companion_constraints || '').split(',').map(item => item.trim()).filter(Boolean);
-      savedCompanionConstraints.forEach(value => setCheckbox('companion_constraints', value, true));
-      const soloTravelInput = document.querySelector('input[name="solo_travel"]');
-      const noLateArrivalInput = document.querySelector('input[name="no_late_arrival"]');
-      const preferDaytimeArrivalInput = document.querySelector('input[name="prefer_daytime_arrival"]');
-      if (soloTravelInput) soloTravelInput.checked = Boolean(soft.solo_travel);
-      if (noLateArrivalInput) noLateArrivalInput.checked = Boolean(soft.no_late_arrival);
-      if (preferDaytimeArrivalInput) preferDaytimeArrivalInput.checked = Boolean(soft.prefer_daytime_arrival);
-      const savedTimeMode = soft.time_preference_mode || soft.time_preference || hard.time_preference;
-      if (savedTimeMode) setRadio('time_preference', savedTimeMode === 'any' ? 'unlimited' : savedTimeMode);
-      if (soft.refund_flexibility) setRadio('refund_flexibility', soft.refund_flexibility);
-      if (soft.price_sensitivity) setRadio('price_sensitivity', soft.price_sensitivity);
-      if (soft.airline_policy) setRadio('airline_policy', soft.airline_policy);
-      setRadio('lcc_policy', data.lcc_policy || hard.lcc_policy || 'any');
-      if (soft.exclude_airlines) form.exclude_airlines.value = (soft.exclude_airlines || []).join(', ');
-      if (hard.accept_self_transfer !== undefined) setRadio('accept_self_transfer', String(Boolean(hard.accept_self_transfer)));
-      if (hard.accept_overnight_transfer !== undefined) setRadio('accept_overnight_transfer', String(Boolean(hard.accept_overnight_transfer)));
-      if (goals.primary) setRadio('primary_goal', goals.primary);
-      secondaryGoalChecks.forEach(check => {
-        check.checked = (goals.secondary || []).includes(check.value);
-      });
-      if (goals.method) setRadio('notification_method', goals.method);
-      if (goals.email) notificationEmailInput.value = goals.email;
-      if (goals.frequency) {
-        setRadio('notification_frequency', goals.frequency);
-        syncNotificationFrequencyShadow();
-      }
+      applyMonitorMode();
+      toggleBudgetRequired();
+      toggleNotificationMethod();
+      syncNotificationFrequencyShadow();
+      syncSameDayRoundTrip();
+      toggleReturnDate();
+      updateConditionalFields();
+      updateRequiredProgress();
+      syncPrefCards();
     }
 
     function slotSummary(name, labelMap) {
@@ -3286,22 +3445,22 @@ FORM_TEMPLATE = """
     }
 
     const summaryEditTargets = {
-      route_type: {step: 1, selector: 'input[name="route_type"]'},
-      route: {step: 1, selector: '#destination'},
-      trip_dates: {step: 1, selector: 'input[name="round_trip"]'},
-      date_flexibility: {step: 1, selector: 'input[name="date_flexibility"]'},
-      price_strategy: {step: 2, selector: 'input[name="price_strategy"]'},
-      transfer_policy: {step: 2, selector: 'input[name="transfer_policy"]'},
-      baggage: {step: 2, selector: 'input[name="baggage"]'},
-      scenarios: {step: 3, selector: 'input[name="travel_scenario"]'},
-      passengers: {step: 3, selector: 'input[name="passenger_count"], input[name="adult_count"]'},
-      primary_goal: {step: 3, selector: 'input[name="primary_goal"]'},
-      notification: {step: 3, selector: 'input[name="notification_method"]'},
-      notification_frequency: {step: 3, selector: 'input[name="notification_frequency"]'},
-      precise_companions: {step: 3, selector: '#advanced-preferences'},
-      precise_time: {step: 3, selector: '#pref-detail-time'},
-      precise_business: {step: 3, selector: '#business-rules-module'},
-      precise_rules: {step: 3, selector: '#advanced-rules'}
+      route_type: {step: stationNumberForField('route_type'), selector: 'input[name="route_type"]'},
+      route: {step: stationNumberForField('destination'), selector: '#destination'},
+      trip_dates: {step: stationNumberForField('depart_date'), selector: 'input[name="round_trip"]'},
+      date_flexibility: {step: stationNumberForField('date_flexibility'), selector: 'input[name="date_flexibility"]'},
+      price_strategy: {step: stationNumberForField('price_strategy'), selector: 'input[name="price_strategy"]'},
+      transfer_policy: {step: stationNumberForField('transfer_policy'), selector: 'input[name="transfer_policy"]'},
+      baggage: {step: stationNumberForField('baggage'), selector: 'input[name="baggage"]'},
+      scenarios: {step: stationNumberForField('travel_scenario'), selector: 'input[name="travel_scenario"]'},
+      passengers: {step: stationNumberForField('passenger_count'), selector: 'input[name="passenger_count"], input[name="adult_count"]'},
+      primary_goal: {step: stationNumberForField('primary_goal'), selector: 'input[name="primary_goal"]'},
+      notification: {step: stationNumberForField('notification_method'), selector: 'input[name="notification_method"]'},
+      notification_frequency: {step: stationNumberForField('notification_frequency'), selector: 'input[name="notification_frequency"]'},
+      precise_companions: {step: stationNumberForField('companions'), selector: '#advanced-preferences'},
+      precise_time: {step: stationNumberForField('time_preference'), selector: '#pref-detail-time'},
+      precise_business: {step: stationNumberForField('trip_natures'), selector: '#business-rules-module'},
+      precise_rules: {step: stationNumberForField('transfer_policy'), selector: '#advanced-rules'}
     };
 
     function highlightField(el) {
@@ -3632,11 +3791,11 @@ FORM_TEMPLATE = """
       addSummaryHeader(
         checkedValue('monitor_mode') === 'precise'
           ? '【系统默认规则】'
-          : '【系统默认规则】（快速模式自动套用）'
+          : '【系统默认规则】（基础填写自动套用）'
       );
       systemDefaultRulesForSummary().forEach(rule => addSummaryLine(rule, 'summary-default-rule'));
       if (checkedValue('monitor_mode') !== 'precise') {
-        addSummaryLine('你可以展开“精准监控”修改这些默认规则');
+        addSummaryLine('你可以展开进阶设置修改这些默认规则');
       }
       addSummaryLine('未填写的偏好将按普通出行默认处理');
       return;
@@ -3907,13 +4066,15 @@ FORM_TEMPLATE = """
       }
       goToStep(currentStep + 1);
     });
-    mobileSummaryButton?.addEventListener('click', () => {
+    mobileSummaryButton?.addEventListener('click', async () => {
+      await refreshDefaultsPreview();
       buildSummary();
       summaryCard.style.display = 'block';
       summaryCard.scrollIntoView({behavior: 'smooth', block: 'start'});
     });
-    mobileSubmitButton?.addEventListener('click', () => {
+    mobileSubmitButton?.addEventListener('click', async () => {
       if (summaryCard.style.display !== 'block') {
+        await refreshDefaultsPreview();
         buildSummary();
         summaryCard.style.display = 'block';
       }
@@ -3921,6 +4082,41 @@ FORM_TEMPLATE = """
     });
 
     window.addEventListener('resize', updateStepper);
+
+    advancedDepthToggle?.addEventListener('click', () => {
+      if (advancedDepthContent && !advancedDepthContent.hidden) {
+        advancedDepthExpanded = false;
+        advancedDepthContent.hidden = true;
+        advancedDepthToggle.textContent = '展开完整飞行偏好';
+        return;
+      }
+      advancedDepthExpanded = true;
+      setRadio('monitor_mode', 'precise', true);
+      applyMonitorMode();
+      advancedDepthContent?.scrollIntoView({behavior: 'smooth', block: 'start'});
+    });
+
+    document.querySelectorAll(
+      '#station-body-who details, #station-body-flight_preferences details'
+    ).forEach(detail => {
+      detail.dataset.advancedDepth = '';
+      detail.addEventListener('toggle', () => {
+        if (!detail.open) return;
+        advancedDepthExpanded = true;
+        setRadio('monitor_mode', 'precise', true);
+        applyMonitorMode();
+      });
+    });
+
+    document.querySelectorAll('[data-advanced-depth] input, [data-advanced-depth] select').forEach(control => {
+      control.addEventListener('change', () => {
+        if (control.disabled) return;
+        advancedDepthExpanded = true;
+        control.dataset.explicit = 'true';
+        setRadio('monitor_mode', 'precise', true);
+        applyMonitorMode();
+      });
+    });
 
     advancedToggle.addEventListener('click', () => {
       const expanded = advanced.classList.contains('open');
@@ -3934,7 +4130,7 @@ FORM_TEMPLATE = """
       rulesToggle.textContent = expanded ? '＋ 更细的筛选规则' : '－ 收起筛选规则';
     });
 
-    previewButton.addEventListener('click', () => {
+    previewButton.addEventListener('click', async () => {
       toggleBudgetRequired();
       toggleReturnDate();
       const missing = updateRequiredProgress();
@@ -3953,6 +4149,7 @@ FORM_TEMPLATE = """
       if (!form.reportValidity()) {
         return;
       }
+      await refreshDefaultsPreview();
       buildSummary();
       summaryCard.style.display = 'block';
       summaryCard.scrollIntoView({behavior: 'smooth', block: 'start'});
@@ -4069,20 +4266,6 @@ FORM_TEMPLATE = """
     document.querySelectorAll('.pref-card-detail input, .pref-card-detail select').forEach(input => {
       input.addEventListener('change', syncPrefCards);
     });
-    openPreciseModeButton?.addEventListener('click', () => {
-      setRadio('monitor_mode', 'precise');
-      applyMonitorMode();
-      setSmartPanel(advanced, true);
-      setSmartPanel(advancedRules, true);
-      advancedToggle.textContent = '－ 收起补充偏好';
-      rulesToggle.textContent = '－ 收起筛选规则';
-      advanced.scrollIntoView({behavior: 'smooth', block: 'start'});
-    });
-    sameDayOpenPreciseButton?.addEventListener('click', () => {
-      setRadio('monitor_mode', 'precise');
-      applyMonitorMode();
-      document.querySelector('input[name="business_start"]')?.focus();
-    });
     transferRadios.forEach(radio => radio.addEventListener('change', () => {
       toggleShortTransferOptions();
       updateConditionalFields();
@@ -4124,10 +4307,12 @@ FORM_TEMPLATE = """
     applyDefaultSecondaryGoals();
     setupSavedTemplatePrompt();
     updateStepper();
+    refreshDefaultsPreview();
     form.addEventListener('input', () => {
       updateRequiredProgress();
       updateStrictRulesWarning();
       refreshSummaryIfFinalStep();
+      scheduleDefaultsPreview();
     });
     form.addEventListener('change', () => {
       updateConditionalFields();
@@ -4135,8 +4320,9 @@ FORM_TEMPLATE = """
       updateStrictRulesWarning();
       syncPrefCards();
       refreshSummaryIfFinalStep();
+      scheduleDefaultsPreview();
     });
-    form.addEventListener('submit', event => {
+    form.addEventListener('submit', async event => {
       const missing = updateRequiredProgress();
       if (missing.length) {
         event.preventDefault();
@@ -4166,6 +4352,7 @@ FORM_TEMPLATE = """
         if (!form.reportValidity()) {
           return;
         }
+        await refreshDefaultsPreview();
         buildSummary();
         summaryCard.style.display = 'block';
         summaryCard.scrollIntoView({behavior: 'smooth', block: 'start'});
@@ -5783,7 +5970,9 @@ def index():
             candidate_index = int(edit_arg)
             subscriptions = load_subscriptions()
             if 0 <= candidate_index < len(subscriptions):
-                edit_subscription = {**subscriptions[candidate_index], "_index": candidate_index}
+                edit_subscription = subscription_to_form_values(
+                    {**subscriptions[candidate_index], "_index": candidate_index}
+                )
                 edit_index = candidate_index
         except ValueError:
             edit_subscription = None
@@ -5798,8 +5987,69 @@ def index():
         exact_location_airports=EXACT_LOCATION_AIRPORTS,
         edit_subscription=edit_subscription or {},
         edit_index=edit_index,
+        form_stations=FORM_STATIONS,
+        form_structure=form_structure_payload(),
         form_error="",
     )
+
+
+@app.post("/defaults_preview")
+def defaults_preview():
+    """只读预览现有默认规则、六站摘要和共用约束依据。"""
+    station_summaries = summarize_stations(request.form)
+    try:
+        subscription = build_subscription(request.form)
+        subscription_with_defaults = apply_default_rules(subscription)
+        hard = subscription_with_defaults.get("hard_constraints") or {}
+        soft = subscription_with_defaults.get("soft_preferences") or {}
+        passengers = soft.get("passengers") or {}
+        route_type = (
+            subscription_with_defaults.get("route_type")
+            or (subscription_with_defaults.get("basic") or {}).get("route_type")
+        )
+        max_budget = hard.get("max_budget")
+        scope = str(
+            hard.get("max_budget_scope")
+            or hard.get("budget_scope")
+            or "per_person"
+        ).strip()
+        comparison_budget = max_budget
+        if max_budget not in (None, "") and scope == "per_person":
+            comparison_budget = float(max_budget) * passenger_rate_sum(
+                passengers,
+                route_type,
+            )
+        constraint_parts = build_constraint_summary(
+            hard,
+            max_budget=comparison_budget,
+            passengers=passengers,
+            route_type=route_type,
+        )
+        return jsonify(
+            {
+                "ok": True,
+                "station_summaries": station_summaries,
+                "defaults_applied": subscription_with_defaults.get(
+                    "defaults_applied",
+                    [],
+                ),
+                "chips": build_default_chips(subscription_with_defaults),
+                "constraint_summary": constraint_parts,
+                "constraint_summary_text": format_constraint_summary(constraint_parts),
+            }
+        )
+    except (TypeError, ValueError) as exc:
+        return jsonify(
+            {
+                "ok": False,
+                "error": str(exc),
+                "station_summaries": station_summaries,
+                "defaults_applied": [],
+                "chips": [],
+                "constraint_summary": [],
+                "constraint_summary_text": format_constraint_summary([]),
+            }
+        )
 
 
 @app.get("/price_hint")
@@ -5856,6 +6106,8 @@ def subscribe():
             exact_location_airports=EXACT_LOCATION_AIRPORTS,
             edit_subscription={},
             edit_index=None,
+            form_stations=FORM_STATIONS,
+            form_structure=form_structure_payload(),
             form_error=str(exc),
         ), 400
     except Exception as exc:

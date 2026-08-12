@@ -28,6 +28,7 @@ from constraint_fingerprint import (
     constraint_fingerprint,
     short_constraint_fingerprint,
 )
+from constraint_summary import format_constraint_summary
 from domestic_fare_rules import get_aircraft_name
 from airlines import classify_itinerary, classify_segment
 from flight_combo_utils import normalize_combo
@@ -4646,7 +4647,7 @@ def _render_excluded_plan_card(item: dict, current_price, is_roundtrip: bool) ->
         rows.append(_excluded_table_row("", html.escape(str(extra)), danger=True))
     basis = [str(value).strip() for value in (item.get("exclusion_basis") or []) if str(value or "").strip()]
     if basis:
-        rows.append(_excluded_table_row("依据", html.escape("依据:" + "·".join(basis))))
+        rows.append(_excluded_table_row("依据", html.escape(format_constraint_summary(basis))))
     comparison_points = _canonical_price_comparison_points(
         item.get("comparison_points") or [],
         price,

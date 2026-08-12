@@ -1,0 +1,2803 @@
+{
+  "scenarios": {
+    "business_meeting": {
+      "form_input": {
+        "adult_count": "1",
+        "baggage": "required",
+        "cabin_policy": "economy_only",
+        "child_count": "0",
+        "date_flexibility": "1",
+        "depart_date": "2026-11-18",
+        "destination": "PEK",
+        "elderly_count": "0",
+        "infant_count": "0",
+        "invoice_context": "true",
+        "invoice_needed": "true",
+        "lcc_policy": "any",
+        "max_budget": "8000",
+        "max_budget_scope": "per_person",
+        "meeting_end": "17:00",
+        "meeting_start": "10:30",
+        "monitor_mode": "precise",
+        "notification_frequency": "important_only",
+        "notification_method": "page_only",
+        "origin_select": "PVG",
+        "price_strategy": "explicit",
+        "primary_goal": "buy_timing",
+        "reimburse_per_person": "5000",
+        "return_date": "2026-11-20",
+        "return_date_flexibility": "1",
+        "round_trip": "true",
+        "route_type": "domestic",
+        "target_price": "6000",
+        "target_price_scope": "per_person",
+        "transfer_policy": "reasonable",
+        "travel_scenario": [
+          "business"
+        ],
+        "trip_natures": [
+          "business",
+          "meeting"
+        ]
+      },
+      "normalized_subscription": {
+        "_index": null,
+        "advanced_rules": {
+          "airlines": {
+            "blocked": [],
+            "lcc_policy": "any",
+            "preference": "any"
+          },
+          "alerts": {
+            "digest_time": "09:00",
+            "frequency": "important_only",
+            "price_change_threshold": "down_100",
+            "types": [
+              "price_risk_alert",
+              "better_same_day"
+            ]
+          },
+          "time_windows": {
+            "arrival": [],
+            "departure": [],
+            "hourly": {
+              "arrival_end": "",
+              "arrival_start": "",
+              "departure_end": "",
+              "departure_start": ""
+            },
+            "outbound_arrival": [],
+            "outbound_departure": [],
+            "return_arrival": [],
+            "return_departure": []
+          },
+          "transfer": {
+            "max_extra_duration_hours": 6,
+            "max_total_duration": null,
+            "overnight_transfer": false,
+            "self_transfer": false
+          }
+        },
+        "airline_policy": "any",
+        "arrival_slots": [
+          "dawn",
+          "morning",
+          "noon",
+          "afternoon",
+          "evening",
+          "night",
+          "redeye"
+        ],
+        "arrival_time_policy": "any",
+        "basic": {
+          "departure_date": "2026-11-18",
+          "dest_airports": [
+            "PEK"
+          ],
+          "destination": "PEK",
+          "destination_airports": [
+            "PEK"
+          ],
+          "destination_airports_active": [
+            "PEK"
+          ],
+          "origin": "PVG",
+          "origin_airports": [
+            "PVG"
+          ],
+          "origin_airports_active": [
+            "PVG"
+          ],
+          "passenger_count": 1,
+          "return_date": "2026-11-18",
+          "route_type": "domestic",
+          "trip_type": "round_trip"
+        },
+        "budget": 8000,
+        "budget_mode": "fixed",
+        "budget_scope": "per_person",
+        "cabin_classes": [
+          "economy"
+        ],
+        "companions": "solo",
+        "constraints": {
+          "airport_advance_min": null,
+          "arrival_exit_min": null,
+          "budget_scope": "per_person",
+          "budget_strategy": "explicit",
+          "business_end": "17:00",
+          "business_seats": 0,
+          "business_start": "10:30",
+          "cabin_arrangement": "economy_all",
+          "cabin_policy": "economy_only",
+          "checked_baggage_required": true,
+          "custom_redundancy_min": null,
+          "date_flexibility_days": 1,
+          "day_trip_period": "morning",
+          "delay_buffer_min": null,
+          "destination_transport_min": null,
+          "economy_seats": 1,
+          "ideal_price": 6000,
+          "lcc_policy": "any",
+          "max_budget_scope": "per_person",
+          "max_price": 8000,
+          "meeting_end": "17:00",
+          "meeting_importance": "important",
+          "meeting_location": "",
+          "meeting_start": "10:30",
+          "origin_transport_min": null,
+          "outbound_set_off": "",
+          "post_meeting_buffer_min": null,
+          "pre_meeting_buffer_min": null,
+          "redundancy_min": 25,
+          "reimburse_per_person": 5000,
+          "return_set_off": "",
+          "route_type": "domestic",
+          "same_day_round_trip": true,
+          "same_flight_required": false,
+          "target_price_scope": "per_person",
+          "team_date_flexibility": "fixed",
+          "team_passenger_count": null,
+          "time_source": "meeting_derived",
+          "transfer_policy": "reasonable",
+          "transport_margin_mode": "standard",
+          "trip_nature": "meeting",
+          "trip_natures": [
+            "business",
+            "meeting"
+          ],
+          "user_level": "staff",
+          "user_transport_min": null
+        },
+        "date_flexibility": 1,
+        "defaults_applied": [
+          "当天往返商务模式：优先早去晚回、直飞和低执行风险方案",
+          "商务会议：按会议时间窗口提高准点、缓冲和低执行风险权重",
+          "商务/会议：准点、直飞和可改签优先",
+          "当天往返会议模式:以会议时间为最高优先,清晨早班/晚班返程均可选,已含机场缓冲+车程+路途冗余(standard)+安全余量",
+          "会议模式接管时间设置:按会议10:30-17:00+预留推算,用户时间偏好本次不生效",
+          "当天往返:返程晚班视为正常,深夜限制放宽至午夜前到达"
+        ],
+        "depart_date": "2026-11-18",
+        "departure_slots": [
+          "dawn",
+          "morning",
+          "noon",
+          "afternoon",
+          "evening",
+          "night",
+          "redeye"
+        ],
+        "departure_time_policy": "no_redeye",
+        "destination": "PEK",
+        "destination_airports": [
+          "PEK"
+        ],
+        "destination_airports_active": [
+          "PEK"
+        ],
+        "destination_type": "airport",
+        "direct_only": "flexible",
+        "exclude_airlines": [],
+        "goals": [
+          "buy_timing",
+          "best_overall"
+        ],
+        "hard_constraints": {
+          "accept_overnight_transfer": false,
+          "accept_self_transfer": false,
+          "airport_advance_min": null,
+          "arrival_exit_min": null,
+          "arrival_slots": [
+            "dawn",
+            "morning",
+            "noon",
+            "afternoon",
+            "evening",
+            "night",
+            "redeye"
+          ],
+          "arrival_time_policy": "any",
+          "arrival_time_windows": [],
+          "baggage": "required",
+          "budget_scope": "per_person",
+          "budget_strategy": "explicit",
+          "business_end": "17:00",
+          "business_seats": 0,
+          "business_start": "10:30",
+          "cabin_arrangement": "economy_all",
+          "cabin_policy": "economy_only",
+          "custom_redundancy_min": null,
+          "date_flexibility": 1,
+          "day_trip_period": "morning",
+          "delay_buffer_min": null,
+          "departure_slots": [
+            "dawn",
+            "morning",
+            "noon",
+            "afternoon",
+            "evening",
+            "night",
+            "redeye"
+          ],
+          "departure_time_policy": "no_redeye",
+          "departure_time_windows": [],
+          "destination_transport_min": null,
+          "economy_seats": 1,
+          "lcc_policy": "any",
+          "max_budget": 8000,
+          "max_budget_mode": "fixed",
+          "max_budget_scope": "per_person",
+          "max_extra_duration_hours": 6,
+          "max_total_duration_hours": null,
+          "meeting_end": "17:00",
+          "meeting_importance": "important",
+          "meeting_location": "",
+          "meeting_start": "10:30",
+          "meeting_time_priority": true,
+          "origin_airport_preference": "all",
+          "origin_transport_min": null,
+          "outbound_arrival_slots": [
+            "dawn",
+            "morning",
+            "noon",
+            "afternoon",
+            "evening",
+            "night",
+            "redeye"
+          ],
+          "outbound_arrival_time_windows": [],
+          "outbound_departure_slots": [
+            "dawn",
+            "morning",
+            "noon",
+            "afternoon",
+            "evening",
+            "night",
+            "redeye"
+          ],
+          "outbound_departure_time_windows": [],
+          "outbound_set_off": "",
+          "post_meeting_buffer_min": null,
+          "pre_meeting_buffer_min": null,
+          "preferred_arrival_slots": [
+            "dawn",
+            "morning",
+            "noon",
+            "afternoon",
+            "evening",
+            "night",
+            "redeye"
+          ],
+          "preferred_departure_slots": [
+            "dawn",
+            "morning",
+            "noon",
+            "afternoon",
+            "evening",
+            "night",
+            "redeye"
+          ],
+          "redundancy_min": 25,
+          "reimburse_per_person": 5000,
+          "return_arrival_slots": [
+            "dawn",
+            "morning",
+            "noon",
+            "afternoon",
+            "evening",
+            "night",
+            "redeye"
+          ],
+          "return_arrival_time_windows": [],
+          "return_departure_slots": [
+            "dawn",
+            "morning",
+            "noon",
+            "afternoon",
+            "evening",
+            "night",
+            "redeye"
+          ],
+          "return_departure_time_windows": [],
+          "return_set_off": "",
+          "route_type": "domestic",
+          "same_day_round_trip": true,
+          "same_flight_required": false,
+          "target_price": 6000,
+          "target_price_mode": "fixed",
+          "target_price_scope": "per_person",
+          "team_date_flexibility": "fixed",
+          "team_passenger_count": null,
+          "time_preference": "daytime",
+          "time_preference_mode": "daytime",
+          "time_source": "meeting_derived",
+          "transfer_policy": "reasonable",
+          "transport_margin_mode": "standard",
+          "trip_nature": "meeting",
+          "trip_natures": [
+            "business",
+            "meeting"
+          ],
+          "user_level": "staff",
+          "user_transport_min": null
+        },
+        "id": null,
+        "lcc_policy": "any",
+        "max_budget": 8000,
+        "max_budget_mode": "fixed",
+        "max_budget_scope": "per_person",
+        "max_extra_duration_hours": 6,
+        "max_total_duration_hours": null,
+        "mode": "balanced",
+        "monitor_mode": "precise",
+        "name": "网页订阅",
+        "need_baggage": "required",
+        "notification_goals": {
+          "digest_time": "09:00",
+          "email": "",
+          "frequency": "important_only",
+          "method": "page_only",
+          "price_change_threshold": "down_100",
+          "primary": "buy_timing",
+          "secondary": [
+            "price_risk_alert",
+            "better_same_day"
+          ]
+        },
+        "origin": "PVG",
+        "origin_airport_preference": "all",
+        "origin_airports": [
+          "PVG"
+        ],
+        "origin_airports_active": [
+          "PVG"
+        ],
+        "origin_type": "airport",
+        "outbound_arrival_slots": [
+          "dawn",
+          "morning",
+          "noon",
+          "afternoon",
+          "evening",
+          "night",
+          "redeye"
+        ],
+        "outbound_departure_slots": [
+          "dawn",
+          "morning",
+          "noon",
+          "afternoon",
+          "evening",
+          "night",
+          "redeye"
+        ],
+        "preferences": {
+          "child_type": "",
+          "companion_constraints": [],
+          "elderly_condition": "normal",
+          "invoice_cabin_limit": false,
+          "invoice_needed": true,
+          "invoice_special_vat": false,
+          "mobility_limited": false,
+          "no_late_arrival": false,
+          "passenger_count": 1,
+          "passengers": {
+            "adult": 1,
+            "child": 0,
+            "elderly": 0,
+            "infant": 0
+          },
+          "prefer_daytime_arrival": false,
+          "price_sensitivity": "low",
+          "refund_policy": "preferred",
+          "solo_travel": false,
+          "time_pref": "unlimited",
+          "travel_purposes": [
+            "business"
+          ],
+          "travel_scenario": "business",
+          "travel_scenarios": [
+            "business"
+          ],
+          "travel_type": "business",
+          "travelers": "solo"
+        },
+        "preferred_arrival_slots": [
+          "dawn",
+          "morning",
+          "noon",
+          "afternoon",
+          "evening",
+          "night",
+          "redeye"
+        ],
+        "preferred_departure_slots": [
+          "dawn",
+          "morning",
+          "noon",
+          "afternoon",
+          "evening",
+          "night",
+          "redeye"
+        ],
+        "price_sensitivity": "low",
+        "priorities": null,
+        "red_eye": "reject",
+        "red_eye_policy": "not_allowed",
+        "refund_flexibility": "preferred",
+        "return_arrival_slots": [
+          "dawn",
+          "morning",
+          "noon",
+          "afternoon",
+          "evening",
+          "night",
+          "redeye"
+        ],
+        "return_date": "2026-11-18",
+        "return_date_flexibility": 1,
+        "return_departure_slots": [
+          "dawn",
+          "morning",
+          "noon",
+          "afternoon",
+          "evening",
+          "night",
+          "redeye"
+        ],
+        "round_trip": true,
+        "route_type": "domestic",
+        "soft_preferences": {
+          "airline_policy": "prefer_full_service",
+          "allow_overnight_transfer": false,
+          "allow_self_transfer": false,
+          "arrival_time_windows": [],
+          "budget_scope": "per_person",
+          "child_type": "",
+          "companion_constraints": [],
+          "companions": "solo",
+          "departure_time_windows": [],
+          "direct_preferred": true,
+          "early_morning_allowed": true,
+          "elderly_condition": "normal",
+          "exclude_airlines": [],
+          "invoice_cabin_limit": false,
+          "invoice_needed": true,
+          "invoice_special_vat": false,
+          "max_budget": 8000,
+          "max_budget_scope": "per_person",
+          "meeting_time_priority": true,
+          "mobility_limited": false,
+          "no_late_arrival": false,
+          "outbound_arrival_time_windows": [],
+          "outbound_departure_time_windows": [],
+          "passenger_count": 1,
+          "passengers": {
+            "adult": 1,
+            "child": 0,
+            "elderly": 0,
+            "infant": 0
+          },
+          "prefer_daytime_arrival": false,
+          "price_sensitivity": "low",
+          "price_tolerance": 100,
+          "red_eye_allowed": true,
+          "refund_flexibility": "preferred",
+          "return_arrival_time_windows": [],
+          "return_departure_time_windows": [],
+          "same_day_round_trip": true,
+          "scenario_rules": [
+            "business"
+          ],
+          "solo_travel": false,
+          "target_price": 6000,
+          "target_price_mode": "fixed",
+          "target_price_scope": "per_person",
+          "time_preference": "daytime",
+          "time_preference_mode": "daytime",
+          "travel_purposes": [
+            "business"
+          ],
+          "travel_scenario": "business",
+          "travel_scenarios": [
+            "business"
+          ],
+          "travelers": "solo",
+          "trip_natures": [
+            "business",
+            "meeting"
+          ],
+          "trip_rigidity": "confirmed",
+          "trip_type": "business"
+        },
+        "subscription_id": null,
+        "target_price": 6000,
+        "target_price_mode": "fixed",
+        "target_price_scope": "per_person",
+        "transfer_policy": "reasonable",
+        "trip_rigidity": "confirmed",
+        "trip_type": "business"
+      }
+    },
+    "family_elderly_tourism": {
+      "form_input": {
+        "adult_count": "2",
+        "baggage": "required",
+        "child_count": "1",
+        "child_type": "school_age",
+        "companion_constraints": [
+          "direct_preferred",
+          "no_redeye",
+          "need_baggage"
+        ],
+        "date_flexibility": "1",
+        "depart_date": "2026-12-01",
+        "destination": "KIX",
+        "elderly_condition": "limited_walk_transfer",
+        "elderly_count": "1",
+        "infant_count": "0",
+        "lcc_policy": "any",
+        "max_budget": "8000",
+        "max_budget_scope": "per_person",
+        "monitor_mode": "precise",
+        "notification_frequency": "important_only",
+        "notification_method": "page_only",
+        "origin_select": "PVG",
+        "price_strategy": "explicit",
+        "primary_goal": "buy_timing",
+        "refund_flexibility": "preferred",
+        "return_date": "2026-12-06",
+        "return_date_flexibility": "1",
+        "round_trip": "true",
+        "route_type": "international",
+        "target_price": "6000",
+        "target_price_scope": "per_person",
+        "time_preference": "daytime",
+        "transfer_policy": "reasonable",
+        "travel_scenario": [
+          "tourism",
+          "family",
+          "elderly"
+        ]
+      },
+      "normalized_subscription": {
+        "_index": null,
+        "advanced_rules": {
+          "airlines": {
+            "blocked": [],
+            "lcc_policy": "any",
+            "preference": "any"
+          },
+          "alerts": {
+            "digest_time": "09:00",
+            "frequency": "important_only",
+            "price_change_threshold": "down_100",
+            "types": [
+              "price_risk_alert",
+              "better_same_day"
+            ]
+          },
+          "time_windows": {
+            "arrival": [
+              [
+                "06:00",
+                "20:00"
+              ]
+            ],
+            "departure": [
+              [
+                "06:00",
+                "20:00"
+              ]
+            ],
+            "hourly": {
+              "arrival_end": "",
+              "arrival_start": "",
+              "departure_end": "",
+              "departure_start": ""
+            },
+            "outbound_arrival": [
+              [
+                "06:00",
+                "20:00"
+              ]
+            ],
+            "outbound_departure": [
+              [
+                "06:00",
+                "20:00"
+              ]
+            ],
+            "return_arrival": [
+              [
+                "06:00",
+                "20:00"
+              ]
+            ],
+            "return_departure": [
+              [
+                "06:00",
+                "20:00"
+              ]
+            ]
+          },
+          "transfer": {
+            "max_extra_duration_hours": 6,
+            "max_total_duration": null,
+            "overnight_transfer": false,
+            "self_transfer": false
+          }
+        },
+        "airline_policy": "any",
+        "arrival_slots": [
+          "dawn",
+          "morning",
+          "noon",
+          "afternoon",
+          "evening"
+        ],
+        "arrival_time_policy": "any",
+        "basic": {
+          "departure_date": "2026-12-01",
+          "dest_airports": [
+            "KIX"
+          ],
+          "destination": "KIX",
+          "destination_airports": [
+            "KIX"
+          ],
+          "destination_airports_active": [
+            "KIX"
+          ],
+          "origin": "PVG",
+          "origin_airports": [
+            "PVG"
+          ],
+          "origin_airports_active": [
+            "PVG"
+          ],
+          "passenger_count": 4,
+          "return_date": "2026-12-06",
+          "route_type": "international",
+          "trip_type": "round_trip"
+        },
+        "budget": 8000,
+        "budget_mode": "fixed",
+        "budget_scope": "per_person",
+        "cabin_classes": [
+          "economy"
+        ],
+        "companions": "with_elderly_child",
+        "constraints": {
+          "airport_advance_min": null,
+          "arrival_exit_min": null,
+          "budget_scope": "per_person",
+          "budget_strategy": "explicit",
+          "business_end": "",
+          "business_seats": 0,
+          "business_start": "",
+          "cabin_arrangement": "economy_all",
+          "cabin_policy": "economy_only",
+          "checked_baggage_required": true,
+          "custom_redundancy_min": null,
+          "date_flexibility_days": 1,
+          "day_trip_period": "",
+          "delay_buffer_min": null,
+          "destination_transport_min": null,
+          "economy_seats": 4,
+          "ideal_price": 6000,
+          "lcc_policy": "any",
+          "max_budget_scope": "per_person",
+          "max_price": 8000,
+          "meeting_end": "",
+          "meeting_importance": "",
+          "meeting_location": "",
+          "meeting_start": "",
+          "origin_transport_min": null,
+          "outbound_set_off": "",
+          "post_meeting_buffer_min": null,
+          "pre_meeting_buffer_min": null,
+          "redundancy_min": 25,
+          "reimburse_per_person": null,
+          "return_set_off": "",
+          "route_type": "international",
+          "same_day_round_trip": false,
+          "same_flight_required": false,
+          "target_price_scope": "per_person",
+          "team_date_flexibility": "fixed",
+          "team_passenger_count": null,
+          "time_source": "user_defined",
+          "transfer_policy": "reasonable",
+          "transport_margin_mode": "standard",
+          "trip_nature": "",
+          "trip_natures": [],
+          "user_level": "staff",
+          "user_transport_min": null
+        },
+        "date_flexibility": 1,
+        "defaults_applied": [
+          "旅游：突出低价日期和合理中转",
+          "家庭/亲子：优先白天、直飞/短中转和行李明确",
+          "有老人同行：白天到达、短中转、全服务航司和可退改优先",
+          "老人和儿童同行：优先直飞/短中转、白天和行李明确",
+          "同行约束：需要尽量直飞",
+          "同行约束：不接受红眼/凌晨到达",
+          "同行约束：需要托运行李"
+        ],
+        "depart_date": "2026-12-01",
+        "departure_slots": [
+          "dawn",
+          "morning",
+          "noon",
+          "afternoon",
+          "evening"
+        ],
+        "departure_time_policy": "no_redeye",
+        "destination": "KIX",
+        "destination_airports": [
+          "KIX"
+        ],
+        "destination_airports_active": [
+          "KIX"
+        ],
+        "destination_type": "airport",
+        "direct_only": "flexible",
+        "exclude_airlines": [],
+        "goals": [
+          "buy_timing",
+          "best_overall"
+        ],
+        "hard_constraints": {
+          "accept_overnight_transfer": false,
+          "accept_self_transfer": false,
+          "airport_advance_min": null,
+          "arrival_exit_min": null,
+          "arrival_slots": [
+            "dawn",
+            "morning",
+            "noon",
+            "afternoon",
+            "evening"
+          ],
+          "arrival_time_policy": "any",
+          "arrival_time_windows": [
+            [
+              "06:00",
+              "20:00"
+            ]
+          ],
+          "baggage": "required",
+          "baggage_default": "prefer_included",
+          "budget_scope": "per_person",
+          "budget_strategy": "explicit",
+          "business_end": "",
+          "business_seats": 0,
+          "business_start": "",
+          "cabin_arrangement": "economy_all",
+          "cabin_policy": "economy_only",
+          "custom_redundancy_min": null,
+          "date_flexibility": 1,
+          "day_trip_period": "",
+          "delay_buffer_min": null,
+          "departure_slots": [
+            "dawn",
+            "morning",
+            "noon",
+            "afternoon",
+            "evening"
+          ],
+          "departure_time_policy": "no_redeye",
+          "departure_time_windows": [
+            [
+              "06:00",
+              "20:00"
+            ]
+          ],
+          "destination_transport_min": null,
+          "economy_seats": 4,
+          "lcc_policy": "any",
+          "max_budget": 8000,
+          "max_budget_mode": "fixed",
+          "max_budget_scope": "per_person",
+          "max_extra_duration_hours": 6,
+          "max_total_duration_hours": null,
+          "meeting_end": "",
+          "meeting_importance": "",
+          "meeting_location": "",
+          "meeting_start": "",
+          "origin_airport_preference": "all",
+          "origin_transport_min": null,
+          "outbound_arrival_slots": [
+            "dawn",
+            "morning",
+            "noon",
+            "afternoon",
+            "evening"
+          ],
+          "outbound_arrival_time_windows": [
+            [
+              "06:00",
+              "20:00"
+            ]
+          ],
+          "outbound_departure_slots": [
+            "dawn",
+            "morning",
+            "noon",
+            "afternoon",
+            "evening"
+          ],
+          "outbound_departure_time_windows": [
+            [
+              "06:00",
+              "20:00"
+            ]
+          ],
+          "outbound_set_off": "",
+          "post_meeting_buffer_min": null,
+          "pre_meeting_buffer_min": null,
+          "preferred_arrival_slots": [
+            "dawn",
+            "morning",
+            "noon",
+            "afternoon",
+            "evening"
+          ],
+          "preferred_departure_slots": [
+            "dawn",
+            "morning",
+            "noon",
+            "afternoon",
+            "evening"
+          ],
+          "redundancy_min": 25,
+          "reimburse_per_person": null,
+          "return_arrival_slots": [
+            "dawn",
+            "morning",
+            "noon",
+            "afternoon",
+            "evening"
+          ],
+          "return_arrival_time_windows": [
+            [
+              "06:00",
+              "20:00"
+            ]
+          ],
+          "return_departure_slots": [
+            "dawn",
+            "morning",
+            "noon",
+            "afternoon",
+            "evening"
+          ],
+          "return_departure_time_windows": [
+            [
+              "06:00",
+              "20:00"
+            ]
+          ],
+          "return_set_off": "",
+          "route_type": "international",
+          "same_day_round_trip": false,
+          "same_flight_required": false,
+          "target_price": 6000,
+          "target_price_mode": "fixed",
+          "target_price_scope": "per_person",
+          "team_date_flexibility": "fixed",
+          "team_passenger_count": null,
+          "time_preference": "no_redeye",
+          "time_preference_mode": "no_redeye",
+          "time_source": "user_defined",
+          "transfer_policy": "reasonable",
+          "transport_margin_mode": "standard",
+          "trip_nature": "",
+          "trip_natures": [],
+          "user_level": "staff",
+          "user_transport_min": null
+        },
+        "id": null,
+        "lcc_policy": "any",
+        "max_budget": 8000,
+        "max_budget_mode": "fixed",
+        "max_budget_scope": "per_person",
+        "max_extra_duration_hours": 6,
+        "max_total_duration_hours": null,
+        "mode": "balanced",
+        "monitor_mode": "precise",
+        "name": "网页订阅",
+        "need_baggage": "required",
+        "notification_goals": {
+          "digest_time": "09:00",
+          "email": "",
+          "frequency": "important_only",
+          "method": "page_only",
+          "price_change_threshold": "down_100",
+          "primary": "buy_timing",
+          "secondary": [
+            "price_risk_alert",
+            "better_same_day"
+          ]
+        },
+        "origin": "PVG",
+        "origin_airport_preference": "all",
+        "origin_airports": [
+          "PVG"
+        ],
+        "origin_airports_active": [
+          "PVG"
+        ],
+        "origin_type": "airport",
+        "outbound_arrival_slots": [
+          "dawn",
+          "morning",
+          "noon",
+          "afternoon",
+          "evening"
+        ],
+        "outbound_departure_slots": [
+          "dawn",
+          "morning",
+          "noon",
+          "afternoon",
+          "evening"
+        ],
+        "preferences": {
+          "child_type": "school_age",
+          "companion_constraints": [
+            "direct_preferred",
+            "no_redeye",
+            "need_baggage"
+          ],
+          "elderly_condition": "limited_walk_transfer",
+          "invoice_cabin_limit": false,
+          "invoice_needed": false,
+          "invoice_special_vat": false,
+          "mobility_limited": false,
+          "no_late_arrival": false,
+          "passenger_count": 4,
+          "passengers": {
+            "adult": 2,
+            "child": 1,
+            "elderly": 1,
+            "infant": 0
+          },
+          "prefer_daytime_arrival": false,
+          "price_sensitivity": "low",
+          "refund_policy": "preferred",
+          "solo_travel": false,
+          "time_pref": "daytime",
+          "travel_purposes": [
+            "tourism",
+            "family",
+            "elderly"
+          ],
+          "travel_scenario": "tourism",
+          "travel_scenarios": [
+            "tourism",
+            "family",
+            "elderly"
+          ],
+          "travel_type": "tourism",
+          "travelers": "with_elderly_child"
+        },
+        "preferred_arrival_slots": [
+          "dawn",
+          "morning",
+          "noon",
+          "afternoon",
+          "evening"
+        ],
+        "preferred_departure_slots": [
+          "dawn",
+          "morning",
+          "noon",
+          "afternoon",
+          "evening"
+        ],
+        "price_sensitivity": "low",
+        "priorities": null,
+        "red_eye": "reject",
+        "red_eye_policy": "not_allowed",
+        "refund_flexibility": "preferred",
+        "return_arrival_slots": [
+          "dawn",
+          "morning",
+          "noon",
+          "afternoon",
+          "evening"
+        ],
+        "return_date": "2026-12-06",
+        "return_date_flexibility": 1,
+        "return_departure_slots": [
+          "dawn",
+          "morning",
+          "noon",
+          "afternoon",
+          "evening"
+        ],
+        "round_trip": true,
+        "route_type": "international",
+        "soft_preferences": {
+          "airline_policy": "prefer_full_service",
+          "allow_overnight_transfer": false,
+          "allow_self_transfer": false,
+          "arrival_time_windows": [
+            [
+              "06:00",
+              "20:00"
+            ]
+          ],
+          "budget_scope": "per_person",
+          "child_type": "school_age",
+          "companion_constraints": [
+            "direct_preferred",
+            "no_redeye",
+            "need_baggage"
+          ],
+          "companions": "with_elderly_child",
+          "departure_time_windows": [
+            [
+              "06:00",
+              "20:00"
+            ]
+          ],
+          "direct_preferred": true,
+          "early_morning_allowed": true,
+          "elderly_condition": "limited_walk_transfer",
+          "exclude_airlines": [],
+          "invoice_cabin_limit": false,
+          "invoice_needed": false,
+          "invoice_special_vat": false,
+          "max_budget": 8000,
+          "max_budget_scope": "per_person",
+          "mobility_limited": false,
+          "no_late_arrival": false,
+          "outbound_arrival_time_windows": [
+            [
+              "06:00",
+              "20:00"
+            ]
+          ],
+          "outbound_departure_time_windows": [
+            [
+              "06:00",
+              "20:00"
+            ]
+          ],
+          "passenger_count": 4,
+          "passengers": {
+            "adult": 2,
+            "child": 1,
+            "elderly": 1,
+            "infant": 0
+          },
+          "prefer_daytime_arrival": false,
+          "price_sensitivity": "low",
+          "price_tolerance": 100,
+          "red_eye_allowed": false,
+          "refund_flexibility": "preferred",
+          "return_arrival_time_windows": [
+            [
+              "06:00",
+              "20:00"
+            ]
+          ],
+          "return_departure_time_windows": [
+            [
+              "06:00",
+              "20:00"
+            ]
+          ],
+          "scenario_rules": [
+            "elderly",
+            "family",
+            "tourism"
+          ],
+          "solo_travel": false,
+          "target_price": 6000,
+          "target_price_mode": "fixed",
+          "target_price_scope": "per_person",
+          "time_preference": "no_redeye",
+          "time_preference_mode": "no_redeye",
+          "travel_purposes": [
+            "tourism",
+            "family",
+            "elderly"
+          ],
+          "travel_scenario": "tourism",
+          "travel_scenarios": [
+            "tourism",
+            "family",
+            "elderly"
+          ],
+          "travelers": "with_elderly_child",
+          "trip_rigidity": "confirmed",
+          "trip_type": "tourism"
+        },
+        "subscription_id": null,
+        "target_price": 6000,
+        "target_price_mode": "fixed",
+        "target_price_scope": "per_person",
+        "transfer_policy": "reasonable",
+        "trip_rigidity": "confirmed",
+        "trip_type": "tourism"
+      }
+    },
+    "same_day_round_trip": {
+      "form_input": {
+        "baggage": "required",
+        "business_end": "17:00",
+        "business_start": "10:30",
+        "date_flexibility": "1",
+        "depart_date": "2026-11-26",
+        "destination": "北京",
+        "lcc_policy": "any",
+        "max_budget": "8000",
+        "max_budget_scope": "per_person",
+        "meeting_importance": "important",
+        "meeting_location": "大兴区",
+        "monitor_mode": "quick",
+        "notification_frequency": "important_only",
+        "notification_method": "page_only",
+        "origin_select": "PVG",
+        "passenger_count": "3",
+        "price_strategy": "explicit",
+        "primary_goal": "buy_timing",
+        "return_date": "",
+        "return_date_flexibility": "1",
+        "round_trip": "false",
+        "route_type": "domestic",
+        "same_day_round_trip": "true",
+        "target_price": "6000",
+        "target_price_scope": "per_person",
+        "transfer_policy": "direct_only",
+        "travel_scenario": [
+          "business"
+        ]
+      },
+      "normalized_subscription": {
+        "_index": null,
+        "advanced_rules": {
+          "airlines": {
+            "blocked": [],
+            "lcc_policy": "any",
+            "preference": "any"
+          },
+          "alerts": {
+            "digest_time": "09:00",
+            "frequency": "important_only",
+            "price_change_threshold": "down_100",
+            "types": [
+              "price_risk_alert",
+              "better_same_day"
+            ]
+          },
+          "time_windows": {
+            "arrival": [
+              [
+                "06:00",
+                "23:00"
+              ]
+            ],
+            "departure": [
+              [
+                "06:00",
+                "23:00"
+              ]
+            ],
+            "hourly": {
+              "arrival_end": "",
+              "arrival_start": "",
+              "departure_end": "",
+              "departure_start": ""
+            },
+            "outbound_arrival": [
+              [
+                "06:00",
+                "23:00"
+              ]
+            ],
+            "outbound_departure": [
+              [
+                "06:00",
+                "23:00"
+              ]
+            ],
+            "return_arrival": [
+              [
+                "06:00",
+                "23:00"
+              ]
+            ],
+            "return_departure": [
+              [
+                "06:00",
+                "23:00"
+              ]
+            ]
+          },
+          "transfer": {
+            "max_extra_duration_hours": null,
+            "max_total_duration": null,
+            "overnight_transfer": false,
+            "self_transfer": false
+          }
+        },
+        "airline_policy": "any",
+        "arrival_slots": [
+          "dawn",
+          "morning",
+          "noon",
+          "afternoon",
+          "evening",
+          "night"
+        ],
+        "arrival_time_policy": "any",
+        "basic": {
+          "departure_date": "2026-11-26",
+          "dest_airports": [
+            "PEK",
+            "PKX"
+          ],
+          "destination": "北京",
+          "destination_airports": [
+            "PEK",
+            "PKX"
+          ],
+          "destination_airports_active": [
+            "PEK",
+            "PKX"
+          ],
+          "origin": "PVG",
+          "origin_airports": [
+            "PVG"
+          ],
+          "origin_airports_active": [
+            "PVG"
+          ],
+          "passenger_count": 3,
+          "return_date": "2026-11-26",
+          "route_type": "domestic",
+          "trip_type": "round_trip"
+        },
+        "budget": 8000,
+        "budget_mode": "fixed",
+        "budget_scope": "per_person",
+        "cabin_classes": [
+          "economy"
+        ],
+        "companions": "multiple",
+        "constraints": {
+          "airport_advance_min": null,
+          "arrival_exit_min": null,
+          "budget_scope": "per_person",
+          "budget_strategy": "explicit",
+          "business_end": "17:00",
+          "business_seats": 0,
+          "business_start": "10:30",
+          "cabin_arrangement": "economy_all",
+          "cabin_policy": "economy_only",
+          "checked_baggage_required": true,
+          "custom_redundancy_min": null,
+          "date_flexibility_days": 1,
+          "day_trip_period": "morning",
+          "delay_buffer_min": null,
+          "destination_transport_min": null,
+          "economy_seats": 3,
+          "ideal_price": 6000,
+          "lcc_policy": "any",
+          "max_budget_scope": "per_person",
+          "max_price": 8000,
+          "meeting_end": "",
+          "meeting_importance": "important",
+          "meeting_location": "大兴区",
+          "meeting_start": "",
+          "origin_transport_min": null,
+          "outbound_set_off": "",
+          "post_meeting_buffer_min": null,
+          "pre_meeting_buffer_min": null,
+          "redundancy_min": 25,
+          "reimburse_per_person": null,
+          "return_set_off": "",
+          "route_type": "domestic",
+          "same_day_round_trip": true,
+          "same_flight_required": false,
+          "target_price_scope": "per_person",
+          "team_date_flexibility": "fixed",
+          "team_passenger_count": null,
+          "time_source": "meeting_derived",
+          "transfer_policy": "direct_only",
+          "transport_margin_mode": "standard",
+          "trip_nature": "",
+          "trip_natures": [],
+          "user_level": "staff",
+          "user_transport_min": null
+        },
+        "date_flexibility": 1,
+        "defaults_applied": [
+          "当天往返商务模式：优先早去晚回、直飞和低执行风险方案",
+          "商务/会议：准点、直飞和可改签优先",
+          "不推荐红眼/凌晨到达",
+          "当天往返会议模式:以会议时间为最高优先,清晨早班/晚班返程均可选,已含机场缓冲+车程+路途冗余(standard)+安全余量",
+          "会议模式接管时间设置:按会议10:30-17:00+预留推算,用户时间偏好本次不生效",
+          "当天往返:返程晚班视为正常,深夜限制放宽至午夜前到达",
+          "优先含托运行李方案",
+          "不推荐非联程中转",
+          "不推荐过夜中转"
+        ],
+        "depart_date": "2026-11-26",
+        "departure_slots": [
+          "dawn",
+          "morning",
+          "noon",
+          "afternoon",
+          "evening",
+          "night"
+        ],
+        "departure_time_policy": "no_redeye",
+        "destination": "北京",
+        "destination_airports": [
+          "PEK",
+          "PKX"
+        ],
+        "destination_airports_active": [
+          "PEK",
+          "PKX"
+        ],
+        "destination_type": "city",
+        "direct_only": "must",
+        "exclude_airlines": [],
+        "goals": [
+          "buy_timing",
+          "best_overall"
+        ],
+        "hard_constraints": {
+          "accept_overnight_transfer": false,
+          "accept_self_transfer": false,
+          "airport_advance_min": null,
+          "arrival_exit_min": null,
+          "arrival_slots": [
+            "dawn",
+            "morning",
+            "noon",
+            "afternoon",
+            "evening",
+            "night"
+          ],
+          "arrival_time_policy": "no_midnight",
+          "arrival_time_windows": [
+            [
+              "06:00",
+              "23:00"
+            ]
+          ],
+          "baggage": "required",
+          "budget_scope": "per_person",
+          "budget_strategy": "explicit",
+          "business_end": "17:00",
+          "business_seats": 0,
+          "business_start": "10:30",
+          "cabin_arrangement": "economy_all",
+          "cabin_policy": "economy_only",
+          "custom_redundancy_min": null,
+          "date_flexibility": 1,
+          "day_trip_period": "morning",
+          "delay_buffer_min": null,
+          "departure_slots": [
+            "dawn",
+            "morning",
+            "noon",
+            "afternoon",
+            "evening",
+            "night"
+          ],
+          "departure_time_policy": "no_redeye",
+          "departure_time_windows": [
+            [
+              "06:00",
+              "23:00"
+            ]
+          ],
+          "destination_transport_min": null,
+          "economy_seats": 3,
+          "lcc_policy": "any",
+          "max_budget": 8000,
+          "max_budget_mode": "fixed",
+          "max_budget_scope": "per_person",
+          "max_extra_duration_hours": null,
+          "max_total_duration_hours": null,
+          "meeting_end": "",
+          "meeting_importance": "important",
+          "meeting_location": "大兴区",
+          "meeting_start": "",
+          "meeting_time_priority": true,
+          "origin_airport_preference": "all",
+          "origin_transport_min": null,
+          "outbound_arrival_slots": [
+            "dawn",
+            "morning",
+            "noon",
+            "afternoon",
+            "evening",
+            "night"
+          ],
+          "outbound_arrival_time_windows": [
+            [
+              "06:00",
+              "23:00"
+            ]
+          ],
+          "outbound_departure_slots": [
+            "dawn",
+            "morning",
+            "noon",
+            "afternoon",
+            "evening",
+            "night"
+          ],
+          "outbound_departure_time_windows": [
+            [
+              "06:00",
+              "23:00"
+            ]
+          ],
+          "outbound_set_off": "",
+          "post_meeting_buffer_min": null,
+          "pre_meeting_buffer_min": null,
+          "preferred_arrival_slots": [
+            "dawn",
+            "morning",
+            "noon",
+            "afternoon",
+            "evening",
+            "night"
+          ],
+          "preferred_departure_slots": [
+            "dawn",
+            "morning",
+            "noon",
+            "afternoon",
+            "evening",
+            "night"
+          ],
+          "redundancy_min": 25,
+          "reimburse_per_person": null,
+          "return_arrival_slots": [
+            "dawn",
+            "morning",
+            "noon",
+            "afternoon",
+            "evening",
+            "night"
+          ],
+          "return_arrival_time_windows": [
+            [
+              "06:00",
+              "23:00"
+            ]
+          ],
+          "return_departure_slots": [
+            "dawn",
+            "morning",
+            "noon",
+            "afternoon",
+            "evening",
+            "night"
+          ],
+          "return_departure_time_windows": [
+            [
+              "06:00",
+              "23:00"
+            ]
+          ],
+          "return_set_off": "",
+          "route_type": "domestic",
+          "same_day_round_trip": true,
+          "same_flight_required": false,
+          "target_price": 6000,
+          "target_price_mode": "fixed",
+          "target_price_scope": "per_person",
+          "team_date_flexibility": "fixed",
+          "team_passenger_count": null,
+          "time_preference": "no_redeye",
+          "time_preference_mode": "no_redeye",
+          "time_source": "meeting_derived",
+          "transfer_policy": "direct_only",
+          "transport_margin_mode": "standard",
+          "trip_nature": "",
+          "trip_natures": [],
+          "user_level": "staff",
+          "user_transport_min": null
+        },
+        "id": null,
+        "lcc_policy": "any",
+        "max_budget": 8000,
+        "max_budget_mode": "fixed",
+        "max_budget_scope": "per_person",
+        "max_extra_duration_hours": null,
+        "max_total_duration_hours": null,
+        "mode": "balanced",
+        "monitor_mode": "quick",
+        "name": "网页订阅",
+        "need_baggage": "required",
+        "notification_goals": {
+          "digest_time": "09:00",
+          "email": "",
+          "frequency": "important_only",
+          "method": "page_only",
+          "price_change_threshold": "down_100",
+          "primary": "buy_timing",
+          "secondary": [
+            "price_risk_alert",
+            "better_same_day"
+          ]
+        },
+        "origin": "PVG",
+        "origin_airport_preference": "all",
+        "origin_airports": [
+          "PVG"
+        ],
+        "origin_airports_active": [
+          "PVG"
+        ],
+        "origin_type": "airport",
+        "outbound_arrival_slots": [
+          "dawn",
+          "morning",
+          "noon",
+          "afternoon",
+          "evening",
+          "night"
+        ],
+        "outbound_departure_slots": [
+          "dawn",
+          "morning",
+          "noon",
+          "afternoon",
+          "evening",
+          "night"
+        ],
+        "preferences": {
+          "child_type": "",
+          "companion_constraints": [],
+          "elderly_condition": "",
+          "invoice_cabin_limit": false,
+          "invoice_needed": false,
+          "invoice_special_vat": false,
+          "mobility_limited": false,
+          "no_late_arrival": false,
+          "passenger_count": 3,
+          "passengers": {
+            "adult": 3,
+            "child": 0,
+            "elderly": 0,
+            "infant": 0
+          },
+          "prefer_daytime_arrival": false,
+          "price_sensitivity": "low",
+          "refund_policy": "preferred",
+          "solo_travel": false,
+          "time_pref": "no_redeye",
+          "travel_purposes": [
+            "business"
+          ],
+          "travel_scenario": "business",
+          "travel_scenarios": [
+            "business"
+          ],
+          "travel_type": "business",
+          "travelers": "multiple"
+        },
+        "preferred_arrival_slots": [
+          "dawn",
+          "morning",
+          "noon",
+          "afternoon",
+          "evening",
+          "night"
+        ],
+        "preferred_departure_slots": [
+          "dawn",
+          "morning",
+          "noon",
+          "afternoon",
+          "evening",
+          "night"
+        ],
+        "price_sensitivity": "low",
+        "priorities": null,
+        "red_eye": "reject",
+        "red_eye_policy": "not_allowed",
+        "refund_flexibility": "preferred",
+        "return_arrival_slots": [
+          "dawn",
+          "morning",
+          "noon",
+          "afternoon",
+          "evening",
+          "night"
+        ],
+        "return_date": "2026-11-26",
+        "return_date_flexibility": 1,
+        "return_departure_slots": [
+          "dawn",
+          "morning",
+          "noon",
+          "afternoon",
+          "evening",
+          "night"
+        ],
+        "round_trip": true,
+        "route_type": "domestic",
+        "soft_preferences": {
+          "airline_policy": "prefer_full_service",
+          "allow_overnight_transfer": false,
+          "allow_self_transfer": false,
+          "arrival_time_windows": [
+            [
+              "06:00",
+              "23:00"
+            ]
+          ],
+          "budget_scope": "per_person",
+          "child_type": "",
+          "companion_constraints": [],
+          "companions": "multiple",
+          "departure_time_windows": [
+            [
+              "06:00",
+              "23:00"
+            ]
+          ],
+          "direct_preferred": true,
+          "early_morning_allowed": true,
+          "elderly_condition": "",
+          "exclude_airlines": [],
+          "invoice_cabin_limit": false,
+          "invoice_needed": false,
+          "invoice_special_vat": false,
+          "max_budget": 8000,
+          "max_budget_scope": "per_person",
+          "meeting_time_priority": true,
+          "mobility_limited": false,
+          "no_late_arrival": false,
+          "outbound_arrival_time_windows": [
+            [
+              "06:00",
+              "23:00"
+            ]
+          ],
+          "outbound_departure_time_windows": [
+            [
+              "06:00",
+              "23:00"
+            ]
+          ],
+          "passenger_count": 3,
+          "passengers": {
+            "adult": 3,
+            "child": 0,
+            "elderly": 0,
+            "infant": 0
+          },
+          "prefer_daytime_arrival": false,
+          "price_sensitivity": "low",
+          "price_tolerance": 100,
+          "red_eye_allowed": false,
+          "refund_flexibility": "preferred",
+          "return_arrival_time_windows": [
+            [
+              "06:00",
+              "23:00"
+            ]
+          ],
+          "return_departure_time_windows": [
+            [
+              "06:00",
+              "23:00"
+            ]
+          ],
+          "same_day_round_trip": true,
+          "scenario_rules": [
+            "business"
+          ],
+          "solo_travel": false,
+          "target_price": 6000,
+          "target_price_mode": "fixed",
+          "target_price_scope": "per_person",
+          "time_preference": "no_redeye",
+          "time_preference_mode": "no_redeye",
+          "travel_purposes": [
+            "business"
+          ],
+          "travel_scenario": "business",
+          "travel_scenarios": [
+            "business"
+          ],
+          "travelers": "multiple",
+          "trip_rigidity": "confirmed",
+          "trip_type": "business"
+        },
+        "subscription_id": null,
+        "target_price": 6000,
+        "target_price_mode": "fixed",
+        "target_price_scope": "per_person",
+        "transfer_policy": "direct_only",
+        "trip_rigidity": "confirmed",
+        "trip_type": "business"
+      }
+    },
+    "solo_minimal": {
+      "form_input": {
+        "baggage": "unknown",
+        "date_flexibility": "0",
+        "depart_date": "2026-12-01",
+        "destination": "大阪",
+        "lcc_policy": "any",
+        "max_budget": "",
+        "max_budget_scope": "per_person",
+        "monitor_mode": "quick",
+        "notification_frequency": "important_only",
+        "notification_method": "page_only",
+        "origin_select": "PVG",
+        "passenger_count": "1",
+        "price_strategy": "auto_judge",
+        "primary_goal": "buy_timing",
+        "return_date": "",
+        "return_date_flexibility": "0",
+        "round_trip": "false",
+        "route_type": "international",
+        "target_price": "",
+        "target_price_scope": "per_person",
+        "transfer_policy": "reasonable",
+        "travel_scenario": [
+          "personal"
+        ]
+      },
+      "normalized_subscription": {
+        "_index": null,
+        "advanced_rules": {
+          "airlines": {
+            "blocked": [],
+            "lcc_policy": "any",
+            "preference": "any"
+          },
+          "alerts": {
+            "digest_time": "09:00",
+            "frequency": "important_only",
+            "price_change_threshold": "down_100",
+            "types": [
+              "price_risk_alert",
+              "better_same_day"
+            ]
+          },
+          "time_windows": {
+            "arrival": [
+              [
+                "06:00",
+                "23:00"
+              ]
+            ],
+            "departure": [
+              [
+                "06:00",
+                "23:00"
+              ]
+            ],
+            "hourly": {
+              "arrival_end": "",
+              "arrival_start": "",
+              "departure_end": "",
+              "departure_start": ""
+            },
+            "outbound_arrival": [
+              [
+                "06:00",
+                "23:00"
+              ]
+            ],
+            "outbound_departure": [
+              [
+                "06:00",
+                "23:00"
+              ]
+            ],
+            "return_arrival": [
+              [
+                "06:00",
+                "23:00"
+              ]
+            ],
+            "return_departure": [
+              [
+                "06:00",
+                "23:00"
+              ]
+            ]
+          },
+          "transfer": {
+            "max_extra_duration_hours": 6,
+            "max_total_duration": null,
+            "overnight_transfer": false,
+            "self_transfer": false
+          }
+        },
+        "airline_policy": "any",
+        "arrival_slots": [
+          "dawn",
+          "morning",
+          "noon",
+          "afternoon",
+          "evening",
+          "night"
+        ],
+        "arrival_time_policy": "any",
+        "basic": {
+          "departure_date": "2026-12-01",
+          "dest_airports": [
+            "KIX",
+            "ITM"
+          ],
+          "destination": "大阪",
+          "destination_airports": [
+            "KIX",
+            "ITM"
+          ],
+          "destination_airports_active": [
+            "KIX",
+            "ITM"
+          ],
+          "origin": "PVG",
+          "origin_airports": [
+            "PVG"
+          ],
+          "origin_airports_active": [
+            "PVG"
+          ],
+          "passenger_count": 1,
+          "return_date": null,
+          "route_type": "international",
+          "trip_type": "one_way"
+        },
+        "budget": null,
+        "budget_mode": "none",
+        "budget_scope": "per_person",
+        "cabin_classes": [
+          "economy"
+        ],
+        "companions": "solo",
+        "constraints": {
+          "airport_advance_min": null,
+          "arrival_exit_min": null,
+          "budget_scope": "per_person",
+          "budget_strategy": "auto_judge",
+          "business_end": "",
+          "business_seats": 0,
+          "business_start": "",
+          "cabin_arrangement": "economy_all",
+          "cabin_policy": "economy_only",
+          "checked_baggage_required": false,
+          "custom_redundancy_min": null,
+          "date_flexibility_days": 0,
+          "day_trip_period": "",
+          "delay_buffer_min": null,
+          "destination_transport_min": null,
+          "economy_seats": 1,
+          "ideal_price": null,
+          "lcc_policy": "any",
+          "max_budget_scope": "per_person",
+          "max_price": null,
+          "meeting_end": "",
+          "meeting_importance": "",
+          "meeting_location": "",
+          "meeting_start": "",
+          "origin_transport_min": null,
+          "outbound_set_off": "",
+          "post_meeting_buffer_min": null,
+          "pre_meeting_buffer_min": null,
+          "redundancy_min": 25,
+          "reimburse_per_person": null,
+          "return_set_off": "",
+          "route_type": "international",
+          "same_day_round_trip": false,
+          "same_flight_required": false,
+          "target_price_scope": "per_person",
+          "team_date_flexibility": "fixed",
+          "team_passenger_count": null,
+          "time_source": "user_defined",
+          "transfer_policy": "reasonable",
+          "transport_margin_mode": "standard",
+          "trip_nature": "",
+          "trip_natures": [],
+          "user_level": "staff",
+          "user_transport_min": null
+        },
+        "date_flexibility": 0,
+        "defaults_applied": [
+          "个人出行：价格和便利性均衡",
+          "不推荐红眼/凌晨到达",
+          "优先含托运行李方案",
+          "不推荐非联程中转",
+          "不推荐过夜中转"
+        ],
+        "depart_date": "2026-12-01",
+        "departure_slots": [
+          "dawn",
+          "morning",
+          "noon",
+          "afternoon",
+          "evening",
+          "night"
+        ],
+        "departure_time_policy": "no_redeye",
+        "destination": "大阪",
+        "destination_airports": [
+          "KIX",
+          "ITM"
+        ],
+        "destination_airports_active": [
+          "KIX",
+          "ITM"
+        ],
+        "destination_type": "city",
+        "direct_only": "flexible",
+        "exclude_airlines": [],
+        "goals": [
+          "buy_timing",
+          "best_overall"
+        ],
+        "hard_constraints": {
+          "accept_overnight_transfer": false,
+          "accept_self_transfer": false,
+          "airport_advance_min": null,
+          "arrival_exit_min": null,
+          "arrival_slots": [
+            "dawn",
+            "morning",
+            "noon",
+            "afternoon",
+            "evening",
+            "night"
+          ],
+          "arrival_time_policy": "no_midnight",
+          "arrival_time_windows": [
+            [
+              "06:00",
+              "23:00"
+            ]
+          ],
+          "baggage": "unknown",
+          "baggage_default": "prefer_included",
+          "budget_scope": "per_person",
+          "budget_strategy": "auto_judge",
+          "business_end": "",
+          "business_seats": 0,
+          "business_start": "",
+          "cabin_arrangement": "economy_all",
+          "cabin_policy": "economy_only",
+          "custom_redundancy_min": null,
+          "date_flexibility": 0,
+          "day_trip_period": "",
+          "delay_buffer_min": null,
+          "departure_slots": [
+            "dawn",
+            "morning",
+            "noon",
+            "afternoon",
+            "evening",
+            "night"
+          ],
+          "departure_time_policy": "no_redeye",
+          "departure_time_windows": [
+            [
+              "06:00",
+              "23:00"
+            ]
+          ],
+          "destination_transport_min": null,
+          "economy_seats": 1,
+          "lcc_policy": "any",
+          "max_budget": null,
+          "max_budget_mode": "none",
+          "max_budget_scope": "per_person",
+          "max_extra_duration_hours": 6,
+          "max_total_duration_hours": null,
+          "meeting_end": "",
+          "meeting_importance": "",
+          "meeting_location": "",
+          "meeting_start": "",
+          "origin_airport_preference": "all",
+          "origin_transport_min": null,
+          "outbound_set_off": "",
+          "post_meeting_buffer_min": null,
+          "pre_meeting_buffer_min": null,
+          "preferred_arrival_slots": [
+            "dawn",
+            "morning",
+            "noon",
+            "afternoon",
+            "evening",
+            "night"
+          ],
+          "preferred_departure_slots": [
+            "dawn",
+            "morning",
+            "noon",
+            "afternoon",
+            "evening",
+            "night"
+          ],
+          "redundancy_min": 25,
+          "reimburse_per_person": null,
+          "return_set_off": "",
+          "route_type": "international",
+          "same_day_round_trip": false,
+          "same_flight_required": false,
+          "target_price": null,
+          "target_price_mode": "auto",
+          "target_price_scope": "per_person",
+          "team_date_flexibility": "fixed",
+          "team_passenger_count": null,
+          "time_preference": "no_redeye",
+          "time_preference_mode": "no_redeye",
+          "time_source": "user_defined",
+          "transfer_policy": "reasonable",
+          "transport_margin_mode": "standard",
+          "trip_nature": "",
+          "trip_natures": [],
+          "user_level": "staff",
+          "user_transport_min": null
+        },
+        "id": null,
+        "lcc_policy": "any",
+        "max_budget": null,
+        "max_budget_mode": "none",
+        "max_budget_scope": "per_person",
+        "max_extra_duration_hours": 6,
+        "max_total_duration_hours": null,
+        "mode": "balanced",
+        "monitor_mode": "quick",
+        "name": "网页订阅",
+        "need_baggage": "unknown",
+        "notification_goals": {
+          "digest_time": "09:00",
+          "email": "",
+          "frequency": "important_only",
+          "method": "page_only",
+          "price_change_threshold": "down_100",
+          "primary": "buy_timing",
+          "secondary": [
+            "price_risk_alert",
+            "better_same_day"
+          ]
+        },
+        "origin": "PVG",
+        "origin_airport_preference": "all",
+        "origin_airports": [
+          "PVG"
+        ],
+        "origin_airports_active": [
+          "PVG"
+        ],
+        "origin_type": "airport",
+        "outbound_arrival_slots": null,
+        "outbound_departure_slots": null,
+        "preferences": {
+          "child_type": "",
+          "companion_constraints": [],
+          "elderly_condition": "",
+          "invoice_cabin_limit": false,
+          "invoice_needed": false,
+          "invoice_special_vat": false,
+          "mobility_limited": false,
+          "no_late_arrival": false,
+          "passenger_count": 1,
+          "passengers": {
+            "adult": 1,
+            "child": 0,
+            "elderly": 0,
+            "infant": 0
+          },
+          "prefer_daytime_arrival": false,
+          "price_sensitivity": "low",
+          "refund_policy": "preferred",
+          "solo_travel": false,
+          "time_pref": "no_redeye",
+          "travel_purposes": [
+            "personal"
+          ],
+          "travel_scenario": "personal",
+          "travel_scenarios": [
+            "personal"
+          ],
+          "travel_type": "other",
+          "travelers": "solo"
+        },
+        "preferred_arrival_slots": [
+          "dawn",
+          "morning",
+          "noon",
+          "afternoon",
+          "evening",
+          "night"
+        ],
+        "preferred_departure_slots": [
+          "dawn",
+          "morning",
+          "noon",
+          "afternoon",
+          "evening",
+          "night"
+        ],
+        "price_sensitivity": "low",
+        "priorities": null,
+        "red_eye": "reject",
+        "red_eye_policy": "not_allowed",
+        "refund_flexibility": "preferred",
+        "return_arrival_slots": null,
+        "return_date": null,
+        "return_date_flexibility": 0,
+        "return_departure_slots": null,
+        "round_trip": false,
+        "route_type": "international",
+        "soft_preferences": {
+          "airline_policy": "any",
+          "allow_overnight_transfer": false,
+          "allow_self_transfer": false,
+          "arrival_time_windows": [
+            [
+              "06:00",
+              "23:00"
+            ]
+          ],
+          "budget_scope": "per_person",
+          "child_type": "",
+          "companion_constraints": [],
+          "companions": "solo",
+          "departure_time_windows": [
+            [
+              "06:00",
+              "23:00"
+            ]
+          ],
+          "early_morning_allowed": true,
+          "elderly_condition": "",
+          "exclude_airlines": [],
+          "invoice_cabin_limit": false,
+          "invoice_needed": false,
+          "invoice_special_vat": false,
+          "max_budget": null,
+          "max_budget_scope": "per_person",
+          "mobility_limited": false,
+          "no_late_arrival": false,
+          "outbound_arrival_time_windows": [
+            [
+              "06:00",
+              "23:00"
+            ]
+          ],
+          "outbound_departure_time_windows": [
+            [
+              "06:00",
+              "23:00"
+            ]
+          ],
+          "passenger_count": 1,
+          "passengers": {
+            "adult": 1,
+            "child": 0,
+            "elderly": 0,
+            "infant": 0
+          },
+          "prefer_daytime_arrival": false,
+          "price_sensitivity": "low",
+          "price_tolerance": 100,
+          "red_eye_allowed": false,
+          "refund_flexibility": "preferred",
+          "return_arrival_time_windows": [
+            [
+              "06:00",
+              "23:00"
+            ]
+          ],
+          "return_departure_time_windows": [
+            [
+              "06:00",
+              "23:00"
+            ]
+          ],
+          "scenario_rules": [
+            "personal"
+          ],
+          "solo_travel": false,
+          "target_price": null,
+          "target_price_mode": "auto",
+          "target_price_scope": "per_person",
+          "time_preference": "no_redeye",
+          "time_preference_mode": "no_redeye",
+          "travel_purposes": [
+            "personal"
+          ],
+          "travel_scenario": "personal",
+          "travel_scenarios": [
+            "personal"
+          ],
+          "travelers": "solo",
+          "trip_rigidity": "confirmed",
+          "trip_type": "other"
+        },
+        "subscription_id": null,
+        "target_price": null,
+        "target_price_mode": "auto",
+        "target_price_scope": "per_person",
+        "transfer_policy": "reasonable",
+        "trip_rigidity": "confirmed",
+        "trip_type": "other"
+      }
+    },
+    "team_trip": {
+      "form_input": {
+        "adult_count": "8",
+        "baggage": "required",
+        "business_seats": "2",
+        "cabin_arrangement": "mixed",
+        "cabin_policy": "level_based",
+        "child_count": "0",
+        "date_flexibility": "1",
+        "depart_date": "2026-12-10",
+        "destination": "PEK",
+        "economy_seats": "6",
+        "elderly_count": "0",
+        "infant_count": "0",
+        "invoice_context": "true",
+        "invoice_needed": "true",
+        "lcc_policy": "any",
+        "max_budget": "8000",
+        "max_budget_scope": "per_person",
+        "monitor_mode": "precise",
+        "notification_frequency": "important_only",
+        "notification_method": "page_only",
+        "origin_select": "PVG",
+        "price_strategy": "explicit",
+        "primary_goal": "buy_timing",
+        "reimburse_per_person": "4500",
+        "return_date": "2026-12-12",
+        "return_date_flexibility": "1",
+        "round_trip": "true",
+        "route_type": "domestic",
+        "same_flight_required": "true",
+        "target_price": "6000",
+        "target_price_scope": "per_person",
+        "team_date_flexibility": "flexible",
+        "team_passenger_count": "8",
+        "transfer_policy": "reasonable",
+        "travel_scenario": [
+          "business"
+        ],
+        "trip_natures": [
+          "business",
+          "team_building"
+        ],
+        "user_level": "director"
+      },
+      "normalized_subscription": {
+        "_index": null,
+        "advanced_rules": {
+          "airlines": {
+            "blocked": [],
+            "lcc_policy": "any",
+            "preference": "any"
+          },
+          "alerts": {
+            "digest_time": "09:00",
+            "frequency": "important_only",
+            "price_change_threshold": "down_100",
+            "types": [
+              "price_risk_alert",
+              "better_same_day"
+            ]
+          },
+          "time_windows": {
+            "arrival": [],
+            "departure": [],
+            "hourly": {
+              "arrival_end": "",
+              "arrival_start": "",
+              "departure_end": "",
+              "departure_start": ""
+            },
+            "outbound_arrival": [],
+            "outbound_departure": [],
+            "return_arrival": [],
+            "return_departure": []
+          },
+          "transfer": {
+            "max_extra_duration_hours": 6,
+            "max_total_duration": null,
+            "overnight_transfer": false,
+            "self_transfer": false
+          }
+        },
+        "airline_policy": "any",
+        "arrival_slots": [
+          "dawn",
+          "morning",
+          "noon",
+          "afternoon",
+          "evening",
+          "night",
+          "redeye"
+        ],
+        "arrival_time_policy": "any",
+        "basic": {
+          "departure_date": "2026-12-10",
+          "dest_airports": [
+            "PEK"
+          ],
+          "destination": "PEK",
+          "destination_airports": [
+            "PEK"
+          ],
+          "destination_airports_active": [
+            "PEK"
+          ],
+          "origin": "PVG",
+          "origin_airports": [
+            "PVG"
+          ],
+          "origin_airports_active": [
+            "PVG"
+          ],
+          "passenger_count": 8,
+          "return_date": "2026-12-12",
+          "route_type": "domestic",
+          "trip_type": "round_trip"
+        },
+        "budget": 8000,
+        "budget_mode": "fixed",
+        "budget_scope": "per_person",
+        "cabin_classes": [
+          "economy",
+          "business"
+        ],
+        "companions": "multiple",
+        "constraints": {
+          "airport_advance_min": null,
+          "arrival_exit_min": null,
+          "budget_scope": "per_person",
+          "budget_strategy": "explicit",
+          "business_end": "",
+          "business_seats": 2,
+          "business_start": "",
+          "cabin_arrangement": "mixed",
+          "cabin_policy": "level_based",
+          "checked_baggage_required": true,
+          "custom_redundancy_min": null,
+          "date_flexibility_days": 1,
+          "day_trip_period": "",
+          "delay_buffer_min": null,
+          "destination_transport_min": null,
+          "economy_seats": 6,
+          "ideal_price": 6000,
+          "lcc_policy": "any",
+          "max_budget_scope": "per_person",
+          "max_price": 8000,
+          "meeting_end": "",
+          "meeting_importance": "",
+          "meeting_location": "",
+          "meeting_start": "",
+          "origin_transport_min": null,
+          "outbound_set_off": "",
+          "post_meeting_buffer_min": null,
+          "pre_meeting_buffer_min": null,
+          "redundancy_min": 25,
+          "reimburse_per_person": 4500,
+          "return_set_off": "",
+          "route_type": "domestic",
+          "same_day_round_trip": false,
+          "same_flight_required": true,
+          "target_price_scope": "per_person",
+          "team_date_flexibility": "flexible",
+          "team_passenger_count": 8,
+          "time_source": "user_defined",
+          "transfer_policy": "reasonable",
+          "transport_margin_mode": "standard",
+          "trip_nature": "business",
+          "trip_natures": [
+            "business",
+            "team_building"
+          ],
+          "user_level": "director",
+          "user_transport_min": null
+        },
+        "date_flexibility": 1,
+        "defaults_applied": [
+          "公司团建：提高多人库存、同行程和日期弹性权重",
+          "商务/会议：准点、直飞和可改签优先"
+        ],
+        "depart_date": "2026-12-10",
+        "departure_slots": [
+          "dawn",
+          "morning",
+          "noon",
+          "afternoon",
+          "evening",
+          "night",
+          "redeye"
+        ],
+        "departure_time_policy": "no_redeye",
+        "destination": "PEK",
+        "destination_airports": [
+          "PEK"
+        ],
+        "destination_airports_active": [
+          "PEK"
+        ],
+        "destination_type": "airport",
+        "direct_only": "flexible",
+        "exclude_airlines": [],
+        "goals": [
+          "buy_timing",
+          "best_overall"
+        ],
+        "hard_constraints": {
+          "accept_overnight_transfer": false,
+          "accept_self_transfer": false,
+          "airport_advance_min": null,
+          "arrival_exit_min": null,
+          "arrival_slots": [
+            "dawn",
+            "morning",
+            "noon",
+            "afternoon",
+            "evening",
+            "night",
+            "redeye"
+          ],
+          "arrival_time_policy": "any",
+          "arrival_time_windows": [],
+          "baggage": "required",
+          "budget_scope": "per_person",
+          "budget_strategy": "explicit",
+          "business_end": "",
+          "business_seats": 2,
+          "business_start": "",
+          "cabin_arrangement": "mixed",
+          "cabin_policy": "level_based",
+          "custom_redundancy_min": null,
+          "date_flexibility": 1,
+          "day_trip_period": "",
+          "delay_buffer_min": null,
+          "departure_slots": [
+            "dawn",
+            "morning",
+            "noon",
+            "afternoon",
+            "evening",
+            "night",
+            "redeye"
+          ],
+          "departure_time_policy": "no_redeye",
+          "departure_time_windows": [],
+          "destination_transport_min": null,
+          "economy_seats": 6,
+          "lcc_policy": "any",
+          "max_budget": 8000,
+          "max_budget_mode": "fixed",
+          "max_budget_scope": "per_person",
+          "max_extra_duration_hours": 6,
+          "max_total_duration_hours": null,
+          "meeting_end": "",
+          "meeting_importance": "",
+          "meeting_location": "",
+          "meeting_start": "",
+          "origin_airport_preference": "all",
+          "origin_transport_min": null,
+          "outbound_arrival_slots": [
+            "dawn",
+            "morning",
+            "noon",
+            "afternoon",
+            "evening",
+            "night",
+            "redeye"
+          ],
+          "outbound_arrival_time_windows": [],
+          "outbound_departure_slots": [
+            "dawn",
+            "morning",
+            "noon",
+            "afternoon",
+            "evening",
+            "night",
+            "redeye"
+          ],
+          "outbound_departure_time_windows": [],
+          "outbound_set_off": "",
+          "post_meeting_buffer_min": null,
+          "pre_meeting_buffer_min": null,
+          "preferred_arrival_slots": [
+            "dawn",
+            "morning",
+            "noon",
+            "afternoon",
+            "evening",
+            "night",
+            "redeye"
+          ],
+          "preferred_departure_slots": [
+            "dawn",
+            "morning",
+            "noon",
+            "afternoon",
+            "evening",
+            "night",
+            "redeye"
+          ],
+          "redundancy_min": 25,
+          "reimburse_per_person": 4500,
+          "return_arrival_slots": [
+            "dawn",
+            "morning",
+            "noon",
+            "afternoon",
+            "evening",
+            "night",
+            "redeye"
+          ],
+          "return_arrival_time_windows": [],
+          "return_departure_slots": [
+            "dawn",
+            "morning",
+            "noon",
+            "afternoon",
+            "evening",
+            "night",
+            "redeye"
+          ],
+          "return_departure_time_windows": [],
+          "return_set_off": "",
+          "route_type": "domestic",
+          "same_day_round_trip": false,
+          "same_flight_required": true,
+          "target_price": 6000,
+          "target_price_mode": "fixed",
+          "target_price_scope": "per_person",
+          "team_date_flexibility": "flexible",
+          "team_passenger_count": 8,
+          "time_preference": "daytime",
+          "time_preference_mode": "daytime",
+          "time_source": "user_defined",
+          "transfer_policy": "reasonable",
+          "transport_margin_mode": "standard",
+          "trip_nature": "business",
+          "trip_natures": [
+            "business",
+            "team_building"
+          ],
+          "user_level": "director",
+          "user_transport_min": null
+        },
+        "id": null,
+        "lcc_policy": "any",
+        "max_budget": 8000,
+        "max_budget_mode": "fixed",
+        "max_budget_scope": "per_person",
+        "max_extra_duration_hours": 6,
+        "max_total_duration_hours": null,
+        "mode": "balanced",
+        "monitor_mode": "precise",
+        "name": "网页订阅",
+        "need_baggage": "required",
+        "notification_goals": {
+          "digest_time": "09:00",
+          "email": "",
+          "frequency": "important_only",
+          "method": "page_only",
+          "price_change_threshold": "down_100",
+          "primary": "buy_timing",
+          "secondary": [
+            "price_risk_alert",
+            "better_same_day"
+          ]
+        },
+        "origin": "PVG",
+        "origin_airport_preference": "all",
+        "origin_airports": [
+          "PVG"
+        ],
+        "origin_airports_active": [
+          "PVG"
+        ],
+        "origin_type": "airport",
+        "outbound_arrival_slots": [
+          "dawn",
+          "morning",
+          "noon",
+          "afternoon",
+          "evening",
+          "night",
+          "redeye"
+        ],
+        "outbound_departure_slots": [
+          "dawn",
+          "morning",
+          "noon",
+          "afternoon",
+          "evening",
+          "night",
+          "redeye"
+        ],
+        "preferences": {
+          "child_type": "",
+          "companion_constraints": [],
+          "elderly_condition": "normal",
+          "invoice_cabin_limit": false,
+          "invoice_needed": true,
+          "invoice_special_vat": false,
+          "mobility_limited": false,
+          "no_late_arrival": false,
+          "passenger_count": 8,
+          "passengers": {
+            "adult": 8,
+            "child": 0,
+            "elderly": 0,
+            "infant": 0
+          },
+          "prefer_daytime_arrival": false,
+          "price_sensitivity": "low",
+          "refund_policy": "preferred",
+          "solo_travel": false,
+          "time_pref": "unlimited",
+          "travel_purposes": [
+            "business"
+          ],
+          "travel_scenario": "business",
+          "travel_scenarios": [
+            "business"
+          ],
+          "travel_type": "business",
+          "travelers": "multiple"
+        },
+        "preferred_arrival_slots": [
+          "dawn",
+          "morning",
+          "noon",
+          "afternoon",
+          "evening",
+          "night",
+          "redeye"
+        ],
+        "preferred_departure_slots": [
+          "dawn",
+          "morning",
+          "noon",
+          "afternoon",
+          "evening",
+          "night",
+          "redeye"
+        ],
+        "price_sensitivity": "low",
+        "priorities": null,
+        "red_eye": "reject",
+        "red_eye_policy": "not_allowed",
+        "refund_flexibility": "preferred",
+        "return_arrival_slots": [
+          "dawn",
+          "morning",
+          "noon",
+          "afternoon",
+          "evening",
+          "night",
+          "redeye"
+        ],
+        "return_date": "2026-12-12",
+        "return_date_flexibility": 1,
+        "return_departure_slots": [
+          "dawn",
+          "morning",
+          "noon",
+          "afternoon",
+          "evening",
+          "night",
+          "redeye"
+        ],
+        "round_trip": true,
+        "route_type": "domestic",
+        "soft_preferences": {
+          "airline_policy": "prefer_full_service",
+          "allow_overnight_transfer": false,
+          "allow_self_transfer": false,
+          "arrival_time_windows": [],
+          "budget_scope": "per_person",
+          "child_type": "",
+          "companion_constraints": [],
+          "companions": "multiple",
+          "departure_time_windows": [],
+          "direct_preferred": true,
+          "early_morning_allowed": true,
+          "elderly_condition": "normal",
+          "exclude_airlines": [],
+          "invoice_cabin_limit": false,
+          "invoice_needed": true,
+          "invoice_special_vat": false,
+          "max_budget": 8000,
+          "max_budget_scope": "per_person",
+          "mobility_limited": false,
+          "no_late_arrival": false,
+          "outbound_arrival_time_windows": [],
+          "outbound_departure_time_windows": [],
+          "passenger_count": 8,
+          "passengers": {
+            "adult": 8,
+            "child": 0,
+            "elderly": 0,
+            "infant": 0
+          },
+          "prefer_daytime_arrival": false,
+          "price_sensitivity": "low",
+          "price_tolerance": 100,
+          "red_eye_allowed": true,
+          "refund_flexibility": "preferred",
+          "return_arrival_time_windows": [],
+          "return_departure_time_windows": [],
+          "scenario_rules": [
+            "business"
+          ],
+          "solo_travel": false,
+          "target_price": 6000,
+          "target_price_mode": "fixed",
+          "target_price_scope": "per_person",
+          "time_preference": "daytime",
+          "time_preference_mode": "daytime",
+          "travel_purposes": [
+            "business"
+          ],
+          "travel_scenario": "business",
+          "travel_scenarios": [
+            "business"
+          ],
+          "travelers": "multiple",
+          "trip_natures": [
+            "business",
+            "team_building"
+          ],
+          "trip_rigidity": "confirmed",
+          "trip_type": "business"
+        },
+        "subscription_id": null,
+        "target_price": 6000,
+        "target_price_mode": "fixed",
+        "target_price_scope": "per_person",
+        "transfer_policy": "reasonable",
+        "trip_rigidity": "confirmed",
+        "trip_type": "business"
+      }
+    }
+  },
+  "transport": "POST /subscribe",
+  "version": "form_normalization_baseline_v1"
+}

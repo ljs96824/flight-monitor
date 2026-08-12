@@ -10570,50 +10570,14 @@ def _roundtrip_exclusion_basis(
     passengers: dict | None = None,
     route_type: str | None = None,
 ) -> list[str]:
-    constraints = constraints or {}
-    basis = []
-    if constraints.get("same_day_round_trip"):
-        basis.append("当天往返")
-    business_start = str(constraints.get("business_start") or "").strip()
-    business_end = str(constraints.get("business_end") or "").strip()
-    if business_start and business_end:
-        basis.append(f"会议{business_start}-{business_end}")
-    direct_only = str(
-        constraints.get("direct_only")
-        or constraints.get("transfer_policy")
-        or constraints.get("direct_policy")
-        or ""
-    ).strip()
-    if direct_only in {"must", "direct", "direct_only", "nonstop", "必须直飞"}:
-        basis.append("必须直飞")
-    baggage = str(constraints.get("need_baggage") or constraints.get("baggage") or "").strip()
-    if baggage in {"required", "must", "checked_required", "必须托运"}:
-        basis.append("必须含托运")
-    lcc_policy = str(constraints.get("lcc_policy") or "any").strip()
-    if lcc_policy == "exclude_lcc":
-        basis.append("排除廉航")
-    elif lcc_policy == "lcc_only":
-        basis.append("仅看廉航(全段)")
-    max_budget_value = _to_float(max_budget)
-    if max_budget_value is not None:
-        max_scope = normalize_budget_scope(
-            constraints.get("max_budget_scope") or constraints.get("budget_scope")
-        )
-        input_max_budget = _to_float(
-            constraints.get("max_budget")
-            or constraints.get("budget")
-            or constraints.get("price_ceiling")
-        )
-        if max_scope == "per_person" and input_max_budget is not None and passengers:
-            factor = passenger_rate_sum(passengers, route_type)
-            basis.append(
-                f"最高可接受价¥{max_budget_value:,.0f}"
-                f"(全员,=单人¥{input_max_budget:,.0f}×{factor:g})"
-            )
-        else:
-            scope_label = "全员往返" if max_scope == "all" else "单人往返"
-            basis.append(f"最高可接受价¥{max_budget_value:,.0f}({scope_label})")
-    return basis
+    from constraint_summary import build_constraint_summary
+
+    return build_constraint_summary(
+        constraints,
+        max_budget=max_budget,
+        passengers=passengers,
+        route_type=route_type,
+    )
 
 
 def _roundtrip_specific_exclusion_reasons(
