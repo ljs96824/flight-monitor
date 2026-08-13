@@ -39,6 +39,10 @@ from pricing import passenger_rate_sum
 
 from filename_utils import sanitize_filename
 from log_utils import safe_log
+from notification_config import (
+    DEFAULT_NOTIFICATION_METHOD,
+    normalize_notification_goals,
+)
 from price_calendar import load_calendar
 
 
@@ -1187,11 +1191,13 @@ FORM_TEMPLATE = """
       <label>提醒方式</label>
       <div class="choice">
         <label><input type="radio" name="notification_method" value="email"> 邮箱</label>
-        <label><input type="radio" name="notification_method" value="pushplus" checked> PushPlus微信推送</label>
-        <label><input type="radio" name="notification_method" value="both"> 邮箱 + 微信(PushPlus)都接收</label>
+        <label><input type="radio" name="notification_method" value="pushplus"> PushPlus微信推送</label>
+        <label><input type="radio" name="notification_method" value="both" checked> 邮箱 + 微信(PushPlus)都接收</label>
+        {% if edit_subscription.get("notification_method") == "page_only" %}
         <label><input type="radio" name="notification_method" value="page_only"> 暂时只在页面查看</label>
+        {% endif %}
       </div>
-      <div id="email-reminder-wrap" data-show-if="email=true">
+      <div id="email-reminder-wrap" data-show-if="notification_method=email|both">
         <label for="notification_email">邮箱地址</label>
         <input id="notification_email" name="notification_email" type="email" placeholder="you@example.com">
         <p class="hint">支持任意邮箱。注意：Gmail在国内需翻墙才能查看，推荐用QQ/163/Outlook</p>
@@ -3200,7 +3206,7 @@ FORM_TEMPLATE = """
     }
 
     function toggleNotificationMethod() {
-      const method = checkedValue('notification_method') || 'pushplus';
+      const method = checkedValue('notification_method') || 'both';
       const needsEmail = method === 'email' || method === 'both';
       if (emailReminderWrap) {
         emailReminderWrap.style.display = needsEmail ? 'block' : 'none';
@@ -3215,7 +3221,7 @@ FORM_TEMPLATE = """
     }
 
     function validateEmailField(showAlert) {
-      const method = checkedValue('notification_method') || 'pushplus';
+      const method = checkedValue('notification_method') || 'both';
       const needsEmail = method === 'email' || method === 'both';
       const value = notificationEmailInput ? notificationEmailInput.value.trim() : '';
       const ok = !needsEmail || /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(value);
@@ -3239,6 +3245,23 @@ FORM_TEMPLATE = """
       if (notificationFrequencyRuleShadow) {
         notificationFrequencyRuleShadow.value = value || 'important_only';
       }
+    }
+
+    function revealNotificationEmailRequirement() {
+      if (validateEmailField(false)) {
+        return true;
+      }
+      setOptionalSectionExpanded('notifications', true, true);
+      applyMonitorMode();
+      updateStepper();
+      if (isMobileStepper()) {
+        goToStep(stationNumberForField('notification_method'));
+      }
+      emailReminderWrap?.scrollIntoView({behavior: 'smooth', block: 'center'});
+      if (!validateEmailField(true)) {
+        return false;
+      }
+      return true;
     }
 
     function syncNotificationFrequencyShadow() {
@@ -4294,6 +4317,9 @@ FORM_TEMPLATE = """
       if (!validateCabinArrangement(true)) {
         return;
       }
+      if (!revealNotificationEmailRequirement()) {
+        return;
+      }
       if (!form.reportValidity()) {
         return;
       }
@@ -4495,7 +4521,7 @@ FORM_TEMPLATE = """
         event.preventDefault();
         return;
       }
-      if (!validateEmailField(true)) {
+      if (!revealNotificationEmailRequirement()) {
         event.preventDefault();
         return;
       }
@@ -5777,6 +5803,16 @@ def build_subscription(form) -> dict:
         same_flight_required = False
         reimburse_per_person = 0
     use_hourly_time = monitor_mode == "precise" and time_mode == "custom"
+    notification_goals = normalize_notification_goals(
+        {
+            "primary": primary_goal,
+            "secondary": secondary_goals,
+            "method": form.get("notification_method") or DEFAULT_NOTIFICATION_METHOD,
+            "email": form.get("notification_email", "").strip(),
+            "frequency": notification_frequency,
+        }
+    )
+
     def optional_minutes(value):
         return value if value and value > 0 else None
 
@@ -6023,13 +6059,7 @@ def build_subscription(form) -> dict:
             "max_budget_scope": max_budget_scope,
             "target_price_scope": target_price_scope,
         },
-        "notification_goals": {
-            "primary": primary_goal,
-            "secondary": secondary_goals,
-            "method": form.get("notification_method", "pushplus"),
-            "email": form.get("notification_email", "").strip(),
-            "frequency": notification_frequency,
-        },
+        "notification_goals": notification_goals,
         "status": "active",
         "created_at": datetime.now().isoformat(),
     }
@@ -6038,8 +6068,10 @@ def build_subscription(form) -> dict:
 def build_success_summary(subscription: dict) -> dict:
     subscription_with_defaults = apply_default_rules(subscription)
     hard = subscription.get("hard_constraints", {})
-    notification_goals = subscription.get("notification_goals", {}) or {}
-    method = notification_goals.get("method", "pushplus")
+    notification_goals = normalize_notification_goals(
+        subscription.get("notification_goals")
+    )
+    method = notification_goals["method"]
     notification_labels = {
         "pushplus": "PushPlus微信",
         "email": "你的邮箱",

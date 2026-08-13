@@ -45,6 +45,7 @@ from email_notifier import render_email, send_email
 from filename_utils import sanitize_filename
 from health_check import system_health_check
 from log_utils import end_round_log_archive, safe_log, start_round_log_archive
+from notification_config import normalize_notification_goals
 from observations_store import clear_current_round, get_current_round, set_current_round
 from notifier import (
     build_notification_payload,
@@ -209,9 +210,9 @@ def _log_subscription_failure(sub: dict, *, source_errors=None, reason: str | No
 
 
 def _notify_subscription_failure(sub: dict, *, source_errors=None, reason: str | None = None) -> bool:
-    notification_goals = sub.get("notification_goals", {}) or {}
-    method = str(notification_goals.get("method") or "pushplus")
-    email = str(notification_goals.get("email") or "").strip()
+    notification_goals = normalize_notification_goals(sub.get("notification_goals"))
+    method = notification_goals["method"]
+    email = notification_goals["email"]
     failure_reason = _format_source_failure_reason(source_errors, reason)
     route_label = _subscription_route_label(sub)
     content = (
@@ -247,9 +248,9 @@ def _notify_subscription_failure(sub: dict, *, source_errors=None, reason: str |
 def _notify_system_alert(subscriptions: list[dict], title: str, content: str) -> bool:
     """Send one operational alert through the first configured subscription channel."""
     for sub in subscriptions or []:
-        goals = sub.get("notification_goals", {}) or {}
-        method = str(goals.get("method") or "pushplus")
-        email = str(goals.get("email") or "").strip()
+        goals = normalize_notification_goals(sub.get("notification_goals"))
+        method = goals["method"]
+        email = goals["email"]
         if method == "page_only":
             continue
         sent = False
@@ -626,7 +627,10 @@ def _normalize_subscription(item: dict) -> dict:
         preferences["passengers"] = passengers
         soft_preferences["passengers"] = passengers
     soft_preferences["passenger_count"] = passenger_count
-    notification_goals = item.get("notification_goals") or {}
+    notification_goals = normalize_notification_goals(
+        item.get("notification_goals"),
+        logger=safe_log,
+    )
     return_date = item.get("return_date") or hard_constraints.get("return_date")
     same_day_round_trip = bool(
         hard_constraints.get("same_day_round_trip")
@@ -1028,9 +1032,9 @@ def _subscription_identifier(sub: dict, route: str) -> str:
 
 def _deliver_notification(sub: dict, route: str, message_kwargs: dict) -> bool:
     try:
-        notification_goals = sub.get("notification_goals", {}) or {}
-        method = notification_goals.get("method", "pushplus")
-        email = notification_goals.get("email", "").strip()
+        notification_goals = normalize_notification_goals(sub.get("notification_goals"))
+        method = notification_goals["method"]
+        email = notification_goals["email"]
         subscription_id = _subscription_identifier(sub, route)
         route_info = dict(message_kwargs.get("route_info") or {})
         route_info["subscription_id"] = subscription_id

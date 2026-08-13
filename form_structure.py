@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+from notification_config import DEFAULT_NOTIFICATION_METHOD
+
 
 REQUIRED_STATION_COUNT = 4
 
@@ -284,7 +286,7 @@ OPTIONAL_SECTION_DEFAULTS = {
     },
     "notifications": {
         "primary_goal": "buy_timing",
-        "notification_method": "pushplus",
+        "notification_method": DEFAULT_NOTIFICATION_METHOD,
         "notification_email": "",
         "notification_frequency": "important_only",
         "notification_frequency_rule": "important_only",
@@ -639,7 +641,10 @@ def _notification_summary(values) -> str:
         "email": "邮箱",
         "pushplus": "PushPlus",
         "both": "邮箱+PushPlus",
-    }.get(_first(values, "notification_method", "pushplus"), "PushPlus")
+    }.get(
+        _first(values, "notification_method", DEFAULT_NOTIFICATION_METHOD),
+        "邮箱+PushPlus",
+    )
     frequency = {
         "important_only": "重要变化",
         "price_change": "价格变化",
@@ -1065,7 +1070,7 @@ def subscription_to_form_values(subscription: Mapping | None) -> dict:
             "invoice_cabin_limit": invoice_limit,
             "primary_goal": goals.get("primary") or "buy_timing",
             "secondary_goals": list(goals.get("secondary") or alerts.get("types") or []),
-            "notification_method": goals.get("method") or "both",
+            "notification_method": goals.get("method") or DEFAULT_NOTIFICATION_METHOD,
             "notification_email": goals.get("email") or "",
             "notification_frequency": frequency,
             "notification_frequency_rule": frequency,

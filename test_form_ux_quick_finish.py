@@ -43,7 +43,7 @@ class FormUxQuickFinishTest(unittest.TestCase):
         defaults = summarize_optional_sections({})
         self.assertEqual(defaults["feasibility"], "已按场景预设")
         self.assertIn("时间不限", defaults["flight_preferences"])
-        self.assertIn("PushPlus", defaults["notifications"])
+        self.assertEqual(defaults["notifications"], "邮箱+PushPlus · 重要变化")
 
         custom = summarize_optional_sections(
             {
@@ -153,7 +153,7 @@ class FormUxQuickFinishTest(unittest.TestCase):
             },
             "notification_goals": {
                 "main_goal": "buy_timing",
-                "method": "pushplus",
+                "method": "both",
                 "frequency": "important_only",
             },
         }

@@ -132,6 +132,22 @@ SCENARIOS = {
         invoice_context="true",
         invoice_needed="true",
     ),
+    "email_only_notification": _base_form(
+        monitor_mode="precise",
+        notification_method="email",
+        notification_email="email-only@example.com",
+        notification_frequency="daily_digest",
+        notification_frequency_rule="daily_digest",
+    ),
+    "both_notification": _base_form(
+        monitor_mode="precise",
+        notification_method="both",
+        notification_email="both@example.com",
+        notification_frequency="price_change",
+        notification_frequency_rule="price_change",
+        price_change_threshold="down_200",
+        digest_time="08:30",
+    ),
 }
 
 
