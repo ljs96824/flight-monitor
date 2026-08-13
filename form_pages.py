@@ -27,6 +27,40 @@ SECTION_TITLES = {
     "notifications": "怎么提醒",
 }
 
+SECONDARY_GROUP_DEFINITIONS = (
+    {
+        "id": "business-travel",
+        "title": "商务出行",
+        "description": "当天往返、会议与发票设置；普通行程可保持默认。",
+        "after_section": "when",
+        "concept_names": (
+            "same_day_round_trip",
+            "meeting_window",
+            "meeting_location",
+            "meeting_importance",
+            "same_day_execution",
+            "invoice",
+        ),
+    },
+    {
+        "id": "feasibility",
+        "title": "可行性参数",
+        "description": "动身时间、机场交通与冗余；未填写时沿用系统估算。",
+        "after_section": "who",
+        "concept_names": (
+            "set_off_times",
+            "transport_estimates",
+            "transport_margin",
+            "reserve_overrides",
+        ),
+    },
+)
+SECONDARY_CONCEPT_NAMES = frozenset(
+    concept_name
+    for group in SECONDARY_GROUP_DEFINITIONS
+    for concept_name in group["concept_names"]
+)
+
 VISIBILITY_CONTRACTS = frozenset({"passenger-profile", "notification-email"})
 
 ORIGIN_OPTIONS = (
@@ -431,30 +465,46 @@ def _field_spec(name: str, values: Mapping, *, page_mode: str) -> dict:
     }
 
 
+def _concept_spec(concept_name: str, concept: Mapping, values: Mapping) -> dict:
+    fields = [_field_spec(name, values, page_mode="full") for name in concept["fields"]]
+    visible = [field for field in fields if field["type"] != "hidden"]
+    hidden = [field for field in fields if field["type"] == "hidden"]
+    result = {
+        "name": concept_name,
+        "title": concept["canonical_control"] if visible else "",
+        "fields": visible,
+    }
+    if hidden:
+        result["hidden_fields"] = hidden
+    return result
+
+
+def _normalized_group_value(name: str, value):
+    if name in BOOLEAN_FIELDS:
+        return _truthy(value)
+    if name in MULTI_FIELDS:
+        return tuple(sorted(_as_list(value)))
+    return str(value if value is not None else "").strip()
+
+
+def _secondary_group_has_nondefault(group: Mapping, values: Mapping) -> bool:
+    for concept_name in group["concept_names"]:
+        for name in CONCEPTS[concept_name]["canonical_input_names"]:
+            actual = values.get(name, DEFAULTS.get(name, ""))
+            default = DEFAULTS.get(name, False if name in BOOLEAN_FIELDS else "")
+            if _normalized_group_value(name, actual) != _normalized_group_value(name, default):
+                return True
+    return False
+
+
 def _full_sections(values: Mapping) -> list[dict]:
     sections = []
     for section_id in SECTION_IDS:
         concepts = []
         for concept_name, concept in CONCEPTS.items():
-            if concept["station_id"] != section_id:
+            if concept["station_id"] != section_id or concept_name in SECONDARY_CONCEPT_NAMES:
                 continue
-            fields = [_field_spec(name, values, page_mode="full") for name in concept["fields"]]
-            visible = [field for field in fields if field["type"] != "hidden"]
-            hidden = [field for field in fields if field["type"] == "hidden"]
-            if visible:
-                concepts.append(
-                    {
-                        "name": concept_name,
-                        "title": concept["canonical_control"],
-                        "fields": visible,
-                    }
-                )
-            else:
-                concepts.append(
-                    {"name": concept_name, "title": "", "fields": []}
-                )
-            for field in hidden:
-                concepts[-1].setdefault("hidden_fields", []).append(field)
+            concepts.append(_concept_spec(concept_name, concept, values))
         sections.append(
             {
                 "id": section_id,
@@ -465,6 +515,20 @@ def _full_sections(values: Mapping) -> list[dict]:
             }
         )
     return sections
+
+
+def _secondary_groups(values: Mapping, *, editing: bool) -> list[dict]:
+    return [
+        {
+            **group,
+            "concepts": [
+                _concept_spec(concept_name, CONCEPTS[concept_name], values)
+                for concept_name in group["concept_names"]
+            ],
+            "open": editing and _secondary_group_has_nondefault(group, values),
+        }
+        for group in SECONDARY_GROUP_DEFINITIONS
+    ]
 
 
 def _quick_groups(values: Mapping) -> list[dict]:
@@ -491,6 +555,11 @@ def build_form_page_context(page_mode: str, values=None, *, edit_index=None) -> 
         "title": "快速创建监控" if page_mode == "quick" else "完整设置",
         "groups": _quick_groups(data) if page_mode == "quick" else [],
         "sections": _full_sections(data) if page_mode == "full" else [],
+        "secondary_groups": (
+            _secondary_groups(data, editing=edit_index is not None)
+            if page_mode == "full"
+            else []
+        ),
         "monitor_mode": str(data.get("monitor_mode") or ("quick" if page_mode == "quick" else "precise")),
         "subscription_index": data.get("subscription_index", ""),
         "values": data,
@@ -543,9 +612,12 @@ FORM_PAGE_TEMPLATE = r"""
     .concept { margin:0 0 24px; padding:0; border:0; }
     .concept:last-child { margin-bottom:0; }
     .concept legend { font-weight:700; margin-bottom:10px; font-size:15px; }
-    .static-subsection { margin:8px 0 20px; padding:12px 14px; border-left:4px solid var(--accent); background:var(--soft); }
-    .static-subsection h3 { margin:0 0 3px; font-size:16px; }
-    .static-subsection p { margin:0; color:var(--muted); font-size:13px; }
+    .secondary-group { margin:0; padding:0 0 22px; border-bottom:1px solid var(--line); scroll-margin-top:16px; }
+    .secondary-group > summary { cursor:pointer; padding:18px 0; color:var(--ink); }
+    .secondary-group > summary::marker { color:var(--accent); }
+    .secondary-group-title { font-size:18px; font-weight:800; margin-right:10px; }
+    .secondary-group-note { color:var(--muted); font-size:13px; }
+    .secondary-group-body { padding:2px 0 4px; }
     .field-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px 18px; }
     .field { display:flex; flex-direction:column; gap:6px; min-width:0; }
     .field-wide { grid-column:1/-1; }
@@ -634,6 +706,16 @@ FORM_PAGE_TEMPLATE = r"""
     {% endif %}
   {%- endmacro %}
 
+  {% macro render_concept(concept) -%}
+    {% for field in concept.hidden_fields or [] %}{{ render_field(field) }}{% endfor %}
+    {% if concept.fields %}
+      <fieldset class="concept" data-form-concept="{{ concept.name }}">
+        <legend>{{ concept.title }}</legend>
+        <div class="field-grid">{% for field in concept.fields %}{{ render_field(field) }}{% endfor %}</div>
+      </fieldset>
+    {% endif %}
+  {%- endmacro %}
+
   {% if page.mode == 'quick' %}
   <main class="quick-shell">
     <form id="subscription-form" method="post" action="{{ url_for('subscribe') }}" data-page-mode="quick" novalidate>
@@ -661,7 +743,10 @@ FORM_PAGE_TEMPLATE = r"""
   <main class="full-shell">
     <nav class="anchor-directory" aria-label="完整设置目录" data-anchor-directory="true">
       <strong>设置目录</strong>
-      {% for section in page.sections %}<a href="#section-{{ section.html_id }}">{{ section.title }}</a>{% endfor %}
+      {% for section in page.sections %}
+        <a href="#section-{{ section.html_id }}">{{ section.title }}</a>
+        {% for group in page.secondary_groups %}{% if group.after_section == section.id %}<a href="#group-{{ group.id }}">{{ group.title }}</a>{% endif %}{% endfor %}
+      {% endfor %}
     </nav>
     <form id="subscription-form" method="post" action="{{ url_for('subscribe') }}" data-page-mode="full" novalidate>
       <input type="hidden" name="form_page" value="full">
@@ -672,22 +757,21 @@ FORM_PAGE_TEMPLATE = r"""
             <h2>{{ loop.index }}. {{ section.title }}</h2>
             <span class="section-summary" data-section-summary="{{ section.id }}">{{ section.summary }}</span>
           </div>
-          {% for concept in section.concepts %}
-            {% if section.id == 'when' and concept.name == 'same_day_round_trip' %}
-            <div class="static-subsection" data-static-subsection="same-day-meeting">
-              <h3>当天往返与会议参数</h3>
-              <p>仅当天往返行程需要，其余可留空</p>
-            </div>
-            {% endif %}
-            {% for field in concept.hidden_fields or [] %}{{ render_field(field) }}{% endfor %}
-            {% if concept.fields %}
-              <fieldset class="concept" data-form-concept="{{ concept.name }}">
-                <legend>{{ concept.title }}</legend>
-                <div class="field-grid">{% for field in concept.fields %}{{ render_field(field) }}{% endfor %}</div>
-              </fieldset>
-            {% endif %}
-          {% endfor %}
+          {% for concept in section.concepts %}{{ render_concept(concept) }}{% endfor %}
         </section>
+        {% for group in page.secondary_groups %}
+          {% if group.after_section == section.id %}
+          <details id="group-{{ group.id }}" class="secondary-group" data-secondary-group="{{ group.id }}"{% if group.open %} open{% endif %}>
+            <summary>
+              <span class="secondary-group-title">{{ group.title }}</span>
+              <span class="secondary-group-note">{{ group.description }}</span>
+            </summary>
+            <div class="secondary-group-body">
+              {% for concept in group.concepts %}{{ render_concept(concept) }}{% endfor %}
+            </div>
+          </details>
+          {% endif %}
+        {% endfor %}
       {% endfor %}
       <section id="confirmation-map" class="confirmation-map" aria-labelledby="confirmation-title">
         <h2 id="confirmation-title">提交前确认</h2>

@@ -174,6 +174,7 @@ console.log("[UI smoke] 页1提交=PASS 已抵达/success");
 await navigate("/settings");
 const fullContract = await evaluate(`(() => {
   const ids = ['section-where','section-when','section-who','section-budget','section-flight-preferences','section-notifications'];
+  const groupIds = ['group-business-travel','group-feasibility'];
   const visible = element => {
     if (!element) return false;
     const style = getComputedStyle(element);
@@ -187,19 +188,45 @@ const fullContract = await evaluate(`(() => {
     sectionsVisible: ids.every(id => visible(document.getElementById(id))),
     sectionCount: ids.length,
     anchorCount: ids.filter(id => document.querySelector('a[href="#' + id + '"]')).length,
+    groupCount: groupIds.filter(id => document.getElementById(id)?.tagName === 'DETAILS').length,
+    groupAnchorCount: groupIds.filter(id => document.querySelector('a[href="#' + id + '"]')).length,
+    groupsClosed: groupIds.every(id => !document.getElementById(id)?.hasAttribute('open')),
     duplicates: [...new Set(duplicates)],
     buildMarker: document.querySelector('[data-build-marker="true"]')?.textContent.trim() || '',
   };
 })()`);
-if (fullContract.page !== "full" || !fullContract.sectionsVisible || fullContract.anchorCount !== 6 || fullContract.duplicates.length || !fullContract.buildMarker) {
+if (fullContract.page !== "full" || !fullContract.sectionsVisible || fullContract.anchorCount !== 6 || fullContract.groupCount !== 2 || fullContract.groupAnchorCount !== 2 || !fullContract.groupsClosed || fullContract.duplicates.length || !fullContract.buildMarker) {
   throw new Error(`完整页契约失败: ${JSON.stringify(fullContract)}`);
 }
 for (const id of ["section-where","section-when","section-who","section-budget","section-flight-preferences","section-notifications"]) {
   await evaluate(`document.querySelector('a[href="#${id}"]').click(); true`);
   await waitFor(`location.hash === '#${id}' && Boolean(document.getElementById('${id}'))`, `锚点${id}`);
 }
-console.log(`[UI smoke] 页2六节=${fullContract.sectionCount} 全可见=True 目录锚点=${fullContract.anchorCount} 重复name=0`);
+console.log(`[UI smoke] 页2六节=${fullContract.sectionCount} 全可见=True 目录锚点=${fullContract.anchorCount} 次级组锚点=${fullContract.groupAnchorCount} 重复name=0`);
 console.log(`[UI smoke] 版本信标=${fullContract.buildMarker}`);
+
+for (const groupId of ['group-business-travel', 'group-feasibility']) {
+  await clickSelector(`#${groupId} > summary`);
+  await waitFor(`document.getElementById('${groupId}').hasAttribute('open')`, `${groupId}展开`);
+  await clickSelector(`#${groupId} > summary`);
+  await waitFor(`!document.getElementById('${groupId}').hasAttribute('open')`, `${groupId}闭合`);
+}
+console.log("[UI smoke] 原生details开合=PASS 商务出行/可行性参数");
+
+await command("Input.dispatchKeyEvent", {type: "keyDown", key: "f", code: "KeyF", modifiers: 2, windowsVirtualKeyCode: 70, nativeVirtualKeyCode: 70});
+await command("Input.dispatchKeyEvent", {type: "keyUp", key: "f", code: "KeyF", modifiers: 2, windowsVirtualKeyCode: 70, nativeVirtualKeyCode: 70});
+const findProbe = await evaluate(`(() => {
+  const group = document.getElementById('group-business-travel');
+  const text = '需要增值税专票';
+  const textPresent = group?.textContent.includes(text) || false;
+  const matched = window.find(text, false, false, true, false, false, false);
+  return {textPresent, matched, initiallyClosed: !group?.hasAttribute('open')};
+})()`);
+await pressKey("Escape", "Escape", 27);
+if (!findProbe.textPresent || !findProbe.matched || !findProbe.initiallyClosed) {
+  throw new Error(`闭合details内文不可查找: ${JSON.stringify(findProbe)}`);
+}
+console.log("[UI smoke] details内文查找可达=PASS Ctrl+F键序列+浏览器内核find 需要增值税专票");
 
 const pushplusVisibility = await chooseNotificationMethod("pushplus");
 const emailVisibility = await chooseNotificationMethod("email");
@@ -243,6 +270,7 @@ await evaluate(`(() => {
   set('transport_mode', 'taxi');
   set('user_transport_min', '25');
   set('redundancy_min', '15');
+  set('outbound_set_off', '06:30');
 
   set('notification_email', 'ux31@example.com');
   const scenario = document.querySelector('[name="travel_scenario"]');
@@ -266,6 +294,16 @@ if (!confirmation.email || !confirmation.meetingStart || !confirmation.meetingEn
 }
 console.log("[UI smoke] 页2邮箱提交=PASS value=ux31@example.com");
 console.log("[UI smoke] 页2当天往返会议=PASS 10:30-17:00");
+
+await navigate("/settings?edit=1");
+const editGroups = await evaluate(`(() => ({
+  business: document.getElementById('group-business-travel')?.hasAttribute('open') || false,
+  feasibility: document.getElementById('group-feasibility')?.hasAttribute('open') || false,
+}))()`);
+if (!editGroups.business || !editGroups.feasibility) {
+  throw new Error(`编辑态次级组未自动展开: ${JSON.stringify(editGroups)}`);
+}
+console.log("[UI smoke] 编辑态details自动展开=PASS 商务出行+可行性参数");
 
 await sleep(350);
 if (browserErrors.length) throw new Error(`浏览器错误: ${browserErrors.join(' | ')}`);

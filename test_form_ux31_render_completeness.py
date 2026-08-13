@@ -23,11 +23,15 @@ class _FormDom(HTMLParser):
         self.names = []
         self.sections_by_name = {}
         self._section_stack = []
+        self.groups_by_name = {}
+        self._group_stack = []
 
     def handle_starttag(self, tag, attrs):
         values = dict(attrs)
         if tag == "section":
             self._section_stack.append(values.get("id"))
+        if tag == "details":
+            self._group_stack.append(values.get("data-secondary-group"))
         if tag in {"input", "select", "textarea"} and values.get("name"):
             name = values["name"]
             self.names.append(name)
@@ -35,10 +39,16 @@ class _FormDom(HTMLParser):
                 (item for item in reversed(self._section_stack) if item),
                 None,
             )
+            self.groups_by_name[name] = next(
+                (item for item in reversed(self._group_stack) if item),
+                None,
+            )
 
     def handle_endtag(self, tag):
         if tag == "section" and self._section_stack:
             self._section_stack.pop()
+        if tag == "details" and self._group_stack:
+            self._group_stack.pop()
 
 
 def _multidict(mapping):
@@ -79,7 +89,7 @@ class FormUx31RenderCompletenessTest(unittest.TestCase):
             for name in concept["canonical_input_names"]:
                 self.assertEqual(counts[name], 1, f"{concept_name}:{name}")
 
-        meeting_fields = {
+        business_fields = {
             "same_day_round_trip",
             "business_start",
             "business_end",
@@ -87,9 +97,15 @@ class FormUx31RenderCompletenessTest(unittest.TestCase):
             "transport_mode",
             "user_transport_min",
             "redundancy_min",
+            "invoice_needed",
+            "invoice_context",
+            "invoice_special_vat",
+            "invoice_cabin_limit",
         }
-        for name in meeting_fields:
-            self.assertEqual(dom.sections_by_name.get(name), "section-when", name)
+        for name in business_fields:
+            self.assertEqual(dom.groups_by_name.get(name), "business-travel", name)
+        for name in ("outbound_set_off", "origin_transport_min", "transport_margin_mode"):
+            self.assertEqual(dom.groups_by_name.get(name), "feasibility", name)
         for name in ("notification_method", "notification_email"):
             self.assertEqual(dom.sections_by_name.get(name), "section-notifications", name)
 
@@ -112,10 +128,11 @@ class FormUx31RenderCompletenessTest(unittest.TestCase):
         self.assertIn('data-mode-link="quick"', full)
         self.assertIn("返回快速创建", full)
 
-    def test_same_day_meeting_subsection_is_static_and_complete(self):
+    def test_same_day_meeting_fields_use_native_business_group_without_new_visibility(self):
         html = self._page("/settings")
-        self.assertIn('data-static-subsection="same-day-meeting"', html)
-        self.assertIn("仅当天往返行程需要，其余可留空", html)
+        self.assertIn('data-secondary-group="business-travel"', html)
+        self.assertIn("当天往返、会议与发票设置；普通行程可保持默认。", html)
+        self.assertNotIn('data-static-subsection="same-day-meeting"', html)
         self.assertEqual(
             html.count('data-visibility-contract="'),
             html.count('data-visibility-contract="passenger-profile"')

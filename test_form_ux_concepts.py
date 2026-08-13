@@ -215,11 +215,14 @@ class FormUxConceptRenderingTest(unittest.TestCase):
         counts = {name: self.rendered_names().count(name) for name in set(self.rendered_names())}
         self.assertEqual({name: count for name, count in counts.items() if count != 1}, {})
 
-    def test_six_sections_are_static_and_use_plain_anchor_navigation(self):
+    def test_six_primary_sections_and_native_groups_use_plain_anchor_navigation(self):
         for section_id in SECTION_IDS:
             self.assertIn(f'id="{section_id}"', self.html)
             self.assertIn(f'href="#{section_id}"', self.html)
-        self.assertNotIn("<details", self.html)
+        self.assertEqual(self.html.count("<details"), 2)
+        for group_id in ("business-travel", "feasibility"):
+            self.assertIn(f'id="group-{group_id}"', self.html)
+            self.assertIn(f'href="#group-{group_id}"', self.html)
         self.assertNotIn("data-wizard-state", self.html)
         self.assertNotIn("openWizardStation", self.html)
 

@@ -119,7 +119,7 @@ class FormUx3TwoPagesTest(unittest.TestCase):
         for removed in REMOVED_MECHANICS:
             self.assertNotIn(removed, html)
 
-    def test_full_page_has_six_visible_sections_and_plain_anchor_directory(self):
+    def test_full_page_has_six_visible_sections_and_native_secondary_groups(self):
         html = self._page("/settings")
         dom = _Dom()
         dom.feed(html)
@@ -135,7 +135,11 @@ class FormUx3TwoPagesTest(unittest.TestCase):
             self.assertNotIn("hidden", attrs, section_id)
             self.assertNotEqual(attrs.get("style"), "display:none", section_id)
             self.assertIn(f'href="#{section_id}"', html)
-        self.assertNotIn("<details", html)
+        self.assertEqual(html.count("<details"), 2)
+        self.assertIn('data-secondary-group="business-travel"', html)
+        self.assertIn('data-secondary-group="feasibility"', html)
+        self.assertIn('href="#group-business-travel"', html)
+        self.assertIn('href="#group-feasibility"', html)
         for removed in REMOVED_MECHANICS:
             self.assertNotIn(removed, html)
 
