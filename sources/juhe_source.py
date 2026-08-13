@@ -285,9 +285,20 @@ class JuheSource(FlightSource):
                 "reason": reason,
                 "collected_at": collected_at,
             }
-        if _is_success_response(raw):
-            self._write_cache(origin, dest, date_str, cabin_class, raw)
-        flights = self.normalize(self.parse(raw), collected_at=collected_at)
+        parsed = self.parse(raw)
+        flights = self.normalize(parsed, collected_at=collected_at)
+        if not flights:
+            reason = "HTTP成功但空结果" if not parsed else "HTTP成功但无有效方案"
+            safe_log(f"[juhe] empty {date_str}: {reason}")
+            return {
+                "flights": [],
+                "source": self.name,
+                "raw": raw,
+                "source_status": "empty",
+                "reason": reason,
+                "collected_at": collected_at,
+            }
+        self._write_cache(origin, dest, date_str, cabin_class, raw)
         return {
             "flights": flights,
             "source": self.name,
@@ -408,6 +419,9 @@ class JuheSource(FlightSource):
         raw = payload.get("raw")
         if not _is_success_response(raw):
             safe_log("[juhe] cached response is not successful, ignoring cache")
+            return None
+        if not _as_flight_items(raw):
+            safe_log("[juhe] cached response is empty, ignoring cache")
             return None
         return raw
 

@@ -6944,6 +6944,120 @@ def _source_error_text(source_errors: list[dict] | None, source_name: str) -> st
             return text
     return ""
 
+_LISTING_SOURCE_LABELS = {
+    "juhe": "OTA交叉源",
+    "hasdata": "Google数据源",
+}
+_LISTING_SOURCE_TRACKING_LABELS = {
+    "juhe": "OTA源",
+    "hasdata": "Google源",
+}
+
+_LISTING_SOURCE_POOL_LABELS = {
+    "juhe": "OTA",
+    "hasdata": "Google",
+}
+
+
+
+def _source_stats_count(entry: dict | None) -> int:
+    try:
+        return max(0, int((entry or {}).get("count") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _source_degradation_detail(
+    source_name: str,
+    source_stat: dict | None,
+    source_errors: list[dict] | None,
+) -> str:
+    error_text = _source_error_text(source_errors, source_name)
+    if error_text:
+        return error_text
+    source_stat = source_stat or {}
+    reason = str(source_stat.get("reason") or "").strip()
+    status = str(source_stat.get("status") or "").strip().lower()
+    if status == "empty":
+        return reason or "HTTP成功但空结果(原因未知)"
+    if reason:
+        return reason
+    if status:
+        return f"源状态={source_stat.get('status')}"
+    return "本轮未返回有效方案(原因未知)"
+
+
+def _build_source_degradation_context(
+    *,
+    source_stats: dict | None,
+    last_snapshot: dict | None,
+    source_errors: list[dict] | None,
+    current_sources: set[str] | None = None,
+) -> dict:
+    """Build result-side source degradation evidence without changing prices."""
+    source_stats = source_stats if isinstance(source_stats, dict) else {}
+    previous_sources = _parse_snapshot_sources(last_snapshot)
+    positive_sources = {
+        str(name).strip().lower()
+        for name, entry in source_stats.items()
+        if str(name).strip().lower() in _LISTING_SOURCE_LABELS
+        and isinstance(entry, dict)
+        and _source_stats_count(entry) > 0
+    }
+    if current_sources:
+        positive_sources.update(str(item).strip().lower() for item in current_sources if item)
+    unavailable = []
+    for source_name, entry in source_stats.items():
+        normalized = str(source_name).strip().lower()
+        if normalized not in _LISTING_SOURCE_LABELS or not isinstance(entry, dict):
+            continue
+        if _source_stats_count(entry) == 0:
+            unavailable.append(normalized)
+    first_candidates = [name for name in unavailable if name in previous_sources]
+    continued = str((last_snapshot or {}).get("push_type") or "") == "数据源受限"
+    source_name = next(
+        (name for name in ("juhe", "hasdata") if name in first_candidates),
+        "",
+    )
+    first_occurrence = bool(source_name)
+    if not source_name and continued:
+        source_name = next(
+            (name for name in ("juhe", "hasdata") if name in unavailable),
+            "",
+        )
+    if not source_name:
+        return {"active": False}
+    positive_label = "+".join(
+        _LISTING_SOURCE_POOL_LABELS.get(name, name)
+        for name in sorted(positive_sources)
+    ) or "其他可用源"
+    stat = source_stats.get(source_name) or {}
+    detail = _source_degradation_detail(source_name, stat, source_errors)
+    label = _LISTING_SOURCE_LABELS[source_name]
+    if first_occurrence:
+        reason = (
+            f"本轮{label}不可用(原因={detail}),"
+            f"入池仅{positive_label},与上次价格不可直接比"
+        )
+        disclosure_level = "full"
+    else:
+        reason = f"{label}仍不可用(原因={detail}),价格仍不可直接与恢复前比较"
+        disclosure_level = "compact"
+    return {
+        "active": True,
+        "source": source_name,
+        "source_label": _LISTING_SOURCE_TRACKING_LABELS[source_name],
+        "reason_detail": detail,
+        "reason": reason,
+        "first_occurrence": first_occurrence,
+        "disclosure_level": disclosure_level,
+        "previous_sources": sorted(previous_sources),
+        "current_sources": sorted(positive_sources),
+        "missing_sources": [source_name],
+    }
+
+
+
 
 def _constraint_change_context(
     current_fingerprint: str | None,
@@ -7037,8 +7151,29 @@ def _apply_source_degradation_to_push_meta(
     current_sources: set[str],
     previous_sources: set[str],
     source_errors: list[dict] | None = None,
+    degradation_context: dict | None = None,
 ) -> dict:
     result = dict(push_meta or {})
+    if degradation_context is not None:
+        context = dict(degradation_context or {})
+        if not context.get("active"):
+            return result
+        reason = str(context.get("reason") or "").strip()
+        reasons = [
+            str(item)
+            for item in (result.get("reasons") or [])
+            if not _is_previous_price_reason(str(item or ""))
+            and "上涨" not in str(item)
+            and "下降" not in str(item)
+        ]
+        if reason:
+            reasons.insert(0, reason)
+        result["type"] = "数据源受限"
+        result["price_change"] = None
+        result["source_degradation"] = context
+        result["reasons"] = _payload_dedupe_text(reasons)[:4]
+        return result
+
     if not previous_sources or not current_sources:
         return result
     missing_sources = previous_sources - current_sources
@@ -7469,6 +7604,11 @@ def build_notification_payload(
         return_key,
         subscription_id=subscription_snapshot_id,
     )
+    source_degradation_context = _build_source_degradation_context(
+        source_stats=source_stats,
+        last_snapshot=last_snapshot,
+        source_errors=source_errors,
+    )
     current_constraint_fingerprint = str(
         route_info.get("constraint_fingerprint")
         or analysis_result.get("constraint_fingerprint")
@@ -7609,6 +7749,7 @@ def build_notification_payload(
             is_roundtrip,
             return_analysis=return_analysis,
         ),
+        source_degradation=source_degradation_context,
     )
 
     primary_flight = None
@@ -7810,6 +7951,11 @@ def build_notification_payload(
         current_sources=current_source_set,
         previous_sources=previous_source_set,
         source_errors=source_errors,
+        degradation_context=(
+            source_degradation_context
+            if source_degradation_context.get("active")
+            else None
+        ),
     )
     push_meta = _apply_constraint_change_to_push_meta(
         push_meta,

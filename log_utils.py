@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import atexit
+from datetime import datetime
+import json
 from pathlib import Path
+import re
 import sys
 import threading
 
@@ -99,8 +102,117 @@ def configure_run_logging(log_path: str | Path) -> Path:
     }
     return path
 
+_round_log_state: dict | None = None
+_SECRET_KEYS = {
+    "api_key",
+    "apikey",
+    "access_token",
+    "authorization",
+    "key",
+    "password",
+    "secret",
+    "token",
+}
+
+
+def _redact_round_evidence(value):
+    if isinstance(value, dict):
+        redacted = {}
+        for key, item in value.items():
+            normalized = str(key).strip().lower().replace("-", "_")
+            redacted[key] = "***" if normalized in _SECRET_KEYS else _redact_round_evidence(item)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_round_evidence(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_redact_round_evidence(item) for item in value)
+    if isinstance(value, str):
+        return re.sub(
+            r"(?i)(api[_-]?key|access[_-]?token|token|authorization|password|secret|key)=([^&\s]+)",
+            r"\1=***",
+            value,
+        )
+    return value
+
+
+def start_round_log_archive(
+    round_id: str,
+    *,
+    root_dir: str | Path | None = None,
+    now: datetime | None = None,
+) -> Path:
+    """Start one append-only UTF-8 archive segment for a collection round."""
+    global _round_log_state
+    if _round_log_state:
+        end_round_log_archive(status="interrupted")
+    stamp = now or datetime.now()
+    root = Path(root_dir) if root_dir is not None else Path(__file__).resolve().parent / "data" / "logs" / "rounds"
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / f"{stamp:%Y%m%d}.log"
+    archive_file = path.open("a", encoding="utf-8", errors="strict", newline="", buffering=1)
+    lock = threading.RLock()
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
+    sys.stdout = _Utf8TeeStream(original_stdout, archive_file, lock)
+    sys.stderr = _Utf8TeeStream(original_stderr, archive_file, lock)
+    _round_log_state = {
+        "path": path,
+        "file": archive_file,
+        "stdout": original_stdout,
+        "stderr": original_stderr,
+        "lock": lock,
+        "round_id": str(round_id or "unknown"),
+        "started_at": stamp.isoformat(timespec="seconds"),
+    }
+    safe_log(
+        f"===== [轮档开始] round_id={_round_log_state['round_id']} "
+        f"started_at={_round_log_state['started_at']} ====="
+    )
+    return path
+
+
+def append_round_evidence(prefix: str, payload) -> bool:
+    """Append sanitized source evidence to the active round archive only."""
+    state = _round_log_state
+    if not state:
+        return False
+    encoded = json.dumps(
+        _redact_round_evidence(payload),
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+    )
+    with state["lock"]:
+        state["file"].write(f"{prefix}{encoded}\\n")
+        state["file"].flush()
+    return True
+
+
+def end_round_log_archive(*, status: str = "completed") -> None:
+    """Close the active round segment without affecting run_latest.log."""
+    global _round_log_state
+    state = _round_log_state
+    if not state:
+        return
+    try:
+        safe_log(
+            f"===== [轮档结束] round_id={state['round_id']} status={status} ====="
+        )
+    finally:
+        sys.stdout = state["stdout"]
+        sys.stderr = state["stderr"]
+        try:
+            state["file"].flush()
+            state["file"].close()
+        except Exception:
+            pass
+        _round_log_state = None
+
+
+
 
 atexit.register(_close_run_log)
+atexit.register(end_round_log_archive)
 
 
 def safe_log(msg: object = "") -> None:

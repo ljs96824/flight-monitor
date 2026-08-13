@@ -9,7 +9,7 @@ from typing import Callable
 
 from api_usage import load_usage, usage_snapshot
 from collection_plan import build_collection_plan, load_collection_settings
-from log_utils import configure_stdio_utf8, safe_log
+from log_utils import configure_stdio_utf8, end_round_log_archive, safe_log, start_round_log_archive
 from observations_store import (
     DEFAULT_DB_PATH,
     clear_current_round,
@@ -196,6 +196,13 @@ def run_basket(
     today = today or date.today()
     now = now or datetime.now()
     round_id = make_round_id(now)
+    round_archive_started = False
+    round_log_root = Path(state_path).resolve().parent / "logs" / "rounds"
+    try:
+        start_round_log_archive(round_id, root_dir=round_log_root, now=now)
+        round_archive_started = True
+    except Exception as exc:
+        safe_log(f"[轮档失败] round_id={round_id} 原因={type(exc).__name__}:{exc}")
     state = load_or_create_state(state_path, today)
     if renew_expired_queues(state, today):
         _write_state(Path(state_path), state)
@@ -289,6 +296,13 @@ def run_basket(
         if plan_active:
             deactivate_collection_plan()
         clear_current_round()
+        round_status = "ok" if failed == 0 else "partial"
+        safe_log(f"[篮子完成] 队列={queues} 成功={success} 失败={failed} 总写入={written}")
+        if round_archive_started:
+            try:
+                end_round_log_archive(status=round_status)
+            except Exception as exc:
+                safe_log(f"[轮档失败] round_id={round_id} 关闭失败={type(exc).__name__}:{exc}")
 
     summary = {
         "round_id": round_id,
@@ -297,7 +311,6 @@ def run_basket(
         "failed": failed,
         "written": written,
     }
-    safe_log(f"[篮子完成] 队列={queues} 成功={success} 失败={failed} 总写入={written}")
     return summary
 
 

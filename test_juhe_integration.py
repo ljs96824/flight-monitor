@@ -3,6 +3,8 @@ import sys
 import types
 import unittest
 from datetime import date, timedelta
+from pathlib import Path
+import tempfile
 from unittest.mock import patch
 
 from sources.aggregator import FlightAggregator, build_default_sources, is_domestic_route
@@ -192,6 +194,45 @@ class JuheIntegrationTest(unittest.TestCase):
         self.assertEqual(result["error"], "配额不足(112)")
         self.assertEqual(result["resultcode"], "112")
         self.assertEqual(result["error_code"], "10012")
+
+
+    def test_juhe_http_success_empty_is_explicit_and_not_cached(self):
+        source = JuheSource()
+        future = (date.today() + timedelta(days=5)).isoformat()
+        calls = []
+
+        class FakeResponse:
+            status_code = 200
+            text = '{"resultcode":"200","error_code":0,"result":{"flightInfo":[]}}'
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "resultcode": "200",
+                    "error_code": 0,
+                    "result": {"flightInfo": []},
+                }
+
+        def fake_get(*args, **kwargs):
+            calls.append((args, kwargs))
+            return FakeResponse()
+
+        fake_requests = types.SimpleNamespace(get=fake_get)
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = Path(tmp)
+            with patch.dict(os.environ, {"JUHE_FLIGHT_KEY": "test-key"}, clear=True):
+                with patch.dict(sys.modules, {"requests": fake_requests}):
+                    with patch("sources.juhe_source._cache_dir", return_value=cache_dir):
+                        first = source.fetch("PVG", "KIX", future)
+                        second = source.fetch("PVG", "KIX", future)
+
+            self.assertEqual(first["source_status"], "empty")
+            self.assertEqual(second["source_status"], "empty")
+            self.assertEqual(first["reason"], "HTTP成功但空结果")
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(list(cache_dir.glob("juhe_*.json")), [])
 
 
 if __name__ == "__main__":

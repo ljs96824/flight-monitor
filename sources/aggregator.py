@@ -900,6 +900,8 @@ class FlightAggregator:
                 status = "skipped"
             elif any(_source_status_is_failure(value) for value in source_statuses):
                 status = "失败"
+            elif "empty" in source_statuses:
+                status = "empty"
             elif "cache" in source_statuses or "success" in source_statuses:
                 status = "empty"
             elif source_optional:

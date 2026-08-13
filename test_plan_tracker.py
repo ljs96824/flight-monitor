@@ -10,6 +10,29 @@ from unittest.mock import patch
 
 
 class PlanTrackerTest(unittest.TestCase):
+    def test_source_degradation_prevents_sold_out_inference(self):
+        from plan_tracker import _missing_quote_confidence
+
+        result = _missing_quote_confidence(
+            [{"flight_no": f"MU{i}", "price": 1000 + i} for i in range(10)],
+            matched_any=False,
+            source_degradation={
+                "active": True,
+                "source": "juhe",
+                "source_label": "OTA源",
+            },
+        )
+
+        self.assertEqual(result["status"], "source_unavailable")
+        self.assertIn("上次推荐组合来自OTA源", result["note"])
+        self.assertEqual(
+            result["note"],
+            "上次推荐组合来自OTA源,本轮该源不可用,无法核实在售状态。",
+        )
+        self.assertIn("无法核实在售状态", result["note"])
+        self.assertNotIn("售罄", result["note"])
+        self.assertNotIn("停飞", result["note"])
+
     def test_tracks_price_up_for_previous_plan(self):
         from plan_tracker import save_pushed_plans, track_plan_status
 
@@ -112,6 +135,36 @@ class PlanTrackerTest(unittest.TestCase):
         self.assertIn("MU5099去+CA1589回", status["msg"])
         self.assertIn("同单人往返口径对比", status["msg"])
         self.assertNotIn("降了", status["msg"])
+
+    def test_roundtrip_source_degradation_suppresses_matched_price_change(self):
+        from plan_tracker import _track_roundtrip_plan
+
+        result = _track_roundtrip_plan(
+            {
+                "outbound_flight": "MU5099",
+                "return_flight": "CA1589",
+                "price_tiers": {"unit_roundtrip": 2760},
+            },
+            [
+                {
+                    "is_roundtrip": True,
+                    "outbound": {"flight_no": "MU5099", "price": 3000},
+                    "return": {"flight_no": "CA1589", "price": 3000},
+                    "price_tiers": {"unit_roundtrip": 6000},
+                }
+            ],
+            source_degradation={
+                "active": True,
+                "source": "juhe",
+                "source_label": "OTA",
+                "reason": "source unavailable",
+            },
+        )
+
+        self.assertEqual(result["status"], "source_unavailable")
+        self.assertIsNone(result["price_diff"])
+        self.assertIn("OTA", result["msg"])
+        self.assertNotIn("price_up", result["status"])
 
     def test_roundtrip_tracking_uses_unit_price_across_passenger_changes(self):
         from plan_tracker import save_pushed_plans, track_plan_status

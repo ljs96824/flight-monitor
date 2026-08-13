@@ -17,7 +17,7 @@ from pathlib import Path
 from domestic_fare_rules import AIRCRAFT_NAMES, re_match_aircraft_code
 from filename_utils import sanitize_filename
 from flight_combo_utils import normalize_combo
-from log_utils import safe_log
+from log_utils import append_round_evidence, safe_log
 import observations_store
 
 
@@ -30,6 +30,7 @@ _disabled_persistent_dirs: set[str] = set()
 _fetch_trigger_counts: dict[tuple, int] = {}
 _equipment_summary: dict[tuple[str, str], dict] = {}
 _source_circuit_breakers: dict[str, str] = {}
+_round_only_result_keys: set[tuple] = set()
 _SECRET_VALUE_PATTERN = re.compile(
     r"(?i)\b(api[_-]?key|access[_-]?token|token|authorization)=([^&\s]+)"
 )
@@ -229,6 +230,62 @@ def _quota_failure_reason(result) -> str | None:
     return str(result.get("error") or result.get("skipped_reason") or "配额不足").strip()
 
 
+def _positive_result_flights(result) -> list[dict]:
+    if not isinstance(result, dict):
+        return []
+    valid = []
+    for flight in result.get("flights") or []:
+        if not isinstance(flight, dict):
+            continue
+        try:
+            price = float(flight.get("price") or 0)
+        except (TypeError, ValueError):
+            price = 0
+        if price > 0:
+            valid.append(flight)
+    return valid
+
+
+def _result_cache_status(result) -> str:
+    status = str((result or {}).get("source_status") or "").strip().lower()
+    if (
+        status.startswith("failed")
+        or status.startswith("error")
+        or (result or {}).get("error")
+    ):
+        return "round_failed"
+    if not _positive_result_flights(result):
+        return "round_empty"
+    return "persistent"
+
+
+def _store_round_only_result(key: tuple, result: dict, cache_status: str) -> None:
+    _request_cache[key] = {
+        "fetched_at": datetime.now().isoformat(timespec="seconds"),
+        "result": copy.deepcopy(result),
+        "cache_status": cache_status,
+    }
+    _round_only_result_keys.add(key)
+    if _current_stats_round_id:
+        _resolved_request_keys_this_round.add(key)
+
+
+def _archive_listing_result(source_name: str, key: tuple, result: dict) -> None:
+    if source_name not in {"juhe", "hasdata"}:
+        return
+    cache_status = _result_cache_status(result)
+    if cache_status == "persistent":
+        return
+    append_round_evidence(
+        f"[源响应证据] 源={source_name} 航线={key[1]}->{key[2]} 日期={key[3]} "
+        f"状态={result.get('source_status') or cache_status} raw=",
+        result.get("raw") if result.get("raw") is not None else {
+            "error": result.get("error"),
+            "reason": result.get("reason"),
+        },
+    )
+
+
 def _source_preflight_skip(source, origin, dest, date_str, cabin_class):
     check = getattr(source, "preflight_skip", None)
     if not callable(check):
@@ -258,7 +315,10 @@ def _read_persistent(key: tuple, ttl_seconds: int, cache_dir: Path | None = None
         return None
     if not _fresh(payload.get("fetched_at"), ttl_seconds):
         return None
-    return payload.get("result")
+    result = payload.get("result")
+    if _result_cache_status(result) != "persistent":
+        return None
+    return result
 
 
 def _parse_cache_time(value) -> datetime | None:
@@ -568,7 +628,12 @@ def cached_fetch(
             _record_hit(source_name)
             safe_log(f"[本轮池命中] {key[:4]} 已解析入池,整轮内不重复执行")
             cached_result = copy.deepcopy(memory_entry.get("result"))
-            return (cached_result, "cache") if include_cache_status else cached_result
+            cache_status = (
+                str(memory_entry.get("cache_status") or "cache")
+                if key in _round_only_result_keys
+                else "cache"
+            )
+            return (cached_result, cache_status) if include_cache_status else cached_result
 
     skipped_result = _source_preflight_skip(
         source,
@@ -707,13 +772,8 @@ def cached_fetch(
             "source_status": "failed",
             "error": _redact_error_text(f"{type(exc).__name__}: {exc}"),
         }
-        _request_cache[key] = {
-            "fetched_at": datetime.now().isoformat(timespec="seconds"),
-            "result": copy.deepcopy(result),
-            "cache_status": "fresh",
-        }
-        if _current_stats_round_id:
-            _resolved_request_keys_this_round.add(key)
+        _archive_listing_result(source_name, key, result)
+        _store_round_only_result(key, result, "round_failed")
         safe_log(
             f"[采集失败入池] 源={source_name} 航线={key[1]}->{key[2]} "
             f"日期={key[3]} 原因={result['error']}"
@@ -722,13 +782,8 @@ def cached_fetch(
     quota_reason = _quota_failure_reason(result)
     if quota_reason:
         _source_circuit_breakers[source_name] = quota_reason
-        _request_cache[key] = {
-            "fetched_at": datetime.now().isoformat(timespec="seconds"),
-            "result": copy.deepcopy(result),
-            "cache_status": "fresh",
-        }
-        if _current_stats_round_id:
-            _resolved_request_keys_this_round.add(key)
+        _archive_listing_result(source_name, key, result)
+        _store_round_only_result(key, result, "round_failed")
         safe_log(f"[源熔断] 源={source_name} 原因={quota_reason} 生效范围=本进程")
         return (copy.deepcopy(result), "fresh") if include_cache_status else copy.deepcopy(result)
     collected_at = str(result.get("collected_at") or datetime.now().isoformat(timespec="seconds"))
@@ -744,15 +799,20 @@ def cached_fetch(
     _record_equipment_summary(source_name, result)
     _record_observations_after_fetch(source, key, result, cabin_class)
     stored = copy.deepcopy(result)
-    _request_cache[key] = {
-        "fetched_at": datetime.now().isoformat(timespec="seconds"),
-        "result": stored,
-        "cache_status": "fresh",
-    }
-    if _current_stats_round_id:
-        _resolved_request_keys_this_round.add(key)
-    if persist:
-        _write_persistent(key, stored, cache_dir)
+    cache_status = _result_cache_status(stored)
+    _archive_listing_result(source_name, key, stored)
+    if cache_status == "persistent":
+        _request_cache[key] = {
+            "fetched_at": datetime.now().isoformat(timespec="seconds"),
+            "result": stored,
+            "cache_status": "fresh",
+        }
+        if _current_stats_round_id:
+            _resolved_request_keys_this_round.add(key)
+        if persist:
+            _write_persistent(key, stored, cache_dir)
+    else:
+        _store_round_only_result(key, stored, cache_status)
     fresh_result = copy.deepcopy(result)
     return (fresh_result, "fresh") if include_cache_status else fresh_result
 
@@ -779,6 +839,9 @@ def start_request_cache_round(
     _stats.clear()
     _stats.update(_empty_stats())
     _equipment_summary.clear()
+    for key in tuple(_round_only_result_keys):
+        _request_cache.pop(key, None)
+    _round_only_result_keys.clear()
     _current_stats_round_id = str(round_id or "") or None
     _track_usage_for_round = bool(track_usage)
     _usage_path_for_round = Path(usage_path) if usage_path else None
@@ -869,6 +932,7 @@ def reset_request_cache(*, clear_memory: bool = True, reset_stats: bool = True) 
     global _usage_flushed_for_round
     if clear_memory:
         _request_cache.clear()
+        _round_only_result_keys.clear()
         _disabled_persistent_dirs.clear()
         _fetch_trigger_counts.clear()
     _source_circuit_breakers.clear()

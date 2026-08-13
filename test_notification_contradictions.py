@@ -309,6 +309,67 @@ class NotificationContradictionsTest(unittest.TestCase):
         self.assertIn("本轮OTA交叉源不可用(配额不足)", result["reasons"][0])
         self.assertNotIn("上涨¥10,134", " ".join(result["reasons"]))
 
+    def test_empty_listing_result_triggers_first_degradation_disclosure(self):
+        from notifier import (
+            _apply_source_degradation_to_push_meta,
+            _build_source_degradation_context,
+        )
+
+        context = _build_source_degradation_context(
+            source_stats={
+                "hasdata": {"count": 8, "status": "成功", "role": "primary"},
+                "juhe": {"count": 0, "status": "empty", "role": "cross_check"},
+            },
+            last_snapshot={
+                "channels": '["hasdata", "juhe"]',
+                "push_type": "价格提醒",
+            },
+            source_errors=[],
+        )
+        result = _apply_source_degradation_to_push_meta(
+            {
+                "type": "涨价风险",
+                "price_change": {"diff": 10134},
+                "reasons": ["上涨¥10,134"],
+            },
+            current_sources={"hasdata"},
+            previous_sources={"hasdata", "juhe"},
+            source_errors=[],
+            degradation_context=context,
+        )
+
+        self.assertTrue(context["active"])
+        self.assertTrue(context["first_occurrence"])
+        self.assertEqual(context["reason_detail"], "HTTP成功但空结果(原因未知)")
+        self.assertEqual(
+            context["reason"],
+            "本轮OTA交叉源不可用(原因=HTTP成功但空结果(原因未知)),入池仅Google,与上次价格不可直接比",
+        )
+        self.assertEqual(result["type"], "数据源受限")
+        self.assertIsNone(result["price_change"])
+        self.assertIn("HTTP成功但空结果", result["source_degradation"]["reason"])
+        self.assertNotIn("上涨¥10,134", " ".join(result["reasons"]))
+
+    def test_consecutive_empty_listing_result_uses_compact_disclosure(self):
+        from notifier import _build_source_degradation_context
+
+        context = _build_source_degradation_context(
+            source_stats={
+                "hasdata": {"count": 8, "status": "成功", "role": "primary"},
+                "juhe": {"count": 0, "status": "empty", "role": "cross_check"},
+            },
+            last_snapshot={
+                "channels": '["hasdata"]',
+                "push_type": "数据源受限",
+            },
+            source_errors=[],
+        )
+
+        self.assertTrue(context["active"])
+        self.assertFalse(context["first_occurrence"])
+        self.assertEqual(context["disclosure_level"], "compact")
+        self.assertIn("仍不可用", context["reason"])
+
     def test_rising_over_budget_caps_verify_price_and_waits(self):
         analysis = {
             "recommendations": [

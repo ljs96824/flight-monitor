@@ -131,6 +131,47 @@ class SourceWeightingTest(unittest.TestCase):
         self.assertEqual(prices, {"hasdata": 1000.0, "juhe": 1200.0})
         self.assertTrue(result["price_anomalies"])
 
+
+    def test_collect_preserves_explicit_empty_status_beside_positive_source(self):
+        class MixedSource(DummySource):
+            def fetch(self, origin, dest, date_str, cabin_class="economy"):
+                if self.name == "juhe":
+                    return {
+                        "source_status": "empty",
+                        "reason": "HTTP成功但空结果",
+                        "flights": [],
+                    }
+                return {
+                    "source_status": "success",
+                    "flights": [
+                        {
+                            "flight_combo": "MU225",
+                            "flight_no": "MU225",
+                            "departure_airport": origin,
+                            "arrival_airport": dest,
+                            "departure_time": f"{date_str} 09:00",
+                            "arrival_time": f"{date_str} 12:00",
+                            "price": 1000,
+                            "data_source": self.name,
+                        }
+                    ],
+                }
+
+        def direct_cached_fetch(source, origin, dest, date_str, passengers, cabin_class, **kwargs):
+            return source.fetch(origin, dest, date_str, cabin_class)
+
+        aggregator = FlightAggregator(
+            [MixedSource("hasdata"), MixedSource("juhe")],
+            [],
+            route_type="international",
+        )
+        with patch("sources.aggregator.cached_fetch", side_effect=direct_cached_fetch):
+            result = aggregator.collect("PVG", "KIX", "2026-08-20")
+
+        self.assertEqual(result["source_stats"]["hasdata"]["status"], "成功")
+        self.assertEqual(result["source_stats"]["juhe"]["count"], 0)
+        self.assertEqual(result["source_stats"]["juhe"]["status"], "empty")
+
     def test_collect_treats_quota_status_as_source_error_not_empty(self):
         from request_cache import reset_request_cache
 

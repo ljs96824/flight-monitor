@@ -6,6 +6,9 @@
 data/
 data/api_usage.json
 *.db
+# 轮次证据与篮子哨兵状态
+data/logs/rounds/
+data/basket_sentinel.json
 *.jsonl
 
 # Python缓存

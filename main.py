@@ -38,12 +38,13 @@ from analyzer import (
 )
 from collector import _normalize_detail_flight, save_raw_response
 from api_usage import load_usage, usage_snapshot
+from basket_sentinel import run_basket_sentinel
 from collection_plan import build_collection_plan, load_collection_settings
 from constraint_fingerprint import constraint_fingerprint
 from email_notifier import render_email, send_email
 from filename_utils import sanitize_filename
 from health_check import system_health_check
-from log_utils import safe_log
+from log_utils import end_round_log_archive, safe_log, start_round_log_archive
 from observations_store import clear_current_round, get_current_round, set_current_round
 from notifier import (
     build_notification_payload,
@@ -101,6 +102,8 @@ SUBSCRIPTIONS_PATH = DATA_DIR / "subscriptions.json"
 PAGE_PAYLOADS_DIR = DATA_DIR / "payloads"
 CONFIG_PATH = BASE_DIR / "config.yaml"
 API_USAGE_PATH = DATA_DIR / "api_usage.json"
+BASKET_SENTINEL_STATE_PATH = DATA_DIR / "basket_sentinel.json"
+ROUND_LOG_ROOT = DATA_DIR / "logs" / "rounds"
 PYTHONANYWHERE_PAYLOAD_PATH = "/home/{user}/flight-monitor/data/payloads/{filename}"
 AIRPORT_COMBINATION_MIN_OPTIONS = 5
 
@@ -240,6 +243,52 @@ def _notify_subscription_failure(sub: dict, *, source_errors=None, reason: str |
         }
         safe_log(f"[失败通知] 未发送,已记录状态 订阅={_subscription_label(sub)} 原因={failure_reason}")
     return sent
+
+def _notify_system_alert(subscriptions: list[dict], title: str, content: str) -> bool:
+    """Send one operational alert through the first configured subscription channel."""
+    for sub in subscriptions or []:
+        goals = sub.get("notification_goals", {}) or {}
+        method = str(goals.get("method") or "pushplus")
+        email = str(goals.get("email") or "").strip()
+        if method == "page_only":
+            continue
+        sent = False
+        try:
+            if method in {"email", "both"} and email:
+                sent = send_email(email, title, content, {}) or sent
+            if method in {"pushplus", "both"}:
+                sent = send(content, title=title) or sent
+        except Exception as exc:
+            safe_log(f"[篮子哨兵] 通知渠道失败 原因={type(exc).__name__}:{exc}")
+        if sent:
+            return True
+    safe_log("[篮子哨兵] 无可用通知渠道")
+    return False
+
+
+def _run_basket_sentinel_for_main(
+    subscriptions: list[dict],
+    *,
+    now: datetime | None = None,
+) -> dict:
+    threshold = os.getenv("BASKET_SENTINEL_AFTER", "20:00")
+    try:
+        return run_basket_sentinel(
+            usage_payload=load_usage(API_USAGE_PATH),
+            now=now,
+            threshold=threshold,
+            state_path=BASKET_SENTINEL_STATE_PATH,
+            notifier=lambda title, content: _notify_system_alert(
+                subscriptions,
+                title,
+                content,
+            ),
+        )
+    except Exception as exc:
+        safe_log(f"[篮子哨兵] 检查失败 原因={type(exc).__name__}:{exc}")
+        return {"due": False, "notified": False, "status": "error"}
+
+
 
 
 
@@ -1631,6 +1680,15 @@ def process_subscription(
     agg = None
     managed_plan_active = False
     collection_options = _collection_plan_log_options()
+    round_archive_started = False
+    round_status = "failed"
+    if manage_collection_round:
+        try:
+            start_round_log_archive(round_id, root_dir=ROUND_LOG_ROOT)
+            round_archive_started = True
+        except Exception as exc:
+            safe_log(f"[轮档失败] round_id={round_id} 原因={type(exc).__name__}:{exc}")
+
 
     try:
         if manage_collection_round:
@@ -2233,6 +2291,7 @@ def process_subscription(
             _log_subscription_failure(sub, reason="通知未发送成功")
             return False
         logging.info(f"{route} 已推送方案对比表")
+        round_status = "ok"
         return True
 
     except Exception as e:
@@ -2253,6 +2312,11 @@ def process_subscription(
             if managed_plan_active:
                 deactivate_collection_plan()
             clear_current_round()
+            if round_archive_started:
+                try:
+                    end_round_log_archive(status=round_status)
+                except Exception as exc:
+                    safe_log(f"[轮档失败] round_id={round_id} 关闭失败={type(exc).__name__}:{exc}")
 
 def run(sync_remote: bool = True):
     if sync_remote:
@@ -2269,6 +2333,7 @@ def run(sync_remote: bool = True):
         print("暂无订阅，请通过表单添加")
         logging.info("暂无订阅，请通过表单添加")
         safe_log("[订阅前置校验] 本轮检查=0 跳过=0")
+        _run_basket_sentinel_for_main([])
         return
 
     preflight_checked = 0
@@ -2295,9 +2360,17 @@ def run(sync_remote: bool = True):
         safe_log(
             f"[订阅前置校验] 本轮检查={preflight_checked} 跳过={preflight_skipped}"
         )
+        _run_basket_sentinel_for_main(subscriptions)
         return
 
     round_id = _make_collection_round_id()
+    round_status = "failed"
+    round_archive_started = False
+    try:
+        start_round_log_archive(round_id, root_dir=ROUND_LOG_ROOT)
+        round_archive_started = True
+    except Exception as exc:
+        safe_log(f"[轮档失败] round_id={round_id} 原因={type(exc).__name__}:{exc}")
     plan_active = False
     print(f"[观测轮次] round_id={round_id}")
     set_current_round(round_id)
@@ -2342,11 +2415,18 @@ def run(sync_remote: bool = True):
                     exc_info=True,
                 )
                 continue
+        round_status = "ok"
     finally:
         print_request_cache_stats()
+        _run_basket_sentinel_for_main(subscriptions)
         if plan_active:
             deactivate_collection_plan()
         clear_current_round()
+        if round_archive_started:
+            try:
+                end_round_log_archive(status=round_status)
+            except Exception as exc:
+                safe_log(f"[轮档失败] round_id={round_id} 关闭失败={type(exc).__name__}:{exc}")
 
     safe_log(
         f"[订阅前置校验] 本轮检查={preflight_checked} 跳过={preflight_skipped}"

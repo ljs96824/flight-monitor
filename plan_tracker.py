@@ -514,9 +514,23 @@ def _current_collection_uses_cache(current_items: list[dict] | None) -> bool:
     return any(_item_from_cache(item) for item in current_items or [] if isinstance(item, dict))
 
 
-def _missing_quote_confidence(current_items: list[dict] | None, matched_any: bool = False) -> dict:
+def _missing_quote_confidence(
+    current_items: list[dict] | None,
+    matched_any: bool = False,
+    source_degradation: dict | None = None,
+) -> dict:
     collection_count = _current_collection_count(current_items)
     cache_used = _current_collection_uses_cache(current_items)
+    source_degradation = source_degradation or {}
+    if source_degradation.get("active"):
+        label = str(source_degradation.get("source_label") or "缺失数据源").strip()
+        return {
+            "confidence": "unknown",
+            "collection_count": collection_count,
+            "cache_used": cache_used,
+            "status": "source_unavailable",
+            "note": f"上次推荐组合来自{label},本轮该源不可用,无法核实在售状态。",
+        }
     if collection_count < 5:
         note = "本次采集覆盖可能不完整,该航班状态未知,下次采集再确认。"
         if cache_used:
@@ -563,7 +577,11 @@ def _format_change(diff: float | None) -> str:
     return "持平"
 
 
-def _track_roundtrip_plan(plan_a: dict, current_items: list[dict] | None) -> dict | None:
+def _track_roundtrip_plan(
+    plan_a: dict,
+    current_items: list[dict] | None,
+    source_degradation: dict | None = None,
+) -> dict | None:
     outbound_no = str(plan_a.get("outbound_flight") or "").strip()
     return_no = str(plan_a.get("return_flight") or "").strip()
     desc = _roundtrip_desc(outbound_no, return_no)
@@ -641,7 +659,11 @@ def _track_roundtrip_plan(plan_a: dict, current_items: list[dict] | None) -> dic
         f"本次={current_log}({ROUNDTRIP_TRACKING_LABEL})"
         f"{' ' + composition_note if composition_note else ''}"
     )
-    diff = current_price - previous_price if current_price is not None and previous_price is not None else None
+    diff = (
+        current_price - previous_price
+        if not (source_degradation or {}).get("active") and current_price is not None and previous_price is not None
+        else None
+    )
     print(f"[方案追踪诊断] 差额={diff}")
 
     if current_price is None:
@@ -657,7 +679,11 @@ def _track_roundtrip_plan(plan_a: dict, current_items: list[dict] | None) -> dic
                 missing.append(f"返程{return_no}")
             else:
                 available.append(f"返程{return_no}仍{_format_price(return_price)}")
-        confidence = _missing_quote_confidence(current_items, matched_any=matched_any)
+        confidence = _missing_quote_confidence(
+            current_items,
+            matched_any=matched_any,
+            source_degradation=source_degradation,
+        )
         if missing:
             msg = (
                 f"上次推荐:{desc},{ROUNDTRIP_TRACKING_LABEL}{_format_price(previous_price)}。"
@@ -701,6 +727,29 @@ def _track_roundtrip_plan(plan_a: dict, current_items: list[dict] | None) -> dic
                 "cache_used": confidence["cache_used"],
             },
         )
+
+    if (source_degradation or {}).get("active"):
+        label = str(source_degradation.get("source_label") or "?????").strip()
+        msg = (
+            f"????:{desc},{ROUNDTRIP_TRACKING_LABEL}{_format_price(previous_price)}?"
+            f"?????:{ROUNDTRIP_TRACKING_LABEL}{_format_price(current_price)}?"
+            f"??????????{label}?????,?????,?????????"
+        )
+        return _change_payload(
+            "source_unavailable",
+            desc,
+            previous_price,
+            current_price,
+            None,
+            msg,
+            ROUNDTRIP_TRACKING_SCOPE,
+            {
+                "outbound_flight": outbound_no,
+                "return_flight": return_no,
+                "source_degradation": dict(source_degradation),
+            },
+        )
+
 
     if previous_price is None:
         safe_log(
@@ -773,11 +822,16 @@ def _track_roundtrip_plan(plan_a: dict, current_items: list[dict] | None) -> dic
     )
 
 
-def track_plan_status(sub_id, current_flights: list[dict] | None, data_dir=None) -> dict | None:
+def track_plan_status(
+    sub_id,
+    current_flights: list[dict] | None,
+    data_dir=None,
+    source_degradation: dict | None = None,
+) -> dict | None:
     last = load_pushed_plans(sub_id, data_dir)
     plan_a = (last.get("last_pushed") or {}).get("plan_a") or {}
     if plan_a.get("is_roundtrip") or plan_a.get("scope") == "roundtrip":
-        return _track_roundtrip_plan(plan_a, current_flights)
+        return _track_roundtrip_plan(plan_a, current_flights, source_degradation)
 
     flight_no = plan_a.get("flight_no")
     if not flight_no:
@@ -791,6 +845,19 @@ def track_plan_status(sub_id, current_flights: list[dict] | None, data_dir=None)
         f"上次记录的是={json.dumps(plan_a, ensure_ascii=False, default=str)}"
     )
     if not same:
+        if (source_degradation or {}).get("active"):
+            confidence = _missing_quote_confidence(
+                current_flights,
+                source_degradation=source_degradation,
+            )
+            return {
+                "status": confidence["status"],
+                "flight_no": flight_no,
+                "previous_price": previous_price,
+                "scope": "single",
+                "msg": confidence["note"],
+                "source_degradation": dict(source_degradation or {}),
+            }
         return {
             "status": "unavailable",
             "flight_no": flight_no,
@@ -803,6 +870,23 @@ def track_plan_status(sub_id, current_flights: list[dict] | None, data_dir=None)
         f"[方案追踪诊断] 本次价={current_price}, 本次口径=单程, "
         f"本次取到的是={json.dumps(same, ensure_ascii=False, default=str)}"
     )
+
+    if (source_degradation or {}).get("active"):
+        label = str(source_degradation.get("source_label") or "?????").strip()
+        return {
+            "status": "source_unavailable",
+            "flight_no": flight_no,
+            "previous_price": previous_price,
+            "current_price": current_price,
+            "price_diff": None,
+            "scope": "single",
+            "msg": (
+                f"?????{flight_no}????{label}?????,"
+                "???????????,??????,?????????"
+            ),
+            "source_degradation": dict(source_degradation),
+        }
+
     diff = current_price - previous_price if current_price is not None and previous_price is not None else None
     print(f"[方案追踪诊断] 差额={None if diff is None else previous_price - current_price}")
     if previous_price is None or current_price is None:

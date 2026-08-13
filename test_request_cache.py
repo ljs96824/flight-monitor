@@ -51,6 +51,39 @@ class QuotaFailureSource:
         }
 
 
+class EmptyResultSource:
+    name = "empty"
+
+    def __init__(self):
+        self.calls = []
+
+    def fetch(self, origin, dest, date_str, cabin_class="economy"):
+        self.calls.append((origin, dest, date_str, cabin_class))
+        return {
+            "flights": [],
+            "source": self.name,
+            "source_status": "empty",
+            "raw": {"result": {"flightInfo": []}},
+        }
+
+
+class FailedResultSource:
+    name = "failed"
+
+    def __init__(self):
+        self.calls = []
+
+    def fetch(self, origin, dest, date_str, cabin_class="economy"):
+        self.calls.append((origin, dest, date_str, cabin_class))
+        return {
+            "flights": [],
+            "source": self.name,
+            "source_status": "failed",
+            "error": "测试失败(500)",
+            "raw": {"error_code": 500, "reason": "测试失败"},
+        }
+
+
 class PreflightSkipSource:
     name = "skipped"
 
@@ -458,6 +491,120 @@ class RequestCacheTest(unittest.TestCase):
         self.assertEqual(source.calls, [("SHA", "PEK", "2026-08-20", "economy")])
         self.assertEqual(stats["actual"], 1)
         self.assertEqual(stats["skipped"], 1)
+
+    def test_empty_result_is_round_only_and_retried_next_round(self):
+        from request_cache import cached_fetch, start_request_cache_round
+
+        source = EmptyResultSource()
+        start_request_cache_round("empty-round-1")
+        first, first_status = cached_fetch(
+            source,
+            "SHA",
+            "PEK",
+            "2099-08-20",
+            persist=True,
+            include_cache_status=True,
+        )
+        second, second_status = cached_fetch(
+            source,
+            "SHA",
+            "PEK",
+            "2099-08-20",
+            persist=True,
+            include_cache_status=True,
+        )
+
+        self.assertEqual(first_status, "fresh")
+        self.assertEqual(second_status, "round_empty")
+        self.assertEqual(first["flights"], [])
+        self.assertEqual(second["flights"], [])
+        self.assertEqual(len(source.calls), 1)
+        self.assertEqual(list(self._request_cache_dir.glob("api_*.json")), [])
+
+        start_request_cache_round("empty-round-2")
+        _third, third_status = cached_fetch(
+            source,
+            "SHA",
+            "PEK",
+            "2099-08-20",
+            persist=True,
+            include_cache_status=True,
+        )
+        self.assertEqual(third_status, "fresh")
+        self.assertEqual(len(source.calls), 2)
+
+    def test_listing_empty_result_archives_raw_evidence_with_redaction(self):
+        from log_utils import end_round_log_archive, start_round_log_archive
+        from request_cache import cached_fetch, start_request_cache_round
+
+        class EmptyJuheSource:
+            name = "juhe"
+
+            def fetch(self, origin, dest, date_str, cabin_class="economy"):
+                return {
+                    "flights": [],
+                    "source": self.name,
+                    "source_status": "empty",
+                    "raw": {
+                        "resultcode": "200",
+                        "error_code": 0,
+                        "reason": "???????",
+                        "api_key": "must-not-leak",
+                    },
+                }
+
+        archive_root = self._request_cache_dir / "rounds"
+        path = start_round_log_archive(
+            "empty-evidence-round",
+            root_dir=archive_root,
+        )
+        try:
+            start_request_cache_round("empty-evidence-round")
+            result, status = cached_fetch(
+                EmptyJuheSource(),
+                "PVG",
+                "KIX",
+                "2099-08-20",
+                persist=True,
+                include_cache_status=True,
+            )
+        finally:
+            end_round_log_archive(status="ok")
+
+        content = path.read_text(encoding="utf-8")
+        self.assertEqual(status, "fresh")
+        self.assertEqual(result["source_status"], "empty")
+        self.assertIn('"resultcode": "200"', content)
+        self.assertIn("???????", content)
+        self.assertNotIn("must-not-leak", content)
+
+    def test_failed_result_is_not_reused_by_next_round_or_persisted(self):
+        from request_cache import cached_fetch, start_request_cache_round
+
+        source = FailedResultSource()
+        start_request_cache_round("failed-round-1")
+        _first, first_status = cached_fetch(
+            source,
+            "SHA",
+            "PEK",
+            "2099-08-21",
+            persist=True,
+            include_cache_status=True,
+        )
+        start_request_cache_round("failed-round-2")
+        _second, second_status = cached_fetch(
+            source,
+            "SHA",
+            "PEK",
+            "2099-08-21",
+            persist=True,
+            include_cache_status=True,
+        )
+
+        self.assertEqual(first_status, "fresh")
+        self.assertEqual(second_status, "fresh")
+        self.assertEqual(len(source.calls), 2)
+        self.assertEqual(list(self._request_cache_dir.glob("api_*.json")), [])
 
     def test_tracked_round_flushes_actual_usage_once(self):
         from api_usage import load_usage
