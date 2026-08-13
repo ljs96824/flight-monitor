@@ -134,9 +134,9 @@ class TimeFormatTraceTest(unittest.TestCase):
         ):
             result = aggregator.collect(
                 "PVG",
-                "KIX",
+                "HKG",
                 "2026-10-01",
-                route_type="international",
+                route_type="greater_china",
             )
 
         messages = [call.args[0] for call in log.call_args_list if call.args]

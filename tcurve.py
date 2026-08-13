@@ -14,7 +14,7 @@ from typing import Iterator
 from airports import get_airport_city
 from method_registry import method_version
 from provenance import build_envelope
-from source_profiles import get_source_profile, normalize_route_type
+from source_profiles import expected_listing_sources, normalize_route_type
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -57,15 +57,12 @@ def readonly_connection(
         connection.close()
 
 
-def expected_search_sources(route_type: str | None) -> set[str]:
+def expected_search_sources(
+    route_type: str | None,
+    observed_day: str | date | None = None,
+) -> set[str]:
     """从生产源策略派生列表源集合，自动排除 enrichment。"""
-    profile = get_source_profile(route_type)
-    return {
-        str(item.get("name") or "").strip().lower()
-        for item in profile.get("sources") or []
-        if str(item.get("role") or "").strip().lower() != "enrichment"
-        and str(item.get("name") or "").strip()
-    }
+    return expected_listing_sources(route_type, observed_day=observed_day)
 
 
 def _split_route(route: str) -> tuple[str, str]:
@@ -218,7 +215,7 @@ def fold_tcurve_daily_cells(rows: list[dict]) -> list[dict]:
     for (origin_city, dest_city, depart_date, observed_day), values in grouped.items():
         expected = set()
         for route_type in values["route_types"]:
-            expected.update(expected_search_sources(route_type))
+            expected.update(expected_search_sources(route_type, observed_day))
         coverage = set(values["sources"])
         minimum = min(values["prices"])
         computed_t = int(values["computed_t"])

@@ -175,7 +175,7 @@ class TCurveTest(unittest.TestCase):
         self.assertEqual(default_curve["included_cell_count"], 1)
         degraded_cell = next(cell for cell in default_curve["daily_cells"] if cell["degraded"])
         self.assertEqual(degraded_cell["source_coverage"], ["hasdata"])
-        self.assertEqual(degraded_cell["expected_sources"], ["hasdata", "juhe"])
+        self.assertEqual(degraded_cell["expected_sources"], ["juhe"])
         self.assertEqual(self._point(default_curve, 30)["n"], 1)
         self.assertEqual(included_curve["included_cell_count"], 2)
         self.assertTrue(included_curve["include_degraded"])
@@ -236,7 +236,7 @@ class TCurveTest(unittest.TestCase):
         from tcurve import expected_search_sources
 
         self.assertEqual(expected_search_sources("domestic"), {"juhe"})
-        self.assertEqual(expected_search_sources("international"), {"hasdata", "juhe"})
+        self.assertEqual(expected_search_sources("international"), {"juhe"})
         self.assertEqual(expected_search_sources("greater_china"), {"hasdata", "juhe"})
 
     def test_notification_curve_omits_raw_daily_cells(self):

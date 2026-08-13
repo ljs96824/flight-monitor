@@ -381,6 +381,17 @@ def intl_dual_source_snapshot(today: date | None = None) -> dict:
     """离线跑国际双源的 collect、过滤和方案对比链路。"""
     depart_date = ((today or date.today()) + timedelta(days=45)).isoformat()
     original_cached_fetch = aggregator_module.cached_fetch
+    original_get_source_profile = aggregator_module.get_source_profile
+
+    def fixture_get_source_profile(route_type):
+        profile = deepcopy(original_get_source_profile(route_type))
+        if str(route_type or "").strip().lower() == "international":
+            # 仅离线快照注入已退役双源，继续守住合并策略的灵敏度。
+            profile["sources"] = [
+                {"name": "hasdata", "role": "primary", "weight": 1.0},
+                {"name": "juhe", "role": "cross_check", "weight": 0.6},
+            ]
+        return profile
 
     def fixture_cached_fetch(
         source,
@@ -395,6 +406,7 @@ def intl_dual_source_snapshot(today: date | None = None) -> dict:
 
     try:
         aggregator_module.cached_fetch = fixture_cached_fetch
+        aggregator_module.get_source_profile = fixture_get_source_profile
         aggregator = aggregator_module.FlightAggregator(
             search_sources=_intl_fixture_sources(),
             enrichment_sources=[],
@@ -409,6 +421,7 @@ def intl_dual_source_snapshot(today: date | None = None) -> dict:
         )
     finally:
         aggregator_module.cached_fetch = original_cached_fetch
+        aggregator_module.get_source_profile = original_get_source_profile
 
     if not collected or not collected.get("flights"):
         raise RuntimeError("国际双源fixture未生成合并候选")

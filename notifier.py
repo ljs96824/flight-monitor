@@ -67,6 +67,7 @@ from price_estimator import (
 )
 from pricing import assert_same_caliber, budget_to_pp, caliber_label, itinerary_price_pp, passenger_rate_sum, price_in_scope
 from project_time import SHANGHAI_TZ
+from source_profiles import normalize_route_type, retired_listing_sources
 from provenance import (
     attach_payload_provenance,
     format_dual_source_agreement,
@@ -6993,6 +6994,7 @@ def _build_source_degradation_context(
     last_snapshot: dict | None,
     source_errors: list[dict] | None,
     current_sources: set[str] | None = None,
+    retired_sources: set[str] | None = None,
 ) -> dict:
     """Build result-side source degradation evidence without changing prices."""
     source_stats = source_stats if isinstance(source_stats, dict) else {}
@@ -7006,10 +7008,19 @@ def _build_source_degradation_context(
     }
     if current_sources:
         positive_sources.update(str(item).strip().lower() for item in current_sources if item)
+    retired_sources = {
+        str(item).strip().lower()
+        for item in (retired_sources or set())
+        if str(item).strip()
+    }
     unavailable = []
     for source_name, entry in source_stats.items():
         normalized = str(source_name).strip().lower()
-        if normalized not in _LISTING_SOURCE_LABELS or not isinstance(entry, dict):
+        if (
+            normalized not in _LISTING_SOURCE_LABELS
+            or normalized in retired_sources
+            or not isinstance(entry, dict)
+        ):
             continue
         if _source_stats_count(entry) == 0:
             unavailable.append(normalized)
@@ -7057,6 +7068,48 @@ def _build_source_degradation_context(
     }
 
 
+def _build_source_retirement_context(
+    route_type: str | None,
+    last_snapshot: dict | None,
+) -> dict:
+    """生成计划退役披露；它不是源故障，也不参与价格判定。"""
+    normalized = normalize_route_type(route_type)
+    if not normalized:
+        return {"active": False}
+    retirements = retired_listing_sources(normalized)
+    if not retirements:
+        return {"active": False}
+    retired_names = {
+        str(item.get("name") or "").strip().lower()
+        for item in retirements
+        if str(item.get("name") or "").strip()
+    }
+    previous_sources = _parse_snapshot_sources(last_snapshot)
+    previous_pushed_at = str((last_snapshot or {}).get("pushed_at") or "")[:10]
+    first_occurrence = not previous_sources or bool(previous_sources.intersection(retired_names))
+    retired_dates = [str(item.get("retired_on") or "")[:10] for item in retirements]
+    if (
+        previous_pushed_at
+        and retired_dates
+        and previous_pushed_at >= max(retired_dates)
+        and not previous_sources.intersection(retired_names)
+    ):
+        first_occurrence = False
+    primary = retirements[0]
+    notice = ""
+    if first_occurrence and str(primary.get("name") or "").strip().lower() == "hasdata":
+        notice = (
+            f"Google源(HasData)已于{primary.get('retired_on')}停用,"
+            "此后为OTA单源+Duffel规则参考"
+        )
+    return {
+        "active": True,
+        "first_occurrence": first_occurrence,
+        "notice": notice,
+        "sources": sorted(retired_names),
+        "retired_on": str(primary.get("retired_on") or ""),
+        "reason": str(primary.get("reason") or ""),
+    }
 
 
 def _constraint_change_context(
@@ -7580,6 +7633,12 @@ def build_notification_payload(
         or route_info.get("source_errors")
         or []
     )
+    payload_route_type = (
+        ((subscription.get("basic") or {}).get("route_type"))
+        or subscription.get("route_type")
+        or route_info.get("route_type")
+        or _source_stats_route_type(source_stats)
+    )
     decision, confidence, current, target, max_budget = _decision_context(
         analysis_result,
         route_info,
@@ -7604,10 +7663,15 @@ def build_notification_payload(
         return_key,
         subscription_id=subscription_snapshot_id,
     )
+    source_retirement_context = _build_source_retirement_context(
+        payload_route_type,
+        last_snapshot,
+    )
     source_degradation_context = _build_source_degradation_context(
         source_stats=source_stats,
         last_snapshot=last_snapshot,
         source_errors=source_errors,
+        retired_sources=set(source_retirement_context.get("sources") or []),
     )
     current_constraint_fingerprint = str(
         route_info.get("constraint_fingerprint")
@@ -7661,12 +7725,6 @@ def build_notification_payload(
     if recommendation_basis.get("scenarios") != travel_profile.get("scenarios"):
         recommendation_basis = build_recommendation_basis(travel_profile)
 
-    payload_route_type = (
-        ((subscription.get("basic") or {}).get("route_type"))
-        or subscription.get("route_type")
-        or route_info.get("route_type")
-        or _source_stats_route_type(source_stats)
-    )
     passenger_pricing_breakdown = passenger_breakdown or {
         "adult": total_passengers,
         "child": 0,
@@ -8363,6 +8421,7 @@ def build_notification_payload(
         "source_stats": source_stats or {},
         "source_errors": source_errors,
         "source_degradation": (push_meta or {}).get("source_degradation") or {},
+        "source_retirement": source_retirement_context,
         "data_freshness": route_info.get("data_freshness") or {},
         "collected_at": _message_collected_time(analysis_result, route_info),
         "snapshot": {
@@ -11962,6 +12021,21 @@ def _email_source_rows(payload: dict) -> list[str]:
     other_google_count = _source_stat_count(source_stats, ("serpapi", "searchapi"))
     duffel_count = _source_stat_count(source_stats, ("duffel",))
     rows = []
+    retirement = payload.get("source_retirement") or {}
+
+    if route_type == "international" and retirement.get("active"):
+        rows.append(f"<div>🔹 主源:聚合数据(OTA)—{juhe_count}个方案</div>")
+        rows.append(f"<div>🔹 入池价:按全局最低({html.escape(MERGE_PRICE_STRATEGY)})</div>")
+        if duffel_count:
+            rows.append(f"<div>🔹 行李/退改:Duffel 规则参考 — {duffel_count}条</div>")
+        else:
+            rows.append("<div>🔹 行李/退改:Duffel 规则参考</div>")
+        rows.append(
+            "<div style='margin-top:6px;color:#666;font-size:12px;'>"
+            "说明:国际航线按当前源策略以聚合数据为搜索源,价格以平台支付页为准。"
+            "</div>"
+        )
+        return rows
 
     if route_type == "domestic":
         rows.append(f"<div>🔹 主源:聚合数据(Juhe)—{juhe_count}个方案</div>")
@@ -12116,6 +12190,14 @@ def _email_source_body(payload: dict) -> str:
             f"⚠ {html.escape(degradation_reason)}"
             "</div>"
         )
+    retirement = payload.get("source_retirement") or {}
+    retirement_notice = str(retirement.get("notice") or "").strip()
+    if retirement_notice:
+        rows.append(
+            "<div style='margin-top:6px;color:#666;font-size:13px;'>"
+            f"{html.escape(retirement_notice)}"
+            "</div>"
+        )
     rows.append(f"<div style='margin-top:8px;color:#666;font-size:12px;'>采集时间:{html.escape(_payload_freshness_text(payload))}</div>")
     rows.append("<div style='color:#666;font-size:12px;'>说明:技术明细见网页详情页,价格以平台支付页为准。</div>")
     return "".join(rows)
@@ -12125,7 +12207,17 @@ def _compact_source_summary_lines(source_stats: dict | None) -> list[str]:
     if not source_stats:
         return []
     route_type = _source_stats_route_type(source_stats)
-    body = _email_source_body({"source_stats": source_stats, "route_type": route_type})
+    retirement = {
+        "active": bool(retired_listing_sources(route_type)),
+        "notice": "",
+    }
+    body = _email_source_body(
+        {
+            "source_stats": source_stats,
+            "route_type": route_type,
+            "source_retirement": retirement,
+        }
+    )
     return ["<b>数据来源</b>", body]
 
 

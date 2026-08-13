@@ -23,6 +23,7 @@ from request_cache import (
     reset_request_cache,
     start_request_cache_round,
 )
+from source_profiles import retired_listing_sources
 from sources.aggregator import FlightAggregator, build_default_sources
 
 
@@ -152,10 +153,20 @@ def _build_route_aggregator(
     )
     available = {_source_name(source): source for source in search_sources}
     required = list(route["sources"])
-    missing = [name for name in required if name not in available]
+    retired = {
+        str(item.get("name") or "").strip().lower()
+        for item in retired_listing_sources(route["route_type"])
+    }
+    missing = [
+        name
+        for name in required
+        if name not in available and name not in retired
+    ]
     if missing:
         raise RuntimeError(f"缺少配置源:{','.join(missing)}")
-    selected = [available[name] for name in required]
+    selected = [available[name] for name in required if name in available]
+    if not selected:
+        raise RuntimeError("当前源策略无可用列表源")
     return aggregator_factory(selected, [], route_type=route["route_type"])
 
 

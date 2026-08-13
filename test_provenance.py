@@ -708,7 +708,7 @@ class ProvenanceTest(unittest.TestCase):
         self.assertEqual(expected_search_sources("domestic"), {"juhe"})
         self.assertEqual(
             expected_search_sources("international"),
-            {"hasdata", "juhe"},
+            {"juhe"},
         )
         self.assertEqual(
             expected_search_sources("greater_china"),

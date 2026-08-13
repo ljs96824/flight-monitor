@@ -73,7 +73,7 @@ class SourceWeightingTest(unittest.TestCase):
         self.assertEqual(merged[0]["primary_source"], "juhe")
         self.assertEqual(merged[0]["data_source"], "serpapi+juhe")
 
-    def test_international_route_uses_hasdata_then_juhe_sources(self):
+    def test_international_route_uses_only_juhe_after_hasdata_retirement(self):
         aggregator = FlightAggregator(
             [DummySource("juhe"), DummySource("serpapi"), DummySource("hasdata")],
             [],
@@ -81,8 +81,8 @@ class SourceWeightingTest(unittest.TestCase):
 
         ordered = aggregator._ordered_search_sources("PVG", "KIX")
 
-        self.assertEqual([source.name for source in ordered], ["hasdata", "juhe"])
-        self.assertEqual([source.role for source in ordered], ["primary", "cross_check"])
+        self.assertEqual([source.name for source in ordered], ["juhe"])
+        self.assertEqual([source.role for source in ordered], ["primary"])
 
     def test_collect_merges_hasdata_and_juhe_same_combo_with_price_details(self):
         class FetchSource(DummySource):
@@ -116,7 +116,7 @@ class SourceWeightingTest(unittest.TestCase):
             [],
         )
         with patch("sources.aggregator.cached_fetch", side_effect=direct_cached_fetch):
-            result = aggregator.collect("PVG", "KIX", "2026-07-01", route_type="international")
+            result = aggregator.collect("PVG", "HKG", "2026-07-01", route_type="greater_china")
 
         self.assertIsNotNone(result)
         self.assertIn("hasdata", result["source_stats"])
@@ -125,8 +125,8 @@ class SourceWeightingTest(unittest.TestCase):
         flight = result["flights"][0]
         self.assertEqual(flight["price"], 1000)
         self.assertEqual(flight["price_source"], "hasdata")
-        self.assertEqual(flight["data_source"], "hasdata+juhe")
-        self.assertEqual(flight["primary_source"], "hasdata")
+        self.assertEqual(flight["data_source"], "juhe+hasdata")
+        self.assertEqual(flight["primary_source"], "juhe")
         prices = {entry["source"]: entry["price"] for entry in flight["source_price_details"]}
         self.assertEqual(prices, {"hasdata": 1000.0, "juhe": 1200.0})
         self.assertTrue(result["price_anomalies"])
@@ -163,10 +163,10 @@ class SourceWeightingTest(unittest.TestCase):
         aggregator = FlightAggregator(
             [MixedSource("hasdata"), MixedSource("juhe")],
             [],
-            route_type="international",
+            route_type="greater_china",
         )
         with patch("sources.aggregator.cached_fetch", side_effect=direct_cached_fetch):
-            result = aggregator.collect("PVG", "KIX", "2026-08-20")
+            result = aggregator.collect("PVG", "HKG", "2026-08-20")
 
         self.assertEqual(result["source_stats"]["hasdata"]["status"], "成功")
         self.assertEqual(result["source_stats"]["juhe"]["count"], 0)
@@ -255,7 +255,7 @@ class SourceWeightingTest(unittest.TestCase):
             patch("sources.aggregator.cached_fetch", side_effect=direct_cached_fetch),
             patch("sources.aggregator.safe_log") as log,
         ):
-            result = aggregator.collect("PVG", "KIX", "2026-07-01", route_type="international")
+            result = aggregator.collect("PVG", "HKG", "2026-07-01", route_type="greater_china")
 
         self.assertEqual(result["flights"][0]["price"], 1000)
         self.assertEqual(result["flights"][0]["price_source"], "juhe")
@@ -303,12 +303,12 @@ class SourceWeightingTest(unittest.TestCase):
             [],
         )
         with patch("sources.aggregator.cached_fetch", side_effect=direct_cached_fetch):
-            result = aggregator.collect("PVG", "KIX", "2026-07-01", route_type="international")
+            result = aggregator.collect("PVG", "HKG", "2026-07-01", route_type="greater_china")
 
         self.assertEqual(result["source_stats"]["after_dedup"], 1)
         flight = result["flights"][0]
         self.assertEqual(flight["flight_combo"], "BR705+BR182")
-        self.assertEqual(flight["data_source"], "hasdata+juhe")
+        self.assertEqual(flight["data_source"], "juhe+hasdata")
 
     def test_email_source_body_shows_domestic_primary_only(self):
         body = _email_source_body(

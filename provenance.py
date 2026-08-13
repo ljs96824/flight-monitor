@@ -15,7 +15,7 @@ from airports import get_airport_city
 from flight_combo_utils import normalize_combo
 from method_registry import METHOD_VERSIONS, method_version, method_version_for_stat
 from project_time import SHANGHAI_TZ as PROJECT_TIMEZONE
-from source_profiles import get_source_profile, normalize_route_type
+from source_profiles import expected_listing_sources, normalize_route_type
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -85,14 +85,11 @@ def _normalize_pair(airport_pair) -> tuple[str, str] | None:
     return origin, dest
 
 
-def expected_search_sources(route_type: str | None) -> set[str]:
-    profile = get_source_profile(route_type)
-    return {
-        str(item.get("name") or "").strip().lower()
-        for item in profile.get("sources") or []
-        if str(item.get("role") or "").strip().lower() != "enrichment"
-        and str(item.get("name") or "").strip()
-    }
+def expected_search_sources(
+    route_type: str | None,
+    observed_day: str | date | None = None,
+) -> set[str]:
+    return expected_listing_sources(route_type, observed_day=observed_day)
 
 
 def load_route_observations(
@@ -363,10 +360,10 @@ def build_route_provenance_context(
         cell["route_types"].add(route_type)
 
     degraded = 0
-    for cell in daily_sources.values():
+    for (_depart_date, observed_day), cell in daily_sources.items():
         expected = set()
         for route_type in cell["route_types"]:
-            expected.update(expected_search_sources(route_type))
+            expected.update(expected_search_sources(route_type, observed_day))
         if expected and not expected.issubset(cell["sources"]):
             degraded += 1
 

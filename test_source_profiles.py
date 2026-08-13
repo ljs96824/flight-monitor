@@ -55,15 +55,15 @@ class SourceProfilesTest(unittest.TestCase):
         self.assertEqual(enrichment_sources[0].role, "enrichment")
         self.assertEqual(search_sources[0].query_overrides["stops"], "nonstop_preferred")
 
-    def test_international_profile_uses_hasdata_then_juhe_search_sources(self):
+    def test_international_profile_uses_juhe_search_and_duffel_enrichment(self):
         with patch.dict(sys.modules, self.fake_modules):
             with patch.dict(os.environ, self.env, clear=True):
                 search_sources, enrichment_sources = build_default_sources(
                     "PVG", "KIX", route_type="international"
                 )
 
-        self.assertEqual([source.name for source in search_sources], ["hasdata", "juhe"])
-        self.assertEqual([source.role for source in search_sources], ["primary", "cross_check"])
+        self.assertEqual([source.name for source in search_sources], ["juhe"])
+        self.assertEqual([source.role for source in search_sources], ["primary"])
         self.assertEqual([source.name for source in enrichment_sources], ["duffel"])
         self.assertEqual(search_sources[0].query_overrides["stops"], "two_stops_or_fewer")
 
@@ -113,7 +113,7 @@ class SourceProfilesTest(unittest.TestCase):
                     "PVG", "KIX", route_type="domestic"
                 )
 
-        self.assertEqual([source.name for source in search_sources], ["hasdata", "juhe"])
+        self.assertEqual([source.name for source in search_sources], ["juhe"])
         self.assertEqual([source.name for source in enrichment_sources], ["duffel"])
 
     def test_ordered_sources_respect_route_profile_even_with_manual_sources(self):
@@ -132,7 +132,7 @@ class SourceProfilesTest(unittest.TestCase):
         greater_china = aggregator._ordered_search_sources("PVG", "HKG", route_type="greater_china")
 
         self.assertEqual([source.name for source in domestic], ["juhe"])
-        self.assertEqual([source.name for source in international], ["hasdata", "juhe"])
+        self.assertEqual([source.name for source in international], ["juhe"])
         self.assertEqual([source.name for source in greater_china], ["juhe", "hasdata"])
 
 
