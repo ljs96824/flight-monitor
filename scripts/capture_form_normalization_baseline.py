@@ -173,6 +173,26 @@ SCENARIOS = {
         price_change_threshold="down_200",
         digest_time="08:30",
     ),
+    "directional_time_windows": _base_form(
+        monitor_mode="precise",
+        ux2_concept_form="true",
+        ux2_time_touched="true",
+        time_preference="unlimited",
+        allow_redeye="false",
+        arrival_preference="any",
+        shared_departure_window_start="08:00",
+        shared_departure_window_end="12:00",
+        shared_arrival_window_start="10:00",
+        shared_arrival_window_end="15:00",
+        outbound_departure_window_start="06:30",
+        outbound_departure_window_end="08:30",
+        outbound_arrival_window_start="09:00",
+        outbound_arrival_window_end="11:00",
+        return_departure_window_start="18:00",
+        return_departure_window_end="21:00",
+        return_arrival_window_start="20:00",
+        return_arrival_window_end="23:00",
+    ),
 }
 
 

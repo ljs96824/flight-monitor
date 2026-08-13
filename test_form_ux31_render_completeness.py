@@ -21,6 +21,7 @@ class _FormDom(HTMLParser):
     def __init__(self):
         super().__init__()
         self.names = []
+        self.controls_by_name = {}
         self.sections_by_name = {}
         self._section_stack = []
         self.groups_by_name = {}
@@ -35,6 +36,7 @@ class _FormDom(HTMLParser):
         if tag in {"input", "select", "textarea"} and values.get("name"):
             name = values["name"]
             self.names.append(name)
+            self.controls_by_name.setdefault(name, []).append((tag, values))
             self.sections_by_name[name] = next(
                 (item for item in reversed(self._section_stack) if item),
                 None,
@@ -87,7 +89,16 @@ class FormUx31RenderCompletenessTest(unittest.TestCase):
         counts = Counter(dom.names)
         for concept_name, concept in CONCEPTS.items():
             for name in concept["canonical_input_names"]:
-                self.assertEqual(counts[name], 1, f"{concept_name}:{name}")
+                controls = dom.controls_by_name.get(name, [])
+                self.assertTrue(controls, f"{concept_name}:{name}")
+                if counts[name] == 1:
+                    continue
+                self.assertTrue(
+                    all(tag == "input" and attrs.get("type") == "radio" for tag, attrs in controls),
+                    f"{concept_name}:{name}",
+                )
+                values = [attrs.get("value") for _, attrs in controls]
+                self.assertEqual(len(values), len(set(values)), f"{concept_name}:{name}")
 
         business_fields = {
             "same_day_round_trip",
@@ -131,7 +142,7 @@ class FormUx31RenderCompletenessTest(unittest.TestCase):
     def test_same_day_meeting_fields_use_native_business_group_without_new_visibility(self):
         html = self._page("/settings")
         self.assertIn('data-secondary-group="business-travel"', html)
-        self.assertIn("当天往返、会议与发票设置；普通行程可保持默认。", html)
+        self.assertIn("商务类型、会议、团队、报销与发票设置；非商务行程可保持关闭。", html)
         self.assertNotIn('data-static-subsection="same-day-meeting"', html)
         self.assertEqual(
             html.count('data-visibility-contract="'),
@@ -185,10 +196,11 @@ class FormUx31RenderCompletenessTest(unittest.TestCase):
         self.assertIn("10:30", html)
         self.assertIn("17:00", html)
 
-    def test_normalization_baseline_contains_eighth_same_day_meeting_scene(self):
+    def test_normalization_baseline_contains_ninth_directional_time_scene(self):
         fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))["scenarios"]
-        self.assertEqual(len(fixture), 8)
+        self.assertEqual(len(fixture), 9)
         self.assertIn("same_day_meeting_complete", fixture)
+        self.assertIn("directional_time_windows", fixture)
 
     def test_ui_smoke_drives_bidirectional_links_email_and_meeting(self):
         driver = (

@@ -181,8 +181,19 @@ const fullContract = await evaluate(`(() => {
     const rect = element.getBoundingClientRect();
     return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
   };
-  const names = [...document.querySelectorAll('input[name],select[name],textarea[name]')].map(x => x.name);
-  const duplicates = names.filter((name, index) => names.indexOf(name) !== index);
+  const controlsByName = new Map();
+  for (const control of document.querySelectorAll('input[name],select[name],textarea[name]')) {
+    if (!controlsByName.has(control.name)) controlsByName.set(control.name, []);
+    controlsByName.get(control.name).push(control);
+  }
+  const duplicates = [...controlsByName.entries()]
+    .filter(([, controls]) => {
+      if (controls.length === 1) return false;
+      const radioGroup = controls.every(control => control.tagName === 'INPUT' && control.type === 'radio');
+      const uniqueValues = new Set(controls.map(control => control.value)).size === controls.length;
+      return !radioGroup || !uniqueValues;
+    })
+    .map(([name]) => name);
   return {
     page: document.body.dataset.pageMode,
     sectionsVisible: ids.every(id => visible(document.getElementById(id))),
@@ -191,7 +202,7 @@ const fullContract = await evaluate(`(() => {
     groupCount: groupIds.filter(id => document.getElementById(id)?.tagName === 'DETAILS').length,
     groupAnchorCount: groupIds.filter(id => document.querySelector('a[href="#' + id + '"]')).length,
     groupsClosed: groupIds.every(id => !document.getElementById(id)?.hasAttribute('open')),
-    duplicates: [...new Set(duplicates)],
+    duplicates,
     buildMarker: document.querySelector('[data-build-marker="true"]')?.textContent.trim() || '',
   };
 })()`);
@@ -205,13 +216,35 @@ for (const id of ["section-where","section-when","section-who","section-budget",
 console.log(`[UI smoke] 页2六节=${fullContract.sectionCount} 全可见=True 目录锚点=${fullContract.anchorCount} 次级组锚点=${fullContract.groupAnchorCount} 重复name=0`);
 console.log(`[UI smoke] 版本信标=${fullContract.buildMarker}`);
 
-for (const groupId of ['group-business-travel', 'group-feasibility']) {
-  await clickSelector(`#${groupId} > summary`);
-  await waitFor(`document.getElementById('${groupId}').hasAttribute('open')`, `${groupId}展开`);
-  await clickSelector(`#${groupId} > summary`);
-  await waitFor(`!document.getElementById('${groupId}').hasAttribute('open')`, `${groupId}闭合`);
-}
-console.log("[UI smoke] 原生details开合=PASS 商务出行/可行性参数");
+await clickSelector('#group-business-travel > summary');
+await waitFor("document.getElementById('group-business-travel').hasAttribute('open')", '商务出行展开');
+const businessBranch = await evaluate(`(() => {
+  const group = document.getElementById('group-business-travel');
+  const names = ['meeting_importance','trip_natures','user_level','reimburse_per_person','same_day_round_trip','business_start','business_end'];
+  return names.every(name => group?.querySelector('[name="' + name + '"]'));
+})()`);
+if (!businessBranch) throw new Error('商务出行分支缺少专属控件');
+await clickSelector('#group-business-travel > summary');
+await waitFor("!document.getElementById('group-business-travel').hasAttribute('open')", '商务出行闭合');
+console.log("[UI smoke] 商务场景分支=PASS 原生details开合+商务专属控件归组");
+
+await clickSelector('#group-feasibility > summary');
+await waitFor("document.getElementById('group-feasibility').hasAttribute('open')", '可行性参数展开');
+await clickSelector('#group-feasibility > summary');
+await waitFor("!document.getElementById('group-feasibility').hasAttribute('open')", '可行性参数闭合');
+console.log("[UI smoke] 原生details开合=PASS 可行性参数");
+
+await clickSelector('[data-time-window-group="custom"] > summary');
+await waitFor("document.querySelector('[data-time-window-group=\"custom\"]').hasAttribute('open')", '自定义时间窗展开');
+await clickSelector('[data-time-window-group="directional"] > summary');
+await waitFor("document.querySelector('[data-time-window-group=\"directional\"]').hasAttribute('open')", '分方向时间窗展开');
+const timeWindowControls = await evaluate(`(() => {
+  const directional = document.querySelector('[data-time-window-group="directional"]');
+  const names = ['outbound_departure_window_start','outbound_departure_window_end','return_departure_window_start','return_departure_window_end'];
+  return names.every(name => directional?.querySelector('[name="' + name + '"]'));
+})()`);
+if (!timeWindowControls) throw new Error('分方向时间窗缺少规范控件');
+console.log("[UI smoke] 分层时间窗=PASS 分方向完整时间窗>通用完整时间窗>时段偏好");
 
 await command("Input.dispatchKeyEvent", {type: "keyDown", key: "f", code: "KeyF", modifiers: 2, windowsVirtualKeyCode: 70, nativeVirtualKeyCode: 70});
 await command("Input.dispatchKeyEvent", {type: "keyUp", key: "f", code: "KeyF", modifiers: 2, windowsVirtualKeyCode: 70, nativeVirtualKeyCode: 70});
@@ -271,6 +304,12 @@ await evaluate(`(() => {
   set('user_transport_min', '25');
   set('redundancy_min', '15');
   set('outbound_set_off', '06:30');
+  set('shared_departure_window_start', '08:00');
+  set('shared_departure_window_end', '12:00');
+  set('outbound_departure_window_start', '06:30');
+  set('outbound_departure_window_end', '08:30');
+  set('return_departure_window_start', '18:00');
+  set('return_departure_window_end', '21:00');
 
   set('notification_email', 'ux31@example.com');
   const scenario = document.querySelector('[name="travel_scenario"]');
@@ -287,23 +326,28 @@ const confirmation = await evaluate(`(() => {
     email: text.includes('ux31@example.com'),
     meetingStart: text.includes('10:30'),
     meetingEnd: text.includes('17:00'),
+    outboundWindow: text.includes('06:30-08:30'),
+    returnWindow: text.includes('18:00-21:00'),
   };
 })()`);
-if (!confirmation.email || !confirmation.meetingStart || !confirmation.meetingEnd) {
+if (!confirmation.email || !confirmation.meetingStart || !confirmation.meetingEnd || !confirmation.outboundWindow || !confirmation.returnWindow) {
   throw new Error(`完整页回读失败: ${JSON.stringify(confirmation)}`);
 }
 console.log("[UI smoke] 页2邮箱提交=PASS value=ux31@example.com");
 console.log("[UI smoke] 页2当天往返会议=PASS 10:30-17:00");
+console.log("[UI smoke] 分方向时间窗回读=PASS 去程06:30-08:30 返程18:00-21:00");
 
 await navigate("/settings?edit=1");
 const editGroups = await evaluate(`(() => ({
   business: document.getElementById('group-business-travel')?.hasAttribute('open') || false,
   feasibility: document.getElementById('group-feasibility')?.hasAttribute('open') || false,
+  customTime: document.querySelector('[data-time-window-group="custom"]')?.hasAttribute('open') || false,
+  directionalTime: document.querySelector('[data-time-window-group="directional"]')?.hasAttribute('open') || false,
 }))()`);
-if (!editGroups.business || !editGroups.feasibility) {
+if (!editGroups.business || !editGroups.feasibility || !editGroups.customTime || !editGroups.directionalTime) {
   throw new Error(`编辑态次级组未自动展开: ${JSON.stringify(editGroups)}`);
 }
-console.log("[UI smoke] 编辑态details自动展开=PASS 商务出行+可行性参数");
+console.log("[UI smoke] 编辑态details自动展开=PASS 商务出行+可行性参数+分层时间窗");
 
 await sleep(350);
 if (browserErrors.length) throw new Error(`浏览器错误: ${browserErrors.join(' | ')}`);

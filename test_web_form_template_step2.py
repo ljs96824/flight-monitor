@@ -63,7 +63,23 @@ class WebFormTemplateStep2Test(unittest.TestCase):
             "notification_frequency",
             "notification_frequency_rule",
         ):
-            self.assertEqual(self.full.count(f'name="{name}"'), 1, name)
+            tags = re.findall(
+                rf'<(?:input|select|textarea)\b[^>]*\bname="{re.escape(name)}"[^>]*>',
+                self.full,
+                re.I,
+            )
+            self.assertTrue(tags, name)
+            if len(tags) == 1:
+                continue
+            self.assertTrue(
+                all(re.search(r'\btype="radio"', tag, re.I) for tag in tags),
+                name,
+            )
+            values = [
+                re.search(r'\bvalue="([^"]*)"', tag, re.I).group(1)
+                for tag in tags
+            ]
+            self.assertEqual(len(values), len(set(values)), name)
         self.assertNotIn("syncNotificationFrequencyShadow", self.full)
         self.assertNotIn("advanced-frequency-copy", self.full)
 

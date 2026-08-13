@@ -20,16 +20,41 @@ DEFAULT_ARRIVAL_SLOTS = DEFAULT_DEPARTURE_SLOTS
 DAYTIME_TIME_SLOTS = ("dawn", "morning", "noon", "afternoon", "evening")
 ALL_TIME_SLOTS = (*DEFAULT_DEPARTURE_SLOTS, "redeye")
 
-UX2_TIME_CONTROL_FIELDS = (
-    "allow_redeye",
-    "arrival_preference",
-    "separate_direction_times",
-    "outbound_time_preference",
-    "outbound_allow_redeye",
-    "outbound_arrival_preference",
-    "return_time_preference",
-    "return_allow_redeye",
-    "return_arrival_preference",
+VALID_SCENARIO_SCOPES = {"common", "business", "tourism"}
+BUSINESS_SCENARIO_CONCEPTS = frozenset(
+    {
+        "business_nature",
+        "business_level",
+        "team_arrangement",
+        "reimbursement",
+        "invoice",
+        "same_day_round_trip",
+        "meeting_window",
+        "meeting_location",
+        "meeting_importance",
+        "same_day_execution",
+    }
+)
+
+CANONICAL_TIME_WINDOW_FIELDS = (
+    "shared_departure_window_start",
+    "shared_departure_window_end",
+    "shared_arrival_window_start",
+    "shared_arrival_window_end",
+    "outbound_departure_window_start",
+    "outbound_departure_window_end",
+    "outbound_arrival_window_start",
+    "outbound_arrival_window_end",
+    "return_departure_window_start",
+    "return_departure_window_end",
+    "return_arrival_window_start",
+    "return_arrival_window_end",
+)
+LEGACY_RAW_TIME_WINDOW_FIELDS = (
+    "departure_time_start",
+    "departure_time_end",
+    "arrival_time_start",
+    "arrival_time_end",
     "outbound_departure_time_start",
     "outbound_departure_time_end",
     "outbound_arrival_time_start",
@@ -38,6 +63,23 @@ UX2_TIME_CONTROL_FIELDS = (
     "return_departure_time_end",
     "return_arrival_time_start",
     "return_arrival_time_end",
+)
+
+LEGACY_DIRECTION_TIME_CONTROL_FIELDS = (
+    "separate_direction_times",
+    "outbound_time_preference",
+    "outbound_allow_redeye",
+    "outbound_arrival_preference",
+    "return_time_preference",
+    "return_allow_redeye",
+    "return_arrival_preference",
+)
+
+UX2_TIME_CONTROL_FIELDS = (
+    "allow_redeye",
+    "arrival_preference",
+    *CANONICAL_TIME_WINDOW_FIELDS,
+    *LEGACY_DIRECTION_TIME_CONTROL_FIELDS,
 )
 
 
@@ -139,6 +181,11 @@ def project_time_concept_fields(values: Mapping, *, round_trip: bool) -> dict:
     shared_raw = _legacy_direction(values)
     outbound_raw = _legacy_direction(values, "outbound") if round_trip else shared_raw
     return_raw = _legacy_direction(values, "return") if round_trip else shared_raw
+    shared = _project_direction(
+        shared_raw,
+        no_late=no_late,
+        prefer_daytime=prefer_daytime,
+    )
     outbound = _project_direction(
         outbound_raw,
         no_late=no_late,
@@ -149,21 +196,59 @@ def project_time_concept_fields(values: Mapping, *, round_trip: bool) -> dict:
         no_late=no_late,
         prefer_daytime=prefer_daytime,
     )
-    separate = round_trip and outbound_raw != return_raw
+    separate = round_trip and (
+        outbound_raw != shared_raw or return_raw != shared_raw
+    )
+    saved_mode = str(values.get("time_pref") or "").strip().lower()
+    shared_departure_is_custom = saved_mode == "custom" or (
+        not saved_mode and shared["time_preference"] == "custom"
+    )
+    shared_arrival_is_custom = shared["arrival_preference"] == "custom"
     result = {
         "ux2_concept_form": "true",
-        "time_preference": outbound["time_preference"],
-        "allow_redeye": outbound["allow_redeye"],
-        "arrival_preference": outbound["arrival_preference"],
+        "time_preference": (
+            "daytime" if shared["time_preference"] == "daytime" else "unlimited"
+        ),
+        "allow_redeye": shared["allow_redeye"],
+        "arrival_preference": (
+            shared["arrival_preference"]
+            if shared["arrival_preference"] != "custom"
+            else "any"
+        ),
         "separate_direction_times": "true" if separate else "false",
-        "departure_time_start": outbound["departure_time_start"],
-        "departure_time_end": outbound["departure_time_end"],
-        "arrival_time_start": outbound["arrival_time_start"],
-        "arrival_time_end": outbound["arrival_time_end"],
+        "shared_departure_window_start": (
+            shared["departure_time_start"] if shared_departure_is_custom else ""
+        ),
+        "shared_departure_window_end": (
+            shared["departure_time_end"] if shared_departure_is_custom else ""
+        ),
+        "shared_arrival_window_start": (
+            shared["arrival_time_start"] if shared_arrival_is_custom else ""
+        ),
+        "shared_arrival_window_end": (
+            shared["arrival_time_end"] if shared_arrival_is_custom else ""
+        ),
+
     }
-    for prefix, projected in (("outbound", outbound), ("return", returned)):
+    for prefix, projected, raw in (
+        ("outbound", outbound, outbound_raw),
+        ("return", returned, return_raw),
+    ):
         for key, value in projected.items():
             result[f"{prefix}_{key}"] = value
+        use_override = round_trip and raw != shared_raw
+        result[f"{prefix}_departure_window_start"] = (
+            projected["departure_time_start"] if use_override else ""
+        )
+        result[f"{prefix}_departure_window_end"] = (
+            projected["departure_time_end"] if use_override else ""
+        )
+        result[f"{prefix}_arrival_window_start"] = (
+            projected["arrival_time_start"] if use_override else ""
+        )
+        result[f"{prefix}_arrival_window_end"] = (
+            projected["arrival_time_end"] if use_override else ""
+        )
     return result
 
 
@@ -174,6 +259,7 @@ def _concept(
     derived=(),
     *,
     canonical_input_names=None,
+    scenario_scope="common",
 ):
     declared_fields = tuple(fields)
     return {
@@ -182,6 +268,7 @@ def _concept(
         "fields": declared_fields,
         "canonical_input_names": tuple(canonical_input_names or declared_fields),
         "derived_schema_fields": tuple(derived),
+        "scenario_scope": scenario_scope,
     }
 
 
@@ -197,12 +284,41 @@ CONCEPTS = {
     "trip_direction": _concept("when", "单程或往返", ("round_trip",), ("round_trip", "basic.trip_type")),
     "return_date": _concept("when", "返程日期", ("return_date",), ("return_date",)),
     "return_flexibility": _concept("when", "返程日期弹性", ("return_date_flexibility",), ("return_date_flexibility",)),
-    "same_day_round_trip": _concept("when", "当天往返", ("same_day_round_trip", "day_trip_period"), ("constraints.same_day_round_trip", "constraints.day_trip_period")),
-    "meeting_window": _concept("when", "会议开始与结束", ("business_start", "business_end", "meeting_start", "meeting_end"), ("constraints.business_start", "constraints.business_end", "constraints.meeting_start", "constraints.meeting_end")),
-    "meeting_location": _concept("when", "会议地点", ("meeting_location",), ("constraints.meeting_location",)),
-    "meeting_importance": _concept("when", "会议重要程度", ("meeting_importance",), ("constraints.meeting_importance",)),
+    "same_day_round_trip": _concept(
+        "who",
+        "当天往返",
+        ("same_day_round_trip", "day_trip_period"),
+        ("constraints.same_day_round_trip", "constraints.day_trip_period"),
+        scenario_scope="business",
+    ),
+    "meeting_window": _concept(
+        "who",
+        "会议开始与结束",
+        ("business_start", "business_end", "meeting_start", "meeting_end"),
+        (
+            "constraints.business_start",
+            "constraints.business_end",
+            "constraints.meeting_start",
+            "constraints.meeting_end",
+        ),
+        scenario_scope="business",
+    ),
+    "meeting_location": _concept(
+        "who",
+        "会议地点",
+        ("meeting_location",),
+        ("constraints.meeting_location",),
+        scenario_scope="business",
+    ),
+    "meeting_importance": _concept(
+        "who",
+        "会议重要程度",
+        ("meeting_importance",),
+        ("constraints.meeting_importance",),
+        scenario_scope="business",
+    ),
     "same_day_execution": _concept(
-        "when",
+        "who",
         "当天往返执行参数",
         ("buffer_hours", "transport_mode", "user_transport_min", "redundancy_min"),
         (
@@ -211,9 +327,28 @@ CONCEPTS = {
             "constraints.user_transport_min",
             "constraints.redundancy_min",
         ),
+        scenario_scope="business",
     ),
-    "travel_context": _concept("who", "出行场景与目的", ("travel_scenario", "trip_natures"), ("preferences.travel_scenarios", "constraints.trip_natures")),
-    "business_level": _concept("who", "商务层级", ("user_level",), ("constraints.user_level",)),
+    "travel_context": _concept(
+        "who",
+        "出行场景",
+        ("travel_scenario",),
+        ("preferences.travel_scenarios",),
+    ),
+    "business_nature": _concept(
+        "who",
+        "商务类型",
+        ("trip_natures",),
+        ("constraints.trip_natures",),
+        scenario_scope="business",
+    ),
+    "business_level": _concept(
+        "who",
+        "商务层级",
+        ("user_level",),
+        ("constraints.user_level",),
+        scenario_scope="business",
+    ),
     "companion_mode": _concept("who", "同行形态", ("companions", "solo_travel"), ("companions", "preferences.solo_travel")),
     "passenger_mix": _concept("who", "乘客构成", ("passenger_count", "adult_count", "child_count", "elderly_count", "infant_count"), ("preferences.passengers", "basic.passenger_count")),
     "child_profile": _concept("who", "儿童画像", ("child_type",), ("preferences.child_type",)),
@@ -223,29 +358,68 @@ CONCEPTS = {
     "transport_estimates": _concept("who", "交通时间估算", ("origin_transport_min", "destination_transport_min"), ("constraints.origin_transport_min", "constraints.destination_transport_min")),
     "transport_margin": _concept("who", "交通冗余", ("transport_margin_mode",), ("constraints.transport_margin_mode",)),
     "reserve_overrides": _concept("who", "商务冗余覆盖", ("airport_advance_min", "arrival_exit_min", "delay_buffer_min", "pre_meeting_buffer_min", "post_meeting_buffer_min", "custom_redundancy_min"), ("constraints.airport_advance_min", "constraints.arrival_exit_min", "constraints.delay_buffer_min", "constraints.pre_meeting_buffer_min", "constraints.post_meeting_buffer_min", "constraints.custom_redundancy_min")),
-    "team_arrangement": _concept("who", "团队安排", ("team_passenger_count", "team_date_flexibility", "same_flight_required"), ("constraints.team_passenger_count", "constraints.team_date_flexibility", "constraints.same_flight_required")),
+    "team_arrangement": _concept(
+        "who",
+        "团队安排",
+        ("team_passenger_count", "team_date_flexibility", "same_flight_required"),
+        (
+            "constraints.team_passenger_count",
+            "constraints.team_date_flexibility",
+            "constraints.same_flight_required",
+        ),
+        scenario_scope="business",
+    ),
     "price_strategy": _concept("budget", "价格策略", ("price_strategy",), ("constraints.budget_strategy",)),
     "max_budget": _concept("budget", "最高预算与口径", ("max_budget_mode", "max_budget", "max_budget_scope"), ("max_budget", "max_budget_mode", "max_budget_scope")),
     "target_price": _concept("budget", "理想价与口径", ("target_price_mode", "target_price", "target_price_scope"), ("target_price", "target_price_mode", "target_price_scope")),
     "legacy_budget_scope": _concept("budget", "预算口径兼容别名", ("budget_scope",), ("budget_scope",)),
     "price_tolerance": _concept("budget", "价格容忍度", ("price_tolerance_mode", "price_tolerance_custom"), ("soft_preferences.price_tolerance",)),
-    "reimbursement": _concept("budget", "报销上限", ("reimburse_per_person",), ("constraints.reimburse_per_person",)),
-    "invoice": _concept("budget", "发票要求", ("invoice_needed", "invoice_context", "invoice_special_vat", "invoice_cabin_limit"), ("preferences.invoice_needed", "preferences.invoice_special_vat", "preferences.invoice_cabin_limit")),
+    "reimbursement": _concept(
+        "who",
+        "报销上限",
+        ("reimburse_per_person",),
+        ("constraints.reimburse_per_person",),
+        scenario_scope="business",
+    ),
+    "invoice": _concept(
+        "who",
+        "发票要求",
+        ("invoice_needed", "invoice_context", "invoice_special_vat", "invoice_cabin_limit"),
+        (
+            "preferences.invoice_needed",
+            "preferences.invoice_special_vat",
+            "preferences.invoice_cabin_limit",
+        ),
+        scenario_scope="business",
+    ),
     "interaction_depth": _concept("flight_preferences", "向导交互深度(服务端派生)", ("monitor_mode",), ("monitor_mode",)),
     "transfer": _concept("flight_preferences", "中转偏好芯片组", ("transfer_policy", "short_transfer_limit", "accept_overnight_transfer", "accept_self_transfer"), ("transfer_policy", "direct_only", "advanced_rules.transfer")),
     "time": _concept(
         "flight_preferences",
         "统一时间偏好组",
         (
-            "ux2_concept_form", "ux2_time_touched",
-            "ux2_original_departure_time_policy", "ux2_original_arrival_time_policy",
-            "time_preference", *UX2_TIME_CONTROL_FIELDS, "departure_time_policy",
-            "departure_slots", "arrival_slots", "outbound_departure_slots",
-            "outbound_arrival_slots", "return_departure_slots", "return_arrival_slots",
-            "departure_time_start", "departure_time_end", "arrival_time_start",
-            "arrival_time_end", "no_late_arrival", "prefer_daytime_arrival",
+            "ux2_concept_form",
+            "ux2_time_touched",
+            "ux2_original_departure_time_policy",
+            "ux2_original_arrival_time_policy",
+            "time_preference",
+            *UX2_TIME_CONTROL_FIELDS,
         ),
-        ("departure_time_policy", "arrival_time_policy", "red_eye", "red_eye_policy", "hard_constraints.*_slots", "hard_constraints.*_time_windows", "soft_preferences.*_time_windows"),
+        (
+            "departure_time_policy",
+            "arrival_time_policy",
+            "red_eye",
+            "red_eye_policy",
+            "hard_constraints.*_slots",
+            "hard_constraints.*_time_windows",
+            "soft_preferences.*_time_windows",
+        ),
+        canonical_input_names=(
+            "time_preference",
+            "allow_redeye",
+            "arrival_preference",
+            *CANONICAL_TIME_WINDOW_FIELDS,
+        ),
     ),
     "baggage": _concept("flight_preferences", "行李芯片组", ("baggage",), ("need_baggage", "hard_constraints.checked_baggage_required")),
     "refund": _concept("flight_preferences", "退改芯片组", ("refund_flexibility",), ("refund_flexibility", "preferences.refund_policy")),
@@ -295,6 +469,24 @@ def validate_concept_registry(field_owners: Mapping[str, str], concepts=None) ->
         for field in concept.get("canonical_input_names") or ()
         if field not in (concept.get("fields") or ())
     )
+    missing_scenario_scope = sorted(
+        concept_name
+        for concept_name, concept in registry.items()
+        if "scenario_scope" not in concept
+    )
+    invalid_scenario_scope = sorted(
+        (concept_name, concept.get("scenario_scope"))
+        for concept_name, concept in registry.items()
+        if concept.get("scenario_scope") not in VALID_SCENARIO_SCOPES
+    )
+    actual_business_concepts = {
+        concept_name
+        for concept_name, concept in registry.items()
+        if concept.get("scenario_scope") == "business"
+    }
+    business_scope_mismatch = sorted(
+        BUSINESS_SCENARIO_CONCEPTS ^ actual_business_concepts
+    )
     result = {
         "missing": missing,
         "duplicates": duplicates,
@@ -302,6 +494,9 @@ def validate_concept_registry(field_owners: Mapping[str, str], concepts=None) ->
         "unknown": unknown,
         "missing_canonical": missing_canonical,
         "invalid_canonical": invalid_canonical,
+        "missing_scenario_scope": missing_scenario_scope,
+        "invalid_scenario_scope": invalid_scenario_scope,
+        "business_scope_mismatch": business_scope_mismatch,
     }
     errors = []
     if missing:
@@ -316,6 +511,12 @@ def validate_concept_registry(field_owners: Mapping[str, str], concepts=None) ->
         errors.append(f"缺少规范控件={missing_canonical}")
     if invalid_canonical:
         errors.append(f"规范控件未归属概念={invalid_canonical}")
+    if missing_scenario_scope:
+        errors.append(f"缺少场景范围={missing_scenario_scope}")
+    if invalid_scenario_scope:
+        errors.append(f"无效场景范围={invalid_scenario_scope}")
+    if business_scope_mismatch:
+        errors.append(f"商务场景范围冻结不一致={business_scope_mismatch}")
     if errors:
         raise ValueError("概念注册表无效: " + "; ".join(errors))
     return result
@@ -397,17 +598,149 @@ def _direction_time(values, prefix: str = "") -> dict:
     }
 
 
+def _has_value(values, key: str) -> bool:
+    return bool(_first(values, key, "").strip())
+
+
+def _complete_window_pair(
+    values,
+    start_key: str,
+    end_key: str,
+    *,
+    legacy_start_key: str = "",
+    legacy_end_key: str = "",
+) -> tuple[str, str] | None:
+    if _has_value(values, start_key) or _has_value(values, end_key):
+        start = _first(values, start_key, "")
+        end = _first(values, end_key, "")
+        return (start, end) if start and end else None
+    if legacy_start_key and legacy_end_key:
+        start = _first(values, legacy_start_key, "")
+        end = _first(values, legacy_end_key, "")
+        return (start, end) if start and end else None
+    return None
+
+
+def _copy_direction_time(source: Mapping) -> dict:
+    copied = dict(source)
+    copied["departure_slots"] = list(source.get("departure_slots") or [])
+    copied["arrival_slots"] = list(source.get("arrival_slots") or [])
+    return copied
+
+
+def _apply_window_pair(
+    direction: dict,
+    *,
+    departure_pair: tuple[str, str] | None = None,
+    arrival_pair: tuple[str, str] | None = None,
+) -> None:
+    if departure_pair:
+        direction["mode"] = "custom"
+        direction["departure_start"], direction["departure_end"] = departure_pair
+    if arrival_pair:
+        direction["arrival_preference"] = "custom"
+        direction["arrival_start"], direction["arrival_end"] = arrival_pair
+
+
+def _arrival_window_mode(direction: Mapping) -> str:
+    if direction["arrival_preference"] == "custom":
+        return "custom"
+    if (
+        direction["arrival_preference"] == "daytime"
+        or direction["mode"] == "daytime"
+    ):
+        return "daytime"
+    return "unlimited"
+
+
 def derive_time_concept_fields(values, *, round_trip: bool) -> dict:
-    """把 UX2 唯一时间控件派生为现有 slot/window/policy 字段。"""
-    separate = round_trip and _truthy(_first(values, "separate_direction_times", "false"))
+    """按分方向、通用、自上而下偏好的优先级派生原有时段字段。"""
     shared = _direction_time(values)
-    outbound = _direction_time(values, "outbound") if separate else shared
-    returned = _direction_time(values, "return") if separate else shared
+    shared_departure = _complete_window_pair(
+        values,
+        "shared_departure_window_start",
+        "shared_departure_window_end",
+        legacy_start_key="departure_time_start",
+        legacy_end_key="departure_time_end",
+    )
+    shared_arrival = _complete_window_pair(
+        values,
+        "shared_arrival_window_start",
+        "shared_arrival_window_end",
+        legacy_start_key="arrival_time_start",
+        legacy_end_key="arrival_time_end",
+    )
+    _apply_window_pair(
+        shared,
+        departure_pair=shared_departure,
+        arrival_pair=shared_arrival,
+    )
+
+    directional_fields = CANONICAL_TIME_WINDOW_FIELDS[4:]
+    has_directional_value = any(_has_value(values, key) for key in directional_fields)
+    legacy_separate = round_trip and _truthy(
+        _first(values, "separate_direction_times", "false")
+    )
+    if round_trip and legacy_separate and not has_directional_value:
+        outbound = _direction_time(values, "outbound")
+        returned = _direction_time(values, "return")
+        separate = True
+    else:
+        outbound = _copy_direction_time(shared)
+        returned = _copy_direction_time(shared)
+        outbound_departure = _complete_window_pair(
+            values,
+            "outbound_departure_window_start",
+            "outbound_departure_window_end",
+        )
+        outbound_arrival = _complete_window_pair(
+            values,
+            "outbound_arrival_window_start",
+            "outbound_arrival_window_end",
+        )
+        return_departure = _complete_window_pair(
+            values,
+            "return_departure_window_start",
+            "return_departure_window_end",
+        )
+        return_arrival = _complete_window_pair(
+            values,
+            "return_arrival_window_start",
+            "return_arrival_window_end",
+        )
+        if round_trip:
+            _apply_window_pair(
+                outbound,
+                departure_pair=outbound_departure,
+                arrival_pair=outbound_arrival,
+            )
+            _apply_window_pair(
+                returned,
+                departure_pair=return_departure,
+                arrival_pair=return_arrival,
+            )
+        separate = round_trip and any(
+            (
+                outbound_departure,
+                outbound_arrival,
+                return_departure,
+                return_arrival,
+            )
+        )
+
     modes = {outbound["mode"], returned["mode"]} if round_trip else {shared["mode"]}
-    red_eye_values = {outbound["allow_redeye"], returned["allow_redeye"]} if round_trip else {shared["allow_redeye"]}
+    red_eye_values = (
+        {outbound["allow_redeye"], returned["allow_redeye"]}
+        if round_trip
+        else {shared["allow_redeye"]}
+    )
     if separate and (
         outbound["departure_slots"] != returned["departure_slots"]
         or outbound["arrival_slots"] != returned["arrival_slots"]
+        or outbound["departure_start"] != returned["departure_start"]
+        or outbound["departure_end"] != returned["departure_end"]
+        or outbound["arrival_start"] != returned["arrival_start"]
+        or outbound["arrival_end"] != returned["arrival_end"]
     ):
         legacy_mode = "custom"
     elif "custom" in modes:
@@ -419,15 +752,16 @@ def derive_time_concept_fields(values, *, round_trip: bool) -> dict:
     else:
         legacy_mode = "unlimited"
 
-    base = outbound if round_trip else shared
+    base = shared
     departure_policy = {
         "no_redeye": "no_redeye",
         "daytime": "daytime",
     }.get(legacy_mode, "any")
-    arrival_preferences = {
-        outbound["arrival_preference"],
-        returned["arrival_preference"],
-    } if round_trip else {shared["arrival_preference"]}
+    arrival_preferences = (
+        {outbound["arrival_preference"], returned["arrival_preference"]}
+        if round_trip
+        else {shared["arrival_preference"]}
+    )
     if "no_late" in arrival_preferences:
         arrival_policy = "no_midnight"
     elif "daytime" in arrival_preferences or legacy_mode == "daytime":
@@ -449,13 +783,57 @@ def derive_time_concept_fields(values, *, round_trip: bool) -> dict:
         "departure_time_end": base["departure_end"],
         "arrival_time_start": base["arrival_start"],
         "arrival_time_end": base["arrival_end"],
-        "departure_time_windows": _windows(base["mode"], base["departure_slots"], base["departure_start"], base["departure_end"]),
-        "arrival_time_windows": _windows("custom" if base["arrival_preference"] == "custom" else ("daytime" if base["arrival_preference"] == "daytime" or base["mode"] == "daytime" else "unlimited"), base["arrival_slots"], base["arrival_start"], base["arrival_end"]),
-        "outbound_departure_time_windows": _windows(outbound["mode"], outbound["departure_slots"], outbound["departure_start"], outbound["departure_end"]),
-        "outbound_arrival_time_windows": _windows("custom" if outbound["arrival_preference"] == "custom" else ("daytime" if outbound["arrival_preference"] == "daytime" or outbound["mode"] == "daytime" else "unlimited"), outbound["arrival_slots"], outbound["arrival_start"], outbound["arrival_end"]),
-        "return_departure_time_windows": _windows(returned["mode"], returned["departure_slots"], returned["departure_start"], returned["departure_end"]),
-        "return_arrival_time_windows": _windows("custom" if returned["arrival_preference"] == "custom" else ("daytime" if returned["arrival_preference"] == "daytime" or returned["mode"] == "daytime" else "unlimited"), returned["arrival_slots"], returned["arrival_start"], returned["arrival_end"]),
-        "no_late_arrival": "true" if any(item["arrival_preference"] == "no_late" for item in (outbound, returned) if item) else "false",
-        "prefer_daytime_arrival": "true" if any(item["arrival_preference"] == "daytime" for item in (outbound, returned) if item) else "false",
+        "departure_time_windows": _windows(
+            base["mode"],
+            base["departure_slots"],
+            base["departure_start"],
+            base["departure_end"],
+        ),
+        "arrival_time_windows": _windows(
+            _arrival_window_mode(base),
+            base["arrival_slots"],
+            base["arrival_start"],
+            base["arrival_end"],
+        ),
+        "outbound_departure_time_windows": _windows(
+            outbound["mode"],
+            outbound["departure_slots"],
+            outbound["departure_start"],
+            outbound["departure_end"],
+        ),
+        "outbound_arrival_time_windows": _windows(
+            _arrival_window_mode(outbound),
+            outbound["arrival_slots"],
+            outbound["arrival_start"],
+            outbound["arrival_end"],
+        ),
+        "return_departure_time_windows": _windows(
+            returned["mode"],
+            returned["departure_slots"],
+            returned["departure_start"],
+            returned["departure_end"],
+        ),
+        "return_arrival_time_windows": _windows(
+            _arrival_window_mode(returned),
+            returned["arrival_slots"],
+            returned["arrival_start"],
+            returned["arrival_end"],
+        ),
+        "no_late_arrival": (
+            "true"
+            if any(
+                item["arrival_preference"] == "no_late"
+                for item in (outbound, returned)
+            )
+            else "false"
+        ),
+        "prefer_daytime_arrival": (
+            "true"
+            if any(
+                item["arrival_preference"] == "daytime"
+                for item in (outbound, returned)
+            )
+            else "false"
+        ),
     }
     return result

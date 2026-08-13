@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from notification_config import DEFAULT_NOTIFICATION_METHOD
 from form_concepts import (
     CONCEPTS,
+    LEGACY_RAW_TIME_WINDOW_FIELDS,
     UX2_TIME_CONTROL_FIELDS,
     derive_time_concept_fields,
     project_time_concept_fields,
@@ -47,18 +48,6 @@ FORM_STATIONS = (
             "round_trip",
             "return_date",
             "return_date_flexibility",
-            "same_day_round_trip",
-            "day_trip_period",
-            "business_start",
-            "business_end",
-            "meeting_start",
-            "meeting_end",
-            "meeting_location",
-            "meeting_importance",
-            "buffer_hours",
-            "transport_mode",
-            "user_transport_min",
-            "redundancy_min",
         ),
     },
     {
@@ -71,6 +60,26 @@ FORM_STATIONS = (
             "travel_scenario",
             "trip_natures",
             "user_level",
+            "team_passenger_count",
+            "team_date_flexibility",
+            "same_flight_required",
+            "reimburse_per_person",
+            "invoice_needed",
+            "invoice_context",
+            "invoice_special_vat",
+            "invoice_cabin_limit",
+            "same_day_round_trip",
+            "day_trip_period",
+            "business_start",
+            "business_end",
+            "meeting_start",
+            "meeting_end",
+            "meeting_location",
+            "meeting_importance",
+            "buffer_hours",
+            "transport_mode",
+            "user_transport_min",
+            "redundancy_min",
             "companions",
             "solo_travel",
             "passenger_count",
@@ -92,9 +101,6 @@ FORM_STATIONS = (
             "pre_meeting_buffer_min",
             "post_meeting_buffer_min",
             "custom_redundancy_min",
-            "team_passenger_count",
-            "team_date_flexibility",
-            "same_flight_required",
         ),
     },
     {
@@ -114,11 +120,6 @@ FORM_STATIONS = (
             "budget_scope",
             "price_tolerance_mode",
             "price_tolerance_custom",
-            "reimburse_per_person",
-            "invoice_needed",
-            "invoice_context",
-            "invoice_special_vat",
-            "invoice_cabin_limit",
         ),
     },
     {
@@ -138,36 +139,7 @@ FORM_STATIONS = (
             "accept_overnight_transfer",
             "accept_self_transfer",
             "time_preference",
-            "allow_redeye",
-            "arrival_preference",
-            "separate_direction_times",
-            "outbound_time_preference",
-            "outbound_allow_redeye",
-            "outbound_arrival_preference",
-            "return_time_preference",
-            "return_allow_redeye",
-            "return_arrival_preference",
-            "departure_time_policy",
-            "departure_slots",
-            "arrival_slots",
-            "outbound_departure_slots",
-            "outbound_arrival_slots",
-            "return_departure_slots",
-            "return_arrival_slots",
-            "departure_time_start",
-            "departure_time_end",
-            "arrival_time_start",
-            "arrival_time_end",
-            "outbound_departure_time_start",
-            "outbound_departure_time_end",
-            "outbound_arrival_time_start",
-            "outbound_arrival_time_end",
-            "return_departure_time_start",
-            "return_departure_time_end",
-            "return_arrival_time_start",
-            "return_arrival_time_end",
-            "no_late_arrival",
-            "prefer_daytime_arrival",
+            *UX2_TIME_CONTROL_FIELDS,
             "baggage",
             "refund_flexibility",
             "price_sensitivity",
@@ -201,7 +173,6 @@ FORM_STATIONS = (
         ),
     },
 )
-
 FIELD_OWNERS = {
     field: station["id"] for station in FORM_STATIONS for field in station["fields"]
 }
@@ -1189,6 +1160,7 @@ def subscription_to_form_values(subscription: Mapping | None) -> dict:
         "return_arrival_time_windows": hard.get("return_arrival_time_windows") or soft.get("return_arrival_time_windows"),
         "no_late_arrival": values.get("no_late_arrival"),
         "prefer_daytime_arrival": values.get("prefer_daytime_arrival"),
+        "time_pref": preferences.get("time_pref"),
     }
     values.update(
         project_time_concept_fields(
@@ -1203,4 +1175,6 @@ def subscription_to_form_values(subscription: Mapping | None) -> dict:
             "ux2_original_arrival_time_policy": original_arrival_time_policy,
         }
     )
+    for legacy_name in LEGACY_RAW_TIME_WINDOW_FIELDS:
+        values.pop(legacy_name, None)
     return values

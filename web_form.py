@@ -285,6 +285,7 @@ SUCCESS_TEMPLATE = """
     <p><a href="{{ url_for('subscription_list') }}">查看我的所有监控</a> <a class="secondary-link" href="{{ url_for('index') }}">再创建一个</a></p>
     <p><b>{{ summary.route }}</b></p>
     {% if summary.meeting_text %}<p data-confirmed-meeting="true">{{ summary.meeting_text }}</p>{% endif %}
+    {% if summary.time_window_text %}<p data-confirmed-time-windows="true">{{ summary.time_window_text }}</p>{% endif %}
     {% if summary.airport_coverage %}
     <p>{{ summary.airport_coverage }}</p>
     {% endif %}
@@ -1809,6 +1810,38 @@ def build_subscription(form) -> dict:
     return subscription
 
 
+def _first_time_window_text(value) -> str:
+    if not isinstance(value, (list, tuple)) or not value:
+        return ""
+    first = value[0]
+    if not isinstance(first, (list, tuple)) or len(first) < 2:
+        return ""
+    start = str(first[0] or "").strip()
+    end = str(first[1] or "").strip()
+    return f"{start}-{end}" if start and end else ""
+
+
+def _success_time_window_text(hard: dict) -> str:
+    items = []
+    for label, key in (
+        ("去程出发", "outbound_departure_time_windows"),
+        ("去程到达", "outbound_arrival_time_windows"),
+        ("返程出发", "return_departure_time_windows"),
+        ("返程到达", "return_arrival_time_windows"),
+    ):
+        text = _first_time_window_text(hard.get(key))
+        if text:
+            items.append(f"{label}{text}")
+    if not items:
+        for label, key in (
+            ("出发", "departure_time_windows"),
+            ("到达", "arrival_time_windows"),
+        ):
+            text = _first_time_window_text(hard.get(key))
+            if text:
+                items.append(f"{label}{text}")
+    return f"时间窗：{'；'.join(items)}" if items else ""
+
 def build_success_summary(subscription: dict) -> dict:
     subscription_with_defaults = apply_default_rules(subscription)
     hard = subscription.get("hard_constraints", {})
@@ -1897,6 +1930,7 @@ def build_success_summary(subscription: dict) -> dict:
         "exclusions": exclusions,
         "notification_text": notification_text,
         "meeting_text": meeting_text,
+        "time_window_text": _success_time_window_text(hard),
     }
 
 

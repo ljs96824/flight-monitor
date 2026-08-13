@@ -3,18 +3,11 @@ from collections import Counter
 from html.parser import HTMLParser
 
 import web_form
-from form_concepts import CONCEPTS
+from form_concepts import BUSINESS_SCENARIO_CONCEPTS, CONCEPTS
 from form_pages import FORM_PAGE_TEMPLATE, build_form_page_context
 
 
-BUSINESS_CONCEPTS = {
-    "same_day_round_trip",
-    "meeting_window",
-    "meeting_location",
-    "meeting_importance",
-    "same_day_execution",
-    "invoice",
-}
+BUSINESS_CONCEPTS = set(BUSINESS_SCENARIO_CONCEPTS)
 FEASIBILITY_CONCEPTS = {
     "set_off_times",
     "transport_estimates",

@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from form_concepts import CONCEPTS
+from form_concepts import (
+    BUSINESS_SCENARIO_CONCEPTS,
+    CANONICAL_TIME_WINDOW_FIELDS,
+    CONCEPTS,
+)
 from form_structure import FORM_STATIONS, summarize_stations
 from notification_config import DEFAULT_NOTIFICATION_METHOD
 
@@ -31,15 +35,20 @@ SECONDARY_GROUP_DEFINITIONS = (
     {
         "id": "business-travel",
         "title": "商务出行",
-        "description": "当天往返、会议与发票设置；普通行程可保持默认。",
-        "after_section": "when",
+        "description": "商务类型、会议、团队、报销与发票设置；非商务行程可保持关闭。",
+        "after_section": "who",
+        "after_concept": "travel_context",
         "concept_names": (
+            "business_nature",
+            "business_level",
+            "team_arrangement",
+            "reimbursement",
+            "invoice",
             "same_day_round_trip",
             "meeting_window",
             "meeting_location",
             "meeting_importance",
             "same_day_execution",
-            "invoice",
         ),
     },
     {
@@ -55,6 +64,16 @@ SECONDARY_GROUP_DEFINITIONS = (
         ),
     },
 )
+_BUSINESS_GROUP_CONCEPTS = frozenset(
+    next(
+        group["concept_names"]
+        for group in SECONDARY_GROUP_DEFINITIONS
+        if group["id"] == "business-travel"
+    )
+)
+if _BUSINESS_GROUP_CONCEPTS != BUSINESS_SCENARIO_CONCEPTS:
+    raise ValueError("商务场景范围与页面分组不一致")
+
 SECONDARY_CONCEPT_NAMES = frozenset(
     concept_name
     for group in SECONDARY_GROUP_DEFINITIONS
@@ -95,10 +114,10 @@ OPTIONS = {
     "target_price_scope": (("per_person", "单人"), ("total", "全员")),
     "transfer_policy": (("direct_only", "必须直飞"), ("reasonable", "合理中转"), ("price_first", "价格优先")),
     "short_transfer_limit": (("extra_3", "最多多3小时"), ("extra_6", "最多多6小时"), ("total_12", "总时长不超12小时"), ("total_18", "总时长不超18小时")),
-    "time_preference": (("unlimited", "不限"), ("daytime", "白天出发"), ("custom", "自定义")),
+    "time_preference": (("unlimited", "不限"), ("daytime", "白天优先")),
     "outbound_time_preference": (("unlimited", "不限"), ("daytime", "白天出发"), ("custom", "自定义")),
     "return_time_preference": (("unlimited", "不限"), ("daytime", "白天出发"), ("custom", "自定义")),
-    "arrival_preference": (("any", "不限"), ("daytime", "白天到达"), ("no_late", "避免深夜"), ("custom", "自定义")),
+    "arrival_preference": (("any", "不限"), ("daytime", "白天到达"), ("no_late", "避免深夜")),
     "outbound_arrival_preference": (("any", "不限"), ("daytime", "白天到达"), ("no_late", "避免深夜"), ("custom", "自定义")),
     "return_arrival_preference": (("any", "不限"), ("daytime", "白天到达"), ("no_late", "避免深夜"), ("custom", "自定义")),
     "baggage": (("required", "必须含托运"), ("not_needed", "不需要托运"), ("unknown", "不确定")),
@@ -157,6 +176,13 @@ HIDDEN_FIELDS = frozenset(
         "ux2_time_touched",
         "ux2_original_departure_time_policy",
         "ux2_original_arrival_time_policy",
+        "separate_direction_times",
+        "outbound_time_preference",
+        "outbound_allow_redeye",
+        "outbound_arrival_preference",
+        "return_time_preference",
+        "return_allow_redeye",
+        "return_arrival_preference",
         "departure_time_policy",
         "departure_slots",
         "arrival_slots",
@@ -183,6 +209,7 @@ TIME_FIELDS = frozenset(
         "outbound_arrival_time_start", "outbound_arrival_time_end",
         "return_departure_time_start", "return_departure_time_end",
         "return_arrival_time_start", "return_arrival_time_end",
+        *CANONICAL_TIME_WINDOW_FIELDS,
     }
 )
 NUMBER_FIELDS = frozenset(
@@ -259,6 +286,18 @@ LABELS = {
     "time_preference": "出发时段",
     "allow_redeye": "接受红眼",
     "arrival_preference": "到达偏好",
+    "shared_departure_window_start": "通用出发不早于",
+    "shared_departure_window_end": "通用出发不晚于",
+    "shared_arrival_window_start": "通用到达不早于",
+    "shared_arrival_window_end": "通用到达不晚于",
+    "outbound_departure_window_start": "去程出发不早于",
+    "outbound_departure_window_end": "去程出发不晚于",
+    "outbound_arrival_window_start": "去程到达不早于",
+    "outbound_arrival_window_end": "去程到达不晚于",
+    "return_departure_window_start": "返程出发不早于",
+    "return_departure_window_end": "返程出发不晚于",
+    "return_arrival_window_start": "返程到达不早于",
+    "return_arrival_window_end": "返程到达不晚于",
     "separate_direction_times": "去返分别设置",
     "outbound_time_preference": "去程出发时段",
     "outbound_allow_redeye": "去程接受红眼",
@@ -323,6 +362,18 @@ DEFAULTS = {
     "time_preference": "unlimited",
     "allow_redeye": "false",
     "arrival_preference": "any",
+    "shared_departure_window_start": "",
+    "shared_departure_window_end": "",
+    "shared_arrival_window_start": "",
+    "shared_arrival_window_end": "",
+    "outbound_departure_window_start": "",
+    "outbound_departure_window_end": "",
+    "outbound_arrival_window_start": "",
+    "outbound_arrival_window_end": "",
+    "return_departure_window_start": "",
+    "return_departure_window_end": "",
+    "return_arrival_window_start": "",
+    "return_arrival_window_end": "",
     "separate_direction_times": "false",
     "outbound_time_preference": "unlimited",
     "outbound_allow_redeye": "false",
@@ -381,6 +432,8 @@ def _truthy(value) -> bool:
 
 
 def _field_type(name: str) -> str:
+    if name == "time_preference":
+        return "radio"
     if name in HIDDEN_FIELDS:
         return "hidden"
     if name in MULTI_FIELDS:
@@ -474,6 +527,26 @@ def _concept_spec(concept_name: str, concept: Mapping, values: Mapping) -> dict:
         "title": concept["canonical_control"] if visible else "",
         "fields": visible,
     }
+    if concept_name == "time":
+        fields_by_name = {field["name"]: field for field in visible}
+        common_names = CANONICAL_TIME_WINDOW_FIELDS[:4]
+        directional_names = CANONICAL_TIME_WINDOW_FIELDS[4:]
+        result["fields"] = [
+            fields_by_name[name]
+            for name in ("time_preference", "allow_redeye", "arrival_preference")
+        ]
+        result["custom_window_fields"] = [
+            fields_by_name[name] for name in common_names
+        ]
+        result["directional_window_fields"] = [
+            fields_by_name[name] for name in directional_names
+        ]
+        result["custom_window_open"] = any(
+            field["value"].strip() for field in result["custom_window_fields"]
+        )
+        result["directional_window_open"] = any(
+            field["value"].strip() for field in result["directional_window_fields"]
+        )
     if hidden:
         result["hidden_fields"] = hidden
     return result
@@ -518,17 +591,27 @@ def _full_sections(values: Mapping) -> list[dict]:
 
 
 def _secondary_groups(values: Mapping, *, editing: bool) -> list[dict]:
-    return [
-        {
-            **group,
-            "concepts": [
-                _concept_spec(concept_name, CONCEPTS[concept_name], values)
-                for concept_name in group["concept_names"]
-            ],
-            "open": editing and _secondary_group_has_nondefault(group, values),
-        }
-        for group in SECONDARY_GROUP_DEFINITIONS
-    ]
+    scenarios = set(_as_list(values.get("travel_scenario")))
+    groups = []
+    for group in SECONDARY_GROUP_DEFINITIONS:
+        parent_selected = (
+            group["id"] == "business-travel" and "business" in scenarios
+        )
+        groups.append(
+            {
+                **group,
+                "concepts": [
+                    _concept_spec(concept_name, CONCEPTS[concept_name], values)
+                    for concept_name in group["concept_names"]
+                ],
+                "open": editing
+                and (
+                    parent_selected
+                    or _secondary_group_has_nondefault(group, values)
+                ),
+            }
+        )
+    return groups
 
 
 def _quick_groups(values: Mapping) -> list[dict]:
@@ -623,11 +706,17 @@ FORM_PAGE_TEMPLATE = r"""
     .field-wide { grid-column:1/-1; }
     label { font-size:14px; font-weight:600; }
     input, select, textarea, button { font:inherit; letter-spacing:0; }
-    input:not([type="checkbox"]), select, textarea { width:100%; min-height:42px; border:1px solid #aeb7c0; border-radius:6px; padding:8px 10px; background:#fff; color:var(--ink); }
+    input:not([type="checkbox"]):not([type="radio"]), select, textarea { width:100%; min-height:42px; border:1px solid #aeb7c0; border-radius:6px; padding:8px 10px; background:#fff; color:var(--ink); }
     select[multiple] { min-height:112px; }
     input:focus, select:focus, textarea:focus { outline:2px solid #8ccfba; outline-offset:1px; border-color:var(--accent); }
     .check-field { flex-direction:row; align-items:center; min-height:42px; padding-top:22px; }
     .check-field input { width:18px; height:18px; margin:0; }
+    .radio-options { display:flex; flex-wrap:wrap; gap:10px 18px; min-height:42px; align-items:center; }
+    .radio-option { display:inline-flex; align-items:center; gap:6px; font-weight:500; }
+    .radio-option input { width:18px; height:18px; margin:0; }
+    .time-window-details { grid-column:1/-1; border:1px solid var(--line); border-radius:6px; padding:0 14px; }
+    .time-window-details > summary { cursor:pointer; padding:12px 0; font-weight:700; }
+    .time-window-body { padding:4px 0 14px; }
     .hint { color:var(--muted); font-size:13px; font-weight:400; }
     .candidate-list { display:flex; flex-wrap:wrap; gap:8px; margin-top:6px; }
     .candidate-list button { border:1px solid var(--line); background:#fff; border-radius:6px; padding:5px 8px; cursor:pointer; }
@@ -682,6 +771,16 @@ FORM_PAGE_TEMPLATE = r"""
         {% if field.type == 'checkbox' %}
           <input type="checkbox" id="{{ field.id }}" name="{{ field.name }}" value="true"{% if field.checked %} checked{% endif %}>
           <label for="{{ field.id }}">{{ field.label }}</label>
+        {% elif field.type == 'radio' %}
+          <span class="hint">{{ field.label }}</span>
+          <div class="radio-options" role="radiogroup" aria-label="{{ field.label }}">
+            {% for option in field.options %}
+            <label class="radio-option" for="{{ field.id }}-{{ option.value }}">
+              <input id="{{ field.id }}-{{ option.value }}" name="{{ field.name }}" type="radio" value="{{ option.value }}"{% if option.selected %} checked{% endif %}>
+              <span>{{ option.label }}</span>
+            </label>
+            {% endfor %}
+          </div>
         {% elif field.type in ['select','multi'] %}
           <label for="{{ field.id }}">{{ field.label }}</label>
           <select id="{{ field.id }}" name="{{ field.name }}"{% if field.type == 'multi' %} multiple{% endif %}{% if field.required %} required{% endif %}>
@@ -711,9 +810,38 @@ FORM_PAGE_TEMPLATE = r"""
     {% if concept.fields %}
       <fieldset class="concept" data-form-concept="{{ concept.name }}">
         <legend>{{ concept.title }}</legend>
-        <div class="field-grid">{% for field in concept.fields %}{{ render_field(field) }}{% endfor %}</div>
+        <div class="field-grid">
+          {% for field in concept.fields %}{{ render_field(field) }}{% endfor %}
+          {% if concept.name == 'time' %}
+          <details class="time-window-details" data-time-window-group="custom"{% if concept.custom_window_open %} open{% endif %}>
+            <summary>自定义时间窗（可选，填写即覆盖上方偏好，留空不生效）</summary>
+            <div class="time-window-body">
+              <div class="field-grid">{% for field in concept.custom_window_fields %}{{ render_field(field) }}{% endfor %}</div>
+              <details class="time-window-details" data-time-window-group="directional"{% if concept.directional_window_open %} open{% endif %}>
+                <summary>去程/返程分别设置（可选，填写即覆盖通用）</summary>
+                <div class="time-window-body field-grid">{% for field in concept.directional_window_fields %}{{ render_field(field) }}{% endfor %}</div>
+              </details>
+              <p class="hint">生效优先级：分方向完整时间窗 > 通用完整时间窗 > 时段偏好。起止只填一项视为未完成，不覆盖下一层。</p>
+            </div>
+          </details>
+          {% elif concept.name == 'cabin' %}
+          <p class="hint field-wide">当前按全员同舱监控；混舱（如成人商务+儿童经济）为规划中特性。</p>
+          {% endif %}
+        </div>
       </fieldset>
     {% endif %}
+  {%- endmacro %}
+
+  {% macro render_secondary_group(group) -%}
+    <details id="group-{{ group.id }}" class="secondary-group" data-secondary-group="{{ group.id }}"{% if group.open %} open{% endif %}>
+      <summary>
+        <span class="secondary-group-title">{{ group.title }}</span>
+        <span class="secondary-group-note">{{ group.description }}</span>
+      </summary>
+      <div class="secondary-group-body">
+        {% for concept in group.concepts %}{{ render_concept(concept) }}{% endfor %}
+      </div>
+    </details>
   {%- endmacro %}
 
   {% if page.mode == 'quick' %}
@@ -757,19 +885,18 @@ FORM_PAGE_TEMPLATE = r"""
             <h2>{{ loop.index }}. {{ section.title }}</h2>
             <span class="section-summary" data-section-summary="{{ section.id }}">{{ section.summary }}</span>
           </div>
-          {% for concept in section.concepts %}{{ render_concept(concept) }}{% endfor %}
+          {% for concept in section.concepts %}
+            {{ render_concept(concept) }}
+            {% for group in page.secondary_groups %}
+              {% if group.after_section == section.id and group.after_concept == concept.name %}
+                {{ render_secondary_group(group) }}
+              {% endif %}
+            {% endfor %}
+          {% endfor %}
         </section>
         {% for group in page.secondary_groups %}
-          {% if group.after_section == section.id %}
-          <details id="group-{{ group.id }}" class="secondary-group" data-secondary-group="{{ group.id }}"{% if group.open %} open{% endif %}>
-            <summary>
-              <span class="secondary-group-title">{{ group.title }}</span>
-              <span class="secondary-group-note">{{ group.description }}</span>
-            </summary>
-            <div class="secondary-group-body">
-              {% for concept in group.concepts %}{{ render_concept(concept) }}{% endfor %}
-            </div>
-          </details>
+          {% if group.after_section == section.id and not group.after_concept %}
+            {{ render_secondary_group(group) }}
           {% endif %}
         {% endfor %}
       {% endfor %}

@@ -4,6 +4,7 @@ from copy import deepcopy
 
 import form_structure
 import web_form
+from form_concepts import CANONICAL_TIME_WINDOW_FIELDS, LEGACY_RAW_TIME_WINDOW_FIELDS
 from form_pages import FORM_PAGE_TEMPLATE
 from werkzeug.datastructures import MultiDict
 
@@ -184,22 +185,20 @@ class FormUxConceptRenderingTest(unittest.TestCase):
             if re.search(fr'\bname="{re.escape(name)}"', tag, re.I)
         )
 
-    def test_legacy_time_aliases_are_hidden_not_parallel_visible_controls(self):
+    def test_legacy_time_aliases_are_derived_and_not_rendered(self):
         names = self.rendered_names()
         self.assertEqual(names.count("business_start"), 1)
         self.assertEqual(names.count("business_end"), 1)
-        for name in RAW_TIME_INPUTS:
-            self.assertEqual(names.count(name), 1)
-            self.assertIn('type="hidden"', self.tag_for_name(name))
-        for name in (
-            "time_preference",
-            "allow_redeye",
-            "arrival_preference",
-            "separate_direction_times",
-        ):
-            self.assertIn(name, names)
+        for name in (*RAW_TIME_INPUTS, *LEGACY_RAW_TIME_WINDOW_FIELDS):
+            self.assertEqual(names.count(name), 0, name)
+        for name in CANONICAL_TIME_WINDOW_FIELDS:
+            self.assertEqual(names.count(name), 1, name)
             self.assertNotIn('type="hidden"', self.tag_for_name(name))
-
+        self.assertEqual(names.count("time_preference"), 2)
+        for name in ("allow_redeye", "arrival_preference"):
+            self.assertEqual(names.count(name), 1, name)
+            self.assertNotIn('type="hidden"', self.tag_for_name(name))
+        self.assertIn('type="hidden"', self.tag_for_name("separate_direction_times"))
     def test_every_rendered_business_field_is_owned_by_the_concept_registry(self):
         allowed_page_fields = {"form_page"}
         self.assertEqual(
@@ -211,15 +210,31 @@ class FormUxConceptRenderingTest(unittest.TestCase):
             [],
         )
 
-    def test_each_named_control_occurs_once(self):
-        counts = {name: self.rendered_names().count(name) for name in set(self.rendered_names())}
-        self.assertEqual({name: count for name, count in counts.items() if count != 1}, {})
-
+    def test_each_named_control_is_unique_or_a_valid_radio_group(self):
+        for name in set(self.rendered_names()):
+            tags = [
+                tag
+                for tag in self.rendered_form_tags()
+                if re.search(fr'\bname="{re.escape(name)}"', tag, re.I)
+            ]
+            if len(tags) == 1:
+                continue
+            self.assertTrue(
+                all(re.search(r'\btype="radio"', tag, re.I) for tag in tags),
+                name,
+            )
+            values = [
+                re.search(r'\bvalue="([^"]*)"', tag, re.I).group(1)
+                for tag in tags
+            ]
+            self.assertEqual(len(values), len(set(values)), name)
     def test_six_primary_sections_and_native_groups_use_plain_anchor_navigation(self):
         for section_id in SECTION_IDS:
             self.assertIn(f'id="{section_id}"', self.html)
             self.assertIn(f'href="#{section_id}"', self.html)
-        self.assertEqual(self.html.count("<details"), 2)
+        self.assertEqual(self.html.count("<details"), 4)
+        self.assertEqual(self.html.count('data-secondary-group="'), 2)
+        self.assertEqual(self.html.count('data-time-window-group="'), 2)
         for group_id in ("business-travel", "feasibility"):
             self.assertIn(f'id="group-{group_id}"', self.html)
             self.assertIn(f'href="#group-{group_id}"', self.html)

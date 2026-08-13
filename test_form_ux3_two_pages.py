@@ -135,7 +135,9 @@ class FormUx3TwoPagesTest(unittest.TestCase):
             self.assertNotIn("hidden", attrs, section_id)
             self.assertNotEqual(attrs.get("style"), "display:none", section_id)
             self.assertIn(f'href="#{section_id}"', html)
-        self.assertEqual(html.count("<details"), 2)
+        self.assertEqual(html.count("<details"), 4)
+        self.assertEqual(html.count('data-secondary-group="'), 2)
+        self.assertEqual(html.count('data-time-window-group="'), 2)
         self.assertIn('data-secondary-group="business-travel"', html)
         self.assertIn('data-secondary-group="feasibility"', html)
         self.assertIn('href="#group-business-travel"', html)
@@ -147,13 +149,22 @@ class FormUx3TwoPagesTest(unittest.TestCase):
         html = self._page("/settings")
         dom = _Dom()
         dom.feed(html)
-        names = []
+        controls_by_name = {}
         for tag in ("input", "select", "textarea"):
-            names.extend(
-                attrs["name"] for attrs in dom.attributes(tag=tag, name="name")
+            for attrs in dom.attributes(tag=tag, name="name"):
+                controls_by_name.setdefault(attrs["name"], []).append((tag, attrs))
+        invalid = {}
+        for name, controls in controls_by_name.items():
+            if len(controls) == 1:
+                continue
+            radio_group = all(
+                tag == "input" and attrs.get("type") == "radio"
+                for tag, attrs in controls
             )
-        duplicates = {name: count for name, count in Counter(names).items() if count != 1}
-        self.assertEqual(duplicates, {})
+            values = [attrs.get("value") for _, attrs in controls]
+            if not radio_group or len(values) != len(set(values)):
+                invalid[name] = len(controls)
+        self.assertEqual(invalid, {})
 
     def test_conditional_visibility_is_limited_to_passenger_profile_and_email(self):
         quick = self._page("/")
