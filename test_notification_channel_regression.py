@@ -25,28 +25,34 @@ class NotificationChannelRegressionTest(unittest.TestCase):
         web_form.app.config.update(TESTING=True)
 
     def test_station_six_exposes_three_channels_with_both_as_default(self):
-        station = next(item for item in form_structure.FORM_STATIONS if item["id"] == "notifications")
+        station = next(
+            item for item in form_structure.FORM_STATIONS
+            if item["id"] == "notifications"
+        )
         self.assertIn("notification_method", station["fields"])
         self.assertIn("notification_email", station["fields"])
 
-        template = web_form.app.test_client().get("/").get_data(as_text=True)
-        self.assertIn('name="notification_method" value="email"', template)
-        self.assertIn('name="notification_method" value="pushplus"', template)
-        self.assertIn('name="notification_method" value="both" checked', template)
-        self.assertNotIn('name="notification_method" value="page_only"', template)
-        self.assertIn('id="email-reminder-wrap" data-show-if="notification_method=email|both"', template)
+        template = web_form.app.test_client().get("/settings").get_data(as_text=True)
+        self.assertEqual(template.count('name="notification_method"'), 1)
+        for value in ("email", "pushplus", "both"):
+            self.assertIn(f'value="{value}"', template)
+        self.assertIn('<option value="both" selected>', template)
+        self.assertNotIn('value="page_only"', template)
+        self.assertIn('data-visibility-contract="notification-email"', template)
         self.assertEqual(
             form_structure.OPTIONAL_SECTION_DEFAULTS["notifications"]["notification_method"],
             "both",
         )
-        self.assertIn("邮箱+PushPlus", form_structure.summarize_optional_sections({})["notifications"])
-
-    def test_quick_finish_reveals_email_control_before_validating_default_both(self):
-        template = web_form.app.test_client().get("/").get_data(as_text=True)
-        self.assertIn("function revealNotificationEmailRequirement()", template)
-        self.assertIn("setOptionalSectionExpanded('notifications', true, true)", template)
-        self.assertIn("if (!validateEmailField(true))", template)
-
+        self.assertIn(
+            "邮箱+PushPlus",
+            form_structure.summarize_optional_sections({})["notifications"],
+        )
+    def test_full_page_reveals_email_control_for_email_or_both(self):
+        template = web_form.app.test_client().get("/settings").get_data(as_text=True)
+        self.assertIn("function updateEmailVisibility()", template)
+        self.assertIn("['email', 'both'].includes(method)", template)
+        self.assertIn('data-visibility-contract="notification-email"', template)
+        self.assertNotIn("setOptionalSectionExpanded", template)
     def test_notification_email_visibility_matches_selected_channel(self):
         self.assertIn(
             "notification_email",
@@ -114,15 +120,22 @@ class NotificationChannelRegressionTest(unittest.TestCase):
         original = web_form.SUBSCRIPTIONS_PATH
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "subscriptions.json"
-            path.write_text(json.dumps([subscription], ensure_ascii=False), encoding="utf-8")
+            path.write_text(
+                json.dumps([subscription], ensure_ascii=False),
+                encoding="utf-8",
+            )
             web_form.SUBSCRIPTIONS_PATH = path
             try:
-                page = web_form.app.test_client().get("/?edit=0").get_data(as_text=True)
+                page = web_form.app.test_client().get(
+                    "/settings?edit=0"
+                ).get_data(as_text=True)
             finally:
                 web_form.SUBSCRIPTIONS_PATH = original
-        self.assertIn('"notification_method": "email"', page)
-        self.assertIn('"notification_email": "saved@example.com"', page)
-
+        self.assertIn('<option value="email" selected>', page)
+        self.assertIn(
+            'name="notification_email" type="email" value="saved@example.com"',
+            page,
+        )
     def test_phase_one_fixture_adds_email_only_and_both_contracts(self):
         scenarios = json.loads(FIXTURE.read_text(encoding="utf-8"))["scenarios"]
         self.assertEqual(len(scenarios), 7)

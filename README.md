@@ -63,3 +63,13 @@ PUSHPLUS_TOKEN
 ## 注意
 
 GitHub Actions 的运行环境是临时的，本地生成的 `data/prices.db`、`data/last_signals.json`、`data/analysis_log.jsonl` 不会自动跨运行持久保存。当前部署方式适合定时采集和推送；如果需要长期历史分析，需要后续接入外部数据库或把数据作为 artifact/commit 回仓库。
+
+## 本地 UI 契约测试
+
+双收集器保持纯离线运行；真实浏览器交互在本机 Microsoft Edge 上单独验收：
+
+```bash
+python -X utf8 scripts/ui_smoke.py
+```
+
+脚本使用 Edge DevTools Protocol，不需要 Selenium 或 msedgedriver。CI 中保留显式 `local-only` 跳过步骤，避免把未安装 Edge 的 runner 误报为已验证。

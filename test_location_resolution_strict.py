@@ -177,7 +177,8 @@ class WebLocationValidationTest(unittest.TestCase):
     def test_template_validates_iata_against_airport_dictionary(self):
         self.assertIn("const airportCodes = new Set", web_form.FORM_TEMPLATE)
         self.assertIn("airportCodes.has(upper)", web_form.FORM_TEMPLATE)
-        self.assertIn("function locationCandidates", web_form.FORM_TEMPLATE)
+        self.assertIn("function suggestions", web_form.FORM_TEMPLATE)
+        self.assertIn("if (query.length < 2) return []", web_form.FORM_TEMPLATE)
 
 
 class InvalidSubscriptionPreflightTest(unittest.TestCase):

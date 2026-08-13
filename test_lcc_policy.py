@@ -501,9 +501,10 @@ class LccRenderingTest(unittest.TestCase):
 
 class LccSubscriptionTest(unittest.TestCase):
     def test_form_template_and_roundtrip_persist_policy(self):
-        self.assertIn('name="lcc_policy"', web_form.FORM_TEMPLATE)
-        self.assertIn('value="exclude_lcc"', web_form.FORM_TEMPLATE)
-        self.assertIn('value="lcc_only"', web_form.FORM_TEMPLATE)
+        page = web_form.app.test_client().get("/settings").get_data(as_text=True)
+        self.assertEqual(page.count('name="lcc_policy"'), 1)
+        self.assertIn('value="exclude_lcc"', page)
+        self.assertIn('value="lcc_only"', page)
 
         subscription = web_form.build_subscription(
             _base_form(lcc_policy="exclude_lcc")

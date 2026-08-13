@@ -25,3 +25,6 @@ jobs:
       - run: pip install -r requirements.txt pytest
       - run: python -X utf8 -m pytest -q
       - run: python -X utf8 -m unittest discover
+      - name: UI smoke (local only, requires Microsoft Edge)
+        if: ${{ false }}
+        run: python -X utf8 scripts/ui_smoke.py

@@ -13,80 +13,70 @@ import web_form
 
 
 FIXTURE = Path(__file__).parent / "tests" / "fixtures" / "form_normalization_baseline_v1.json"
+SECTION_IDS = (
+    "section-where",
+    "section-when",
+    "section-who",
+    "section-budget",
+    "section-flight-preferences",
+    "section-notifications",
+)
 
 
 class FormUxPhase1Test(unittest.TestCase):
     def setUp(self):
         web_form.app.config.update(TESTING=True)
+        self.client = web_form.app.test_client()
 
-    def test_template_has_six_stations_and_declarative_metadata(self):
-        response = web_form.app.test_client().get("/")
-        self.assertEqual(response.status_code, 200)
-        template = response.get_data(as_text=True)
-        for number, station_id in enumerate(
-            ["where", "when", "who", "budget", "flight_preferences", "notifications"],
-            start=1,
+    def test_quick_and_full_pages_expose_the_two_page_contract(self):
+        quick = self.client.get("/").get_data(as_text=True)
+        full = self.client.get("/settings").get_data(as_text=True)
+        self.assertIn('data-page-mode="quick"', quick)
+        self.assertIn('name="monitor_mode" value="quick"', quick)
+        self.assertIn('href="/settings"', quick)
+        self.assertIn("创建监控", quick)
+        self.assertIn('data-page-mode="full"', full)
+        self.assertIn('name="monitor_mode" value="precise"', full)
+        for section_id in SECTION_IDS:
+            self.assertIn(f'id="{section_id}"', full)
+            self.assertIn(f'href="#{section_id}"', full)
+        self.assertNotIn("station-breadcrumbs", quick + full)
+        self.assertNotIn("scenario-preset-chips", quick + full)
+
+    def test_full_page_anchor_directory_and_summaries_use_six_station_ownership(self):
+        full = self.client.get("/settings").get_data(as_text=True)
+        self.assertIn('class="anchor-directory"', full)
+        self.assertEqual(full.count('data-form-section="'), 6)
+        for section_id in SECTION_IDS:
+            station = section_id.removeprefix("section-").replace("-", "_")
+            self.assertIn(f'data-section-summary="{station}"', full)
+            self.assertIn(f'data-confirm-edit="{section_id}"', full)
+
+    def test_business_and_cabin_fields_live_once_on_the_full_page(self):
+        full = self.client.get("/settings").get_data(as_text=True)
+        for field in (
+            "trip_natures",
+            "meeting_start",
+            "meeting_end",
+            "cabin_policy",
+            "cabin_arrangement",
+            "business_seats",
+            "economy_seats",
         ):
-            self.assertIn(f'data-step="{number}"', template)
-            self.assertIn(f'data-station-id="{station_id}"', template)
-            self.assertIn(f'data-station-summary="{station_id}"', template)
-        self.assertIn('data-field-owners=', template)
-        self.assertIn('data-visibility-rules=', template)
-        self.assertIn('data-advanced-depth', template)
-        self.assertIn('id="scenario-preset-chips"', template)
-        self.assertIn('id="constraint-summary-preview"', template)
-        self.assertIn('type="hidden" id="monitor_mode" name="monitor_mode" value="quick"', template)
-        self.assertNotIn('type="radio" name="monitor_mode"', template)
-        self.assertNotIn('切换精准模式', template)
-        self.assertNotIn('快速模式只需', template)
-        self.assertNotIn('展开“精准监控”', template)
-        self.assertGreaterEqual(template.count('await refreshDefaultsPreview();'), 4)
+            self.assertEqual(full.count(f'name="{field}"'), 1, field)
+        self.assertNotIn("canonical-preference-chips", full)
+        self.assertNotIn("openWizardStation", full)
 
-    def test_mobile_navigation_and_summary_edits_use_six_station_ownership(self):
-        template = web_form.app.test_client().get("/").get_data(as_text=True)
-        self.assertIn("function stationNumberForField", template)
-        self.assertIn("step: stationNumberForField('depart_date')", template)
-        self.assertIn("trip_dates: {step: stationNumberForField('depart_date')", template)
-        self.assertIn("price_strategy: {step: stationNumberForField('price_strategy')", template)
-        self.assertIn("notification: {step: stationNumberForField('notification_method')", template)
-
-    def test_relocated_business_cabin_visibility_and_chip_depth_label_stay_consistent(self):
-        template = web_form.app.test_client().get("/").get_data(as_text=True)
-        self.assertIn(
-            'id="business-cabin-fields" data-form-section="flight_preferences" data-show-if="trip_natures=business|meeting|team_building"',
-            template,
-        )
-        self.assertIn('data-breadcrumb-station="5"', template)
-        self.assertIn(
-            "openWizardStation(requiredStationCount + 1)",
-            template,
-        )
-
-    def test_conditional_families_declare_their_real_station_owners(self):
-        template = web_form.app.test_client().get("/").get_data(as_text=True)
-        self.assertIn(
-            'id="domestic-invoice-trigger" data-advanced-depth', template
-        )
-        self.assertIn(
-            'id="business-rules-module" data-advanced-depth data-form-section="who"', template
-        )
-        self.assertIn(
-            'id="business-meeting-fields" data-advanced-depth data-form-section="when"', template
-        )
-        self.assertIn(
-            'id="business-budget-fields" data-advanced-depth data-form-section="budget"', template
-        )
-        self.assertIn(
-            'id="advanced-alert-settings" data-advanced-depth data-form-section="notifications"', template
-        )
-        self.assertNotIn("const scenarioDefaults", template)
-        self.assertIn("control.dataset.explicit = 'true'", template)
-        self.assertIn(
-            "document.querySelectorAll('[data-advanced-depth] input", template
-        )
-        self.assertIn("function visibilityRuleMatches", template)
-        self.assertNotIn("if (name === 'has_child' || name === 'has_elderly')", template)
-        self.assertNotIn("if (name === 'business_context')", template)
+    def test_conditional_families_are_limited_to_the_two_approved_contracts(self):
+        quick = self.client.get("/").get_data(as_text=True)
+        full = self.client.get("/settings").get_data(as_text=True)
+        html = quick + full
+        self.assertIn('data-visibility-contract="passenger-profile"', html)
+        self.assertIn('data-visibility-contract="notification-email"', html)
+        self.assertNotIn("data-show-if", html)
+        self.assertNotIn("data-advanced-depth", html)
+        self.assertEqual(quick.count("element.hidden ="), 2)
+        self.assertEqual(full.count("element.hidden ="), 2)
 
     def test_defaults_preview_uses_local_default_engine_and_never_saves(self):
         form = json.loads(FIXTURE.read_text(encoding="utf-8"))["scenarios"][
@@ -96,36 +86,33 @@ class FormUxPhase1Test(unittest.TestCase):
             original = web_form.SUBSCRIPTIONS_PATH
             web_form.SUBSCRIPTIONS_PATH = Path(tmpdir) / "subscriptions.json"
             try:
-                client = web_form.app.test_client()
-                response = client.post("/defaults_preview", data=form)
+                response = self.client.post("/defaults_preview", data=form)
             finally:
                 web_form.SUBSCRIPTIONS_PATH = original
         self.assertEqual(response.status_code, 200)
         payload = response.get_json()
         self.assertTrue(payload["ok"])
-        self.assertEqual(set(payload["station_summaries"]), {
-            "where", "when", "who", "budget", "flight_preferences", "notifications"
-        })
-        self.assertIn("constraint_summary_text", payload)
+        self.assertEqual(
+            set(payload["station_summaries"]),
+            {"where", "when", "who", "budget", "flight_preferences", "notifications"},
+        )
         self.assertEqual(
             payload["constraint_summary_text"],
             format_constraint_summary(payload["constraint_summary"]),
         )
         self.assertTrue(payload["defaults_applied"])
         self.assertTrue(payload["chips"])
-        self.assertIn("constraint_summary", payload)
         self.assertFalse((Path(tmpdir) / "subscriptions.json").exists())
 
-    def test_five_post_baselines_remain_field_for_field_equal(self):
+    def test_seven_post_baselines_remain_field_for_field_equal(self):
         fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
         original = web_form.SUBSCRIPTIONS_PATH
         with tempfile.TemporaryDirectory() as tmpdir:
             web_form.SUBSCRIPTIONS_PATH = Path(tmpdir) / "subscriptions.json"
             try:
                 with patch.object(web_form, "start_background_collection"):
-                    client = web_form.app.test_client()
                     for name, case in fixture["scenarios"].items():
-                        response = client.post("/subscribe", data=case["form_input"])
+                        response = self.client.post("/subscribe", data=case["form_input"])
                         self.assertEqual(response.status_code, 302, name)
                         saved = json.loads(
                             web_form.SUBSCRIPTIONS_PATH.read_text(encoding="utf-8")
@@ -138,7 +125,7 @@ class FormUxPhase1Test(unittest.TestCase):
             finally:
                 web_form.SUBSCRIPTIONS_PATH = original
 
-    def test_edit_hydration_roundtrip_is_normalization_idempotent_for_all_scenarios(self):
+    def test_edit_projection_roundtrip_remains_normalization_idempotent(self):
         cases = json.loads(FIXTURE.read_text(encoding="utf-8"))["scenarios"]
         for name, case in cases.items():
             values = subscription_to_form_values(case["normalized_subscription"])
@@ -156,17 +143,30 @@ class FormUxPhase1Test(unittest.TestCase):
                 case["normalized_subscription"],
                 name,
             )
-        template = web_form.app.test_client().get("/").get_data(as_text=True)
-        self.assertIn("function hydrateFormValues", template)
-        self.assertIn("hydrateFormValues(data)", template)
+
+        original = web_form.SUBSCRIPTIONS_PATH
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "subscriptions.json"
+            saved = cases["solo_minimal"]["normalized_subscription"]
+            path.write_text(json.dumps([saved], ensure_ascii=False), encoding="utf-8")
+            web_form.SUBSCRIPTIONS_PATH = path
+            try:
+                response = self.client.get("/?edit=0")
+            finally:
+                web_form.SUBSCRIPTIONS_PATH = original
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(response.headers["Location"].endswith("/settings?edit=0"))
 
     def test_price_hint_and_location_rejection_routes_remain_present(self):
-        client = web_form.app.test_client()
-        with patch.object(web_form, "load_calendar", side_effect=AssertionError("部分地点禁止读日历")):
-            response = client.get("/price_hint?origin=SHA&dest=北")
+        with patch.object(
+            web_form,
+            "load_calendar",
+            side_effect=AssertionError("部分地点禁止读日历"),
+        ):
+            response = self.client.get("/price_hint?origin=SHA&dest=北")
         self.assertEqual(response.status_code, 200)
         self.assertFalse(response.get_json()["has_data"])
-        bad = client.post(
+        bad = self.client.post(
             "/defaults_preview",
             data={"origin_select": "PVG", "destination": "不存在城市"},
         )

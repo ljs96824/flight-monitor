@@ -4,6 +4,7 @@ from copy import deepcopy
 
 import form_structure
 import web_form
+from form_pages import FORM_PAGE_TEMPLATE
 from werkzeug.datastructures import MultiDict
 
 
@@ -18,11 +19,18 @@ RAW_TIME_INPUTS = (
     "no_late_arrival",
     "prefer_daytime_arrival",
 )
+SECTION_IDS = (
+    "section-where",
+    "section-when",
+    "section-who",
+    "section-budget",
+    "section-flight-preferences",
+    "section-notifications",
+)
 
 
 class FormUxConceptRegistryTest(unittest.TestCase):
     def test_every_declared_form_field_has_exactly_one_concept(self):
-        self.assertTrue(hasattr(form_structure, "CONCEPTS"))
         result = form_structure.validate_concepts()
         self.assertEqual(result["missing"], [])
         self.assertEqual(result["duplicates"], [])
@@ -121,7 +129,7 @@ class FormUxConceptRegistryTest(unittest.TestCase):
         self.assertEqual(custom["departure_time_windows"], [["08:30", "11:15"]])
         self.assertEqual(custom["arrival_time_windows"], [["10:30", "14:00"]])
 
-    def test_split_direction_visibility_and_edit_expansion_follow_canonical_controls(self):
+    def test_split_direction_visibility_follows_canonical_controls(self):
         shared = form_structure.visible_field_names(
             {"round_trip": "true", "separate_direction_times": "false"}
         )
@@ -133,16 +141,6 @@ class FormUxConceptRegistryTest(unittest.TestCase):
         )
         self.assertIn("outbound_time_preference", split)
         self.assertIn("return_arrival_time_end", split)
-
-        expanded = form_structure.edit_expanded_sections(
-            {
-                "monitor_mode": "precise",
-                "ux2_concept_form": "true",
-                "outbound_departure_time_start": "08:30",
-            },
-            editing=True,
-        )
-        self.assertIn("flight_preferences", expanded)
 
     def test_ux2_submission_uses_the_same_derived_time_policy_family(self):
         base = {
@@ -167,7 +165,7 @@ class FormUxConceptRegistryTest(unittest.TestCase):
 class FormUxConceptRenderingTest(unittest.TestCase):
     def setUp(self):
         web_form.app.config.update(TESTING=True)
-        self.html = web_form.app.test_client().get("/").get_data(as_text=True)
+        self.html = web_form.app.test_client().get("/settings").get_data(as_text=True)
 
     def rendered_form_tags(self):
         return re.findall(r"<(?:input|select|textarea)\b[^>]*>", self.html, re.I)
@@ -180,13 +178,19 @@ class FormUxConceptRenderingTest(unittest.TestCase):
                 names.append(match.group(1))
         return names
 
-    def test_real_duplicate_surfaces_are_removed(self):
+    def tag_for_name(self, name):
+        return next(
+            tag for tag in self.rendered_form_tags()
+            if re.search(fr'\bname="{re.escape(name)}"', tag, re.I)
+        )
+
+    def test_legacy_time_aliases_are_hidden_not_parallel_visible_controls(self):
         names = self.rendered_names()
         self.assertEqual(names.count("business_start"), 1)
         self.assertEqual(names.count("business_end"), 1)
         for name in RAW_TIME_INPUTS:
-            self.assertNotIn(name, names)
-
+            self.assertEqual(names.count(name), 1)
+            self.assertIn('type="hidden"', self.tag_for_name(name))
         for name in (
             "time_preference",
             "allow_redeye",
@@ -194,59 +198,47 @@ class FormUxConceptRenderingTest(unittest.TestCase):
             "separate_direction_times",
         ):
             self.assertIn(name, names)
+            self.assertNotIn('type="hidden"', self.tag_for_name(name))
 
-    def test_every_rendered_field_is_owned_by_the_concept_registry(self):
+    def test_every_rendered_business_field_is_owned_by_the_concept_registry(self):
+        allowed_page_fields = {"form_page"}
         self.assertEqual(
-            sorted(set(self.rendered_names()) - set(form_structure.FIELD_OWNERS)),
+            sorted(
+                set(self.rendered_names())
+                - set(form_structure.FIELD_OWNERS)
+                - allowed_page_fields
+            ),
             [],
         )
 
-    def test_each_non_option_input_name_occurs_once_and_option_values_are_unique(self):
-        tags = self.rendered_form_tags()
-        seen = set()
-        duplicates = []
-        for tag in tags:
-            name_match = re.search(r'\bname="([^"]+)"', tag, re.I)
-            if not name_match:
-                continue
-            name = name_match.group(1)
-            type_match = re.search(r'\btype="([^"]+)"', tag, re.I)
-            input_type = (type_match.group(1).lower() if type_match else "")
-            if input_type in {"radio", "checkbox"}:
-                value_match = re.search(r'\bvalue="([^"]*)"', tag, re.I)
-                key = (name, value_match.group(1) if value_match else "")
-            else:
-                key = (name, "__single_surface__")
-            if key in seen:
-                duplicates.append(key)
-            seen.add(key)
-        self.assertEqual(duplicates, [])
+    def test_each_named_control_occurs_once(self):
+        counts = {name: self.rendered_names().count(name) for name in set(self.rendered_names())}
+        self.assertEqual({name: count for name, count in counts.items() if count != 1}, {})
 
-    def test_six_stations_are_a_single_open_breadcrumb_wizard(self):
-        self.assertIn('id="station-breadcrumbs"', self.html)
-        self.assertEqual(self.html.count('data-breadcrumb-station="'), 6)
-        self.assertIn('data-wizard-state="current"', self.html)
-        self.assertIn("panel.hidden = !isActive", self.html)
-        self.assertIn("function openWizardStation", self.html)
-        self.assertIn("完成✓", self.html)
-        self.assertIn("当前▶", self.html)
-        self.assertIn("未到○", self.html)
+    def test_six_sections_are_static_and_use_plain_anchor_navigation(self):
+        for section_id in SECTION_IDS:
+            self.assertIn(f'id="{section_id}"', self.html)
+            self.assertIn(f'href="#{section_id}"', self.html)
+        self.assertNotIn("<details", self.html)
+        self.assertNotIn("data-wizard-state", self.html)
+        self.assertNotIn("openWizardStation", self.html)
 
-    def test_chip_wall_reuses_canonical_controls_instead_of_parallel_buttons(self):
-        self.assertIn('id="canonical-preference-chips"', self.html)
-        self.assertIn('id="preference-chip-home"', self.html)
-        self.assertIn("mountCanonicalPreferenceChips", self.html)
-        function_body = self.html.split(
-            "function renderDefaultChips", 1
-        )[1].split("function renderStationSummaries", 1)[0]
-        self.assertNotIn("document.createElement('button')", function_body)
-        self.assertIn("preset-active", function_body)
+    def test_chip_and_breadcrumb_surfaces_are_removed(self):
+        for marker in (
+            "station-breadcrumbs",
+            "scenario-preset-chips",
+            "canonical-preference-chips",
+            "mountCanonicalPreferenceChips",
+            "renderDefaultChips",
+        ):
+            self.assertNotIn(marker, self.html)
+            self.assertNotIn(marker, FORM_PAGE_TEMPLATE)
 
-    def test_confirmation_edit_links_target_the_owning_station(self):
-        self.assertIn("link.dataset.summaryStation", self.html)
-        self.assertIn("link.dataset.summaryAnchor", self.html)
-        self.assertIn("link.href = '#station-'", self.html)
-        self.assertIn("openWizardStation(config.step)", self.html)
+    def test_confirmation_edit_links_target_static_section_anchors(self):
+        self.assertIn('id="confirmation-map"', self.html)
+        for section_id in SECTION_IDS:
+            self.assertIn(f'data-confirm-edit="{section_id}"', self.html)
+            self.assertIn(f'href="#{section_id}"', self.html)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 import sys
 import types
 import unittest
+import flask  # noqa: F401
 
 
 class _DummyFlask:
