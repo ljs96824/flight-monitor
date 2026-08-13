@@ -55,6 +55,7 @@ OPTIONS = {
     "elderly_condition": (("normal", "普通"), ("mobility_limited", "不适合长时间步行/换乘"), ("no_early_late", "不适合红眼或早班")),
     "companion_constraints": (("direct_preferred", "尽量直飞"), ("no_redeye", "不接受红眼"), ("avoid_long_layover", "避免长中转"), ("need_baggage", "需要托运行李"), ("need_refund_change", "需要可退改"), ("daytime_arrival", "希望白天到达"), ("limited_mobility", "行动不便")),
     "transport_margin_mode": (("tight", "紧凑"), ("standard", "标准"), ("loose", "保守")),
+    "transport_mode": (("", "系统自动估算"), ("taxi", "驾车/出租车"), ("transit", "公共交通")),
     "price_strategy": (("explicit", "填写具体金额"), ("auto_judge", "由系统判断"), ("low_price_alert", "进入低价区时提醒")),
     "max_budget_scope": (("per_person", "单人"), ("total", "全员")),
     "target_price_scope": (("per_person", "单人"), ("total", "全员")),
@@ -152,7 +153,7 @@ TIME_FIELDS = frozenset(
 )
 NUMBER_FIELDS = frozenset(
     {
-        "user_transport_min", "origin_transport_min", "destination_transport_min",
+        "buffer_hours", "user_transport_min", "origin_transport_min", "destination_transport_min",
         "redundancy_min", "airport_advance_min", "arrival_exit_min",
         "delay_buffer_min", "pre_meeting_buffer_min", "post_meeting_buffer_min",
         "custom_redundancy_min", "team_passenger_count", "max_budget",
@@ -179,6 +180,8 @@ LABELS = {
     "meeting_end": "会议结束（兼容字段）",
     "meeting_location": "会议地点/区域",
     "meeting_importance": "会议重要程度",
+    "buffer_hours": "会议安全缓冲（小时）",
+    "transport_mode": "机场到会场交通方式",
     "travel_scenario": "出行场景",
     "trip_natures": "商务类型",
     "user_level": "出行层级",
@@ -191,7 +194,7 @@ LABELS = {
     "companion_constraints": "同行约束",
     "outbound_set_off": "去程最早可出门",
     "return_set_off": "返程最早可动身",
-    "user_transport_min": "到机场车程（分钟）",
+    "user_transport_min": "机场到会场车程（分钟）",
     "origin_transport_min": "出发地到机场（分钟）",
     "destination_transport_min": "机场到目的地（分钟）",
     "transport_margin_mode": "交通冗余模式",
@@ -258,6 +261,8 @@ DEFAULTS = {
     "return_date_flexibility": "0",
     "day_trip_period": "morning",
     "meeting_importance": "important",
+    "buffer_hours": "",
+    "transport_mode": "",
     "travel_scenario": ["personal"],
     "user_level": "staff",
     "passenger_count": 1,
@@ -313,6 +318,12 @@ QUICK_GROUPS = (
     {"id": "passengers", "title": "乘客构成", "fields": ("passenger_count",)},
     {"id": "budget", "title": "预算", "fields": ("price_strategy", "max_budget", "max_budget_scope", "target_price", "target_price_scope")},
     {"id": "scenario", "title": "出行场景", "fields": ("travel_scenario", "child_type", "elderly_condition")},
+)
+QUICK_CANONICAL_INPUT_NAMES = (
+    "form_page",
+    "monitor_mode",
+    "subscription_index",
+    *tuple(field for group in QUICK_GROUPS for field in group["fields"]),
 )
 
 
@@ -477,7 +488,7 @@ def build_form_page_context(page_mode: str, values=None, *, edit_index=None) -> 
         data["monitor_mode"] = "precise"
     return {
         "mode": page_mode,
-        "title": "快速创建航班监控" if page_mode == "quick" else "完整设置",
+        "title": "快速创建监控" if page_mode == "quick" else "完整设置",
         "groups": _quick_groups(data) if page_mode == "quick" else [],
         "sections": _full_sections(data) if page_mode == "full" else [],
         "monitor_mode": str(data.get("monitor_mode") or ("quick" if page_mode == "quick" else "precise")),
@@ -517,6 +528,7 @@ FORM_PAGE_TEMPLATE = r"""
     .page-header { border-bottom:1px solid var(--line); padding:24px max(20px,calc((100vw - 1180px)/2)); background:#fff; }
     .page-header h1 { margin:0 0 6px; font-size:26px; }
     .page-header p { margin:0; color:var(--muted); }
+    .mode-link { display:inline-block; margin-top:10px; font-weight:700; }
     .quick-shell { max-width:720px; margin:0 auto; padding:8px 20px 48px; }
     .quick-shell .field-grid { grid-template-columns:1fr; }
     .full-shell { max-width:1180px; margin:0 auto; padding:0 20px 56px; display:grid; grid-template-columns:210px minmax(0,1fr); gap:36px; align-items:start; }
@@ -531,6 +543,9 @@ FORM_PAGE_TEMPLATE = r"""
     .concept { margin:0 0 24px; padding:0; border:0; }
     .concept:last-child { margin-bottom:0; }
     .concept legend { font-weight:700; margin-bottom:10px; font-size:15px; }
+    .static-subsection { margin:8px 0 20px; padding:12px 14px; border-left:4px solid var(--accent); background:var(--soft); }
+    .static-subsection h3 { margin:0 0 3px; font-size:16px; }
+    .static-subsection p { margin:0; color:var(--muted); font-size:13px; }
     .field-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px 18px; }
     .field { display:flex; flex-direction:column; gap:6px; min-width:0; }
     .field-wide { grid-column:1/-1; }
@@ -576,6 +591,11 @@ FORM_PAGE_TEMPLATE = r"""
   <header class="page-header">
     <h1>{{ page.title }}</h1>
     <p>{% if page.mode == 'quick' %}填写核心信息，其他设置按场景预设。{% else %}六组设置一次展开，使用左侧目录直接定位。{% endif %}</p>
+    {% if page.mode == 'quick' %}
+    <a class="mode-link" data-mode-link="full" href="{{ url_for('settings') }}">需要完整控制？进入完整设置 →</a>
+    {% else %}
+    <a class="mode-link" data-mode-link="quick" href="{{ url_for('index') }}">← 返回快速创建</a>
+    {% endif %}
   </header>
 
   {% macro render_field(field) -%}
@@ -652,6 +672,12 @@ FORM_PAGE_TEMPLATE = r"""
             <span class="section-summary" data-section-summary="{{ section.id }}">{{ section.summary }}</span>
           </div>
           {% for concept in section.concepts %}
+            {% if section.id == 'when' and concept.name == 'same_day_round_trip' %}
+            <div class="static-subsection" data-static-subsection="same-day-meeting">
+              <h3>当天往返与会议参数</h3>
+              <p>仅当天往返行程需要，其余可留空</p>
+            </div>
+            {% endif %}
             {% for field in concept.hidden_fields or [] %}{{ render_field(field) }}{% endfor %}
             {% if concept.fields %}
               <fieldset class="concept" data-form-concept="{{ concept.name }}">

@@ -276,13 +276,14 @@ SUCCESS_TEMPLATE = """
     <p><b>接下来系统会:</b></p>
     <ol>
       <li>立即进行第一次采集和购买判断(约30秒-1分钟)</li>
-      <li>结果将推送到: {{ summary.notification_text or "你的邮箱 / PushPlus微信" }}</li>
+      <li data-confirmed-notification="true">结果将推送到: {{ summary.notification_text or "你的邮箱 / PushPlus微信" }}</li>
       <li>之后发现低价、涨价风险或更优方案时自动提醒</li>
       <li>可随时在「我的监控」暂停或修改</li>
     </ol>
     <p>💡 第一次判断稍后到达,你可以关掉此页,留意邮箱/微信推送。</p>
     <p><a href="{{ url_for('subscription_list') }}">查看我的所有监控</a> <a class="secondary-link" href="{{ url_for('index') }}">再创建一个</a></p>
     <p><b>{{ summary.route }}</b></p>
+    {% if summary.meeting_text %}<p data-confirmed-meeting="true">{{ summary.meeting_text }}</p>{% endif %}
     {% if summary.airport_coverage %}
     <p>{{ summary.airport_coverage }}</p>
     {% endif %}
@@ -1188,6 +1189,10 @@ def build_subscription(form) -> dict:
     meeting_importance = form.get("meeting_importance", "important").strip() or "important"
     if meeting_importance not in {"normal", "important", "critical"}:
         meeting_importance = "important"
+    buffer_hours = parse_float(form.get("buffer_hours"), 0.0)
+    transport_mode = form.get("transport_mode", "").strip().lower()
+    if transport_mode not in {"", "taxi", "transit"}:
+        raise ValueError(f"transport_mode取值无效: {transport_mode}")
     outbound_set_off = form.get("outbound_set_off", "").strip()
     return_set_off = form.get("return_set_off", "").strip()
     user_transport_min = parse_int(form.get("user_transport_min"), 0)
@@ -1416,6 +1421,8 @@ def build_subscription(form) -> dict:
         pre_meeting_buffer_min = 0
         post_meeting_buffer_min = 0
         custom_redundancy_min = 0
+        buffer_hours = 0.0
+        transport_mode = ""
         transport_margin_mode = "standard"
         redundancy_min = 25
     if precise_passengers.get("child") and precise_passengers.get("elderly"):
@@ -1545,7 +1552,7 @@ def build_subscription(form) -> dict:
     def optional_minutes(value):
         return value if value and value > 0 else None
 
-    return {
+    subscription = {
         "basic": {
             "origin": origin_info["value"],
             "origin_airports": origin_info["airports"],
@@ -1792,6 +1799,13 @@ def build_subscription(form) -> dict:
         "status": "active",
         "created_at": datetime.now().isoformat(),
     }
+    if buffer_hours > 0:
+        subscription["constraints"]["buffer_hours"] = buffer_hours
+        subscription["hard_constraints"]["buffer_hours"] = buffer_hours
+    if transport_mode:
+        subscription["constraints"]["transport_mode"] = transport_mode
+        subscription["hard_constraints"]["transport_mode"] = transport_mode
+    return subscription
 
 
 def build_success_summary(subscription: dict) -> dict:
@@ -1801,6 +1815,7 @@ def build_success_summary(subscription: dict) -> dict:
         subscription.get("notification_goals")
     )
     method = notification_goals["method"]
+    notification_email = str(notification_goals.get("email") or "").strip()
     notification_labels = {
         "pushplus": "PushPlus微信",
         "email": "你的邮箱",
@@ -1863,13 +1878,24 @@ def build_success_summary(subscription: dict) -> dict:
         )
         coverage = f"覆盖出发机场：{origin_text}；到达机场：{destination_text}"
 
+    notification_text = notification_labels.get(method, "你的邮箱 / PushPlus微信")
+    if method in {"email", "both"} and notification_email:
+        notification_text = f"{notification_text}（{notification_email}）"
+    meeting_text = ""
+    if hard.get("same_day_round_trip"):
+        meeting_start = hard.get("business_start") or hard.get("meeting_start")
+        meeting_end = hard.get("business_end") or hard.get("meeting_end")
+        if meeting_start or meeting_end:
+            meeting_text = f"当天往返会议：{meeting_start or '未填'}-{meeting_end or '未填'}"
+
     return {
         "route": f"{city_label(subscription.get('origin'))} → {city_label(subscription.get('destination'))}",
         "airport_coverage": coverage,
         "defaults_applied": subscription_with_defaults.get("defaults_applied", []),
         "reminders": reminders,
         "exclusions": exclusions,
-        "notification_text": notification_labels.get(method, "你的邮箱 / PushPlus微信"),
+        "notification_text": notification_text,
+        "meeting_text": meeting_text,
     }
 
 

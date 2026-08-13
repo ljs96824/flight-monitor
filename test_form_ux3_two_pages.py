@@ -210,7 +210,7 @@ class FormUx3TwoPagesTest(unittest.TestCase):
         self.assertIn('data-visibility-contract="notification-email"', FORM_PAGE_TEMPLATE)
         self.assertNotIn("classList.toggle('open'", FORM_PAGE_TEMPLATE)
 
-    def test_page_marker_does_not_change_seven_fixture_normalization(self):
+    def test_page_marker_does_not_change_eight_fixture_normalization(self):
         fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))["scenarios"]
         for name, case in fixture.items():
             source_items = []
@@ -228,7 +228,7 @@ class FormUx3TwoPagesTest(unittest.TestCase):
                     f"{name}:{page_mode}",
                 )
 
-    def test_full_page_html_edit_roundtrip_is_idempotent_for_seven_scenarios(self):
+    def test_full_page_html_edit_roundtrip_is_idempotent_for_eight_scenarios(self):
         fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))["scenarios"]
         original = web_form.SUBSCRIPTIONS_PATH
         with tempfile.TemporaryDirectory() as tmpdir:

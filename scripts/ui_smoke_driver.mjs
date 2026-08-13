@@ -91,6 +91,12 @@ if (quickContract.page !== "quick" || !quickContract.form || !quickContract.allR
 }
 console.log(`[UI smoke] 页1必填=${quickContract.requiredCount} 可见可交互=True 可见控件=${quickContract.visibleControlCount}`);
 
+await evaluate(`document.querySelector('[data-mode-link="full"]').click(); true`);
+await waitFor("location.pathname === '/settings'", "页1进入完整设置");
+await evaluate(`document.querySelector('[data-mode-link="quick"]').click(); true`);
+await waitFor("location.pathname === '/'", "页2返回快速创建");
+console.log("[UI smoke] 双页互链=PASS 页1→页2→页1");
+
 const depart = new Date();
 depart.setDate(depart.getDate() + 21);
 const returned = new Date(depart);
@@ -147,6 +153,59 @@ for (const id of ["section-where","section-when","section-who","section-budget",
   await waitFor(`location.hash === '#${id}' && Boolean(document.getElementById('${id}'))`, `锚点${id}`);
 }
 console.log(`[UI smoke] 页2六节=${fullContract.sectionCount} 全可见=True 目录锚点=${fullContract.anchorCount} 重复name=0`);
+
+await evaluate(`(() => {
+  const set = (name, value) => {
+    const element = document.querySelector('[name="' + name + '"]');
+    if (!element) throw new Error('missing ' + name);
+    element.value = value;
+    element.dispatchEvent(new Event('input', {bubbles:true}));
+    element.dispatchEvent(new Event('change', {bubbles:true}));
+  };
+  const check = (name, checked) => {
+    const element = document.querySelector('[name="' + name + '"]');
+    if (!element) throw new Error('missing ' + name);
+    element.checked = checked;
+    element.dispatchEvent(new Event('change', {bubbles:true}));
+  };
+  set('origin_select', '上海');
+  set('destination', '北京');
+  set('depart_date', '${iso(depart)}');
+  set('round_trip', 'true');
+  set('return_date', '${iso(depart)}');
+  set('adult_count', '1');
+  set('child_count', '0');
+  set('elderly_count', '0');
+  set('infant_count', '0');
+  set('business_start', '10:30');
+  set('business_end', '17:00');
+  set('buffer_hours', '1.5');
+  set('transport_mode', 'taxi');
+  set('user_transport_min', '25');
+  set('redundancy_min', '15');
+  set('notification_method', 'email');
+  set('notification_email', 'ux31@example.com');
+  const scenario = document.querySelector('[name="travel_scenario"]');
+  [...scenario.options].forEach(option => option.selected = option.value === 'business');
+  scenario.dispatchEvent(new Event('change', {bubbles:true}));
+  check('same_day_round_trip', true);
+  document.querySelector('form[data-page-mode="full"]').requestSubmit();
+  return true;
+})()`);
+await waitFor("location.pathname === '/success'", "完整页提交确认", 15000);
+const confirmation = await evaluate(`(() => {
+  const text = document.body.textContent;
+  return {
+    email: text.includes('ux31@example.com'),
+    meetingStart: text.includes('10:30'),
+    meetingEnd: text.includes('17:00'),
+  };
+})()`);
+if (!confirmation.email || !confirmation.meetingStart || !confirmation.meetingEnd) {
+  throw new Error(`完整页回读失败: ${JSON.stringify(confirmation)}`);
+}
+console.log("[UI smoke] 页2邮箱提交=PASS value=ux31@example.com");
+console.log("[UI smoke] 页2当天往返会议=PASS 10:30-17:00");
 
 await sleep(350);
 if (browserErrors.length) throw new Error(`浏览器错误: ${browserErrors.join(' | ')}`);

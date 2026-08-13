@@ -104,7 +104,7 @@ class FormUxPhase1Test(unittest.TestCase):
         self.assertTrue(payload["chips"])
         self.assertFalse((Path(tmpdir) / "subscriptions.json").exists())
 
-    def test_seven_post_baselines_remain_field_for_field_equal(self):
+    def test_eight_post_baselines_remain_field_for_field_equal(self):
         fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
         original = web_form.SUBSCRIPTIONS_PATH
         with tempfile.TemporaryDirectory() as tmpdir:

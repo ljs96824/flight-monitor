@@ -150,7 +150,7 @@ class FormUxQuickFinishTest(unittest.TestCase):
         self.assertEqual(quick_result, full_result)
         self.assertEqual(quick_result, case["normalized_subscription"])
 
-    def test_seven_scenario_normalization_fixture_remains_unchanged(self):
+    def test_eight_scenario_normalization_fixture_remains_unchanged(self):
         fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
         original = web_form.SUBSCRIPTIONS_PATH
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -167,11 +167,20 @@ def project_time_concept_fields(values: Mapping, *, round_trip: bool) -> dict:
     return result
 
 
-def _concept(station_id: str, canonical_control: str, fields, derived=()):
+def _concept(
+    station_id: str,
+    canonical_control: str,
+    fields,
+    derived=(),
+    *,
+    canonical_input_names=None,
+):
+    declared_fields = tuple(fields)
     return {
         "station_id": station_id,
         "canonical_control": canonical_control,
-        "fields": tuple(fields),
+        "fields": declared_fields,
+        "canonical_input_names": tuple(canonical_input_names or declared_fields),
         "derived_schema_fields": tuple(derived),
     }
 
@@ -192,6 +201,17 @@ CONCEPTS = {
     "meeting_window": _concept("when", "会议开始与结束", ("business_start", "business_end", "meeting_start", "meeting_end"), ("constraints.business_start", "constraints.business_end", "constraints.meeting_start", "constraints.meeting_end")),
     "meeting_location": _concept("when", "会议地点", ("meeting_location",), ("constraints.meeting_location",)),
     "meeting_importance": _concept("when", "会议重要程度", ("meeting_importance",), ("constraints.meeting_importance",)),
+    "same_day_execution": _concept(
+        "when",
+        "当天往返执行参数",
+        ("buffer_hours", "transport_mode", "user_transport_min", "redundancy_min"),
+        (
+            "constraints.buffer_hours",
+            "constraints.transport_mode",
+            "constraints.user_transport_min",
+            "constraints.redundancy_min",
+        ),
+    ),
     "travel_context": _concept("who", "出行场景与目的", ("travel_scenario", "trip_natures"), ("preferences.travel_scenarios", "constraints.trip_natures")),
     "business_level": _concept("who", "商务层级", ("user_level",), ("constraints.user_level",)),
     "companion_mode": _concept("who", "同行形态", ("companions", "solo_travel"), ("companions", "preferences.solo_travel")),
@@ -200,8 +220,8 @@ CONCEPTS = {
     "elderly_profile": _concept("who", "老人画像", ("elderly_condition",), ("preferences.elderly_condition",)),
     "companion_constraints": _concept("who", "同行约束", ("companion_constraints",), ("preferences.companion_constraints",)),
     "set_off_times": _concept("who", "最早动身时间", ("outbound_set_off", "return_set_off"), ("constraints.outbound_set_off", "constraints.return_set_off")),
-    "transport_estimates": _concept("who", "交通时间估算", ("user_transport_min", "origin_transport_min", "destination_transport_min"), ("constraints.user_transport_min", "constraints.origin_transport_min", "constraints.destination_transport_min")),
-    "transport_margin": _concept("who", "交通冗余", ("transport_margin_mode", "redundancy_min"), ("constraints.transport_margin_mode", "constraints.redundancy_min")),
+    "transport_estimates": _concept("who", "交通时间估算", ("origin_transport_min", "destination_transport_min"), ("constraints.origin_transport_min", "constraints.destination_transport_min")),
+    "transport_margin": _concept("who", "交通冗余", ("transport_margin_mode",), ("constraints.transport_margin_mode",)),
     "reserve_overrides": _concept("who", "商务冗余覆盖", ("airport_advance_min", "arrival_exit_min", "delay_buffer_min", "pre_meeting_buffer_min", "post_meeting_buffer_min", "custom_redundancy_min"), ("constraints.airport_advance_min", "constraints.arrival_exit_min", "constraints.delay_buffer_min", "constraints.pre_meeting_buffer_min", "constraints.post_meeting_buffer_min", "constraints.custom_redundancy_min")),
     "team_arrangement": _concept("who", "团队安排", ("team_passenger_count", "team_date_flexibility", "same_flight_required"), ("constraints.team_passenger_count", "constraints.team_date_flexibility", "constraints.same_flight_required")),
     "price_strategy": _concept("budget", "价格策略", ("price_strategy",), ("constraints.budget_strategy",)),
@@ -264,11 +284,24 @@ def validate_concept_registry(field_owners: Mapping[str, str], concepts=None) ->
         for concept_name, station_id in entries
         if field_owners[field] != station_id
     )
+    missing_canonical = sorted(
+        concept_name
+        for concept_name, concept in registry.items()
+        if not concept.get("canonical_input_names")
+    )
+    invalid_canonical = sorted(
+        (concept_name, field)
+        for concept_name, concept in registry.items()
+        for field in concept.get("canonical_input_names") or ()
+        if field not in (concept.get("fields") or ())
+    )
     result = {
         "missing": missing,
         "duplicates": duplicates,
         "wrong_station": wrong_station,
         "unknown": unknown,
+        "missing_canonical": missing_canonical,
+        "invalid_canonical": invalid_canonical,
     }
     errors = []
     if missing:
@@ -279,6 +312,10 @@ def validate_concept_registry(field_owners: Mapping[str, str], concepts=None) ->
         errors.append(f"跨站归属={wrong_station}")
     if unknown:
         errors.append(f"未知字段={unknown}")
+    if missing_canonical:
+        errors.append(f"缺少规范控件={missing_canonical}")
+    if invalid_canonical:
+        errors.append(f"规范控件未归属概念={invalid_canonical}")
     if errors:
         raise ValueError("概念注册表无效: " + "; ".join(errors))
     return result
