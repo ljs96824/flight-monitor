@@ -5,11 +5,16 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 
+REQUIRED_STATION_COUNT = 4
+
+
 # 二期仅从这层结构元数据接入规律、五档参考价或日历反馈控件；一期不渲染这些数据。
 FORM_STATIONS = (
     {
         "number": 1,
         "id": "where",
+        "depth": "required",
+        "default_collapsed": False,
         "title": "去哪",
         "fields": (
             "origin_select",
@@ -23,6 +28,8 @@ FORM_STATIONS = (
     {
         "number": 2,
         "id": "when",
+        "depth": "required",
+        "default_collapsed": False,
         "title": "什么时候",
         "fields": (
             "depart_date",
@@ -43,6 +50,8 @@ FORM_STATIONS = (
     {
         "number": 3,
         "id": "who",
+        "depth": "required",
+        "default_collapsed": False,
         "title": "谁去",
         "fields": (
             "travel_scenario",
@@ -79,6 +88,8 @@ FORM_STATIONS = (
     {
         "number": 4,
         "id": "budget",
+        "depth": "required",
+        "default_collapsed": False,
         "title": "预算",
         "fields": (
             "price_strategy",
@@ -101,6 +112,8 @@ FORM_STATIONS = (
     {
         "number": 5,
         "id": "flight_preferences",
+        "depth": "optional",
+        "default_collapsed": True,
         "title": "飞行偏好",
         "fields": (
             "transfer_policy",
@@ -138,6 +151,8 @@ FORM_STATIONS = (
     {
         "number": 6,
         "id": "notifications",
+        "depth": "optional",
+        "default_collapsed": True,
         "title": "怎么提醒",
         "fields": (
             "primary_goal",
@@ -187,6 +202,99 @@ ADVANCED_FIELD_NAMES = frozenset(
         "custom_redundancy_min",
     }
 )
+
+OPTIONAL_SECTIONS = (
+    {
+        "id": "feasibility",
+        "station_id": "who",
+        "title": "可行性参数(可选,已按场景预设)",
+        "fields": (
+            "outbound_set_off",
+            "return_set_off",
+            "user_transport_min",
+            "origin_transport_min",
+            "destination_transport_min",
+            "transport_margin_mode",
+            "airport_advance_min",
+            "arrival_exit_min",
+            "delay_buffer_min",
+            "pre_meeting_buffer_min",
+            "post_meeting_buffer_min",
+            "custom_redundancy_min",
+        ),
+    },
+    {
+        "id": "flight_preferences",
+        "station_id": "flight_preferences",
+        "title": "飞行偏好(可选)",
+        "fields": tuple(FORM_STATIONS[4]["fields"]),
+    },
+    {
+        "id": "notifications",
+        "station_id": "notifications",
+        "title": "提醒方式(可选)",
+        "fields": tuple(FORM_STATIONS[5]["fields"]),
+    },
+)
+
+OPTIONAL_SECTION_DEFAULTS = {
+    "feasibility": {
+        "outbound_set_off": "",
+        "return_set_off": "",
+        "user_transport_min": "",
+        "origin_transport_min": "",
+        "destination_transport_min": "",
+        "transport_margin_mode": "standard",
+        "airport_advance_min": "",
+        "arrival_exit_min": "",
+        "delay_buffer_min": "",
+        "pre_meeting_buffer_min": "",
+        "post_meeting_buffer_min": "",
+        "custom_redundancy_min": "",
+    },
+    "flight_preferences": {
+        "transfer_policy": "reasonable",
+        "short_transfer_limit": "extra_6",
+        "accept_overnight_transfer": "false",
+        "accept_self_transfer": "false",
+        "time_preference": "unlimited",
+        "departure_slots": (),
+        "arrival_slots": (),
+        "outbound_departure_slots": (),
+        "outbound_arrival_slots": (),
+        "return_departure_slots": (),
+        "return_arrival_slots": (),
+        "departure_time_start": "",
+        "departure_time_end": "",
+        "arrival_time_start": "",
+        "arrival_time_end": "",
+        "no_late_arrival": "false",
+        "prefer_daytime_arrival": "false",
+        "baggage": "required",
+        "refund_flexibility": "preferred",
+        "price_sensitivity": "low",
+        "airline_policy": "any",
+        "exclude_airlines": "",
+        "blocked_airlines_common": (),
+        "lcc_policy": "any",
+        "cabin_policy": "economy_only",
+        "cabin_arrangement": "economy_all",
+        "business_seats": "0",
+        "trip_rigidity": "confirmed",
+    },
+    "notifications": {
+        "primary_goal": "buy_timing",
+        "notification_method": "pushplus",
+        "notification_email": "",
+        "notification_frequency": "important_only",
+        "notification_frequency_rule": "important_only",
+        "price_change_threshold": "down_100",
+        "secondary_goals": (),
+        "digest_time": "09:00",
+        "remember_preferences": "false",
+    },
+}
+
 
 VISIBILITY_RULES = (
     {
@@ -471,6 +579,33 @@ def _budget_summary(values) -> str:
     return f"自动判断({scope_label}口径)"
 
 
+def _feasibility_summary(values) -> str:
+    parts = []
+    outbound = _first(values, "outbound_set_off")
+    return_set_off = _first(values, "return_set_off")
+    transport = (
+        _first(values, "user_transport_min")
+        or _first(values, "origin_transport_min")
+        or _first(values, "destination_transport_min")
+    )
+    margin_mode = _first(values, "transport_margin_mode", "standard")
+    if outbound:
+        parts.append(f"最早{outbound}出门")
+    if return_set_off:
+        parts.append(f"返程最早{return_set_off}动身")
+    if transport:
+        parts.append(f"车程{transport}分钟")
+    if margin_mode != "standard" or parts:
+        parts.append(
+            {
+                "tight": "紧凑冗余",
+                "standard": "标准冗余",
+                "conservative": "保守冗余",
+            }.get(margin_mode, "自定义冗余")
+        )
+    return " · ".join(parts) if parts else "已按场景预设"
+
+
 def _preference_summary(values) -> str:
     transfer = {
         "direct_only": "必须直飞",
@@ -481,16 +616,22 @@ def _preference_summary(values) -> str:
     }.get(_first(values, "transfer_policy", "reasonable"), "合理中转")
     time_text = {
         "no_redeye": "不红眼",
-        "daytime": "白天出发",
+        "daytime": "白天优先",
         "unlimited": "时间不限",
         "any": "时间不限",
-    }.get(_first(values, "time_preference", "no_redeye"), "自定义时间")
+    }.get(_first(values, "time_preference", "unlimited"), "自定义时间")
+    if _truthy(_first(values, "no_late_arrival")):
+        arrival = "不深夜到达"
+    elif _truthy(_first(values, "prefer_daytime_arrival")):
+        arrival = "白天到达"
+    else:
+        arrival = "到达不限"
     baggage = {
         "required": "需托运",
         "not_needed": "不需托运",
         "unknown": "行李待确认",
     }.get(_first(values, "baggage", "unknown"), "行李待确认")
-    return f"{transfer} · {time_text} · {baggage}"
+    return f"{time_text} · {arrival} · {transfer} · {baggage}"
 
 
 def _notification_summary(values) -> str:
@@ -498,7 +639,7 @@ def _notification_summary(values) -> str:
         "email": "邮箱",
         "pushplus": "PushPlus",
         "both": "邮箱+PushPlus",
-    }.get(_first(values, "notification_method", "both"), "邮箱+PushPlus")
+    }.get(_first(values, "notification_method", "pushplus"), "PushPlus")
     frequency = {
         "important_only": "重要变化",
         "price_change": "价格变化",
@@ -506,6 +647,53 @@ def _notification_summary(values) -> str:
         "daily_digest": "每日摘要",
     }.get(_first(values, "notification_frequency", "important_only"), "重要变化")
     return f"{method} · {frequency}"
+
+
+def summarize_optional_sections(values) -> dict[str, str]:
+    """生成三个可选细调段的当前值摘要。"""
+    return {
+        "feasibility": _feasibility_summary(values),
+        "flight_preferences": _preference_summary(values),
+        "notifications": _notification_summary(values),
+    }
+
+
+def _canonical_optional_value(value):
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (list, tuple, set)):
+        return tuple(sorted(str(item).strip() for item in value if item not in (None, "")))
+    if value in (None, ""):
+        return ""
+    text = str(value).strip()
+    if text.lower() in {"true", "false"}:
+        return text.lower()
+    return text
+
+
+def _section_has_non_default(values, section: dict) -> bool:
+    if not isinstance(values, Mapping):
+        return False
+    defaults = OPTIONAL_SECTION_DEFAULTS.get(section["id"], {})
+    for field in section["fields"]:
+        if field not in values or field not in defaults:
+            continue
+        current = _canonical_optional_value(values.get(field))
+        expected = _canonical_optional_value(defaults[field])
+        if current != expected:
+            return True
+    return False
+
+
+def edit_expanded_sections(values, *, editing: bool = False) -> list[str]:
+    """编辑精确订阅时，只展开含非默认进阶值的段。"""
+    if not editing or _first(values, "monitor_mode", "quick") != "precise":
+        return []
+    return [
+        section["id"]
+        for section in OPTIONAL_SECTIONS
+        if _section_has_non_default(values, section)
+    ]
 
 
 def summarize_stations(values) -> dict[str, str]:
@@ -590,10 +778,23 @@ def build_default_chips(subscription_with_defaults: dict) -> list[dict]:
     return chips
 
 
-def form_structure_payload() -> dict:
+def form_structure_payload(edit_values=None, *, editing: bool = False) -> dict:
     """提供给模板 data-* 属性的声明式结构。"""
+    values = edit_values or {}
+    summaries = summarize_optional_sections(values)
+    expanded = set(edit_expanded_sections(values, editing=editing))
+    optional_sections = []
+    for section in OPTIONAL_SECTIONS:
+        item = dict(section)
+        item["summary"] = summaries[section["id"]]
+        item["edit_expanded"] = section["id"] in expanded
+        optional_sections.append(item)
     return {
         "stations": [dict(station) for station in FORM_STATIONS],
+        "required_station_count": REQUIRED_STATION_COUNT,
+        "optional_sections": optional_sections,
+        "optional_section_map": {item["id"]: item for item in optional_sections},
+        "edit_expanded_sections": sorted(expanded),
         "field_owners": FIELD_OWNERS,
         "visibility_rules": [dict(rule) for rule in VISIBILITY_RULES],
         "advanced_fields": sorted(ADVANCED_FIELD_NAMES),

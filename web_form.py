@@ -32,6 +32,7 @@ from form_structure import (
     build_default_chips,
     form_structure_payload,
     subscription_to_form_values,
+    summarize_optional_sections,
     summarize_stations,
 )
 from pricing import passenger_rate_sum
@@ -817,6 +818,56 @@ FORM_TEMPLATE = """
       line-height: 1.7;
       margin-top: 8px;
     }
+    .form-length-contract {
+      color: #174b8a;
+      font-size: 15px;
+      font-weight: 700;
+      margin: 8px 0 4px;
+    }
+    .station-depth-badge {
+      border: 1px solid #c8d6f0;
+      color: #526078;
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 600;
+      margin-left: 6px;
+      padding: 2px 5px;
+      vertical-align: middle;
+    }
+    .quick-finish-panel {
+      border-top: 1px solid #d7e3f7;
+      margin-top: 18px;
+      padding-top: 16px;
+    }
+    #quick-finish-button {
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+    .optional-station-toggle {
+      margin: 0 0 10px;
+      text-align: left;
+      width: 100%;
+    }
+    .optional-station-content[hidden] {
+      display: none;
+    }
+    .optional-section-attention {
+      border-left: 3px solid #e0a100;
+      padding-left: 12px;
+    }
+    .optional-details {
+      border-top: 1px solid #d7e3f7;
+      margin-top: 14px;
+      padding-top: 10px;
+    }
+    .optional-details > summary {
+      color: #174b8a;
+      cursor: pointer;
+      font-weight: 700;
+      line-height: 1.5;
+      list-style-position: outside;
+      margin-bottom: 10px;
+    }
     #station-body-who #pref-detail-companions {
       display: block;
     }
@@ -825,7 +876,13 @@ FORM_TEMPLATE = """
 <body>
   <h1>航班监控订阅</h1>
   <p><a href="{{ url_for('subscription_list') }}">查看我的所有监控 →</a></p>
-  <p class="hint">先填基础需求即可；高级偏好可以按需展开。</p>
+  <div
+    id="form-length-contract"
+    class="form-length-contract"
+    data-required-stations="{{ form_structure.required_station_count }}"
+    data-optional-stations="2"
+  >必填4步 · 其余可选</div>
+  <p class="hint">先完成去哪、日期、同行人和预算；其余设置已有场景预设。</p>
   <div id="saved-template-banner" class="template-banner">
     检测到上次的偏好设置，是否套用？
     <div id="saved-template-summary" class="hint"></div>
@@ -837,8 +894,8 @@ FORM_TEMPLATE = """
   </div>
 
   <div id="mobile-stepper">
-    <div class="step-dots" id="step-dots">● ○ ○ ○ ○ ○</div>
-    <div id="step-label">第1站/共6站：去哪</div>
+    <div class="step-dots" id="step-dots">● ○ ○ ○</div>
+    <div id="step-label">第1站/共4站：去哪</div>
   </div>
 
   <form
@@ -847,6 +904,7 @@ FORM_TEMPLATE = """
     action="{{ url_for('subscribe') }}"
     data-field-owners='{{ form_structure.field_owners|tojson }}'
     data-visibility-rules='{{ form_structure.visibility_rules|tojson }}'
+    data-required-stations="{{ form_structure.required_station_count }}"
   >
     <input type="hidden" id="subscription_index" name="subscription_index" value="{{ edit_index if edit_index is not none else '' }}">
     <input type="hidden" id="monitor_mode" name="monitor_mode" value="quick">
@@ -854,7 +912,7 @@ FORM_TEMPLATE = """
       <div class="server-error">{{ form_error }}</div>
     {% endif %}
     <div id="quick-defaults-note" class="station-depth-note">
-      先按六站填写事实即可；展开进阶设置后，系统自动保留为精准深度。
+      完成前四步即可创建；展开任何可选设置后，系统自动保留为精准深度。
     </div>
     <div id="required-progress" class="required-progress incomplete">
       <div class="required-progress-title">还需填写：</div>
@@ -863,17 +921,49 @@ FORM_TEMPLATE = """
 
     <div id="form-station-flow">
       {% for station in form_stations %}
-      <fieldset class="form-step{% if station.number == 1 %} active{% endif %}" data-step="{{ station.number }}" data-station-id="{{ station.id }}">
+      <fieldset
+        class="form-step{% if station.number == 1 %} active{% endif %}"
+        data-step="{{ station.number }}"
+        data-station-id="{{ station.id }}"
+        data-station-depth="{{ station.depth }}"
+        data-default-collapsed="{{ 'true' if station.default_collapsed else 'false' }}"
+      >
         <legend class="station-legend">
-          <span class="station-title">{{ station.number }}. {{ station.title }}</span>
+          <span class="station-title">
+            {{ station.number }}. {{ station.title }}
+            <span class="station-depth-badge">{{ '必经' if station.depth == 'required' else '可选' }}</span>
+          </span>
           <span class="station-summary" data-station-summary="{{ station.id }}">尚未填写</span>
         </legend>
-        {% if station.id == "flight_preferences" %}
-        <p class="hint">已按出行场景预设；展开后可逐项修改。</p>
-        <div id="scenario-preset-chips" class="scenario-preset-chips" aria-live="polite"></div>
-        <button id="advanced-depth-toggle" class="secondary-button" type="button" data-advanced-depth>展开完整飞行偏好</button>
+        {% if station.depth == "optional" %}
+          {% set optional = form_structure.optional_section_map.get(station.id) %}
+          <button
+            id="{{ 'advanced-depth-toggle' if station.id == 'flight_preferences' else 'notification-depth-toggle' }}"
+            class="secondary-button optional-station-toggle"
+            type="button"
+            data-optional-station-toggle="{{ station.id }}"
+            aria-expanded="{{ 'true' if optional.edit_expanded else 'false' }}"
+          >{{ optional.title }}：<span data-optional-summary="{{ station.id }}">{{ optional.summary }}</span> ▸</button>
+          <div
+            id="{{ 'advanced-depth-content' if station.id == 'flight_preferences' else 'notification-depth-content' }}"
+            data-optional-section="{{ station.id }}" data-edit-expanded="{{ 'true' if optional.edit_expanded else 'false' }}"
+            class="optional-station-content{% if optional.edit_expanded %} optional-section-attention{% endif %}"
+            {% if not optional.edit_expanded %}hidden{% endif %}
+          >
+            <div id="station-body-{{ station.id }}"></div>
+          </div>
+        {% else %}
+          <div id="station-body-{{ station.id }}"></div>
+          {% if station.id == "budget" %}
+          <div id="quick-finish-panel" class="quick-finish-panel">
+            <button id="quick-finish-button" type="button">✓ 完成创建(使用下方预设)</button>
+            <div id="scenario-preset-chips" class="scenario-preset-chips" aria-live="polite"></div>
+            <button id="optional-settings-toggle" class="secondary-button" type="button">
+              想细调时间/航司/提醒?展开可选设置
+            </button>
+          </div>
+          {% endif %}
         {% endif %}
-        <div id="station-body-{{ station.id }}"></div>
       </fieldset>
       {% endfor %}
     </div>
@@ -960,7 +1050,16 @@ FORM_TEMPLATE = """
     </section>
     <section class="form-source-block" data-form-section="who">
 
-      <div id="trip-feasibility-fields" class="precise-only">
+      {% set feasibility = form_structure.optional_section_map.get("feasibility") %}
+      <details
+        id="feasibility-optional-section"
+        class="optional-details{% if feasibility.edit_expanded %} optional-section-attention{% endif %}"
+        data-optional-section="feasibility" data-edit-expanded="{{ 'true' if feasibility.edit_expanded else 'false' }}"
+        data-advanced-depth
+        {% if feasibility.edit_expanded %}open{% endif %}
+      >
+        <summary>{{ feasibility.title }}：<span data-optional-summary="feasibility">{{ feasibility.summary }}</span> ▸</summary>
+        <div id="trip-feasibility-fields" class="precise-only">
         <label>行程可行性分析(选填,填了才分析)</label>
         <div class="inline-grid">
           <label>去程:最早几点能出门? <input name="outbound_set_off" type="time"></label>
@@ -990,7 +1089,8 @@ FORM_TEMPLATE = """
         <p class="hint" data-show-if="route_type=domestic">国内:系统将叠加值机安检缓冲(按机场75-110分钟)。</p>
         <p class="hint" data-show-if="route_type=international">国际:系统将叠加值机+出境边检海关缓冲(150-180分钟),到达后另提示入境+提行李时间。</p>
         <p class="hint" data-show-if="route_type=greater_china">港澳台:系统将叠加值机+出入境查验缓冲(120-150分钟)。</p>
-      </div>
+        </div>
+      </details>
 
     </section>
     <section class="form-source-block" data-form-section="when">
@@ -1674,16 +1774,6 @@ FORM_TEMPLATE = """
         companionDetail.classList.add('precise-only');
         whoBody.appendChild(companionDetail);
       }
-      const preferenceBody = document.getElementById('station-body-flight_preferences');
-      if (preferenceBody) {
-        const depthContent = document.createElement('div');
-        depthContent.id = 'advanced-depth-content';
-        depthContent.hidden = true;
-        while (preferenceBody.firstChild) {
-          depthContent.appendChild(preferenceBody.firstChild);
-        }
-        preferenceBody.appendChild(depthContent);
-      }
       document.getElementById('form-field-warehouse')?.remove();
     }
 
@@ -1703,8 +1793,11 @@ FORM_TEMPLATE = """
     const strictRulesWarning = document.getElementById('strict-rules-warning');
     const quickDefaultsNote = document.getElementById('quick-defaults-note');
     const monitorModeInput = document.getElementById('monitor_mode');
-    const advancedDepthToggle = document.getElementById('advanced-depth-toggle');
-    const advancedDepthContent = document.getElementById('advanced-depth-content');
+    const quickFinishButton = document.getElementById('quick-finish-button');
+    const optionalSettingsToggle = document.getElementById('optional-settings-toggle');
+    const optionalStationToggles = Array.from(
+      document.querySelectorAll('[data-optional-station-toggle]')
+    );
     const scenarioPresetChips = document.getElementById('scenario-preset-chips');
     const constraintSummaryPreview = document.getElementById('constraint-summary-preview');
 
@@ -1810,10 +1903,13 @@ FORM_TEMPLATE = """
       'PVG','SHA','PEK','PKX','CAN','SZX','CTU','TFU','HGH','NKG','XIY','CKG',
       'WUH','CSX','TAO','XMN','FOC','KMG','SHE','DLC','TSN','CGO','URC','HRB'
     ]);
+    const requiredStationCount = Number(
+      form.dataset.requiredStations || formStructure.required_station_count || 4
+    );
     let currentStep = 1;
     let routeTypeTouched = false;
-    let advancedDepthExpanded = (
-      editSubscription && editSubscription.monitor_mode === 'precise'
+    let optionalFlowEnabled = Boolean(
+      (formStructure.edit_expanded_sections || []).length
     );
 
     if (stepTimePreferences && customTimeOptions) {
@@ -2040,20 +2136,26 @@ FORM_TEMPLATE = """
       return window.matchMedia('(max-width: 720px)').matches;
     }
 
+    function activeStepCount() {
+      return optionalFlowEnabled ? stepTitles.length : requiredStationCount;
+    }
+
     function updateStepper() {
       const mobile = isMobileStepper();
+      const visibleCount = activeStepCount();
       stepPanels.forEach(panel => {
         const isActive = Number(panel.dataset.step) === currentStep;
         panel.classList.toggle('active', !mobile || isActive);
       });
       stepDots.textContent = stepTitles
+        .slice(0, visibleCount)
         .map((_, index) => index + 1 === currentStep ? '●' : '○')
         .join(' ');
-      stepLabel.textContent = `第${currentStep}站/共${stepTitles.length}站：${stepTitles[currentStep - 1]}`;
+      stepLabel.textContent = `第${currentStep}站/共${visibleCount}站：${stepTitles[currentStep - 1]}`;
       stepPrev.disabled = currentStep === 1;
-      stepNext.style.display = currentStep === stepTitles.length ? 'none' : 'block';
+      stepNext.style.display = currentStep === visibleCount ? 'none' : 'block';
       previewButton.classList.remove('step-final-visible');
-      if (mobile && currentStep === stepTitles.length) {
+      if (mobile && currentStep === visibleCount) {
         buildSummary();
         summaryCard.style.display = 'block';
       } else if (mobile) {
@@ -2065,7 +2167,7 @@ FORM_TEMPLATE = """
     function updateMobileActionBar() {
       if (!mobileActionBar || !isMobileStepper()) return;
       const missing = missingRequiredLabels(currentStep);
-      const finalStep = currentStep === stepTitles.length;
+      const finalStep = currentStep === activeStepCount();
       if (mobileActionText) {
         mobileActionText.textContent = finalStep
           ? '确认摘要后即可开始监控'
@@ -2083,7 +2185,7 @@ FORM_TEMPLATE = """
     }
 
     function goToStep(step) {
-      currentStep = Math.max(1, Math.min(stepTitles.length, step));
+      currentStep = Math.max(1, Math.min(activeStepCount(), step));
       updateStepper();
       if (isMobileStepper()) {
         mobileStepper.scrollIntoView({behavior: 'smooth', block: 'start'});
@@ -2188,7 +2290,7 @@ FORM_TEMPLATE = """
         buildSummary();
         return;
       }
-      if (isMobileStepper() && currentStep === stepTitles.length) {
+      if (isMobileStepper() && currentStep === activeStepCount()) {
         buildSummary();
       }
     }
@@ -2581,16 +2683,39 @@ FORM_TEMPLATE = """
       });
     }
 
+    function optionalSectionElement(sectionId) {
+      return document.querySelector(`[data-optional-section="${sectionId}"]`);
+    }
+
+    function setOptionalSectionExpanded(sectionId, expanded, markPrecise = false) {
+      const section = optionalSectionElement(sectionId);
+      const toggle = document.querySelector(
+        `[data-optional-station-toggle="${sectionId}"]`
+      );
+      if (section?.tagName === 'DETAILS') {
+        section.open = expanded;
+      } else if (section) {
+        section.hidden = !expanded;
+      }
+      if (toggle) {
+        toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+      }
+      if (expanded && markPrecise) {
+        optionalFlowEnabled = true;
+        setRadio('monitor_mode', 'precise', true);
+      }
+    }
+
+    function applyEditOptionalSections() {
+      document.querySelectorAll('[data-optional-section][data-edit-expanded="true"]').forEach(section => {
+        const sectionId = section.dataset.optionalSection;
+        setOptionalSectionExpanded(sectionId, true, false);
+        section.classList.add('optional-section-attention');
+      });
+    }
+
     function applyMonitorMode() {
       const precise = checkedValue('monitor_mode') === 'precise';
-      if (advancedDepthContent) {
-        advancedDepthContent.hidden = !advancedDepthExpanded;
-      }
-      if (advancedDepthToggle) {
-        advancedDepthToggle.textContent = advancedDepthExpanded
-          ? '收起完整飞行偏好'
-          : '展开完整飞行偏好';
-      }
       document.querySelectorAll('.precise-only').forEach(el => {
         el.style.display = precise ? 'block' : 'none';
       });
@@ -3264,6 +3389,16 @@ FORM_TEMPLATE = """
       });
     }
 
+    function renderOptionalSectionSummaries(summaries) {
+      Object.entries(summaries || {}).forEach(([sectionId, text]) => {
+        document.querySelectorAll(
+          `[data-optional-summary="${sectionId}"]`
+        ).forEach(target => {
+          target.textContent = text;
+        });
+      });
+    }
+
     function renderConstraintSummary(text) {
       if (!constraintSummaryPreview) return;
       constraintSummaryPreview.textContent = text || '\u4f9d\u636e:\u672a\u8bbe\u7f6e\u786c\u7ea6\u675f';
@@ -3277,6 +3412,7 @@ FORM_TEMPLATE = """
         });
         const data = await response.json();
         renderStationSummaries(data.station_summaries);
+        renderOptionalSectionSummaries(data.optional_section_summaries);
         if (!data.ok) return data;
         renderDefaultChips(data.chips);
         renderConstraintSummary(data.constraint_summary_text);
@@ -4083,17 +4219,29 @@ FORM_TEMPLATE = """
 
     window.addEventListener('resize', updateStepper);
 
-    advancedDepthToggle?.addEventListener('click', () => {
-      if (advancedDepthContent && !advancedDepthContent.hidden) {
-        advancedDepthExpanded = false;
-        advancedDepthContent.hidden = true;
-        advancedDepthToggle.textContent = '展开完整飞行偏好';
-        return;
-      }
-      advancedDepthExpanded = true;
-      setRadio('monitor_mode', 'precise', true);
+    optionalSettingsToggle?.addEventListener('click', () => {
+      optionalFlowEnabled = true;
+      setOptionalSectionExpanded('flight_preferences', true, true);
       applyMonitorMode();
-      advancedDepthContent?.scrollIntoView({behavior: 'smooth', block: 'start'});
+      if (isMobileStepper()) {
+        goToStep(requiredStationCount + 1);
+      } else {
+        optionalSectionElement('flight_preferences')?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start'
+        });
+      }
+    });
+
+    optionalStationToggles.forEach(toggle => {
+      toggle.addEventListener('click', () => {
+        const sectionId = toggle.dataset.optionalStationToggle;
+        const section = optionalSectionElement(sectionId);
+        const expanded = section ? !section.hidden : false;
+        setOptionalSectionExpanded(sectionId, expanded, expanded);
+        applyMonitorMode();
+        updateStepper();
+      });
     });
 
     document.querySelectorAll(
@@ -4102,16 +4250,16 @@ FORM_TEMPLATE = """
       detail.dataset.advancedDepth = '';
       detail.addEventListener('toggle', () => {
         if (!detail.open) return;
-        advancedDepthExpanded = true;
+        optionalFlowEnabled = true;
         setRadio('monitor_mode', 'precise', true);
         applyMonitorMode();
+        updateStepper();
       });
     });
 
     document.querySelectorAll('[data-advanced-depth] input, [data-advanced-depth] select').forEach(control => {
       control.addEventListener('change', () => {
         if (control.disabled) return;
-        advancedDepthExpanded = true;
         control.dataset.explicit = 'true';
         setRadio('monitor_mode', 'precise', true);
         applyMonitorMode();
@@ -4130,7 +4278,7 @@ FORM_TEMPLATE = """
       rulesToggle.textContent = expanded ? '＋ 更细的筛选规则' : '－ 收起筛选规则';
     });
 
-    previewButton.addEventListener('click', async () => {
+    async function showSubmissionPreview() {
       toggleBudgetRequired();
       toggleReturnDate();
       const missing = updateRequiredProgress();
@@ -4153,7 +4301,10 @@ FORM_TEMPLATE = """
       buildSummary();
       summaryCard.style.display = 'block';
       summaryCard.scrollIntoView({behavior: 'smooth', block: 'start'});
-    });
+    }
+
+    quickFinishButton?.addEventListener('click', showSubmissionPreview);
+    previewButton.addEventListener('click', showSubmissionPreview);
 
     editButton.addEventListener('click', () => {
       summaryCard.style.display = 'none';
@@ -4276,13 +4427,14 @@ FORM_TEMPLATE = """
     primaryGoalRadios.forEach(radio => radio.addEventListener('change', () => {
       applyDefaultSecondaryGoals();
     updateBudgetScopeLabels();
-      if (isMobileStepper() && currentStep === stepTitles.length) {
+      if (isMobileStepper() && currentStep === activeStepCount()) {
         buildSummary();
       }
     }));
     companionRadios.forEach(radio => radio.addEventListener('change', applyCompanionDefaults));
     captureModuleDefaults();
     applyEditSubscription(editSubscription);
+    applyEditOptionalSections();
     syncSameDayRoundTrip();
     toggleReturnDate();
     toggleBudgetRequired();
@@ -5988,7 +6140,10 @@ def index():
         edit_subscription=edit_subscription or {},
         edit_index=edit_index,
         form_stations=FORM_STATIONS,
-        form_structure=form_structure_payload(),
+        form_structure=form_structure_payload(
+            edit_subscription or {},
+            editing=edit_index is not None,
+        ),
         form_error="",
     )
 
@@ -5997,6 +6152,7 @@ def index():
 def defaults_preview():
     """只读预览现有默认规则、六站摘要和共用约束依据。"""
     station_summaries = summarize_stations(request.form)
+    optional_section_summaries = summarize_optional_sections(request.form)
     try:
         subscription = build_subscription(request.form)
         subscription_with_defaults = apply_default_rules(subscription)
@@ -6029,6 +6185,7 @@ def defaults_preview():
             {
                 "ok": True,
                 "station_summaries": station_summaries,
+                "optional_section_summaries": optional_section_summaries,
                 "defaults_applied": subscription_with_defaults.get(
                     "defaults_applied",
                     [],
@@ -6044,6 +6201,7 @@ def defaults_preview():
                 "ok": False,
                 "error": str(exc),
                 "station_summaries": station_summaries,
+                "optional_section_summaries": optional_section_summaries,
                 "defaults_applied": [],
                 "chips": [],
                 "constraint_summary": [],

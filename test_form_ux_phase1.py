@@ -56,7 +56,11 @@ class FormUxPhase1Test(unittest.TestCase):
             'id="business-cabin-fields" data-form-section="flight_preferences" data-show-if="trip_natures=business|meeting|team_building"',
             template,
         )
-        self.assertIn("advancedDepthToggle.textContent = advancedDepthExpanded", template)
+        self.assertIn('data-optional-station-toggle="flight_preferences"', template)
+        self.assertIn(
+            "setOptionalSectionExpanded('flight_preferences', true, true)",
+            template,
+        )
 
     def test_conditional_families_declare_their_real_station_owners(self):
         template = web_form.app.test_client().get("/").get_data(as_text=True)
