@@ -58,9 +58,12 @@ class WebFormTemplateStep2Test(unittest.TestCase):
         self.assertIn('data-show-if="transfer_policy=price_first"', FORM_TEMPLATE)
 
     def test_time_business_and_reminder_reduction_markers_exist(self):
-        self.assertIn('id="custom-time-options" data-show-if="time_preference=custom"', FORM_TEMPLATE)
-        self.assertIn('id="precise-time-toggle"', FORM_TEMPLATE)
-        self.assertIn('data-show-if="time_preference=custom"', FORM_TEMPLATE)
+        self.assertIn('id="canonical-time-concept"', FORM_TEMPLATE)
+        self.assertIn('id="shared-departure-custom"', FORM_TEMPLATE)
+        self.assertIn('id="shared-arrival-custom"', FORM_TEMPLATE)
+        self.assertIn('name="separate_direction_times"', FORM_TEMPLATE)
+        self.assertNotIn('id="custom-time-options"', FORM_TEMPLATE)
+        self.assertNotIn('id="precise-time-toggle"', FORM_TEMPLATE)
         self.assertIn('id="business-rules-module" data-advanced-depth data-form-section="who" data-show-if="business_context=true"', FORM_TEMPLATE)
         self.assertIn('id="notification_frequency_rule_shadow"', FORM_TEMPLATE)
         self.assertIn("syncNotificationFrequencyShadow", FORM_TEMPLATE)
@@ -312,8 +315,10 @@ class WebFormTemplateStep2Test(unittest.TestCase):
         self.assertIn('disablePreciseOnlyFields(!precise)', FORM_TEMPLATE)
 
     def test_completion_summary_has_per_row_edit_actions(self):
-        self.assertIn("button.className = 'summary-row-edit'", FORM_TEMPLATE)
-        self.assertIn('data-summary-target', FORM_TEMPLATE)
+        self.assertIn("link.className = 'summary-row-edit'", FORM_TEMPLATE)
+        self.assertIn('link.dataset.summaryStation', FORM_TEMPLATE)
+        self.assertIn('link.dataset.summaryAnchor', FORM_TEMPLATE)
+        self.assertIn("link.href = '#station-'", FORM_TEMPLATE)
         self.assertIn('function editSummaryTarget', FORM_TEMPLATE)
         self.assertIn('function highlightField', FORM_TEMPLATE)
         self.assertIn("summaryLine('", FORM_TEMPLATE)

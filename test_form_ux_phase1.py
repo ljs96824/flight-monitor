@@ -56,9 +56,9 @@ class FormUxPhase1Test(unittest.TestCase):
             'id="business-cabin-fields" data-form-section="flight_preferences" data-show-if="trip_natures=business|meeting|team_building"',
             template,
         )
-        self.assertIn('data-optional-station-toggle="flight_preferences"', template)
+        self.assertIn('data-breadcrumb-station="5"', template)
         self.assertIn(
-            "setOptionalSectionExpanded('flight_preferences', true, true)",
+            "openWizardStation(requiredStationCount + 1)",
             template,
         )
 
@@ -80,7 +80,7 @@ class FormUxPhase1Test(unittest.TestCase):
             'id="advanced-alert-settings" data-advanced-depth data-form-section="notifications"', template
         )
         self.assertNotIn("const scenarioDefaults", template)
-        self.assertIn("matching.dataset.explicit = 'true'", template)
+        self.assertIn("control.dataset.explicit = 'true'", template)
         self.assertIn(
             "document.querySelectorAll('[data-advanced-depth] input", template
         )

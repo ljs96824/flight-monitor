@@ -30,6 +30,7 @@ from constraint_summary import build_constraint_summary, format_constraint_summa
 from form_structure import (
     FORM_STATIONS,
     build_default_chips,
+    derive_time_concept_fields,
     form_structure_payload,
     subscription_to_form_values,
     summarize_optional_sections,
@@ -778,6 +779,90 @@ FORM_TEMPLATE = """
       font-weight: 700;
       white-space: nowrap;
     }
+    .form-step {
+      display: none;
+    }
+    .form-step.active {
+      display: block;
+    }
+    .station-breadcrumbs {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 6px;
+      margin: 14px 0 18px;
+    }
+    .station-breadcrumb {
+      align-items: flex-start;
+      background: #f7f9fc;
+      border: 1px solid #d7e3f7;
+      color: #435069;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      min-height: 74px;
+      min-width: 0;
+      padding: 9px;
+      text-align: left;
+      white-space: normal;
+    }
+    .station-breadcrumb.active {
+      background: #eef5ff;
+      border-color: #1a73e8;
+      color: #174b8a;
+    }
+    .breadcrumb-state {
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .breadcrumb-title {
+      font-size: 14px;
+      font-weight: 700;
+    }
+    .breadcrumb-summary {
+      font-size: 11px;
+      line-height: 1.35;
+      max-width: 100%;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    .canonical-preference-chips {
+      display: grid;
+      gap: 12px;
+    }
+    .concept-control-group {
+      border-top: 1px solid #d7e3f7;
+      padding-top: 10px;
+    }
+    .concept-control-group:first-of-type {
+      border-top: 0;
+    }
+    .chip-choice label {
+      background: #f7f9fc;
+      border: 1px solid #d7e3f7;
+      border-radius: 6px;
+      margin: 2px;
+      padding: 7px 9px;
+    }
+    .chip-choice label.preset-active {
+      background: #eef5ff;
+      border-color: #1a73e8;
+      color: #174b8a;
+    }
+    .canonical-time-custom,
+    .direction-time-settings {
+      display: none;
+    }
+    @media (max-width: 900px) {
+      .station-breadcrumbs {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+    }
+    @media (max-width: 560px) {
+      .station-breadcrumbs {
+        grid-template-columns: minmax(0, 1fr);
+      }
+    }
+
     .station-summary {
       color: #5f6b7a;
       font-size: 13px;
@@ -923,14 +1008,35 @@ FORM_TEMPLATE = """
       <ul id="required-missing-list"></ul>
     </div>
 
+    <nav id="station-breadcrumbs" class="station-breadcrumbs" aria-label="创建监控步骤">
+      {% for station in form_stations %}
+      <button
+        type="button"
+        class="station-breadcrumb{% if station.number == 1 %} active{% endif %}"
+        data-breadcrumb-station="{{ station.number }}"
+        data-wizard-state="{{ 'current' if station.number == 1 else 'upcoming' }}"
+        aria-controls="station-{{ station.id }}"
+      >
+        <span class="breadcrumb-state">{{ '当前▶' if station.number == 1 else '未到○' }}</span>
+        <span class="breadcrumb-title">{{ station.number }}.{{ station.title }}</span>
+        <span class="breadcrumb-summary" data-station-summary="{{ station.id }}">尚未填写</span>
+      </button>
+      {% endfor %}
+    </nav>
+
     <div id="form-station-flow">
       {% for station in form_stations %}
+      {% set optional = form_structure.optional_section_map.get(station.id) %}
       <fieldset
-        class="form-step{% if station.number == 1 %} active{% endif %}"
+        id="station-{{ station.id }}"
+        class="form-step{% if station.number == 1 %} active{% endif %}{% if optional and optional.edit_expanded %} optional-section-attention{% endif %}"
         data-step="{{ station.number }}"
         data-station-id="{{ station.id }}"
         data-station-depth="{{ station.depth }}"
+        data-wizard-state="{{ 'current' if station.number == 1 else 'upcoming' }}"
         data-default-collapsed="{{ 'true' if station.default_collapsed else 'false' }}"
+        {% if optional %}data-optional-section="{{ station.id }}" data-edit-expanded="{{ 'true' if optional.edit_expanded else 'false' }}"{% endif %}
+        {% if station.number != 1 %}hidden{% endif %}
       >
         <legend class="station-legend">
           <span class="station-title">
@@ -939,34 +1045,18 @@ FORM_TEMPLATE = """
           </span>
           <span class="station-summary" data-station-summary="{{ station.id }}">尚未填写</span>
         </legend>
-        {% if station.depth == "optional" %}
-          {% set optional = form_structure.optional_section_map.get(station.id) %}
-          <button
-            id="{{ 'advanced-depth-toggle' if station.id == 'flight_preferences' else 'notification-depth-toggle' }}"
-            class="secondary-button optional-station-toggle"
-            type="button"
-            data-optional-station-toggle="{{ station.id }}"
-            aria-expanded="{{ 'true' if optional.edit_expanded else 'false' }}"
-          >{{ optional.title }}：<span data-optional-summary="{{ station.id }}">{{ optional.summary }}</span> ▸</button>
-          <div
-            id="{{ 'advanced-depth-content' if station.id == 'flight_preferences' else 'notification-depth-content' }}"
-            data-optional-section="{{ station.id }}" data-edit-expanded="{{ 'true' if optional.edit_expanded else 'false' }}"
-            class="optional-station-content{% if optional.edit_expanded %} optional-section-attention{% endif %}"
-            {% if not optional.edit_expanded %}hidden{% endif %}
-          >
-            <div id="station-body-{{ station.id }}"></div>
-          </div>
-        {% else %}
-          <div id="station-body-{{ station.id }}"></div>
-          {% if station.id == "budget" %}
-          <div id="quick-finish-panel" class="quick-finish-panel">
-            <button id="quick-finish-button" type="button">✓ 完成创建(使用下方预设)</button>
-            <div id="scenario-preset-chips" class="scenario-preset-chips" aria-live="polite"></div>
-            <button id="optional-settings-toggle" class="secondary-button" type="button">
-              想细调时间/航司/提醒?展开可选设置
-            </button>
-          </div>
-          {% endif %}
+        {% if optional %}
+        <p class="station-depth-note">{{ optional.title }}：<span data-optional-summary="{{ station.id }}">{{ optional.summary }}</span></p>
+        {% endif %}
+        <div id="station-body-{{ station.id }}"></div>
+        {% if station.id == "budget" %}
+        <div id="quick-finish-panel" class="quick-finish-panel">
+          <button id="quick-finish-button" type="button">✓ 完成创建(使用下方预设)</button>
+          <div id="scenario-preset-chips" class="scenario-preset-chips" aria-live="polite"></div>
+          <button id="optional-settings-toggle" class="secondary-button" type="button">
+            想细调时间/航司/提醒?展开可选设置
+          </button>
+        </div>
         {% endif %}
       </fieldset>
       {% endfor %}
@@ -1028,19 +1118,11 @@ FORM_TEMPLATE = """
       </div>
       <div id="same-day-business-fields" data-show-if="same_day_round_trip=true">
         <label>当天往返安排</label>
-        <div class="quick-only">
-          <div class="inline-grid">
-            <label>会议/办事开始时间 <input name="business_start" type="time" value="10:00"></label>
-            <label>会议/办事结束时间 <input name="business_end" type="time" value="17:00"></label>
-          </div>
+        <div class="inline-grid">
+          <label>会议/办事开始时间 <input name="business_start" type="time" value="10:00"></label>
+          <label>会议/办事结束时间 <input name="business_end" type="time" value="17:00"></label>
         </div>
-        <div class="precise-only">
-          <div class="inline-grid">
-            <label>会议/办事开始时间 <input name="business_start" type="time" value="10:00"></label>
-            <label>会议/办事结束时间 <input name="business_end" type="time" value="17:00"></label>
-          </div>
-          <p class="hint">展开进阶设置后，可按机场等级、车程估算和冗余参数精确反推航班窗口。</p>
-        </div>
+        <p class="hint">系统按机场等级、车程估算和冗余参数反推航班窗口；可行性参数可在“谁去”站细调。</p>
         <label>会议地点/区域 <input name="meeting_location" type="text" placeholder="例如 国贸 / 陆家嘴 / 某酒店"></label>
         <label>会议重要程度</label>
         <div class="choice">
@@ -1163,19 +1245,135 @@ FORM_TEMPLATE = """
 
     </section>
     <section class="form-source-block" data-form-section="flight_preferences">
+      <div id="preference-chip-home"></div>
+      <div id="canonical-preference-chips" class="canonical-preference-chips" data-advanced-depth>
+        <input type="hidden" name="ux2_concept_form" value="true">
+        <input type="hidden" name="ux2_time_touched" value="false">
+        <input type="hidden" name="ux2_original_departure_time_policy" value="">
+        <input type="hidden" name="ux2_original_arrival_time_policy" value="">
 
-      <label>中转接受程度</label>
-      <div class="choice">
-        <label><input type="radio" name="transfer_policy" value="direct_only"> 必须直飞</label>
-        <label><input type="radio" name="transfer_policy" value="reasonable" checked> 可以接受合理中转</label>
-        <label><input type="radio" name="transfer_policy" value="price_first"> 价格优先，中转也可以</label>
-      </div>
+        <section id="canonical-transfer-concept" class="concept-control-group" data-concept="transfer">
+          <strong>中转</strong>
+          <div class="choice chip-choice">
+            <label data-chip-field="transfer_policy" data-chip-value="direct_only"><input type="radio" name="transfer_policy" value="direct_only"> 必须直飞</label>
+            <label data-chip-field="transfer_policy" data-chip-value="reasonable"><input type="radio" name="transfer_policy" value="reasonable" checked> 合理中转</label>
+            <label data-chip-field="transfer_policy" data-chip-value="price_first"><input type="radio" name="transfer_policy" value="price_first"> 价格优先</label>
+          </div>
+        </section>
 
-      <label>是否需要托运行李</label>
-      <div class="choice">
-        <label><input type="radio" name="baggage" value="required" checked> 必须</label>
-        <label><input type="radio" name="baggage" value="not_needed"> 不需要</label>
-        <label><input type="radio" name="baggage" value="unknown"> 不确定</label>
+        <section class="concept-control-group" data-concept="baggage">
+          <strong>托运行李</strong>
+          <div class="choice chip-choice">
+            <label data-chip-field="baggage" data-chip-value="required"><input type="radio" name="baggage" value="required" checked> 必须含托运</label>
+            <label data-chip-field="baggage" data-chip-value="not_needed"><input type="radio" name="baggage" value="not_needed"> 不需要</label>
+            <label data-chip-field="baggage" data-chip-value="unknown"><input type="radio" name="baggage" value="unknown"> 不确定</label>
+          </div>
+        </section>
+
+        <section id="canonical-time-concept" class="concept-control-group" data-concept="time">
+          <strong>时间偏好</strong>
+          <div id="meeting-time-handoff-card" class="meeting-handoff-card" aria-live="polite">
+            <strong>时间安排已由会议模式接管</strong>
+            <div id="meeting-time-handoff-text">系统将按你的会议时间 + 预留时间自动推算航班窗口。</div>
+            <p class="hint">精确窗口会按目的地机场车程计算，提交后生效。想手动设置时间？取消会议模式。</p>
+          </div>
+          <div id="time-preference-controls">
+            <div class="choice chip-choice">
+              <label data-chip-field="time_preference" data-chip-value="unlimited"><input type="radio" name="time_preference" value="unlimited" checked> 出发不限</label>
+              <label data-chip-field="time_preference" data-chip-value="daytime"><input type="radio" name="time_preference" value="daytime"> 白天出发</label>
+              <label data-chip-field="time_preference" data-chip-value="custom"><input type="radio" name="time_preference" value="custom"> 自定义</label>
+            </div>
+            <div class="choice chip-choice">
+              <label data-chip-field="allow_redeye" data-chip-value="true"><input type="checkbox" name="allow_redeye" value="true"> 接受红眼/凌晨</label>
+            </div>
+            <label>到达偏好</label>
+            <div class="choice chip-choice">
+              <label><input type="radio" name="arrival_preference" value="any" checked> 不限</label>
+              <label><input type="radio" name="arrival_preference" value="daytime"> 白天到达</label>
+              <label><input type="radio" name="arrival_preference" value="no_late"> 不深夜到达</label>
+              <label><input type="radio" name="arrival_preference" value="custom"> 自定义</label>
+            </div>
+            <label id="separate-direction-times-wrap" data-show-if="round_trip=true">
+              <input type="checkbox" name="separate_direction_times" value="true"> 去程/返程分别设置
+            </label>
+
+            <div id="shared-time-settings">
+              <div id="shared-departure-custom" class="inline-grid canonical-time-custom">
+                <label>最早起飞 <input type="time" name="departure_time_start"></label>
+                <label>最晚起飞 <input type="time" name="departure_time_end"></label>
+              </div>
+              <div id="shared-arrival-custom" class="inline-grid canonical-time-custom">
+                <label>最早到达 <input type="time" name="arrival_time_start"></label>
+                <label>最晚到达 <input type="time" name="arrival_time_end"></label>
+              </div>
+            </div>
+
+            <div id="direction-time-settings" class="direction-time-settings">
+              {% for prefix, title in [("outbound", "去程"), ("return", "返程")] %}
+              <fieldset class="time-preferences {{ 'time-outbound' if prefix == 'outbound' else 'time-return' }}" data-direction="{{ prefix }}">
+                <legend>{{ title }}</legend>
+                <div class="choice chip-choice">
+                  <label><input type="radio" name="{{ prefix }}_time_preference" value="unlimited" checked> 出发不限</label>
+                  <label><input type="radio" name="{{ prefix }}_time_preference" value="daytime"> 白天出发</label>
+                  <label><input type="radio" name="{{ prefix }}_time_preference" value="custom"> 自定义</label>
+                  <label><input type="checkbox" name="{{ prefix }}_allow_redeye" value="true"> 接受红眼</label>
+                </div>
+                <label>到达偏好</label>
+                <div class="choice chip-choice">
+                  <label><input type="radio" name="{{ prefix }}_arrival_preference" value="any" checked> 不限</label>
+                  <label><input type="radio" name="{{ prefix }}_arrival_preference" value="daytime"> 白天</label>
+                  <label><input type="radio" name="{{ prefix }}_arrival_preference" value="no_late"> 不深夜</label>
+                  <label><input type="radio" name="{{ prefix }}_arrival_preference" value="custom"> 自定义</label>
+                </div>
+                <div class="inline-grid direction-departure-custom">
+                  <label>最早起飞 <input type="time" name="{{ prefix }}_departure_time_start"></label>
+                  <label>最晚起飞 <input type="time" name="{{ prefix }}_departure_time_end"></label>
+                </div>
+                <div class="inline-grid direction-arrival-custom">
+                  <label>最早到达 <input type="time" name="{{ prefix }}_arrival_time_start"></label>
+                  <label>最晚到达 <input type="time" name="{{ prefix }}_arrival_time_end"></label>
+                </div>
+              </fieldset>
+              {% endfor %}
+            </div>
+          </div>
+        </section>
+
+        <section class="concept-control-group" data-concept="refund">
+          <strong>退改</strong>
+          <div class="choice chip-choice">
+            <label data-chip-field="refund_flexibility" data-chip-value="not_needed"><input type="radio" name="refund_flexibility" value="not_needed"> 便宜优先</label>
+            <label data-chip-field="refund_flexibility" data-chip-value="preferred"><input type="radio" name="refund_flexibility" value="preferred" checked> 最好可改签</label>
+            <label data-chip-field="refund_flexibility" data-chip-value="required"><input type="radio" name="refund_flexibility" value="required"> 必须可退改</label>
+            <label data-chip-field="refund_flexibility" data-chip-value="unknown"><input type="radio" name="refund_flexibility" value="unknown"> 不确定</label>
+          </div>
+        </section>
+
+        <section id="canonical-airline-concept" class="concept-control-group" data-concept="airline">
+          <strong>航司与廉航</strong>
+          <div class="choice chip-choice">
+            <label data-chip-field="airline_policy" data-chip-value="any"><input type="radio" name="airline_policy" value="any" checked> 不限制航司</label>
+            <label data-chip-field="airline_policy" data-chip-value="prefer_full_service"><input type="radio" name="airline_policy" value="prefer_full_service"> 偏好全服务</label>
+            <label data-chip-field="airline_policy" data-chip-value="no_lcc"><input type="radio" name="airline_policy" value="no_lcc"> 不接受廉航</label>
+            <label data-chip-field="airline_policy" data-chip-value="exclude_airlines"><input type="radio" name="airline_policy" value="exclude_airlines"> 排除指定航司</label>
+          </div>
+          <div data-show-if="exclude_airlines=true">
+            <label>不接受的航司 <input name="exclude_airlines" placeholder="多个航司用逗号分隔"></label>
+            <div class="choice chip-choice">
+              <label><input type="checkbox" name="blocked_airlines_common" value="Spirit"> Spirit</label>
+              <label><input type="checkbox" name="blocked_airlines_common" value="Frontier"> Frontier</label>
+              <label><input type="checkbox" name="blocked_airlines_common" value="春秋航空"> 春秋航空</label>
+              <label><input type="checkbox" name="blocked_airlines_common" value="乐桃航空"> 乐桃航空</label>
+            </div>
+          </div>
+          <label>廉价航空</label>
+          <div class="choice chip-choice">
+            <label><input type="radio" name="lcc_policy" value="any" checked> 不限</label>
+            <label><input type="radio" name="lcc_policy" value="exclude_lcc"> 排除廉航</label>
+            <label><input type="radio" name="lcc_policy" value="lcc_only"> 仅看廉航</label>
+          </div>
+          <p class="hint">按执飞航司识别；“仅看廉航”要求全部航段均由廉航执飞。</p>
+        </section>
       </div>
     </section>
 
@@ -1262,34 +1460,6 @@ FORM_TEMPLATE = """
         <legend>提高推荐准确度</legend>
         <p class="hint">不填也可以，系统会按普通出行默认规则监控</p>
 
-        <div class="pref-cards">
-          <div class="pref-card">
-            <div class="pref-name">同行人员</div>
-            <div class="pref-value" id="pref-value-companion" data-pref-value="companions">未设置</div>
-            <button class="secondary-button pref-card-button" type="button" data-pref-target="companions">补充</button>
-          </div>
-          <div class="pref-card">
-            <div class="pref-name">时间偏好</div>
-            <div class="pref-value" id="pref-value-time" data-pref-value="time">使用默认：避免红眼</div>
-            <button class="secondary-button pref-card-button" type="button" data-pref-target="time">修改</button>
-          </div>
-          <div class="pref-card">
-            <div class="pref-name">退改签</div>
-            <div class="pref-value" id="pref-value-refund" data-pref-value="refund">使用默认：便宜优先，提醒风险</div>
-            <button class="secondary-button pref-card-button" type="button" data-pref-target="refund">修改</button>
-          </div>
-          <div class="pref-card">
-            <div class="pref-name">航司偏好</div>
-            <div class="pref-value" id="pref-value-airline" data-pref-value="airline">使用默认：不限</div>
-            <button class="secondary-button pref-card-button" type="button" data-pref-target="airline">修改</button>
-          </div>
-          <div class="pref-card">
-            <div class="pref-name">非联程中转</div>
-            <div class="pref-value" id="pref-value-self-transfer" data-pref-value="self_transfer">使用默认：不接受</div>
-            <button class="secondary-button pref-card-button" type="button" data-pref-target="self_transfer">修改</button>
-          </div>
-        </div>
-
         <div id="pref-detail-companions" class="pref-card-detail">
         <label>购票人数</label>
         <div class="inline-grid">
@@ -1335,129 +1505,14 @@ FORM_TEMPLATE = """
         <label>其他实际需求（可选）</label>
         <div class="choice">
           <label><input type="checkbox" name="solo_travel" value="true"> 独自出行</label>
-          <label><input type="checkbox" name="no_late_arrival" value="true"> 不接受深夜到达</label>
-          <label><input type="checkbox" name="prefer_daytime_arrival" value="true"> 希望优先白天到达</label>
         </div>
         <div id="auto-preference-notice" class="auto-notice"></div>
         </div>
 
-        <input type="hidden" name="departure_time_policy" value="any">
         <input type="hidden" name="trip_rigidity" value="confirmed">
 
-        <div id="pref-detail-time" class="pref-card-detail">
-        <div class="module-heading">
-          <label>时间偏好</label>
-          <button class="reset-module" type="button" data-reset-module="time">恢复默认</button>
-        </div>
-        <div id="meeting-time-handoff-card" class="meeting-handoff-card" aria-live="polite">
-          <strong>⏱ 时间安排已由会议模式接管</strong>
-          <div id="meeting-time-handoff-text">
-            系统将按你的会议时间 + 预留时间自动推算航班窗口。
-          </div>
-          <p class="hint">精确窗口会按目的地机场车程计算，提交后生效。想手动设置时间？取消会议模式。</p>
-        </div>
-        <div id="time-preference-controls">
-        <div class="choice">
-          <label><input type="radio" name="time_preference" value="unlimited" checked> 不限制</label>
-          <label><input type="radio" name="time_preference" value="daytime"> 白天优先</label>
-          <label><input type="radio" name="time_preference" value="no_redeye"> 不接受红眼/凌晨到达</label>
-          <label><input type="radio" name="time_preference" value="custom"> 自定义时间段</label>
-        </div>
-
-        <div id="custom-time-options" data-show-if="time_preference=custom">
-        <p class="hint">这些设置不是必填项。保持默认时，系统会按普通出行规则处理。</p>
-        <fieldset id="single-time-preferences" class="time-preferences time-outbound">
-          <strong>时段偏好</strong>
-          <label>偏好哪些时段起飞？（可多选）</label>
-          <div class="choice">
-            <label><input type="checkbox" name="departure_slots" value="dawn" checked> 清晨 06:00-09:00</label>
-            <label><input type="checkbox" name="departure_slots" value="morning" checked> 早上 09:00-12:00</label>
-            <label><input type="checkbox" name="departure_slots" value="noon" checked> 中午 12:00-14:00</label>
-            <label><input type="checkbox" name="departure_slots" value="afternoon" checked> 下午 14:00-17:00</label>
-            <label><input type="checkbox" name="departure_slots" value="evening" checked> 傍晚 17:00-20:00</label>
-            <label><input type="checkbox" name="departure_slots" value="night" checked> 晚上 20:00-23:00</label>
-            <label><input type="checkbox" name="departure_slots" value="redeye"> 凌晨/红眼 23:00-06:00</label>
-          </div>
-
-          <label>可接受哪些时段到达？（可多选）</label>
-          <div class="choice">
-            <label><input type="checkbox" name="arrival_slots" value="dawn" checked> 清晨 06:00-09:00</label>
-            <label><input type="checkbox" name="arrival_slots" value="morning" checked> 早上 09:00-12:00</label>
-            <label><input type="checkbox" name="arrival_slots" value="noon" checked> 中午 12:00-14:00</label>
-            <label><input type="checkbox" name="arrival_slots" value="afternoon" checked> 下午 14:00-17:00</label>
-            <label><input type="checkbox" name="arrival_slots" value="evening" checked> 傍晚 17:00-20:00</label>
-            <label><input type="checkbox" name="arrival_slots" value="night" checked> 晚上 20:00-23:00</label>
-            <label><input type="checkbox" name="arrival_slots" value="redeye"> 凌晨/红眼 23:00-06:00</label>
-          </div>
-        </fieldset>
-
-        <div id="round-trip-time-preferences" data-show-if="round_trip=true">
-          <fieldset class="time-preferences time-outbound">
-            <strong>━━ 去程时段偏好 ━━</strong>
-            <label>去程偏好哪些时段起飞？</label>
-            <div class="choice">
-              <label><input type="checkbox" name="outbound_departure_slots" value="dawn" checked> 清晨 06:00-09:00</label>
-              <label><input type="checkbox" name="outbound_departure_slots" value="morning" checked> 早上 09:00-12:00</label>
-              <label><input type="checkbox" name="outbound_departure_slots" value="noon" checked> 中午 12:00-14:00</label>
-              <label><input type="checkbox" name="outbound_departure_slots" value="afternoon" checked> 下午 14:00-17:00</label>
-              <label><input type="checkbox" name="outbound_departure_slots" value="evening" checked> 傍晚 17:00-20:00</label>
-              <label><input type="checkbox" name="outbound_departure_slots" value="night" checked> 晚上 20:00-23:00</label>
-              <label><input type="checkbox" name="outbound_departure_slots" value="redeye"> 凌晨/红眼 23:00-06:00</label>
-            </div>
-
-            <label>去程可接受哪些时段到达？</label>
-            <div class="choice">
-              <label><input type="checkbox" name="outbound_arrival_slots" value="dawn" checked> 清晨 06:00-09:00</label>
-              <label><input type="checkbox" name="outbound_arrival_slots" value="morning" checked> 早上 09:00-12:00</label>
-              <label><input type="checkbox" name="outbound_arrival_slots" value="noon" checked> 中午 12:00-14:00</label>
-              <label><input type="checkbox" name="outbound_arrival_slots" value="afternoon" checked> 下午 14:00-17:00</label>
-              <label><input type="checkbox" name="outbound_arrival_slots" value="evening" checked> 傍晚 17:00-20:00</label>
-              <label><input type="checkbox" name="outbound_arrival_slots" value="night" checked> 晚上 20:00-23:00</label>
-              <label><input type="checkbox" name="outbound_arrival_slots" value="redeye"> 凌晨/红眼 23:00-06:00</label>
-            </div>
-          </fieldset>
-
-          <fieldset class="time-preferences time-return">
-            <strong>━━ 返程时段偏好 ━━</strong>
-            <label>返程偏好哪些时段起飞？</label>
-            <div class="choice">
-              <label><input type="checkbox" name="return_departure_slots" value="dawn" checked> 清晨 06:00-09:00</label>
-              <label><input type="checkbox" name="return_departure_slots" value="morning" checked> 早上 09:00-12:00</label>
-              <label><input type="checkbox" name="return_departure_slots" value="noon" checked> 中午 12:00-14:00</label>
-              <label><input type="checkbox" name="return_departure_slots" value="afternoon" checked> 下午 14:00-17:00</label>
-              <label><input type="checkbox" name="return_departure_slots" value="evening" checked> 傍晚 17:00-20:00</label>
-              <label><input type="checkbox" name="return_departure_slots" value="night" checked> 晚上 20:00-23:00</label>
-              <label><input type="checkbox" name="return_departure_slots" value="redeye"> 凌晨/红眼 23:00-06:00</label>
-            </div>
-
-            <label>返程可接受哪些时段到达？</label>
-            <div class="choice">
-              <label><input type="checkbox" name="return_arrival_slots" value="dawn" checked> 清晨 06:00-09:00</label>
-              <label><input type="checkbox" name="return_arrival_slots" value="morning" checked> 早上 09:00-12:00</label>
-              <label><input type="checkbox" name="return_arrival_slots" value="noon" checked> 中午 12:00-14:00</label>
-              <label><input type="checkbox" name="return_arrival_slots" value="afternoon" checked> 下午 14:00-17:00</label>
-              <label><input type="checkbox" name="return_arrival_slots" value="evening" checked> 傍晚 17:00-20:00</label>
-              <label><input type="checkbox" name="return_arrival_slots" value="night" checked> 晚上 20:00-23:00</label>
-              <label><input type="checkbox" name="return_arrival_slots" value="redeye"> 凌晨/红眼 23:00-06:00</label>
-            </div>
-          </fieldset>
-        </div>
-        </div>
-        </div>
-        </div>
-
-        <div id="pref-detail-refund" class="pref-card-detail">
-        <label>如果行程变化，你希望机票怎样？</label>
-        <div class="choice">
-          <label><input type="radio" name="refund_flexibility" value="not_needed"> 不重要，便宜优先</label>
-          <label><input type="radio" name="refund_flexibility" value="preferred" checked> 最好能改签日期</label>
-          <label><input type="radio" name="refund_flexibility" value="required"> 必须能退票或改签</label>
-          <label><input type="radio" name="refund_flexibility" value="unknown"> 不确定</label>
-        </div>
-
-        <label>为了便宜，你最多能接受多大不方便？</label>
-        <div class="choice">
-          <label><input type="radio" name="price_sensitivity" value="low" checked> 不接受明显不方便，时间和稳定更重要</label>
+        <div id="pref-detail-refund" class="concept-control-group">
+        <label><input type="radio" name="price_sensitivity" value="low" checked> 不接受明显不方便，时间和稳定更重要</label>
           <label><input type="radio" name="price_sensitivity" value="medium"> 便宜200元左右，可以接受早晚班</label>
           <label><input type="radio" name="price_sensitivity" value="high"> 便宜500元以上，可以接受中转或更长耗时</label>
           <label><input type="radio" name="price_sensitivity" value="max"> 价格优先，只要显著便宜都可以看</label>
@@ -1605,56 +1660,6 @@ FORM_TEMPLATE = """
           </div>
           </div>
 
-          <div id="precise-time-module">
-          <div class="module-heading">
-            <label>小时级精确设置</label>
-          </div>
-          <button id="precise-time-toggle" class="secondary-button" type="button" data-show-if="time_preference=custom" style="font-size:13px;padding:8px;margin-top:10px;">需要更精确？按小时设置</button>
-          <div id="precise-time-options" class="sub-options">
-            <label>最早起飞</label>
-            <input type="time" name="departure_time_start">
-            <label>最晚起飞</label>
-            <input type="time" name="departure_time_end">
-            <label>最早到达</label>
-            <input type="time" name="arrival_time_start">
-            <label>最晚到达</label>
-            <input type="time" name="arrival_time_end">
-            <p class="hint">填写后会覆盖上面的自然语言时段。</p>
-          </div>
-          </div>
-
-          <div id="pref-detail-airline" class="pref-card-detail">
-          <div class="module-heading">
-            <label>航司偏好</label>
-            <button class="reset-module" type="button" data-reset-module="airline">恢复默认</button>
-          </div>
-          <p class="hint">这些设置不是必填项。保持默认时，系统会按普通出行规则处理。</p>
-          <div class="choice">
-            <label><input type="radio" name="airline_policy" value="any" checked> 不限制</label>
-            <label><input type="radio" name="airline_policy" value="prefer_full_service"> 偏好全服务航司</label>
-            <label><input type="radio" name="airline_policy" value="no_lcc"> 不接受廉航</label>
-            <label><input type="radio" name="airline_policy" value="exclude_airlines"> 有不接受的航司吗？</label>
-          </div>
-
-          <div data-show-if="exclude_airlines=true">
-            <label>不接受的航司</label>
-            <input name="exclude_airlines" placeholder="选填，多个航司用逗号分隔，例如 Spirit, Frontier">
-            <div class="choice">
-              <label><input type="checkbox" name="blocked_airlines_common" value="Spirit"> Spirit</label>
-              <label><input type="checkbox" name="blocked_airlines_common" value="Frontier"> Frontier</label>
-              <label><input type="checkbox" name="blocked_airlines_common" value="春秋航空"> 春秋航空</label>
-              <label><input type="checkbox" name="blocked_airlines_common" value="乐桃航空"> 乐桃航空</label>
-            </div>
-          </div>
-          <label>廉价航空</label>
-          <div class="choice">
-            <label><input type="radio" name="lcc_policy" value="any" checked> 不限</label>
-            <label><input type="radio" name="lcc_policy" value="exclude_lcc"> 排除廉航</label>
-            <label><input type="radio" name="lcc_policy" value="lcc_only"> 仅看廉航</label>
-          </div>
-          <p class="hint">按执飞航司识别；“仅看廉航”要求全部航段均由廉航执飞。</p>
-          </div>
-
           <div id="advanced-alert-settings" data-advanced-depth data-form-section="notifications" class="precise-only">
           <div class="module-heading">
             <label>提醒规则</label>
@@ -1787,6 +1792,7 @@ FORM_TEMPLATE = """
 
     const form = document.getElementById('subscription-form');
     const modeRadios = document.querySelectorAll('input[name="monitor_mode"]');
+    const ux2TimeTouchedInput = document.querySelector('input[name="ux2_time_touched"]');
     const budgetStrategyRadios = document.querySelectorAll('input[name="price_strategy"]');
     const budgetAmountFields = document.getElementById('budget-amount-fields');
     const requiredProgress = document.getElementById('required-progress');
@@ -1801,10 +1807,12 @@ FORM_TEMPLATE = """
     const monitorModeInput = document.getElementById('monitor_mode');
     const quickFinishButton = document.getElementById('quick-finish-button');
     const optionalSettingsToggle = document.getElementById('optional-settings-toggle');
-    const optionalStationToggles = Array.from(
-      document.querySelectorAll('[data-optional-station-toggle]')
-    );
     const scenarioPresetChips = document.getElementById('scenario-preset-chips');
+    const canonicalPreferenceChips = document.getElementById('canonical-preference-chips');
+    const preferenceChipHome = document.getElementById('preference-chip-home');
+    const breadcrumbButtons = Array.from(
+      document.querySelectorAll('[data-breadcrumb-station]')
+    );
     const constraintSummaryPreview = document.getElementById('constraint-summary-preview');
 
     const originSelect = document.getElementById('origin');
@@ -1837,11 +1845,11 @@ FORM_TEMPLATE = """
     const meetingTimeHandoffCard = document.getElementById('meeting-time-handoff-card');
     const meetingTimeHandoffText = document.getElementById('meeting-time-handoff-text');
     const timePreferenceControls = document.getElementById('time-preference-controls');
-    const customTimeOptions = document.getElementById('custom-time-options');
-    const preciseTimeToggle = document.getElementById('precise-time-toggle');
-    const preciseTimeOptions = document.getElementById('precise-time-options');
-    const singleTimePreferences = document.getElementById('single-time-preferences');
-    const roundTripTimePreferences = document.getElementById('round-trip-time-preferences');
+    const sharedTimeSettings = document.getElementById('shared-time-settings');
+    const sharedDepartureCustom = document.getElementById('shared-departure-custom');
+    const sharedArrivalCustom = document.getElementById('shared-arrival-custom');
+    const directionTimeSettings = document.getElementById('direction-time-settings');
+    const separateDirectionTimes = document.querySelector('input[name="separate_direction_times"]');
     const timePreferenceRadios = document.querySelectorAll('input[name="time_preference"]');
     const maxBudgetRadios = document.querySelectorAll('input[name="max_budget_mode"]');
     const targetPriceRadios = document.querySelectorAll('input[name="target_price_mode"]');
@@ -1887,7 +1895,6 @@ FORM_TEMPLATE = """
     const travelScenarioNotice = document.getElementById('travel-scenario-notice');
     const companionRadios = document.querySelectorAll('input[name="companions"]');
     const autoPreferenceNotice = document.getElementById('auto-preference-notice');
-    const departurePolicyInput = document.querySelector('input[name="departure_time_policy"]');
     const stepPanels = Array.from(document.querySelectorAll('.form-step'));
     const mobileStepper = document.getElementById('mobile-stepper');
     const stepDots = document.getElementById('step-dots');
@@ -1899,9 +1906,6 @@ FORM_TEMPLATE = """
     const mobileNextButton = document.getElementById('mobile-next-button');
     const mobileSummaryButton = document.getElementById('mobile-summary-button');
     const mobileSubmitButton = document.getElementById('mobile-submit-button');
-    const stepTimePreferences = document.getElementById('step-time-preferences');
-    const prefCardButtons = document.querySelectorAll('.pref-card-button');
-    const prefCardDetails = document.querySelectorAll('.pref-card-detail');
     const resetModuleButtons = document.querySelectorAll('.reset-module');
     const stepTitles = formStructure.stations.map(station => station.title);
     const greaterChinaAirports = new Set(['HKG', 'MFM', 'TPE', 'TSA']);
@@ -1917,10 +1921,6 @@ FORM_TEMPLATE = """
     let optionalFlowEnabled = Boolean(
       (formStructure.edit_expanded_sections || []).length
     );
-
-    if (stepTimePreferences && customTimeOptions) {
-      stepTimePreferences.appendChild(customTimeOptions);
-    }
 
     function checkedValue(name) {
       const selected = document.querySelector(`input[name="${name}"]:checked`);
@@ -2024,9 +2024,9 @@ FORM_TEMPLATE = """
     });
 
     const moduleInputContainers = {
-      time: ['pref-detail-time'],
-      transfer: ['transfer-rules-module'],
-      airline: ['pref-detail-airline'],
+      time: ['canonical-time-concept'],
+      transfer: ['canonical-transfer-concept', 'transfer-rules-module'],
+      airline: ['canonical-airline-concept'],
       alerts: ['alerts-secondary-options']
     };
 
@@ -2062,9 +2062,6 @@ FORM_TEMPLATE = """
         const mainFrequency = document.querySelector('input[name="notification_frequency"][value="important_only"]');
         if (mainFrequency) mainFrequency.checked = true;
       }
-      if (moduleName === 'time' && preciseTimeOptions) {
-        preciseTimeOptions.style.display = 'none';
-      }
       updateConditionalFields();
       toggleTimePreference();
       toggleShortTransferOptions();
@@ -2078,37 +2075,44 @@ FORM_TEMPLATE = """
       return document.querySelectorAll(`input[name="${name}"]:checked`).length;
     }
 
+    function minutesBetween(start, end) {
+      if (!start || !end) return null;
+      const startParts = start.split(':').map(Number);
+      const endParts = end.split(':').map(Number);
+      if (startParts.length !== 2 || endParts.length !== 2) return null;
+      let value = endParts[0] * 60 + endParts[1] - startParts[0] * 60 - startParts[1];
+      if (value < 0) value += 24 * 60;
+      return value;
+    }
+
     function hasNarrowCustomTimeWindow() {
-      if (checkedValue('time_preference') !== 'custom') {
-        return false;
-      }
-      const isRoundTrip = checkedValue('round_trip') === 'true';
-      const fields = isRoundTrip
-        ? ['outbound_departure_slots', 'outbound_arrival_slots', 'return_departure_slots', 'return_arrival_slots']
-        : ['departure_slots', 'arrival_slots'];
-      return fields.some(name => {
-        const count = selectedCount(name);
-        return count > 0 && count <= 2;
+      const split = checkedValue('round_trip') === 'true'
+        && Boolean(separateDirectionTimes?.checked);
+      const prefixes = split ? ['outbound_', 'return_'] : [''];
+      return prefixes.some(prefix => {
+        if (checkedValue(prefix + 'time_preference') !== 'custom') return false;
+        const start = checkedValue(prefix + 'departure_time_start');
+        const end = checkedValue(prefix + 'departure_time_end');
+        const width = minutesBetween(start, end);
+        return width !== null && width <= 6 * 60;
       });
     }
 
     function customTimeExcludesRedeye() {
-      if (checkedValue('time_preference') !== 'custom') {
-        return false;
+      const split = checkedValue('round_trip') === 'true'
+        && Boolean(separateDirectionTimes?.checked);
+      if (split) {
+        return !document.querySelector('input[name="outbound_allow_redeye"]')?.checked
+          && !document.querySelector('input[name="return_allow_redeye"]')?.checked;
       }
-      const isRoundTrip = checkedValue('round_trip') === 'true';
-      const fields = isRoundTrip
-        ? ['outbound_departure_slots', 'outbound_arrival_slots', 'return_departure_slots', 'return_arrival_slots']
-        : ['departure_slots', 'arrival_slots'];
-      return fields.every(name => !Array.from(document.querySelectorAll(`input[name="${name}"]:checked`))
-        .some(input => input.value === 'redeye'));
+      return !document.querySelector('input[name="allow_redeye"]')?.checked;
     }
 
     function strictRuleStatus() {
       let score = 0;
       if (checkedValue('transfer_policy') === 'direct_only') score += 1;
       if (checkedValue('baggage') === 'required') score += 1;
-      if (checkedValue('time_preference') === 'no_redeye' || customTimeExcludesRedeye()) score += 1;
+      if (customTimeExcludesRedeye()) score += 1;
       if (checkedValue('airline_policy') === 'no_lcc') score += 1;
       const maxBudget = Number(maxBudgetInput.value || 0);
       const targetPrice = Number(targetPriceInput.value || 0);
@@ -2146,27 +2150,56 @@ FORM_TEMPLATE = """
       return optionalFlowEnabled ? stepTitles.length : requiredStationCount;
     }
 
+    function mountCanonicalPreferenceChips() {
+      if (!canonicalPreferenceChips) return;
+      const target = currentStep === requiredStationCount
+        ? scenarioPresetChips
+        : preferenceChipHome;
+      if (target && canonicalPreferenceChips.parentElement !== target) {
+        target.appendChild(canonicalPreferenceChips);
+      }
+    }
+
     function updateStepper() {
-      const mobile = isMobileStepper();
       const visibleCount = activeStepCount();
       stepPanels.forEach(panel => {
-        const isActive = Number(panel.dataset.step) === currentStep;
-        panel.classList.toggle('active', !mobile || isActive);
+        const step = Number(panel.dataset.step);
+        const isActive = step === currentStep;
+        panel.classList.toggle('active', isActive);
+        panel.hidden = !isActive;
+        panel.dataset.wizardState = isActive
+          ? 'current'
+          : (step < currentStep ? 'complete' : 'upcoming');
+      });
+      breadcrumbButtons.forEach(button => {
+        const step = Number(button.dataset.breadcrumbStation);
+        const state = step === currentStep
+          ? 'current'
+          : (step < currentStep ? 'complete' : 'upcoming');
+        button.dataset.wizardState = state;
+        button.classList.toggle('active', state === 'current');
+        const stateLabel = button.querySelector('.breadcrumb-state');
+        if (stateLabel) {
+          stateLabel.textContent = state === 'current'
+            ? '当前▶'
+            : (state === 'complete' ? '完成✓' : '未到○');
+        }
       });
       stepDots.textContent = stepTitles
         .slice(0, visibleCount)
         .map((_, index) => index + 1 === currentStep ? '●' : '○')
         .join(' ');
-      stepLabel.textContent = `第${currentStep}站/共${visibleCount}站：${stepTitles[currentStep - 1]}`;
+      stepLabel.textContent = '第' + currentStep + '站/共' + visibleCount + '站：' + stepTitles[currentStep - 1];
       stepPrev.disabled = currentStep === 1;
       stepNext.style.display = currentStep === visibleCount ? 'none' : 'block';
       previewButton.classList.remove('step-final-visible');
-      if (mobile && currentStep === visibleCount) {
+      if (isMobileStepper() && currentStep === visibleCount) {
         buildSummary();
         summaryCard.style.display = 'block';
-      } else if (mobile) {
+      } else if (isMobileStepper()) {
         summaryCard.style.display = 'none';
       }
+      mountCanonicalPreferenceChips();
       updateMobileActionBar();
     }
 
@@ -2193,9 +2226,21 @@ FORM_TEMPLATE = """
     function goToStep(step) {
       currentStep = Math.max(1, Math.min(activeStepCount(), step));
       updateStepper();
-      if (isMobileStepper()) {
-        mobileStepper.scrollIntoView({behavior: 'smooth', block: 'start'});
+      const currentPanel = document.querySelector('.form-step[data-step="' + currentStep + '"]');
+      currentPanel?.scrollIntoView({behavior: 'smooth', block: 'start'});
+    }
+
+    function openWizardStation(step) {
+      const target = Number(step);
+      if (target > requiredStationCount) {
+        optionalFlowEnabled = true;
+        setRadio('monitor_mode', 'precise', true);
+        applyMonitorMode();
       }
+      currentStep = Math.max(1, Math.min(stepTitles.length, target));
+      updateStepper();
+      const currentPanel = document.querySelector('.form-step[data-step="' + currentStep + '"]');
+      currentPanel?.scrollIntoView({behavior: 'smooth', block: 'start'});
     }
 
     function validateCurrentStep() {
@@ -2695,29 +2740,25 @@ FORM_TEMPLATE = """
 
     function setOptionalSectionExpanded(sectionId, expanded, markPrecise = false) {
       const section = optionalSectionElement(sectionId);
-      const toggle = document.querySelector(
-        `[data-optional-station-toggle="${sectionId}"]`
-      );
-      if (section?.tagName === 'DETAILS') {
-        section.open = expanded;
-      } else if (section) {
-        section.hidden = !expanded;
-      }
-      if (toggle) {
-        toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
-      }
-      if (expanded && markPrecise) {
-        optionalFlowEnabled = true;
+      if (!expanded) return;
+      optionalFlowEnabled = true;
+      section?.classList.add('optional-section-attention');
+      if (markPrecise) {
         setRadio('monitor_mode', 'precise', true);
       }
     }
 
     function applyEditOptionalSections() {
-      document.querySelectorAll('[data-optional-section][data-edit-expanded="true"]').forEach(section => {
-        const sectionId = section.dataset.optionalSection;
-        setOptionalSectionExpanded(sectionId, true, false);
-        section.classList.add('optional-section-attention');
-      });
+      const expanded = Array.from(
+        document.querySelectorAll('[data-optional-section][data-edit-expanded="true"]')
+      );
+      if (!expanded.length) return;
+      optionalFlowEnabled = true;
+      setRadio('monitor_mode', 'precise', true);
+      expanded.forEach(section => section.classList.add('optional-section-attention'));
+      const first = expanded[0];
+      const stationId = first.dataset.stationId || first.dataset.optionalSection;
+      currentStep = stationNumberById.get(stationId) || currentStep;
     }
 
     function applyMonitorMode() {
@@ -2769,48 +2810,58 @@ FORM_TEMPLATE = """
       syncPrefCards();
     }
 
-    function syncPreciseTimeDisabled() {
-      const custom = checkedValue('time_preference') === 'custom'
-        && checkedValue('monitor_mode') === 'precise'
-        && !meetingHandoffActive();
-      const preciseOpen = custom && preciseTimeOptions && preciseTimeOptions.style.display === 'block';
-      if (preciseTimeToggle) {
-        preciseTimeToggle.disabled = !custom;
-      }
-      preciseTimeOptions?.querySelectorAll('input, select, textarea').forEach(control => {
-        control.disabled = !preciseOpen;
+    function setCanonicalBlockVisible(element, visible) {
+      if (!element) return;
+      element.style.display = visible ? 'grid' : 'none';
+      element.querySelectorAll('input, select, textarea').forEach(control => {
+        control.disabled = !visible;
       });
     }
 
+    function syncCanonicalTimeControls() {
+      const roundTrip = checkedValue('round_trip') === 'true';
+      const split = roundTrip && Boolean(separateDirectionTimes?.checked);
+      setCanonicalBlockVisible(sharedTimeSettings, !split);
+      setCanonicalBlockVisible(directionTimeSettings, split);
+
+      const sharedMode = checkedValue('time_preference') || 'unlimited';
+      const sharedArrival = checkedValue('arrival_preference') || 'any';
+      setCanonicalBlockVisible(sharedDepartureCustom, !split && sharedMode === 'custom');
+      setCanonicalBlockVisible(sharedArrivalCustom, !split && sharedArrival === 'custom');
+
+      ['outbound', 'return'].forEach(prefix => {
+        const fieldset = directionTimeSettings?.querySelector('[data-direction="' + prefix + '"]');
+        if (!fieldset) return;
+        const departureCustom = fieldset.querySelector('.direction-departure-custom');
+        const arrivalCustom = fieldset.querySelector('.direction-arrival-custom');
+        setCanonicalBlockVisible(
+          departureCustom,
+          split && checkedValue(prefix + '_time_preference') === 'custom'
+        );
+        setCanonicalBlockVisible(
+          arrivalCustom,
+          split && checkedValue(prefix + '_arrival_preference') === 'custom'
+        );
+      });
+
+      if (meetingHandoffActive()) {
+        timePreferenceControls?.querySelectorAll('input, select, textarea').forEach(control => {
+          control.disabled = true;
+        });
+      }
+    }
+
+    function syncPreciseTimeDisabled() {
+      syncCanonicalTimeControls();
+    }
+
     function toggleTimePreference() {
-      const preference = checkedValue('time_preference') || 'unlimited';
-      const custom = preference === 'custom'
-        && checkedValue('monitor_mode') === 'precise'
-        && !meetingHandoffActive();
-      if (customTimeOptions) {
-        customTimeOptions.style.display = custom ? 'block' : 'none';
-      }
-      if (!custom && preciseTimeOptions) {
-        preciseTimeOptions.style.display = 'none';
-      }
-      if (departurePolicyInput) {
-        departurePolicyInput.value = preference === 'custom' ? 'any' : preference;
-      }
-      const isRoundTrip = checkedValue('round_trip') === 'true';
-      if (singleTimePreferences) {
-        singleTimePreferences.style.display = custom && !isRoundTrip ? 'block' : 'none';
-      }
-      if (roundTripTimePreferences) {
-        roundTripTimePreferences.style.display = custom && isRoundTrip ? 'block' : 'none';
-      }
-      if (preciseTimeToggle) {
-        preciseTimeToggle.style.display = custom ? 'block' : 'none';
-      }
-      syncPreciseTimeDisabled();
+      syncCanonicalTimeControls();
     }
 
     function timePreferenceText() {
-      return timePreferenceTextFromValue(checkedValue('time_preference'));
+      const base = timePreferenceTextFromValue(checkedValue('time_preference'));
+      return customTimeExcludesRedeye() ? base + '·不红眼' : base;
     }
 
     function addMinutesToTime(value, minutes) {
@@ -2832,8 +2883,10 @@ FORM_TEMPLATE = """
 
     function hasManualTimeSettings() {
       if (checkedValue('time_preference') === 'custom') return true;
-      return Array.from(document.querySelectorAll('#precise-time-options input[type="time"]'))
-        .some(input => Boolean(input.value));
+      if (Boolean(separateDirectionTimes?.checked)) return true;
+      return Array.from(
+        document.querySelectorAll('#canonical-time-concept input[type="time"]')
+      ).some(input => Boolean(input.value));
     }
 
     function airportBufferFor(code) {
@@ -2948,6 +3001,9 @@ FORM_TEMPLATE = """
         timePreferenceControls.querySelectorAll('input, select, button').forEach(input => {
           input.disabled = active;
         });
+      }
+      if (!active) {
+        syncCanonicalTimeControls();
       }
       const bufferPreview = document.getElementById('airport-buffer-preview');
       if (bufferPreview) {
@@ -3111,20 +3167,7 @@ FORM_TEMPLATE = """
       syncPrefCards();
     }
 
-    function togglePrefDetail(key) {
-      const detail = document.getElementById(`pref-detail-${key}`);
-      if (!detail) return;
-      prefCardDetails.forEach(item => {
-        if (item !== detail) {
-          item.classList.remove('open');
-        }
-      });
-      detail.classList.toggle('open');
-      if (detail.classList.contains('open')) {
-        detail.scrollIntoView({behavior: 'smooth', block: 'nearest'});
-      }
-      syncPrefCards();
-    }
+
 
     function selectedCheckboxLabels(name) {
       return Array.from(document.querySelectorAll(`input[name="${name}"]:checked`))
@@ -3363,52 +3406,44 @@ FORM_TEMPLATE = """
       }
     }
 
-    function showPreciseCompanionSettings() {
-      setRadio('monitor_mode', 'precise');
-      applyMonitorMode();
-      togglePrefDetail('companions');
-      document.getElementById('pref-detail-companions')?.scrollIntoView({behavior: 'smooth', block: 'center'});
-    }
 
-    function applyChipValue(chip) {
-      const matching = document.querySelector(
-        `input[name="${chip.field}"][value="${chip.value}"]`
-      );
-      if (matching?.type === 'checkbox') {
-        matching.checked = true;
-      } else if (matching) {
-        setRadio(chip.field, chip.value);
-      } else {
-        const field = document.querySelector(`[name="${chip.field}"]`);
-        if (field) field.value = chip.value;
-      }
-      if (matching) matching.dataset.explicit = 'true';
-      setRadio('monitor_mode', 'precise', true);
-      applyMonitorMode();
-      refreshDefaultsPreview();
-    }
 
     function renderDefaultChips(chips) {
-      if (!scenarioPresetChips) return;
-      scenarioPresetChips.replaceChildren();
-      (chips || []).forEach(chip => {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = 'scenario-preset-chip';
-        button.textContent = `${chip.label} ✓`;
-        button.dataset.field = chip.field;
-        button.dataset.value = chip.value;
-        button.addEventListener('click', () => applyChipValue(chip));
-        scenarioPresetChips.appendChild(button);
+      document.querySelectorAll(
+        '#canonical-preference-chips [data-chip-field]'
+      ).forEach(label => {
+        label.classList.remove('preset-active');
+        label.removeAttribute('data-preset-label');
+        label.removeAttribute('title');
       });
+      (chips || []).forEach(chip => {
+        const mappedField = chip.field === 'time_preference' && chip.value === 'no_redeye'
+          ? 'time_preference'
+          : chip.field;
+        const mappedValue = chip.field === 'time_preference' && chip.value === 'no_redeye'
+          ? 'unlimited'
+          : chip.value;
+        const selector = '#canonical-preference-chips [data-chip-field="' +
+          mappedField + '"][data-chip-value="' + mappedValue + '"]';
+        const label = document.querySelector(selector);
+        if (!label) return;
+        label.classList.add('preset-active');
+        label.dataset.presetLabel = chip.label || '';
+        label.title = '场景预设：' + (chip.label || '');
+      });
+      if (scenarioPresetChips) {
+        scenarioPresetChips.dataset.defaultsCount = String((chips || []).length);
+      }
+      mountCanonicalPreferenceChips();
     }
 
     function renderStationSummaries(summaries) {
       Object.entries(summaries || {}).forEach(([stationId, text]) => {
-        const target = document.querySelector(
-          `[data-station-summary="${stationId}"]`
-        );
-        if (target) target.textContent = text;
+        document.querySelectorAll(
+          '[data-station-summary="' + stationId + '"]'
+        ).forEach(target => {
+          target.textContent = text;
+        });
       });
     }
 
@@ -3518,11 +3553,7 @@ FORM_TEMPLATE = """
       syncPrefCards();
     }
 
-    function slotSummary(name, labelMap) {
-      const values = checkedValues(name);
-      if (!values.length) return '未选择';
-      return values.map(value => labelMap[value] || value).join('、');
-    }
+
 
     function clearAutoSuggestions() {
       document.querySelectorAll('.auto-suggested').forEach(item => {
@@ -3544,15 +3575,16 @@ FORM_TEMPLATE = """
         return;
       }
 
-      [
-        'departure_slots',
-        'outbound_departure_slots',
-        'return_departure_slots'
-      ].forEach(name => setCheckbox(name, 'redeye', false, true));
-      if (departurePolicyInput) {
-        departurePolicyInput.value = 'no_redeye';
+      const allowRedeye = document.querySelector('input[name="allow_redeye"]');
+      if (allowRedeye) {
+        allowRedeye.checked = false;
+        allowRedeye.closest('label')?.classList.add('auto-suggested');
       }
-      setRadio('time_preference', 'no_redeye', true);
+      ['outbound_allow_redeye', 'return_allow_redeye'].forEach(name => {
+        const input = document.querySelector('input[name="' + name + '"]');
+        if (input) input.checked = false;
+      });
+      setRadio('time_preference', 'unlimited', true);
       toggleTimePreference();
       setRadio('baggage', 'required', true);
 
@@ -3563,17 +3595,13 @@ FORM_TEMPLATE = """
           true
         );
         setRadio('short_transfer_limit', 'extra_3', true);
-        toggleShortTransferOptions();
         autoPreferenceNotice.textContent = '已根据老人同行自动调整推荐偏好，你仍可手动修改';
       } else if (companions === 'with_child') {
-        autoPreferenceNotice.textContent = '已根据带小孩出行自动调整推荐偏好，你仍可手动修改';
-      }
-      if (companions === 'with_child') {
         setRadio('transfer_policy', 'reasonable', true);
         setRadio('short_transfer_limit', 'extra_3', true);
+        autoPreferenceNotice.textContent = '已根据带小孩出行自动调整推荐偏好，你仍可手动修改';
       }
       toggleShortTransferOptions();
-      autoPreferenceNotice.textContent = '已根据老人/小孩同行，默认提高白天航班、直飞、行李权重，你仍可手动修改';
       autoPreferenceNotice.style.display = 'block';
     }
 
@@ -3586,13 +3614,16 @@ FORM_TEMPLATE = """
         li.classList.add('summary-row');
         const span = document.createElement('span');
         span.textContent = text;
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = 'summary-row-edit';
-        button.dataset.summaryTarget = target;
-        button.textContent = '修改';
+        const config = summaryEditTargets[target] || {};
+        const link = document.createElement('a');
+        link.className = 'summary-row-edit';
+        link.dataset.summaryTarget = target;
+        link.dataset.summaryStation = String(config.step || '');
+        link.dataset.summaryAnchor = config.selector || '';
+        link.href = '#station-' + String(config.step || 1);
+        link.textContent = '修改';
         li.appendChild(span);
-        li.appendChild(button);
+        li.appendChild(link);
       } else {
         li.textContent = text;
       }
@@ -3617,7 +3648,7 @@ FORM_TEMPLATE = """
       notification: {step: stationNumberForField('notification_method'), selector: 'input[name="notification_method"]'},
       notification_frequency: {step: stationNumberForField('notification_frequency'), selector: 'input[name="notification_frequency"]'},
       precise_companions: {step: stationNumberForField('companions'), selector: '#advanced-preferences'},
-      precise_time: {step: stationNumberForField('time_preference'), selector: '#pref-detail-time'},
+      precise_time: {step: stationNumberForField('time_preference'), selector: '#canonical-time-concept'},
       precise_business: {step: stationNumberForField('trip_natures'), selector: '#business-rules-module'},
       precise_rules: {step: stationNumberForField('transfer_policy'), selector: '#advanced-rules'}
     };
@@ -3636,7 +3667,7 @@ FORM_TEMPLATE = """
       const config = summaryEditTargets[target];
       if (!config) return;
       summaryCard.style.display = 'none';
-      goToStep(config.step);
+      openWizardStation(config.step);
       if (target.startsWith('precise_')) {
         setRadio('monitor_mode', 'precise');
         applyMonitorMode();
@@ -3648,9 +3679,6 @@ FORM_TEMPLATE = """
         setSmartPanel(advancedRules, true);
       }
       const targetEl = document.querySelector(config.selector);
-      if (targetEl && targetEl.classList.contains('pref-card-detail')) {
-        targetEl.classList.add('open');
-      }
       highlightField(targetEl);
     }
 
@@ -3748,20 +3776,43 @@ FORM_TEMPLATE = """
       return valid;
     }
 
-    function customTimeSummary() {
-      const isRoundTrip = checkedValue('round_trip') === 'true';
-      if (isRoundTrip) {
-        return [
-          `去程起飞 ${slotSummary('outbound_departure_slots', labels.departureSlots)}`,
-          `去程到达 ${slotSummary('outbound_arrival_slots', labels.arrivalSlots)}`,
-          `返程起飞 ${slotSummary('return_departure_slots', labels.departureSlots)}`,
-          `返程到达 ${slotSummary('return_arrival_slots', labels.arrivalSlots)}`
-        ].join('；');
+    function canonicalTimeDirectionSummary(prefix = '') {
+      const keyPrefix = prefix ? prefix + '_' : '';
+      const mode = checkedValue(keyPrefix + 'time_preference') || 'unlimited';
+      const allowRedeye = Boolean(
+        document.querySelector('input[name="' + keyPrefix + 'allow_redeye"]')?.checked
+      );
+      const arrival = checkedValue(keyPrefix + 'arrival_preference') || 'any';
+      let departureText = timePreferenceTextFromValue(mode);
+      if (mode === 'custom') {
+        const start = enabledFieldValue(keyPrefix + 'departure_time_start') || '未填';
+        const end = enabledFieldValue(keyPrefix + 'departure_time_end') || '未填';
+        departureText = start + '-' + end;
       }
-      return [
-        `起飞 ${slotSummary('departure_slots', labels.departureSlots)}`,
-        `到达 ${slotSummary('arrival_slots', labels.arrivalSlots)}`
-      ].join('；');
+      const arrivalLabels = {
+        any: '不限',
+        daytime: '白天',
+        no_late: '不深夜',
+        custom: '自定义'
+      };
+      let arrivalText = arrivalLabels[arrival] || arrival;
+      if (arrival === 'custom') {
+        const start = enabledFieldValue(keyPrefix + 'arrival_time_start') || '未填';
+        const end = enabledFieldValue(keyPrefix + 'arrival_time_end') || '未填';
+        arrivalText = start + '-' + end;
+      }
+      return '出发' + departureText + '·' +
+        (allowRedeye ? '接受红眼' : '不红眼') + '·到达' + arrivalText;
+    }
+
+    function customTimeSummary() {
+      const split = checkedValue('round_trip') === 'true'
+        && Boolean(separateDirectionTimes?.checked);
+      if (split) {
+        return '去程：' + canonicalTimeDirectionSummary('outbound') +
+          '；返程：' + canonicalTimeDirectionSummary('return');
+      }
+      return canonicalTimeDirectionSummary();
     }
 
     function addPreciseRulesForSummary() {
@@ -3770,9 +3821,7 @@ FORM_TEMPLATE = """
       }
       const lines = [];
       if (moduleIsDirty('time')) {
-        const timeText = checkedValue('time_preference') === 'custom'
-          ? customTimeSummary()
-          : timePreferenceText();
+        const timeText = customTimeSummary();
         lines.push(['时间', timeText]);
       }
       if (moduleIsDirty('transfer')) {
@@ -3864,8 +3913,6 @@ FORM_TEMPLATE = """
         }
         const realNeeds = [];
         if (document.querySelector('input[name="solo_travel"]')?.checked) realNeeds.push('独自出行');
-        if (document.querySelector('input[name="no_late_arrival"]')?.checked) realNeeds.push('不接受深夜到达');
-        if (document.querySelector('input[name="prefer_daytime_arrival"]')?.checked) realNeeds.push('希望优先白天到达');
         if (realNeeds.length) {
           summaryLine('实际需求', realNeeds.join('、'), 'precise_companions');
         }
@@ -3922,13 +3969,11 @@ FORM_TEMPLATE = """
             'precise_time'
           );
         }
-        if (!meetingHandoffActive() && checkedValue('time_preference') === 'custom') {
-          if (isRoundTrip) {
-            summaryLine('去程起飞时段', slotSummary('outbound_departure_slots', labels.departureSlots), 'precise_time');
-            summaryLine('返程起飞时段', slotSummary('return_departure_slots', labels.departureSlots), 'precise_time');
-          } else {
-            summaryLine('起飞时段', slotSummary('departure_slots', labels.departureSlots), 'precise_time');
-          }
+        if (!meetingHandoffActive() && (
+          checkedValue('time_preference') === 'custom'
+          || Boolean(separateDirectionTimes?.checked)
+        )) {
+          summaryLine('时间明细', customTimeSummary(), 'precise_time');
         }
         if (checkedValue('transfer_policy') !== 'direct_only') {
           summaryLine('最长总行程', selectedLabel('short_transfer_limit'), 'precise_rules');
@@ -4031,8 +4076,6 @@ FORM_TEMPLATE = """
         elderly_condition: precise ? checkedValue('elderly_condition') : '',
         child_type: precise ? checkedValue('child_type') : '',
         solo_travel: precise && Boolean(document.querySelector('input[name="solo_travel"]')?.checked),
-        no_late_arrival: precise && Boolean(document.querySelector('input[name="no_late_arrival"]')?.checked),
-        prefer_daytime_arrival: precise && Boolean(document.querySelector('input[name="prefer_daytime_arrival"]')?.checked),
         airline_policy: precise ? checkedValue('airline_policy') : 'any',
         lcc_policy: checkedValue('lcc_policy') || 'any',
         notification_method: checkedValue('notification_method'),
@@ -4089,7 +4132,17 @@ FORM_TEMPLATE = """
         'accept_overnight_transfer',
         'accept_self_transfer'
       ].forEach(name => {
-        if (data[name]) setRadio(name, name === 'time_preference' && data[name] === 'any' ? 'unlimited' : data[name]);
+        if (data[name]) {
+          const normalizedValue = name === 'time_preference'
+            && ['any', 'no_redeye'].includes(data[name])
+            ? 'unlimited'
+            : data[name];
+          setRadio(name, normalizedValue);
+          if (name === 'time_preference' && data[name] === 'no_redeye') {
+            const allowRedeye = document.querySelector('input[name="allow_redeye"]');
+            if (allowRedeye) allowRedeye.checked = false;
+          }
+        }
       });
       if (data.budget_strategy) {
         setRadio('price_strategy', data.budget_strategy);
@@ -4114,6 +4167,15 @@ FORM_TEMPLATE = """
         });
       };
       setOptionalInput('meeting_location', data.meeting_location);
+      setOptionalInput('ux2_time_touched', data.ux2_time_touched || 'false');
+      setOptionalInput(
+        'ux2_original_departure_time_policy',
+        data.ux2_original_departure_time_policy
+      );
+      setOptionalInput(
+        'ux2_original_arrival_time_policy',
+        data.ux2_original_arrival_time_policy
+      );
       if (data.meeting_importance) setRadio('meeting_importance', data.meeting_importance);
       setOptionalInput('user_transport_min', data.user_transport_min);
       setOptionalInput('origin_transport_min', data.origin_transport_min);
@@ -4160,11 +4222,7 @@ FORM_TEMPLATE = """
         input.checked = (data.companion_constraints || []).includes(input.value);
       });
       const soloTravelInput = document.querySelector('input[name="solo_travel"]');
-      const noLateArrivalInput = document.querySelector('input[name="no_late_arrival"]');
-      const preferDaytimeArrivalInput = document.querySelector('input[name="prefer_daytime_arrival"]');
       if (soloTravelInput) soloTravelInput.checked = Boolean(data.solo_travel);
-      if (noLateArrivalInput) noLateArrivalInput.checked = Boolean(data.no_late_arrival);
-      if (preferDaytimeArrivalInput) preferDaytimeArrivalInput.checked = Boolean(data.prefer_daytime_arrival);
       secondaryGoalChecks.forEach(check => {
         check.checked = (data.secondary_goals || []).includes(check.value);
       });
@@ -4243,27 +4301,12 @@ FORM_TEMPLATE = """
     window.addEventListener('resize', updateStepper);
 
     optionalSettingsToggle?.addEventListener('click', () => {
-      optionalFlowEnabled = true;
-      setOptionalSectionExpanded('flight_preferences', true, true);
-      applyMonitorMode();
-      if (isMobileStepper()) {
-        goToStep(requiredStationCount + 1);
-      } else {
-        optionalSectionElement('flight_preferences')?.scrollIntoView({
-          behavior: 'smooth',
-          block: 'start'
-        });
-      }
+      openWizardStation(requiredStationCount + 1);
     });
 
-    optionalStationToggles.forEach(toggle => {
-      toggle.addEventListener('click', () => {
-        const sectionId = toggle.dataset.optionalStationToggle;
-        const section = optionalSectionElement(sectionId);
-        const expanded = section ? !section.hidden : false;
-        setOptionalSectionExpanded(sectionId, expanded, expanded);
-        applyMonitorMode();
-        updateStepper();
+    breadcrumbButtons.forEach(button => {
+      button.addEventListener('click', () => {
+        openWizardStation(Number(button.dataset.breadcrumbStation));
       });
     });
 
@@ -4284,6 +4327,9 @@ FORM_TEMPLATE = """
       control.addEventListener('change', () => {
         if (control.disabled) return;
         control.dataset.explicit = 'true';
+        if (control.closest('[data-concept="time"]') && ux2TimeTouchedInput) {
+          ux2TimeTouchedInput.value = 'true';
+        }
         setRadio('monitor_mode', 'precise', true);
         applyMonitorMode();
       });
@@ -4341,9 +4387,10 @@ FORM_TEMPLATE = """
       window.scrollTo({top: 0, behavior: 'smooth'});
     });
     summaryList.addEventListener('click', event => {
-      const button = event.target.closest('[data-summary-target]');
-      if (!button) return;
-      editSummaryTarget(button.dataset.summaryTarget);
+      const link = event.target.closest('[data-summary-target]');
+      if (!link) return;
+      event.preventDefault();
+      editSummaryTarget(link.dataset.summaryTarget);
     });
 
     tripRadios.forEach(radio => radio.addEventListener('change', () => {
@@ -4387,12 +4434,6 @@ FORM_TEMPLATE = """
     modeRadios.forEach(radio => radio.addEventListener('change', applyMonitorMode));
     travelScenarioRadios.forEach(radio => radio.addEventListener('change', applyTravelScenarioDefaults));
     timePreferenceRadios.forEach(radio => radio.addEventListener('change', toggleTimePreference));
-    preciseTimeToggle?.addEventListener('click', () => {
-      if (!preciseTimeOptions) return;
-      preciseTimeOptions.style.display = preciseTimeOptions.style.display === 'block' ? 'none' : 'block';
-      syncPreciseTimeDisabled();
-      refreshSummaryIfFinalStep();
-    });
     notificationMethodRadios.forEach(radio => radio.addEventListener('change', () => {
       toggleNotificationMethod();
       refreshSummaryIfFinalStep();
@@ -4409,9 +4450,6 @@ FORM_TEMPLATE = """
       syncNotificationFrequencyToRule();
       refreshSummaryIfFinalStep();
     }));
-    prefCardButtons.forEach(button => {
-      button.addEventListener('click', () => togglePrefDetail(button.dataset.prefTarget));
-    });
     resetModuleButtons.forEach(button => {
       button.addEventListener('click', () => resetModule(button.dataset.resetModule));
     });
@@ -4424,7 +4462,7 @@ FORM_TEMPLATE = """
       updateConditionalFields();
       refreshSummaryIfFinalStep();
     }));
-    ['companions', 'adult_count', 'child_count', 'elderly_count', 'infant_count', 'passenger_count', 'budget_scope', 'day_trip_period', 'trip_natures', 'team_passenger_count', 'cabin_arrangement', 'business_start', 'business_end', 'meeting_location', 'meeting_importance', 'outbound_set_off', 'return_set_off', 'user_transport_min', 'origin_transport_min', 'destination_transport_min', 'airport_advance_min', 'arrival_exit_min', 'delay_buffer_min', 'pre_meeting_buffer_min', 'post_meeting_buffer_min', 'custom_redundancy_min', 'transport_margin_mode', 'redundancy_min', 'meeting_start', 'meeting_end', 'team_date_flexibility', 'same_flight_required', 'cabin_policy', 'user_level', 'business_seats', 'economy_seats', 'reimburse_per_person', 'invoice_context', 'invoice_needed', 'invoice_special_vat', 'invoice_cabin_limit', 'time_preference', 'refund_flexibility', 'airline_policy', 'accept_self_transfer', 'companion_constraints', 'elderly_condition', 'child_type', 'solo_travel', 'no_late_arrival', 'prefer_daytime_arrival'].forEach(name => {
+    ['companions', 'adult_count', 'child_count', 'elderly_count', 'infant_count', 'passenger_count', 'budget_scope', 'day_trip_period', 'trip_natures', 'team_passenger_count', 'cabin_arrangement', 'business_start', 'business_end', 'meeting_location', 'meeting_importance', 'outbound_set_off', 'return_set_off', 'user_transport_min', 'origin_transport_min', 'destination_transport_min', 'airport_advance_min', 'arrival_exit_min', 'delay_buffer_min', 'pre_meeting_buffer_min', 'post_meeting_buffer_min', 'custom_redundancy_min', 'transport_margin_mode', 'redundancy_min', 'meeting_start', 'meeting_end', 'team_date_flexibility', 'same_flight_required', 'cabin_policy', 'user_level', 'business_seats', 'economy_seats', 'reimburse_per_person', 'invoice_context', 'invoice_needed', 'invoice_special_vat', 'invoice_cabin_limit', 'time_preference', 'allow_redeye', 'arrival_preference', 'separate_direction_times', 'outbound_time_preference', 'outbound_allow_redeye', 'outbound_arrival_preference', 'return_time_preference', 'return_allow_redeye', 'return_arrival_preference', 'refund_flexibility', 'airline_policy', 'accept_self_transfer', 'companion_constraints', 'elderly_condition', 'child_type', 'solo_travel'].forEach(name => {
       document.querySelectorAll(`input[name="${name}"]`).forEach(input => {
         input.addEventListener('change', () => {
           syncPrefCards();
@@ -5563,6 +5601,35 @@ def build_subscription(form) -> dict:
     return_arrival_time_windows = time_windows_from_preference(
         form, "return_arrival_slots", DEFAULT_ARRIVAL_SLOTS, "arrival_time_start", "arrival_time_end"
     )
+    ux2_time_fields = None
+    departure_time_policy = form.get("departure_time_policy", "no_redeye")
+    arrival_time_policy = form.get("arrival_time_policy", "any")
+    if parse_bool(form.get("ux2_concept_form", "false")):
+        ux2_time_fields = derive_time_concept_fields(form, round_trip=round_trip)
+        time_mode = ux2_time_fields["time_preference"]
+        departure_time_policy = ux2_time_fields["departure_time_policy"]
+        arrival_time_policy = ux2_time_fields["arrival_time_policy"]
+        if not parse_bool(form.get("ux2_time_touched", "false")):
+            departure_time_policy = (
+                form.get("ux2_original_departure_time_policy")
+                or departure_time_policy
+            )
+            arrival_time_policy = (
+                form.get("ux2_original_arrival_time_policy")
+                or arrival_time_policy
+            )
+        departure_slots = ux2_time_fields["departure_slots"]
+        arrival_slots = ux2_time_fields["arrival_slots"]
+        outbound_departure_slots = ux2_time_fields["outbound_departure_slots"]
+        outbound_arrival_slots = ux2_time_fields["outbound_arrival_slots"]
+        return_departure_slots = ux2_time_fields["return_departure_slots"]
+        return_arrival_slots = ux2_time_fields["return_arrival_slots"]
+        departure_time_windows = ux2_time_fields["departure_time_windows"]
+        arrival_time_windows = ux2_time_fields["arrival_time_windows"]
+        outbound_departure_time_windows = ux2_time_fields["outbound_departure_time_windows"]
+        outbound_arrival_time_windows = ux2_time_fields["outbound_arrival_time_windows"]
+        return_departure_time_windows = ux2_time_fields["return_departure_time_windows"]
+        return_arrival_time_windows = ux2_time_fields["return_arrival_time_windows"]
     all_time_windows = (
         departure_time_windows
         + arrival_time_windows
@@ -5711,8 +5778,16 @@ def build_subscription(form) -> dict:
     elderly_condition = form.get("elderly_condition", "normal").strip()
     child_type = form.get("child_type", "").strip()
     solo_travel = parse_bool(form.get("solo_travel", "false"))
-    no_late_arrival = parse_bool(form.get("no_late_arrival", "false"))
-    prefer_daytime_arrival = parse_bool(form.get("prefer_daytime_arrival", "false"))
+    no_late_arrival = parse_bool(
+        ux2_time_fields["no_late_arrival"]
+        if ux2_time_fields is not None
+        else form.get("no_late_arrival", "false")
+    )
+    prefer_daytime_arrival = parse_bool(
+        ux2_time_fields["prefer_daytime_arrival"]
+        if ux2_time_fields is not None
+        else form.get("prefer_daytime_arrival", "false")
+    )
     invoice_context = parse_bool(form.get("invoice_context", "false"))
     invoice_needed = parse_bool(form.get("invoice_needed", "false"))
     invoice_special_vat = parse_bool(form.get("invoice_special_vat", "false"))
@@ -6007,8 +6082,8 @@ def build_subscription(form) -> dict:
             "reimburse_per_person": reimburse_per_person or None,
             "max_extra_duration_hours": max_extra_duration_hours,
             "max_total_duration_hours": max_total_duration_hours,
-            "departure_time_policy": form.get("departure_time_policy", "no_redeye"),
-            "arrival_time_policy": form.get("arrival_time_policy", "any"),
+            "departure_time_policy": departure_time_policy,
+            "arrival_time_policy": arrival_time_policy,
             "time_preference": time_mode,
             **time_constraints,
             "baggage": form.get("baggage", "required"),

@@ -5,6 +5,13 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from notification_config import DEFAULT_NOTIFICATION_METHOD
+from form_concepts import (
+    CONCEPTS,
+    UX2_TIME_CONTROL_FIELDS,
+    derive_time_concept_fields,
+    project_time_concept_fields,
+    validate_concept_registry,
+)
 
 
 REQUIRED_STATION_COUNT = 4
@@ -19,6 +26,7 @@ FORM_STATIONS = (
         "default_collapsed": False,
         "title": "去哪",
         "fields": (
+            "subscription_index",
             "origin_select",
             "origin_manual",
             "origin_airports_active",
@@ -118,11 +126,25 @@ FORM_STATIONS = (
         "default_collapsed": True,
         "title": "飞行偏好",
         "fields": (
+            "monitor_mode",
+            "ux2_concept_form",
+            "ux2_time_touched",
+            "ux2_original_departure_time_policy",
+            "ux2_original_arrival_time_policy",
             "transfer_policy",
             "short_transfer_limit",
             "accept_overnight_transfer",
             "accept_self_transfer",
             "time_preference",
+            "allow_redeye",
+            "arrival_preference",
+            "separate_direction_times",
+            "outbound_time_preference",
+            "outbound_allow_redeye",
+            "outbound_arrival_preference",
+            "return_time_preference",
+            "return_allow_redeye",
+            "return_arrival_preference",
             "departure_time_policy",
             "departure_slots",
             "arrival_slots",
@@ -134,6 +156,14 @@ FORM_STATIONS = (
             "departure_time_end",
             "arrival_time_start",
             "arrival_time_end",
+            "outbound_departure_time_start",
+            "outbound_departure_time_end",
+            "outbound_arrival_time_start",
+            "outbound_arrival_time_end",
+            "return_departure_time_start",
+            "return_departure_time_end",
+            "return_arrival_time_start",
+            "return_arrival_time_end",
             "no_late_arrival",
             "prefer_daytime_arrival",
             "baggage",
@@ -174,9 +204,19 @@ FIELD_OWNERS = {
     field: station["id"] for station in FORM_STATIONS for field in station["fields"]
 }
 
+
+def validate_concepts(concepts=None) -> dict[str, list]:
+    """验证每个声明式表单字段恰好归属一个概念。"""
+    return validate_concept_registry(FIELD_OWNERS, concepts)
+
+
+validate_concepts()
+
 ADVANCED_FIELD_NAMES = frozenset(
     {
+        "ux2_concept_form",
         "time_preference",
+        *UX2_TIME_CONTROL_FIELDS,
         "departure_time_policy",
         "departure_slots",
         "arrival_slots",
@@ -255,11 +295,29 @@ OPTIONAL_SECTION_DEFAULTS = {
         "custom_redundancy_min": "",
     },
     "flight_preferences": {
+        "ux2_concept_form": "true",
         "transfer_policy": "reasonable",
         "short_transfer_limit": "extra_6",
         "accept_overnight_transfer": "false",
         "accept_self_transfer": "false",
         "time_preference": "unlimited",
+        "allow_redeye": "false",
+        "arrival_preference": "any",
+        "separate_direction_times": "false",
+        "outbound_time_preference": "unlimited",
+        "outbound_allow_redeye": "false",
+        "outbound_arrival_preference": "any",
+        "return_time_preference": "unlimited",
+        "return_allow_redeye": "false",
+        "return_arrival_preference": "any",
+        "outbound_departure_time_start": "",
+        "outbound_departure_time_end": "",
+        "outbound_arrival_time_start": "",
+        "outbound_arrival_time_end": "",
+        "return_departure_time_start": "",
+        "return_departure_time_end": "",
+        "return_arrival_time_start": "",
+        "return_arrival_time_end": "",
         "departure_slots": (),
         "arrival_slots": (),
         "outbound_departure_slots": (),
@@ -313,6 +371,32 @@ VISIBILITY_RULES = (
             "return_set_off",
             "return_departure_slots",
             "return_arrival_slots",
+            "separate_direction_times",
+        ),
+    },
+    {
+        "id": "separate_direction_times",
+        "when": {
+            "all": (
+                {"field": "round_trip", "values": ("true",)},
+                {"field": "separate_direction_times", "values": ("true",)},
+            )
+        },
+        "fields": (
+            "outbound_time_preference",
+            "outbound_allow_redeye",
+            "outbound_arrival_preference",
+            "outbound_departure_time_start",
+            "outbound_departure_time_end",
+            "outbound_arrival_time_start",
+            "outbound_arrival_time_end",
+            "return_time_preference",
+            "return_allow_redeye",
+            "return_arrival_preference",
+            "return_departure_time_start",
+            "return_departure_time_end",
+            "return_arrival_time_start",
+            "return_arrival_time_end",
         ),
     },
     {
@@ -1076,6 +1160,37 @@ def subscription_to_form_values(subscription: Mapping | None) -> dict:
             "notification_frequency_rule": frequency,
             "price_change_threshold": _first_defined(goals.get("price_change_threshold"), alerts.get("price_change_threshold"), default="down_100"),
             "digest_time": _first_defined(goals.get("digest_time"), alerts.get("digest_time"), default="09:00"),
+        }
+    )
+    original_departure_time_policy = values.get("departure_time_policy") or ""
+    original_arrival_time_policy = values.get("arrival_time_policy") or ""
+    legacy_time_values = {
+        "departure_slots": values.get("departure_slots"),
+        "arrival_slots": values.get("arrival_slots"),
+        "outbound_departure_slots": values.get("outbound_departure_slots"),
+        "outbound_arrival_slots": values.get("outbound_arrival_slots"),
+        "return_departure_slots": values.get("return_departure_slots"),
+        "return_arrival_slots": values.get("return_arrival_slots"),
+        "departure_time_windows": hard.get("departure_time_windows") or soft.get("departure_time_windows"),
+        "arrival_time_windows": hard.get("arrival_time_windows") or soft.get("arrival_time_windows"),
+        "outbound_departure_time_windows": hard.get("outbound_departure_time_windows") or soft.get("outbound_departure_time_windows"),
+        "outbound_arrival_time_windows": hard.get("outbound_arrival_time_windows") or soft.get("outbound_arrival_time_windows"),
+        "return_departure_time_windows": hard.get("return_departure_time_windows") or soft.get("return_departure_time_windows"),
+        "return_arrival_time_windows": hard.get("return_arrival_time_windows") or soft.get("return_arrival_time_windows"),
+        "no_late_arrival": values.get("no_late_arrival"),
+        "prefer_daytime_arrival": values.get("prefer_daytime_arrival"),
+    }
+    values.update(
+        project_time_concept_fields(
+            legacy_time_values,
+            round_trip=bool(data.get("round_trip")),
+        )
+    )
+    values.update(
+        {
+            "ux2_time_touched": "false",
+            "ux2_original_departure_time_policy": original_departure_time_policy,
+            "ux2_original_arrival_time_policy": original_arrival_time_policy,
         }
     )
     return values
