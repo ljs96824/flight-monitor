@@ -64,6 +64,51 @@ async function navigate(path) {
   await waitFor("document.readyState === 'complete'", `加载${path}`);
 }
 
+async function pressKey(key, code, windowsVirtualKeyCode) {
+  const params = {key, code, windowsVirtualKeyCode, nativeVirtualKeyCode: windowsVirtualKeyCode};
+  await command("Input.dispatchKeyEvent", {type: "keyDown", ...params});
+  await command("Input.dispatchKeyEvent", {type: "keyUp", ...params});
+}
+
+async function clickSelector(selector) {
+  const point = await evaluate(`(() => {
+    const element = document.querySelector(${JSON.stringify(selector)});
+    if (!element) throw new Error('missing ' + ${JSON.stringify(selector)});
+    element.scrollIntoView({block: 'center'});
+    const rect = element.getBoundingClientRect();
+    return {x: rect.left + rect.width / 2, y: rect.top + rect.height / 2};
+  })()`);
+  await command("Input.dispatchMouseEvent", {type: "mousePressed", x: point.x, y: point.y, button: "left", clickCount: 1});
+  await command("Input.dispatchMouseEvent", {type: "mouseReleased", x: point.x, y: point.y, button: "left", clickCount: 1});
+}
+
+async function chooseNotificationMethod(value) {
+  const targetIndex = await evaluate(`(() => {
+    const element = document.querySelector('[name="notification_method"]');
+    return [...element.options].findIndex(option => option.value === ${JSON.stringify(value)});
+  })()`);
+  if (targetIndex < 0) throw new Error(`通知方式不存在: ${value}`);
+  await clickSelector('[name="notification_method"]');
+  await pressKey("Home", "Home", 36);
+  for (let index = 0; index < targetIndex; index += 1) {
+    await pressKey("ArrowDown", "ArrowDown", 40);
+  }
+  await pressKey("Enter", "Enter", 13);
+  await waitFor(
+    `document.querySelector('[name="notification_method"]').value === ${JSON.stringify(value)}`,
+    `通知方式切换为${value}`,
+  );
+  return evaluate(`(() => {
+    const wrapper = document.querySelector('[data-visibility-contract="notification-email"]');
+    const input = document.querySelector('[name="notification_email"]');
+    const style = getComputedStyle(wrapper);
+    const rect = input.getBoundingClientRect();
+    const visible = !wrapper.hidden && style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+    if (visible) input.focus();
+    return {method: ${JSON.stringify(value)}, hidden: wrapper.hidden, visible, focusable: visible && document.activeElement === input};
+  })()`);
+}
+
 await command("Runtime.enable");
 await command("Page.enable");
 await command("Log.enable");
@@ -143,9 +188,10 @@ const fullContract = await evaluate(`(() => {
     sectionCount: ids.length,
     anchorCount: ids.filter(id => document.querySelector('a[href="#' + id + '"]')).length,
     duplicates: [...new Set(duplicates)],
+    buildMarker: document.querySelector('[data-build-marker="true"]')?.textContent.trim() || '',
   };
 })()`);
-if (fullContract.page !== "full" || !fullContract.sectionsVisible || fullContract.anchorCount !== 6 || fullContract.duplicates.length) {
+if (fullContract.page !== "full" || !fullContract.sectionsVisible || fullContract.anchorCount !== 6 || fullContract.duplicates.length || !fullContract.buildMarker) {
   throw new Error(`完整页契约失败: ${JSON.stringify(fullContract)}`);
 }
 for (const id of ["section-where","section-when","section-who","section-budget","section-flight-preferences","section-notifications"]) {
@@ -153,6 +199,20 @@ for (const id of ["section-where","section-when","section-who","section-budget",
   await waitFor(`location.hash === '#${id}' && Boolean(document.getElementById('${id}'))`, `锚点${id}`);
 }
 console.log(`[UI smoke] 页2六节=${fullContract.sectionCount} 全可见=True 目录锚点=${fullContract.anchorCount} 重复name=0`);
+console.log(`[UI smoke] 版本信标=${fullContract.buildMarker}`);
+
+const pushplusVisibility = await chooseNotificationMethod("pushplus");
+const emailVisibility = await chooseNotificationMethod("email");
+const bothVisibility = await chooseNotificationMethod("both");
+if (!pushplusVisibility.hidden || pushplusVisibility.visible) {
+  throw new Error(`微信渠道应隐藏邮箱: ${JSON.stringify(pushplusVisibility)}`);
+}
+for (const state of [emailVisibility, bothVisibility]) {
+  if (state.hidden || !state.visible || !state.focusable) {
+    throw new Error(`邮件渠道应显示且可聚焦邮箱: ${JSON.stringify(state)}`);
+  }
+}
+console.log("[UI smoke] 渠道三态转换=PASS 微信→邮箱隐藏；邮件→邮箱可见可聚焦；两者→邮箱可见可聚焦");
 
 await evaluate(`(() => {
   const set = (name, value) => {
@@ -183,7 +243,7 @@ await evaluate(`(() => {
   set('transport_mode', 'taxi');
   set('user_transport_min', '25');
   set('redundancy_min', '15');
-  set('notification_method', 'email');
+
   set('notification_email', 'ux31@example.com');
   const scenario = document.querySelector('[name="travel_scenario"]');
   [...scenario.options].forEach(option => option.selected = option.value === 'business');

@@ -25,6 +25,7 @@ from airports import (
 )
 from analyzer import apply_default_rules, build_price_hint_from_calendar
 from airlines import LCC_POLICIES, resolve_lcc_policy
+from build_info import PROCESS_BUILD_INFO
 from constraint_summary import build_constraint_summary, format_constraint_summary
 from form_pages import FORM_PAGE_TEMPLATE, build_form_page_context
 from form_structure import (
@@ -1908,6 +1909,9 @@ def _form_template_context(page_mode: str, values=None, *, edit_index=None, form
         "airport_codes": sorted(AIRPORTS),
         "exact_location_airports": EXACT_LOCATION_AIRPORTS,
         "form_error": form_error,
+        "build_marker": PROCESS_BUILD_INFO.format_marker(
+            request.environ.get("SERVER_PORT"),
+        ),
     }
 
 

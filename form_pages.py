@@ -567,6 +567,7 @@ FORM_PAGE_TEMPLATE = r"""
     .primary-button:hover { background:#07543f; }
     .secondary-link { padding:9px 0; font-weight:700; }
     .preset-note { color:var(--muted); font-size:13px; flex:1 1 320px; }
+    .build-marker { max-width:1180px; margin:0 auto; padding:16px 20px 22px; border-top:1px solid var(--line); color:var(--muted); font-size:12px; text-align:right; }
     .confirmation-map { margin-top:34px; padding-top:26px; border-top:2px solid var(--ink); }
     .confirmation-map h2 { margin:0 0 8px; }
     .confirmation-row { display:grid; grid-template-columns:120px 1fr auto; gap:14px; padding:11px 0; border-bottom:1px solid var(--line); align-items:start; }
@@ -707,6 +708,8 @@ FORM_PAGE_TEMPLATE = r"""
     </form>
   </main>
   {% endif %}
+
+  <footer class="build-marker" data-build-marker="true">{{ build_marker }}</footer>
 
   <script>
     (() => {

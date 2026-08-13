@@ -178,6 +178,11 @@ class FormUx31RenderCompletenessTest(unittest.TestCase):
             Path(__file__).parent / "scripts" / "ui_smoke_driver.mjs"
         ).read_text(encoding="utf-8")
         self.assertIn("双页互链=PASS", driver)
+        self.assertIn("渠道三态转换=PASS", driver)
+        self.assertIn('chooseNotificationMethod("pushplus")', driver)
+        self.assertIn('chooseNotificationMethod("email")', driver)
+        self.assertIn('chooseNotificationMethod("both")', driver)
+        self.assertNotIn("set('notification_method'", driver)
         self.assertIn("ux31@example.com", driver)
         self.assertIn("页2当天往返会议=PASS", driver)
 
