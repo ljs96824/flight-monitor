@@ -41,7 +41,7 @@ def _base_form(**overrides):
 
 
 class FormUx36TransferVisibilityTest(unittest.TestCase):
-    def test_transfer_is_fourth_visibility_contract_and_children_are_grouped(self):
+    def test_transfer_and_mixed_cabin_are_whitelisted_visibility_contracts(self):
         self.assertEqual(
             VISIBILITY_CONTRACTS,
             frozenset(
@@ -50,6 +50,7 @@ class FormUx36TransferVisibilityTest(unittest.TestCase):
                     "notification-email",
                     "business-scenario",
                     "transfer-details",
+                    "mixed-cabin",
                 }
             ),
         )

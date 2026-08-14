@@ -187,10 +187,121 @@ def build_display_prices(
     return_unit_price=None,
     passengers=None,
     route_type=None,
+    *,
+    per_cabin_unit_prices=None,
+    cabin_allocation=None,
 ) -> dict:
     """自成员分项向上汇总唯一的展示金额树。"""
     normalized = normalize_passengers_for_pricing(passengers)
     route_key, rates = passenger_fare_rates(route_type)
+
+    if per_cabin_unit_prices is not None or cabin_allocation is not None:
+        from cabin_allocation import (
+            CABIN_LABELS,
+            CABIN_ORDER,
+            PASSENGER_TYPE_LABELS,
+            PASSENGER_TYPE_ORDER,
+            validate_cabin_allocation,
+        )
+
+        validated = validate_cabin_allocation(cabin_allocation, normalized)
+        allocation = validated["allocation"]
+
+        def build_mixed_leg(direction):
+            prices = (per_cabin_unit_prices or {}).get(direction) or {}
+            cabins = {}
+            all_parts = []
+            raw_total = Decimal("0")
+            display_total = 0
+            for cabin in CABIN_ORDER:
+                counts = allocation[cabin]
+                if not sum(counts.values()):
+                    continue
+                unit_decimal = _to_decimal(prices.get(cabin))
+                if unit_decimal is None:
+                    raise ValueError(f"{CABIN_LABELS[cabin]}舱{direction}缺少单价")
+                cabin_parts = []
+                cabin_raw_total = Decimal("0")
+                cabin_display_total = 0
+                for key in PASSENGER_TYPE_ORDER:
+                    count = counts.get(key, 0)
+                    if not count:
+                        continue
+                    rate = Decimal(str(rates[key]))
+                    raw_unit = unit_decimal * rate
+                    raw_subtotal = raw_unit * count
+                    display_unit = round_display_price(raw_unit)
+                    display_subtotal = int(display_unit or 0) * count
+                    part = {
+                        "cabin": cabin,
+                        "cabin_label": CABIN_LABELS[cabin],
+                        "type": key,
+                        "label": PASSENGER_TYPE_LABELS[key],
+                        "count": count,
+                        "ratio": rates[key],
+                        "raw_unit_price": float(raw_unit),
+                        "raw_total": float(raw_subtotal),
+                        "unit_price": display_unit,
+                        "total": display_subtotal,
+                    }
+                    cabin_parts.append(part)
+                    all_parts.append(part)
+                    cabin_raw_total += raw_subtotal
+                    cabin_display_total += display_subtotal
+                cabins[cabin] = {
+                    "label": CABIN_LABELS[cabin],
+                    "unit_price": float(unit_decimal),
+                    "raw_total": float(cabin_raw_total),
+                    "total": cabin_display_total,
+                    "component_sum": sum(item["total"] for item in cabin_parts),
+                    "parts": cabin_parts,
+                    "parts_by_type": {item["type"]: item for item in cabin_parts},
+                }
+                raw_total += cabin_raw_total
+                display_total += cabin_display_total
+            return {
+                "unit_price": None,
+                "raw_total": float(raw_total),
+                "total": display_total,
+                "component_sum": sum(item["total"] for item in all_parts),
+                "parts": all_parts,
+                "cabins": cabins,
+            }
+
+        outbound = build_mixed_leg("outbound")
+        ret = (
+            build_mixed_leg("return")
+            if (per_cabin_unit_prices or {}).get("return")
+            else None
+        )
+        legs = [leg for leg in (outbound, ret) if leg]
+        total = sum(leg["total"] for leg in legs)
+        raw_total = sum(
+            (_to_decimal(leg["raw_total"]) or Decimal("0")) for leg in legs
+        )
+        passenger_count = sum(normalized.values()) or 1
+        return {
+            "outbound": outbound,
+            "return": ret,
+            "total": total,
+            "raw_total": float(raw_total),
+            "per_person_blended": round_display_price(Decimal(total) / passenger_count),
+            "passenger_count": passenger_count,
+            "passengers": normalized,
+            "passenger_label": _passenger_label(normalized),
+            "factor": None,
+            "route_type": route_type or "",
+            "route_rate_key": route_key,
+            "note": (
+                f"{rates['note']}；儿童按同舱成人价{rates['child'] * 100:g}%估算，"
+                "商务舱儿童票规差异大，以实际票规为准"
+            ),
+            "rounding": "ROUND_HALF_UP",
+            "mixed_cabin": True,
+            "cabin_allocation": allocation,
+            "cabin_label": validated["label"],
+            "per_cabin_unit_prices": per_cabin_unit_prices,
+        }
 
     def build_leg(unit_price):
         unit_decimal = _to_decimal(unit_price)

@@ -268,9 +268,11 @@ class FormUx33RenderingTest(unittest.TestCase):
         ]
         self.assertEqual({item.get("value") for item in radios}, {"daytime", "unlimited"})
 
-    def test_cabin_stays_in_flight_preferences_with_same_cabin_note(self):
+    def test_cabin_stays_in_flight_preferences_with_mixed_cabin_note(self):
         self.assertIn("当前按全员同舱监控", self.html)
-        self.assertIn("混舱（如成人商务+儿童经济）为规划中特性", self.html)
+        self.assertIn("选择混舱后按每类乘客分别计价", self.html)
+        self.assertIn("商务舱儿童票规差异较大", self.html)
+        self.assertNotIn("混舱（如成人商务+儿童经济）为规划中特性", self.html)
         self.assertNotEqual(self.dom.group_by_name.get("cabin_policy"), "business-travel")
 
     def test_no_new_custom_javascript_controls_native_details(self):
@@ -287,7 +289,7 @@ class FormUx33RenderingTest(unittest.TestCase):
 class FormUx33FixtureAndSmokeTest(unittest.TestCase):
     def test_directional_and_parallel_dimension_fixtures_are_frozen(self):
         fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))["scenarios"]
-        self.assertEqual(len(fixture), 10)
+        self.assertEqual(len(fixture), 11)
         self.assertIn("directional_time_windows", fixture)
         self.assertIn("parallel_scenarios_elderly_child", fixture)
         self.assertIn("directional_time_windows", SCENARIOS)

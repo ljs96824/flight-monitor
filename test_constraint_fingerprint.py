@@ -68,6 +68,7 @@ EXPECTED_FINGERPRINT_FIELDS = {
     "destination_airports_active",
     "excluded_airports",
     "cabin_classes",
+    "cabin_allocation",
 }
 
 

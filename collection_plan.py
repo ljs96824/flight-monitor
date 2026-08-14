@@ -118,6 +118,26 @@ class CollectionPlan:
         return dict(Counter(key[0] for key in self._requests))
 
     @property
+    def cabin_counts(self) -> dict[str, int]:
+        return dict(
+            Counter(
+                str(request.cabin_class or "economy")
+                for request in self._requests.values()
+                if "行李退改补充" not in request.reasons
+            )
+        )
+
+    @property
+    def enrichment_cabin_counts(self) -> dict[str, int]:
+        return dict(
+            Counter(
+                str(request.cabin_class or "economy")
+                for request in self._requests.values()
+                if "行李退改补充" in request.reasons
+            )
+        )
+
+    @property
     def conditional_count(self) -> int:
         return sum(1 for request in self._requests.values() if request.conditional)
 
@@ -203,6 +223,8 @@ class CollectionPlan:
         fresh_scope: str | None = None,
     ) -> None:
         counts = self.source_counts
+        cabin_counts = self.cabin_counts
+        enrichment_cabin_counts = self.enrichment_cabin_counts
         panel_reuse_keys = self._panel_reuse_keys()
         panel_reuse_by_source = Counter(key[0] for key in panel_reuse_keys)
         panel_only_missing_by_source = Counter(
@@ -217,6 +239,10 @@ class CollectionPlan:
             f"hasdata={counts.get('hasdata', 0)} "
             f"serpapi={counts.get('serpapi', 0)} "
             f"duffel={counts.get('duffel', 0)} "
+            f"分舱定价=economy:{cabin_counts.get('economy', 0)},"
+            f"business:{cabin_counts.get('business', 0)} "
+            f"富化=economy:{enrichment_cabin_counts.get('economy', 0)},"
+            f"business:{enrichment_cabin_counts.get('business', 0)} "
             f"订阅数={self.subscription_count} 篮子日期={self.basket_date_count} "
             f"复用节省={self.reuse_saved} 条件项={self.conditional_count} "
             f"预计面板复用={len(panel_reuse_keys)}"
@@ -510,6 +536,11 @@ def _add_direction_requests(
                 consumer=consumer,
                 reason="行李退改补充",
             )
+        # 月度估算：篮子0次商务请求；每个含商务席位的往返订阅约2次/日，
+        # SerpAPI 250次/月由既有reserve门继续保护。
+        # 商务舱是稀缺月配额：v1保留主日期规则富化，不进弹性与日历。
+        if cabin == "business":
+            continue
         for flex_date in flex_dates:
             for source in cabin_search_sources:
                 plan.add_request(
@@ -653,6 +684,13 @@ def build_collection_plan(
             continue
         required = {str(name).lower() for name in (item.get("sources") or [])}
         cabin_class = str(item.get("cabin_class") or "economy")
+        # 固定篮子只维护经济舱市场曲线；商务舱由启用该舱位的订阅主日期采集。
+        if cabin_class == "business":
+            safe_log(
+                f"[采集计划跳过] 篮子={item.get('queue', index)} 航线={origin}->{dest} "
+                "原因=固定篮子不采商务舱"
+            )
+            continue
         search_sources = [
             source
             for source in search_sources

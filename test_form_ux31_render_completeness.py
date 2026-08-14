@@ -172,7 +172,8 @@ class FormUx31RenderCompletenessTest(unittest.TestCase):
             html.count('data-visibility-contract="passenger-profile"')
             + html.count('data-visibility-contract="notification-email"')
             + html.count('data-visibility-contract="business-scenario"')
-            + html.count('data-visibility-contract="transfer-details"'),
+            + html.count('data-visibility-contract="transfer-details"')
+            + html.count('data-visibility-contract="mixed-cabin"'),
         )
 
     def test_same_day_execution_fields_roundtrip_without_guessing(self):
@@ -223,10 +224,11 @@ class FormUx31RenderCompletenessTest(unittest.TestCase):
 
     def test_normalization_baseline_contains_directional_and_parallel_scenes(self):
         fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))["scenarios"]
-        self.assertEqual(len(fixture), 10)
+        self.assertEqual(len(fixture), 11)
         self.assertIn("same_day_meeting_complete", fixture)
         self.assertIn("directional_time_windows", fixture)
         self.assertIn("parallel_scenarios_elderly_child", fixture)
+        self.assertIn("mixed_cabin_passenger_allocation", fixture)
 
     def test_ui_smoke_drives_bidirectional_links_email_and_meeting(self):
         driver = (

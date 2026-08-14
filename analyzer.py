@@ -48,6 +48,7 @@ from airlines import (
     resolve_lcc_policy,
 )
 from log_utils import safe_log
+from mixed_cabin import match_mixed_cabin_combinations
 from observations_store import get_current_round
 from storage import get_all_history, get_latest_alternatives, get_target_history
 
@@ -9511,6 +9512,21 @@ def analyze_all_flights(
             merged_preferences["need_baggage"] = hard_constraints.get("baggage")
     else:
         merged_preferences = user_preferences or {}
+    mixed_cabin_allocation = merged_preferences.get("cabin_allocation")
+    mixed_business_flights = []
+    if isinstance(mixed_cabin_allocation, dict):
+        mixed_business_flights = [
+            flight
+            for flight in usable_flights
+            if (flight.get("cabin_class") or "economy") == "business"
+        ]
+        usable_flights = [
+            flight
+            for flight in usable_flights
+            if (flight.get("cabin_class") or "economy") == "economy"
+        ]
+        if not usable_flights:
+            return {"error": "no_economy_candidates", "business_flights": mixed_business_flights}
     roundtrip_purchase_context = bool(
         merged_preferences.get("round_trip")
         or merged_preferences.get("same_day_round_trip")
@@ -9917,6 +9933,7 @@ def analyze_all_flights(
         "qualified_flights": qualified_flights,
         "reference_flights": reference_flights,
         "user_preferences": merged_preferences,
+        **({"business_flights": mixed_business_flights} if isinstance(mixed_cabin_allocation, dict) else {}),
         "preference_excluded_count": len(preference_excluded),
         "excluded_flights": _excluded_flight_summary(excluded_flights),
         "preference_summary": preference_summary,
@@ -10969,6 +10986,14 @@ def analyze_round_trip(
     )
     budget_scope = normalize_budget_scope(combined_preferences.get("max_budget_scope") or combined_preferences.get("budget_scope"))
     target_budget_scope = normalize_budget_scope(combined_preferences.get("target_price_scope") or budget_scope)
+    mixed_cabin_allocation = combined_preferences.get("cabin_allocation")
+    mixed_cabin_active = bool(
+        isinstance(mixed_cabin_allocation, dict)
+        and str(combined_preferences.get("cabin_arrangement") or "") == "mixed"
+    )
+    if mixed_cabin_active:
+        budget_scope = "all"
+        target_budget_scope = "all"
     same_day_round_trip = bool(
         combined_preferences.get("same_day_round_trip")
         or outbound_analysis.get("same_day_round_trip")
@@ -11183,6 +11208,7 @@ def analyze_round_trip(
                 combined_preferences,
             )
 
+    mixed_cabin_matching = {}
     if same_day_round_trip:
         combinations = list(same_day_combos)
     else:
@@ -11206,8 +11232,28 @@ def analyze_round_trip(
                     }
                 )
 
+    if mixed_cabin_active:
+        mixed_cabin_matching = match_mixed_cabin_combinations(
+            combinations,
+            outbound_analysis.get("business_flights") or [],
+            return_analysis.get("business_flights") or [],
+            cabin_allocation=mixed_cabin_allocation,
+            passengers=pricing_passengers,
+            route_type=pricing_route_type,
+        )
+        stats = mixed_cabin_matching.get("stats") or {}
+        safe_log(
+            "[混舱匹配] "
+            f"候选={stats.get('candidates', 0)} "
+            f"全匹配={stats.get('full', 0)} "
+            f"部分={stats.get('partial', 0)}"
+        )
+        combinations = list(mixed_cabin_matching.get("priceable") or [])
+        if same_day_round_trip:
+            same_day_combos = list(combinations)
+
     for combo in combinations:
-        if combo.get("outbound") and combo.get("return"):
+        if combo.get("outbound") and combo.get("return") and not combo.get("mixed_cabin"):
             passenger_pricing = build_passenger_roundtrip_pricing(
                 combo.get("outbound_price") or (combo.get("outbound") or {}).get("price"),
                 combo.get("return_price") or (combo.get("return") or {}).get("price"),
@@ -11259,7 +11305,11 @@ def analyze_round_trip(
     trend = analyze_roundtrip_trend(history)
     previous = trend.get("previous") if trend.get("available") else None
     budget_limits = same_day_budget_limits
-    budget_price = _to_float(best_combo.get("passenger_total_price")) if best_combo else None
+    budget_price = (
+        _to_float(best_combo.get("raw_passenger_total_price"))
+        if best_combo and best_combo.get("mixed_cabin")
+        else _to_float(best_combo.get("passenger_total_price")) if best_combo else None
+    )
     if budget_price is None:
         budget_price = total_min
     budget_outbound_min = outbound_min
@@ -11270,12 +11320,20 @@ def analyze_round_trip(
         return_pricing = passenger_pricing_for_budget.get("return") or {}
         budget_outbound_min = _to_float(outbound_pricing.get("total")) or budget_outbound_min
         budget_return_min = _to_float(return_pricing.get("total")) or budget_return_min
+        if best_combo.get("mixed_cabin"):
+            budget_outbound_min = _to_float(outbound_pricing.get("raw_total")) or budget_outbound_min
+            budget_return_min = _to_float(return_pricing.get("raw_total")) or budget_return_min
     budget_compare_scope = budget_limits.get("max_budget_compare_scope") or _budget_visible_scope(budget_scope, True)
     target_compare_scope = budget_limits.get("ideal_price_compare_scope") or _budget_visible_scope(target_budget_scope, True)
     budget_price_compare = None
     budget_outbound_compare = None
     budget_return_compare = None
-    if best_combo and best_combo.get("outbound") and best_combo.get("return"):
+    if best_combo and best_combo.get("mixed_cabin"):
+        assert budget_compare_scope == "all_passengers_roundtrip", "混舱预算必须使用全员往返口径"
+        budget_price_compare = _to_float(best_combo.get("raw_passenger_total_price"))
+        budget_outbound_compare = budget_outbound_min
+        budget_return_compare = budget_return_min
+    elif best_combo and best_combo.get("outbound") and best_combo.get("return"):
         best_outbound_price = _to_float(best_combo.get("outbound_price") or (best_combo.get("outbound") or {}).get("price"))
         best_return_price = _to_float(best_combo.get("return_price") or (best_combo.get("return") or {}).get("price"))
         if best_outbound_price is not None and best_return_price is not None:
@@ -11371,6 +11429,19 @@ def analyze_round_trip(
             safe_log("[排除诊断] 无推荐方案,不适用")
         excluded_roundtrip_combos = []
 
+    mixed_history = {}
+    if best_combo and best_combo.get("mixed_cabin"):
+        mixed_tree = best_combo.get("mixed_cabin_pricing") or {}
+        mixed_outbound = mixed_tree.get("outbound") or {}
+        mixed_return = mixed_tree.get("return") or {}
+        mixed_history = {
+            "outbound": _to_float(mixed_outbound.get("raw_total")),
+            "return": _to_float(mixed_return.get("raw_total")),
+            "total": _to_float(mixed_tree.get("raw_total")),
+            "scope": "all_passengers_roundtrip",
+            "sources": ["juhe", "serpapi"],
+        }
+
     return {
         "outbound_min": outbound_min,
         "return_min": return_min,
@@ -11412,6 +11483,8 @@ def analyze_round_trip(
         "buy_vs_wait_risk": buy_vs_wait_risk,
         "excluded_roundtrip_combos": excluded_roundtrip_combos,
         "previous": previous,
+        **({"mixed_cabin_matching": mixed_cabin_matching} if mixed_cabin_active else {}),
+        **({"mixed_cabin_history": mixed_history} if mixed_history else {}),
         "advice": _roundtrip_budget_advice(budget_price, summary_target, summary_budget, budget_is_roundtrip=True),
     }
 

@@ -67,7 +67,7 @@ class FormUxPhase1Test(unittest.TestCase):
         self.assertNotIn("canonical-preference-chips", full)
         self.assertNotIn("openWizardStation", full)
 
-    def test_conditional_families_are_limited_to_the_four_approved_contracts(self):
+    def test_conditional_families_are_limited_to_the_five_approved_contracts(self):
         quick = self.client.get("/").get_data(as_text=True)
         full = self.client.get("/settings").get_data(as_text=True)
         html = quick + full
@@ -75,10 +75,11 @@ class FormUxPhase1Test(unittest.TestCase):
         self.assertIn('data-visibility-contract="notification-email"', html)
         self.assertIn('data-visibility-contract="business-scenario"', html)
         self.assertIn('data-visibility-contract="transfer-details"', html)
+        self.assertIn('data-visibility-contract="mixed-cabin"', html)
         self.assertNotIn("data-show-if", html)
         self.assertNotIn("data-advanced-depth", html)
-        self.assertEqual(quick.count("element.hidden ="), 4)
-        self.assertEqual(full.count("element.hidden ="), 4)
+        self.assertEqual(quick.count("element.hidden ="), 6)
+        self.assertEqual(full.count("element.hidden ="), 6)
 
     def test_defaults_preview_uses_local_default_engine_and_never_saves(self):
         form = json.loads(FIXTURE.read_text(encoding="utf-8"))["scenarios"][

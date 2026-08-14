@@ -176,6 +176,32 @@ async function transferDetailsState() {
   })()`);
 }
 
+async function mixedCabinState() {
+  return evaluate(`(() => {
+    const wrapper = document.querySelector('[data-visibility-contract="mixed-cabin"]');
+    if (!wrapper) throw new Error('missing mixed-cabin');
+    const controls = [...wrapper.querySelectorAll('input,select,textarea')];
+    const style = getComputedStyle(wrapper);
+    const rect = wrapper.getBoundingClientRect();
+    const scope = name => {
+      const items = [...document.querySelectorAll('[name="' + name + '"]')];
+      const selected = items.find(item => item.type !== 'radio' || item.checked);
+      return selected?.value || '';
+    };
+    return {
+      hidden: wrapper.hidden,
+      visible: !wrapper.hidden && style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0,
+      controlCount: controls.length,
+      allDisabled: controls.length > 0 && controls.every(control => control.disabled),
+      noneDisabled: controls.length > 0 && controls.every(control => !control.disabled),
+      status: document.querySelector('[data-cabin-allocation-status]')?.textContent.trim() || '',
+      budgetScope: scope('budget_scope'),
+      maxBudgetScope: scope('max_budget_scope'),
+      targetPriceScope: scope('target_price_scope'),
+    };
+  })()`);
+}
+
 async function setBooleanCheckboxByClick(name, checked) {
   const current = await evaluate(`document.querySelector('[name="${name}"]').checked`);
   if (current !== checked) await clickSelector(`[name="${name}"]`);
@@ -185,6 +211,8 @@ async function setBooleanCheckboxByClick(name, checked) {
 await command("Runtime.enable");
 await command("Page.enable");
 await command("Log.enable");
+await command("Page.bringToFront");
+await command("Page.navigate", {url: baseUrl});
 await waitFor("document.readyState === 'complete'", "快速页加载");
 
 const quickContract = await evaluate(`(() => {
@@ -345,6 +373,40 @@ if (
 }
 console.log("[UI smoke] 中转族显隐=PASS 必须直飞→隐藏禁用；允许中转→显示启用；DOM常驻");
 
+const initialMixedCabin = await mixedCabinState();
+await chooseSelectValue("cabin_arrangement", "mixed");
+await evaluate(`(() => {
+  const set = (name, value) => {
+    const element = document.querySelector('[name="' + name + '"]');
+    if (!element) throw new Error('missing ' + name);
+    element.value = value;
+    element.dispatchEvent(new Event('input', {bubbles:true}));
+    element.dispatchEvent(new Event('change', {bubbles:true}));
+  };
+  set('adult_count', '2');
+  set('child_count', '1');
+  set('elderly_count', '2');
+  set('infant_count', '0');
+  set('cabin_business_adult', '2');
+  set('cabin_business_child', '0');
+  set('cabin_business_elderly', '0');
+  set('cabin_business_infant', '0');
+  set('cabin_economy_adult', '0');
+  set('cabin_economy_child', '1');
+  set('cabin_economy_elderly', '2');
+  set('cabin_economy_infant', '0');
+  return true;
+})()`);
+await waitFor("document.querySelector('[data-cabin-allocation-status]').textContent.includes('人数已与乘客构成对齐')", "混舱人数对齐");
+const filledMixedCabin = await mixedCabinState();
+if (!initialMixedCabin.hidden || !initialMixedCabin.allDisabled || !filledMixedCabin.visible || !filledMixedCabin.noneDisabled ||
+    filledMixedCabin.controlCount !== 8 || filledMixedCabin.budgetScope !== 'total' ||
+    filledMixedCabin.maxBudgetScope !== 'total' || filledMixedCabin.targetPriceScope !== 'total') {
+  throw new Error(`混舱显隐或预算口径错误: initial=${JSON.stringify(initialMixedCabin)} filled=${JSON.stringify(filledMixedCabin)}`);
+}
+console.log("[UI smoke] 混舱显隐=PASS 默认隐藏禁用→混舱显示启用；预算三项强制全员总价");
+console.log("[UI smoke] 混舱人数校验=PASS 商务2人+经济3人");
+
 await chooseSelectValue("short_transfer_limit", "total_18");
 await setBooleanCheckboxByClick("accept_overnight_transfer", true);
 await setBooleanCheckboxByClick("accept_self_transfer", true);
@@ -438,10 +500,18 @@ await evaluate(`(() => {
   set('depart_date', '${iso(depart)}');
   set('round_trip', 'true');
   set('return_date', '${iso(depart)}');
-  set('adult_count', '1');
-  set('child_count', '0');
-  set('elderly_count', '0');
+  set('adult_count', '2');
+  set('child_count', '1');
+  set('elderly_count', '2');
   set('infant_count', '0');
+  set('cabin_business_adult', '2');
+  set('cabin_business_child', '0');
+  set('cabin_business_elderly', '0');
+  set('cabin_business_infant', '0');
+  set('cabin_economy_adult', '0');
+  set('cabin_economy_child', '1');
+  set('cabin_economy_elderly', '2');
+  set('cabin_economy_infant', '0');
   set('business_start', '10:30');
   set('business_end', '17:00');
   set('buffer_hours', '1.5');
@@ -473,15 +543,17 @@ const confirmation = await evaluate(`(() => {
     scenarios: text.includes('商务/会议 + 旅游'),
     companionConstraints: text.includes('需要尽量直飞 + 不接受红眼/凌晨到达'),
     transfer: text.includes('中转设置：价格优先 · 总时长不超18小时 · 接受过夜中转 · 接受非联程自行中转'),
+    mixedCabin: text.includes('商务2人+经济3人'),
   };
 })()`);
-if (!confirmation.email || !confirmation.meetingStart || !confirmation.meetingEnd || !confirmation.outboundWindow || !confirmation.returnWindow || !confirmation.scenarios || !confirmation.companionConstraints || !confirmation.transfer) {
+if (!confirmation.email || !confirmation.meetingStart || !confirmation.meetingEnd || !confirmation.outboundWindow || !confirmation.returnWindow || !confirmation.scenarios || !confirmation.companionConstraints || !confirmation.transfer || !confirmation.mixedCabin) {
   throw new Error(`完整页回读失败: ${JSON.stringify(confirmation)}`);
 }
 console.log("[UI smoke] 页2邮箱提交=PASS value=ux31@example.com");
 console.log("[UI smoke] 页2当天往返会议=PASS 10:30-17:00");
 console.log("[UI smoke] 分方向时间窗回读=PASS 去程06:30-08:30 返程18:00-21:00");
 console.log("[UI smoke] 中转细节回读=PASS 价格优先+总时长18小时+过夜+自行中转");
+console.log("[UI smoke] 混舱分配回读=PASS 商务2人+经济3人");
 
 await navigate("/settings?edit=1");
 const editGroups = await evaluate(`(() => ({
@@ -490,11 +562,12 @@ const editGroups = await evaluate(`(() => ({
   customTime: document.querySelector('[data-time-window-group="custom"]')?.hasAttribute('open') || false,
   directionalTime: document.querySelector('[data-time-window-group="directional"]')?.hasAttribute('open') || false,
   transferDetails: document.querySelector('[data-visibility-contract="transfer-details"]')?.hidden === false,
+  mixedCabin: document.querySelector('[data-visibility-contract="mixed-cabin"]')?.hidden === false,
 }))()`);
-if (!editGroups.business || !editGroups.feasibility || !editGroups.customTime || !editGroups.directionalTime || !editGroups.transferDetails) {
+if (!editGroups.business || !editGroups.feasibility || !editGroups.customTime || !editGroups.directionalTime || !editGroups.transferDetails || !editGroups.mixedCabin) {
   throw new Error(`编辑态次级组未自动展开: ${JSON.stringify(editGroups)}`);
 }
-console.log("[UI smoke] 编辑态details自动展开=PASS 商务出行+可行性参数+分层时间窗");
+console.log("[UI smoke] 编辑态details自动展开=PASS 商务出行+可行性参数+分层时间窗+混舱分配");
 await assertPersistedCheckboxValues(
   "travel_scenario",
   ["business", "tourism"],
@@ -558,6 +631,47 @@ if (hiddenPersisted.policy !== 'direct_only' || !hiddenPersisted.hidden || !hidd
   throw new Error(`中转隐藏提交默认回填失败: ${JSON.stringify(hiddenPersisted)}`);
 }
 console.log("[UI smoke] 中转隐藏提交默认=PASS 直飞态不提交细节；服务端回填extra_6/false/false");
+
+const errorsBeforeMixedReject = browserErrors.length;
+await navigate("/settings");
+await chooseSelectValue("cabin_arrangement", "mixed");
+await evaluate(`(() => {
+  const set = (name, value) => {
+    const element = document.querySelector('[name="' + name + '"]');
+    if (!element) throw new Error('missing ' + name);
+    element.value = value;
+    element.dispatchEvent(new Event('input', {bubbles:true}));
+    element.dispatchEvent(new Event('change', {bubbles:true}));
+  };
+  set('origin_select', '上海');
+  set('destination', '大阪');
+  set('depart_date', '${iso(depart)}');
+  set('round_trip', 'true');
+  set('return_date', '${iso(returned)}');
+  set('adult_count', '2');
+  set('child_count', '1');
+  set('elderly_count', '2');
+  set('infant_count', '0');
+  set('cabin_business_adult', '2');
+  set('cabin_business_child', '0');
+  set('cabin_business_elderly', '0');
+  set('cabin_business_infant', '0');
+  set('cabin_economy_adult', '0');
+  set('cabin_economy_child', '1');
+  set('cabin_economy_elderly', '1');
+  set('cabin_economy_infant', '0');
+  document.querySelector('form[data-page-mode="full"]').requestSubmit();
+  return true;
+})()`);
+await waitFor("document.querySelector('.server-error')?.textContent.includes('老人共有2人，但分舱合计为1人')", "混舱人数不符被服务端拒绝", 15000);
+const mixedRejectErrors = browserErrors.splice(errorsBeforeMixedReject);
+const unexpectedMixedRejectErrors = mixedRejectErrors.filter(
+  text => !text.includes("Failed to load resource: the server responded with a status of 400 (BAD REQUEST)")
+);
+if (unexpectedMixedRejectErrors.length) {
+  throw new Error(`混舱拒绝请求出现非预期浏览器错误: ${unexpectedMixedRejectErrors.join(' | ')}`);
+}
+console.log("[UI smoke] 混舱错误回显=PASS 老人2人仅分配1人→HTTP 400明确拒绝");
 
 await sleep(350);
 if (browserErrors.length) throw new Error(`浏览器错误: ${browserErrors.join(' | ')}`);

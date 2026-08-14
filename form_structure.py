@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+from cabin_allocation import cabin_allocation_label
 from notification_config import DEFAULT_NOTIFICATION_METHOD
 from form_concepts import (
     CONCEPTS,
@@ -151,6 +152,14 @@ FORM_STATIONS = (
             "cabin_arrangement",
             "business_seats",
             "economy_seats",
+            "cabin_business_adult",
+            "cabin_business_child",
+            "cabin_business_elderly",
+            "cabin_business_infant",
+            "cabin_economy_adult",
+            "cabin_economy_child",
+            "cabin_economy_elderly",
+            "cabin_economy_infant",
             "trip_rigidity",
         ),
     },
@@ -315,6 +324,15 @@ OPTIONAL_SECTION_DEFAULTS = {
         "cabin_policy": "economy_only",
         "cabin_arrangement": "economy_all",
         "business_seats": "0",
+        "economy_seats": "0",
+        "cabin_business_adult": "0",
+        "cabin_business_child": "0",
+        "cabin_business_elderly": "0",
+        "cabin_business_infant": "0",
+        "cabin_economy_adult": "0",
+        "cabin_economy_child": "0",
+        "cabin_economy_elderly": "0",
+        "cabin_economy_infant": "0",
         "trip_rigidity": "confirmed",
     },
     "notifications": {
@@ -493,7 +511,18 @@ VISIBILITY_RULES = (
         "when": {
             "all": ({"field": "cabin_arrangement", "values": ("mixed", "mixed_cabin")},)
         },
-        "fields": ("business_seats", "economy_seats"),
+        "fields": (
+            "business_seats",
+            "economy_seats",
+            "cabin_business_adult",
+            "cabin_business_child",
+            "cabin_business_elderly",
+            "cabin_business_infant",
+            "cabin_economy_adult",
+            "cabin_economy_child",
+            "cabin_economy_elderly",
+            "cabin_economy_infant",
+        ),
     },
     {
         "id": "business_cabin",
@@ -696,7 +725,22 @@ def _preference_summary(values) -> str:
         "not_needed": "不需托运",
         "unknown": "行李待确认",
     }.get(_first(values, "baggage", "unknown"), "行李待确认")
-    return f"{time_text} · {arrival} · {transfer} · {baggage}"
+    parts = [time_text, arrival, transfer, baggage]
+    if _first(values, "cabin_arrangement") == "mixed":
+        allocation = {
+            cabin: {
+                passenger_type: _first(
+                    values,
+                    f"cabin_{cabin}_{passenger_type}",
+                    "0",
+                )
+                for passenger_type in ("adult", "elderly", "child", "infant")
+            }
+            for cabin in ("business", "economy")
+        }
+        if any(int(value or 0) for cabin in allocation.values() for value in cabin.values()):
+            parts.append(cabin_allocation_label(allocation))
+    return " · ".join(parts)
 
 
 def _notification_summary(values) -> str:
@@ -1119,6 +1163,46 @@ def subscription_to_form_values(subscription: Mapping | None) -> dict:
             "user_level": _first_defined(hard.get("user_level"), constraints.get("user_level"), default="staff"),
             "business_seats": _first_defined(hard.get("business_seats"), constraints.get("business_seats"), default=0),
             "economy_seats": _first_defined(hard.get("economy_seats"), constraints.get("economy_seats"), default=passenger_count),
+            "cabin_business_adult": _first_defined(
+                (hard.get("cabin_allocation") or {}).get("business", {}).get("adult"),
+                (constraints.get("cabin_allocation") or {}).get("business", {}).get("adult"),
+                default=0,
+            ),
+            "cabin_business_child": _first_defined(
+                (hard.get("cabin_allocation") or {}).get("business", {}).get("child"),
+                (constraints.get("cabin_allocation") or {}).get("business", {}).get("child"),
+                default=0,
+            ),
+            "cabin_business_elderly": _first_defined(
+                (hard.get("cabin_allocation") or {}).get("business", {}).get("elderly"),
+                (constraints.get("cabin_allocation") or {}).get("business", {}).get("elderly"),
+                default=0,
+            ),
+            "cabin_business_infant": _first_defined(
+                (hard.get("cabin_allocation") or {}).get("business", {}).get("infant"),
+                (constraints.get("cabin_allocation") or {}).get("business", {}).get("infant"),
+                default=0,
+            ),
+            "cabin_economy_adult": _first_defined(
+                (hard.get("cabin_allocation") or {}).get("economy", {}).get("adult"),
+                (constraints.get("cabin_allocation") or {}).get("economy", {}).get("adult"),
+                default=0,
+            ),
+            "cabin_economy_child": _first_defined(
+                (hard.get("cabin_allocation") or {}).get("economy", {}).get("child"),
+                (constraints.get("cabin_allocation") or {}).get("economy", {}).get("child"),
+                default=0,
+            ),
+            "cabin_economy_elderly": _first_defined(
+                (hard.get("cabin_allocation") or {}).get("economy", {}).get("elderly"),
+                (constraints.get("cabin_allocation") or {}).get("economy", {}).get("elderly"),
+                default=0,
+            ),
+            "cabin_economy_infant": _first_defined(
+                (hard.get("cabin_allocation") or {}).get("economy", {}).get("infant"),
+                (constraints.get("cabin_allocation") or {}).get("economy", {}).get("infant"),
+                default=0,
+            ),
             "reimburse_per_person": _first_defined(hard.get("reimburse_per_person"), constraints.get("reimburse_per_person")),
         }
     )

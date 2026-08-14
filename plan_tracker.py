@@ -16,6 +16,8 @@ DEFAULT_DATA_DIR = BASE_DIR / "data" / "pushed_plans"
 DEFAULT_FEEDBACK_PATH = BASE_DIR / "data" / "feedback.json"
 ROUNDTRIP_TRACKING_SCOPE = "per_person_roundtrip"
 ROUNDTRIP_TRACKING_LABEL = "单人往返"
+MIXED_TRACKING_SCOPE = "mixed_cabin_all_passengers_roundtrip"
+MIXED_TRACKING_LABEL = "混舱全员往返"
 
 
 def _storage_dir(data_dir=None) -> Path:
@@ -187,6 +189,34 @@ def _passenger_signature(item: dict | None) -> str:
     return "+".join(str(value) for value in values)
 
 
+def _cabin_allocation(item: dict | None) -> dict:
+    item = item or {}
+    for container in (
+        item,
+        item.get("mixed_cabin_pricing") or {},
+        item.get("passenger_pricing") or {},
+    ):
+        allocation = container.get("cabin_allocation") if isinstance(container, dict) else None
+        if isinstance(allocation, dict) and allocation:
+            return allocation
+    return {}
+
+
+def _allocation_signature(item: dict | None) -> str:
+    allocation = _cabin_allocation(item)
+    return json.dumps(allocation, ensure_ascii=False, sort_keys=True, separators=(",", ":")) if allocation else ""
+
+
+def _mixed_total(item: dict | None) -> float | None:
+    item = item or {}
+    tree = item.get("mixed_cabin_pricing") or item.get("passenger_pricing") or {}
+    for value in (item.get("raw_passenger_total_price"), tree.get("raw_total"), item.get("passenger_total_price"), tree.get("total")):
+        number = _to_float(value)
+        if number is not None:
+            return number
+    return None
+
+
 def _explicit_unit_roundtrip(item: dict | None) -> float | None:
     item = item or {}
     tiers = _price_tiers(item)
@@ -255,14 +285,16 @@ def _plan_record(plan: dict, index: int) -> dict | None:
         outbound_price = _leg_price(plan, "outbound", outbound)
         return_price = _leg_price(plan, "return", return_flight)
         total = _roundtrip_price(plan, outbound, return_flight)
-        unit_roundtrip = _current_unit_roundtrip(plan, outbound, return_flight)
+        is_mixed = bool(plan.get("mixed_cabin"))
+        mixed_total = _mixed_total(plan) if is_mixed else None
+        unit_roundtrip = None if is_mixed else _current_unit_roundtrip(plan, outbound, return_flight)
         price_tiers = dict(_price_tiers(plan))
         if unit_roundtrip is not None:
             price_tiers.setdefault("unit_roundtrip", unit_roundtrip)
         factor = _passenger_factor(plan)
         passengers = _passengers(plan)
         passenger_signature = _passenger_signature(plan)
-        return {
+        record = {
             "flight_no": f"{outbound_no}+{return_no}".strip("+"),
             "is_roundtrip": True,
             "scope": "roundtrip",
@@ -284,6 +316,19 @@ def _plan_record(plan: dict, index: int) -> dict | None:
             "label": label,
             "pushed_at": pushed_at,
         }
+        if plan.get("mixed_cabin"):
+            record.update(
+                {
+                    "mixed_cabin": True,
+                    "mixed_cabin_total": mixed_total,
+                    "roundtrip_price": mixed_total,
+                    "price": mixed_total,
+                    "price_scope": MIXED_TRACKING_SCOPE,
+                    "cabin_allocation": _cabin_allocation(plan),
+                    "allocation_signature": _allocation_signature(plan),
+                }
+            )
+        return record
 
     flight = _plan_primary_flight(plan)
     flight_no = _flight_no(flight)
@@ -577,11 +622,122 @@ def _format_change(diff: float | None) -> str:
     return "持平"
 
 
+def _track_mixed_roundtrip_plan(
+    plan_a: dict,
+    current_items: list[dict] | None,
+    source_degradation: dict | None = None,
+) -> dict:
+    outbound_no = str(plan_a.get("outbound_flight") or "").strip()
+    return_no = str(plan_a.get("return_flight") or "").strip()
+    desc = _roundtrip_desc(outbound_no, return_no)
+    previous_price = _to_float(plan_a.get("mixed_cabin_total") or plan_a.get("roundtrip_price"))
+    previous_allocation = str(plan_a.get("allocation_signature") or _allocation_signature(plan_a))
+    combo = _find_roundtrip_combo(current_items, outbound_no, return_no)
+    current_price = _mixed_total(combo) if combo and combo.get("mixed_cabin") else None
+    current_allocation = _allocation_signature(combo)
+    safe_log(
+        f"[追踪口径] 上次={previous_price}({MIXED_TRACKING_LABEL}), "
+        f"本次={current_price}({MIXED_TRACKING_LABEL}) "
+        f"allocation一致={bool(previous_allocation and previous_allocation == current_allocation)}"
+    )
+
+    if combo and previous_allocation != current_allocation:
+        msg = (
+            f"上次推荐:{desc},{MIXED_TRACKING_LABEL}{_format_price(previous_price)}。"
+            "本次乘客分舱发生变化,全员混舱总价不跨allocation直接对比。"
+        )
+        return _change_payload(
+            "comparison_skipped",
+            desc,
+            previous_price,
+            current_price,
+            None,
+            msg,
+            MIXED_TRACKING_SCOPE,
+            {"reason": "cabin_allocation_changed"},
+        )
+
+    if current_price is None:
+        confidence = _missing_quote_confidence(
+            current_items,
+            matched_any=bool(combo),
+            source_degradation=source_degradation,
+        )
+        msg = (
+            f"上次推荐:{desc},{MIXED_TRACKING_LABEL}{_format_price(previous_price)}。"
+            "本次未获取到同航班两舱完整报价,无法计算混舱全员往返价。"
+            f"{confidence['note']}"
+        )
+        return _change_payload(
+            confidence["status"],
+            desc,
+            previous_price,
+            None,
+            None,
+            msg,
+            MIXED_TRACKING_SCOPE,
+            {
+                "confidence": confidence["confidence"],
+                "cabin_allocation": _cabin_allocation(plan_a),
+            },
+        )
+
+    if (source_degradation or {}).get("active"):
+        label = str(source_degradation.get("source_label") or "缺失数据源").strip()
+        msg = (
+            f"上次推荐:{desc},{MIXED_TRACKING_LABEL}{_format_price(previous_price)}。"
+            f"本次同组合:{MIXED_TRACKING_LABEL}{_format_price(current_price)}。"
+            f"本轮{label}不可用,两次报价不可直接比较。"
+        )
+        return _change_payload(
+            "source_unavailable",
+            desc,
+            previous_price,
+            current_price,
+            None,
+            msg,
+            MIXED_TRACKING_SCOPE,
+        )
+
+    diff = current_price - previous_price if previous_price is not None else None
+    status = _price_change_status(diff, previous_price, MIXED_TRACKING_SCOPE, MIXED_TRACKING_SCOPE)
+    change_text = _format_change(diff)
+    verdict = (
+        f"上涨{change_text.replace('↑', '')}"
+        if status == "price_up"
+        else f"下降{change_text.replace('↓', '')}"
+        if status == "price_down"
+        else "价格稳定"
+        if change_text in {"", "持平"}
+        else f"小幅变化({change_text})"
+    )
+    msg = (
+        f"上次推荐:{desc},{MIXED_TRACKING_LABEL}{_format_price(previous_price)}。"
+        f"本次同组合:{MIXED_TRACKING_LABEL}{_format_price(current_price)}({verdict})。"
+        f"（同allocation、同{MIXED_TRACKING_LABEL}口径对比）"
+    )
+    return _change_payload(
+        status,
+        desc,
+        previous_price,
+        current_price,
+        diff,
+        msg,
+        MIXED_TRACKING_SCOPE,
+        {
+            "price_scope": MIXED_TRACKING_SCOPE,
+            "cabin_allocation": _cabin_allocation(combo),
+        },
+    )
+
+
 def _track_roundtrip_plan(
     plan_a: dict,
     current_items: list[dict] | None,
     source_degradation: dict | None = None,
 ) -> dict | None:
+    if plan_a.get("mixed_cabin") or plan_a.get("price_scope") == MIXED_TRACKING_SCOPE:
+        return _track_mixed_roundtrip_plan(plan_a, current_items, source_degradation)
     outbound_no = str(plan_a.get("outbound_flight") or "").strip()
     return_no = str(plan_a.get("return_flight") or "").strip()
     desc = _roundtrip_desc(outbound_no, return_no)

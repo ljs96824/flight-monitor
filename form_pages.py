@@ -86,6 +86,7 @@ VISIBILITY_CONTRACTS = frozenset(
         "notification-email",
         "business-scenario",
         "transfer-details",
+        "mixed-cabin",
     }
 )
 
@@ -234,6 +235,9 @@ NUMBER_FIELDS = frozenset(
         "delay_buffer_min", "pre_meeting_buffer_min", "post_meeting_buffer_min",
         "custom_redundancy_min", "team_passenger_count", "max_budget",
         "target_price", "reimburse_per_person", "business_seats", "economy_seats",
+        "cabin_business_adult", "cabin_business_child", "cabin_business_elderly",
+        "cabin_business_infant", "cabin_economy_adult", "cabin_economy_child",
+        "cabin_economy_elderly", "cabin_economy_infant",
         "adult_count", "child_count", "elderly_count", "infant_count",
     }
 )
@@ -331,6 +335,14 @@ LABELS = {
     "cabin_arrangement": "团队舱位安排",
     "business_seats": "商务舱人数",
     "economy_seats": "经济舱人数",
+    "cabin_business_adult": "商务舱·成人",
+    "cabin_business_child": "商务舱·儿童",
+    "cabin_business_elderly": "商务舱·老人",
+    "cabin_business_infant": "商务舱·婴儿",
+    "cabin_economy_adult": "经济舱·成人",
+    "cabin_economy_child": "经济舱·儿童",
+    "cabin_economy_elderly": "经济舱·老人",
+    "cabin_economy_infant": "经济舱·婴儿",
     "primary_goal": "提醒主目标",
     "notification_method": "提醒方式",
     "notification_email": "接收邮箱",
@@ -403,6 +415,16 @@ DEFAULTS = {
     "lcc_policy": "any",
     "cabin_policy": "economy_only",
     "cabin_arrangement": "economy_all",
+    "business_seats": "0",
+    "economy_seats": "0",
+    "cabin_business_adult": "0",
+    "cabin_business_child": "0",
+    "cabin_business_elderly": "0",
+    "cabin_business_infant": "0",
+    "cabin_economy_adult": "0",
+    "cabin_economy_child": "0",
+    "cabin_economy_elderly": "0",
+    "cabin_economy_infant": "0",
     "trip_rigidity": "confirmed",
     "primary_goal": "buy_timing",
     "notification_method": DEFAULT_NOTIFICATION_METHOD,
@@ -537,6 +559,10 @@ def _concept_spec(
     editing: bool = False,
 ) -> dict:
     fields = [_field_spec(name, values, page_mode="full") for name in concept["fields"]]
+    if concept_name == "cabin":
+        for field in fields:
+            if field["name"] in {"business_seats", "economy_seats"}:
+                field["type"] = "hidden"
     visible = [field for field in fields if field["type"] != "hidden"]
     hidden = [field for field in fields if field["type"] == "hidden"]
     result = {
@@ -589,6 +615,27 @@ def _concept_spec(
         )
         result["transfer_details_initial_visible"] = policy_allows_transfer or (
             editing and detail_nondefault
+        )
+    if concept_name == "cabin":
+        fields_by_name = {field["name"]: field for field in visible}
+        allocation_names = tuple(
+            f"cabin_{cabin}_{passenger_type}"
+            for cabin in ("business", "economy")
+            for passenger_type in ("adult", "child", "elderly", "infant")
+        )
+        result["fields"] = [
+            fields_by_name[name]
+            for name in ("cabin_policy", "cabin_arrangement")
+        ]
+        result["cabin_allocation_fields"] = [
+            fields_by_name[name] for name in allocation_names
+        ]
+        arrangement = str(values.get("cabin_arrangement") or "economy_all")
+        allocation_nondefault = any(
+            int(values.get(name) or 0) > 0 for name in allocation_names
+        )
+        result["mixed_cabin_initial_visible"] = arrangement == "mixed" or (
+            editing and allocation_nondefault
         )
     if hidden:
         result["hidden_fields"] = hidden
@@ -902,7 +949,19 @@ FORM_PAGE_TEMPLATE = r"""
             </div>
           </details>
           {% elif concept.name == 'cabin' %}
-          <p class="hint field-wide">当前按全员同舱监控；混舱（如成人商务+儿童经济）为规划中特性。</p>
+          <div class="field-wide conditional-block" data-visibility-contract="mixed-cabin"
+               data-mixed-cabin-initial-visible="{{ 'true' if concept.mixed_cabin_initial_visible else 'false' }}"
+               {% if not concept.mixed_cabin_initial_visible %} hidden{% endif %}>
+            <p class="hint">按每类乘客分配舱位；每类在商务舱与经济舱的人数之和必须等于乘客构成。</p>
+            <div class="field-grid">
+              {% for field in concept.cabin_allocation_fields %}{{ render_field(field) }}{% endfor %}
+            </div>
+            <p class="hint" data-cabin-allocation-status role="status"></p>
+          </div>
+          <p class="hint field-wide" data-cabin-budget-note hidden>
+            混舱或全员商务下“单人价”无唯一定义，预算按全员总价填写。
+          </p>
+          <p class="hint field-wide">当前按全员同舱监控；选择混舱后按每类乘客分别计价。儿童票按同舱成人价的航线常规费率估算；商务舱儿童票规差异较大，以支付页为准。</p>
           {% endif %}
         </div>
       </fieldset>
@@ -1163,6 +1222,51 @@ FORM_PAGE_TEMPLATE = r"""
           });
         });
       }
+      function setRadioOrValue(name, value) {
+        const controls = fields(name);
+        if (!controls.length) return;
+        if (controls[0].type === 'radio') {
+          controls.forEach(control => { control.checked = control.value === value; });
+        } else {
+          controls[0].value = value;
+        }
+      }
+      function updateMixedCabinVisibility(preserveInitial = false) {
+        const arrangement = scalar('cabin_arrangement') || 'economy_all';
+        const isMixed = arrangement === 'mixed';
+        document.querySelectorAll('[data-visibility-contract="mixed-cabin"]').forEach(element => {
+          const preserveSaved = preserveInitial && element.dataset.mixedCabinInitialVisible === 'true';
+          const visible = isMixed || preserveSaved;
+          element.hidden = !visible;
+          element.querySelectorAll('input,select,textarea').forEach(control => {
+            control.disabled = !visible;
+          });
+        });
+        const requiresAllScope = isMixed || arrangement === 'business_all';
+        document.querySelectorAll('[data-cabin-budget-note]').forEach(element => {
+          element.hidden = !requiresAllScope;
+        });
+        if (requiresAllScope) {
+          ['budget_scope', 'max_budget_scope', 'target_price_scope'].forEach(name => {
+            setRadioOrValue(name, 'total');
+          });
+        }
+        const expected = {
+          adult: Number(scalar('adult_count') || 0),
+          child: Number(scalar('child_count') || 0),
+          elderly: Number(scalar('elderly_count') || 0),
+          infant: Number(scalar('infant_count') || 0),
+        };
+        const mismatches = Object.entries(expected).filter(([kind, count]) => (
+          Number(scalar(`cabin_business_${kind}`) || 0)
+          + Number(scalar(`cabin_economy_${kind}`) || 0)
+        ) !== count);
+        document.querySelectorAll('[data-cabin-allocation-status]').forEach(element => {
+          element.textContent = !isMixed ? '' : mismatches.length
+            ? `尚未对齐：${mismatches.map(([kind]) => ({adult:'成人',child:'儿童',elderly:'老人',infant:'婴儿'}[kind])).join('、')}`
+            : '人数已与乘客构成对齐。';
+        });
+      }
 
       function scheduleSummary() {
         if (pageMode !== 'full') return;
@@ -1191,6 +1295,14 @@ FORM_PAGE_TEMPLATE = r"""
       });
       field('notification_method')?.addEventListener('change', updateEmailVisibility);
       field('transfer_policy')?.addEventListener('change', () => updateTransferVisibility(false));
+      fields('cabin_arrangement').forEach(element => {
+        element.addEventListener('change', () => updateMixedCabinVisibility(false));
+      });
+      ['adult','child','elderly','infant'].forEach(kind => {
+        field(`${kind}_count`)?.addEventListener('input', () => updateMixedCabinVisibility(false));
+        field(`cabin_business_${kind}`)?.addEventListener('input', () => updateMixedCabinVisibility(false));
+        field(`cabin_economy_${kind}`)?.addEventListener('input', () => updateMixedCabinVisibility(false));
+      });
       form.addEventListener('input', scheduleSummary);
       form.addEventListener('change', scheduleSummary);
       form.addEventListener('submit', event => {
@@ -1206,6 +1318,7 @@ FORM_PAGE_TEMPLATE = r"""
       updatePassengerProfile();
       updateEmailVisibility();
       updateTransferVisibility(true);
+      updateMixedCabinVisibility(true);
       scheduleSummary();
     })();
   </script>

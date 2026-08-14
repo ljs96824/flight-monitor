@@ -177,6 +177,7 @@ class FormUx34ParallelDimensionsTest(unittest.TestCase):
                     "notification-email",
                     "business-scenario",
                     "transfer-details",
+                    "mixed-cabin",
                 }
             ),
         )
@@ -209,7 +210,7 @@ class FormUx34ParallelDimensionsTest(unittest.TestCase):
 
     def test_tenth_fixture_freezes_multi_scenario_elderly_child_contract(self):
         fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))["scenarios"]
-        self.assertEqual(len(fixture), 10)
+        self.assertEqual(len(fixture), 11)
         case = fixture["parallel_scenarios_elderly_child"]
         soft = case["normalized_subscription"]["soft_preferences"]
         self.assertEqual(soft["travel_scenarios"], ["tourism", "family", "elderly"])

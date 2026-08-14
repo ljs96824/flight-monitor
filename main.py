@@ -605,6 +605,8 @@ def _invalid_location_subscription(
 
 
 def _normalize_subscription(item: dict) -> dict:
+    from cabin_allocation import find_explicit_cabin_allocation, validate_cabin_allocation
+
     item = migrate_old_subscription(item)
     hard_constraints = dict(item.get("hard_constraints") or {})
     soft_preferences = dict(item.get("soft_preferences") or {})
@@ -627,6 +629,22 @@ def _normalize_subscription(item: dict) -> dict:
         preferences["passengers"] = passengers
         soft_preferences["passengers"] = passengers
     soft_preferences["passenger_count"] = passenger_count
+    explicit_allocation = find_explicit_cabin_allocation(
+        item,
+        hard_constraints,
+        constraints,
+        preferences,
+        soft_preferences,
+    )
+    allocation_result = None
+    if explicit_allocation is not None:
+        allocation_result = validate_cabin_allocation(explicit_allocation, passengers)
+        explicit_allocation = allocation_result["allocation"]
+        for container in (hard_constraints, constraints):
+            container["cabin_arrangement"] = "mixed"
+            container["cabin_allocation"] = explicit_allocation
+            container["business_seats"] = allocation_result["business_seats"]
+            container["economy_seats"] = allocation_result["economy_seats"]
     notification_goals = normalize_notification_goals(
         item.get("notification_goals"),
         logger=safe_log,
@@ -734,6 +752,19 @@ def _normalize_subscription(item: dict) -> dict:
         or item.get("target_price_scope")
         or max_budget_scope
     )
+    cabin_arrangement = str(
+        hard_constraints.get("cabin_arrangement")
+        or constraints.get("cabin_arrangement")
+        or item.get("cabin_arrangement")
+        or "economy_all"
+    ).strip()
+    if allocation_result is not None or cabin_arrangement == "business_all":
+        max_budget_scope = "all"
+        target_price_scope = "all"
+        for container in (hard_constraints, constraints, preferences, soft_preferences):
+            container["budget_scope"] = "all"
+            container["max_budget_scope"] = "all"
+            container["target_price_scope"] = "all"
     transfer_policy = hard_constraints.get(
         "transfer_policy", item.get("transfer_policy", item.get("direct_only"))
     )
@@ -866,9 +897,15 @@ def _normalize_subscription(item: dict) -> dict:
         "hard_constraints": hard_constraints,
         "soft_preferences": soft_preferences,
         "mode": item.get("mode", "balanced"),
-        "cabin_classes": item.get("cabin_classes") or determine_cabins(hard_constraints_for_cabins),
+        "cabin_classes": (
+            determine_cabins(hard_constraints_for_cabins)
+            if allocation_result is not None
+            else item.get("cabin_classes") or determine_cabins(hard_constraints_for_cabins)
+        ),
         "priorities": item.get("priorities"),
     }
+    if allocation_result is not None:
+        normalized["cabin_allocation"] = explicit_allocation
     normalized = apply_default_rules(normalized)
     normalized["goals"] = _normalize_goals(
         normalized.get("notification_goals"), normalized.get("goals", [])
@@ -1166,6 +1203,14 @@ def load_file_subscriptions() -> list[dict]:
         if sub.get("validation_status") == "invalid"
         or (sub.get("origin") and sub.get("destination") and sub.get("depart_date"))
     ]
+
+
+def _reference_cabin_classes(sub: dict | None) -> list[str]:
+    """日历、弹性日期与备选只采经济舱；商务舱仅限主日期对。"""
+    cabins = (sub or {}).get("cabin_classes") or ["economy"]
+    if isinstance(cabins, str):
+        cabins = [cabins]
+    return ["economy"] if "economy" in cabins else [str(cabins[0])]
 
 
 def subscription_preferences(sub: dict) -> dict:
@@ -1868,7 +1913,7 @@ def process_subscription(
         nearby_dates = collect_nearby_dates(
             agg,
             sub,
-            cabin_classes=sub.get("cabin_classes"),
+            cabin_classes=_reference_cabin_classes(sub),
             target_min_price=current_min_price,
             fresh_scope=collection_options.get("fresh_scope", "primary_only"),
         )
@@ -2064,7 +2109,7 @@ def process_subscription(
                 return_nearby_dates = collect_nearby_dates(
                     agg,
                     return_sub,
-                    cabin_classes=sub.get("cabin_classes"),
+                    cabin_classes=_reference_cabin_classes(sub),
                     target_min_price=return_min_price,
                     fresh_scope=collection_options.get(
                         "fresh_scope",
@@ -2101,7 +2146,7 @@ def process_subscription(
                             active_origins,
                             active_dests,
                             previous_depart_date,
-                            cabin_classes=sub.get("cabin_classes"),
+                            cabin_classes=_reference_cabin_classes(sub),
                             route_type=route_type,
                             passengers=request_passengers,
                             request_reason="前一晚备选",
@@ -2118,23 +2163,27 @@ def process_subscription(
                             active_dests,
                             active_origins,
                             next_return_date,
-                            cabin_classes=sub.get("cabin_classes"),
+                            cabin_classes=_reference_cabin_classes(sub),
                             route_type=route_type,
                             passengers=request_passengers,
                             request_reason="次日返程备选",
                         )
                     except Exception as exc:
                         print(f"[当天往返备选] 次日返程补采失败: {exc}")
+                mixed_history = round_trip_analysis.get("mixed_cabin_history") or {}
+                snapshot_outbound = mixed_history.get("outbound") or round_trip_analysis.get("outbound_min")
+                snapshot_return = mixed_history.get("return") or round_trip_analysis.get("return_min")
+                snapshot_total = mixed_history.get("total") or round_trip_analysis.get("total_min")
                 save_roundtrip_snapshot(
                     route,
                     sub["depart_date"],
                     return_date,
-                    round_trip_analysis.get("outbound_min"),
-                    round_trip_analysis.get("return_min"),
-                    round_trip_analysis.get("total_min"),
+                    snapshot_outbound,
+                    snapshot_return,
+                    snapshot_total,
                     datetime.now().isoformat(),
                     constraint_fingerprint=constraint_fp,
-                    sources=sorted(
+                    sources=(mixed_history.get("sources") or sorted(
                         set(
                             _sources_for_price(
                                 constraint_history_flights,
@@ -2147,7 +2196,7 @@ def process_subscription(
                                 round_trip_analysis.get("return_min"),
                             )
                         )
-                    ),
+                    )),
                 )
                 roundtrip_history = get_roundtrip_price_history(
                     route,
@@ -2156,7 +2205,7 @@ def process_subscription(
                     14,
                     constraint_fingerprint=constraint_fp,
                 )
-                roundtrip_current = round_trip_analysis.get("total_min")
+                roundtrip_current = snapshot_total
                 analysis["price_position"] = price_position_description(
                     roundtrip_current,
                     roundtrip_history,

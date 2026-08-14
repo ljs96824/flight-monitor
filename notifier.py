@@ -58,6 +58,7 @@ from analyzer import (
     travel_profile_explanation,
     waiting_risk_description,
 )
+from mixed_cabin import MIXED_CABIN_DISCLOSURE
 from price_estimator import (
     build_display_prices,
     build_passenger_price_breakdown,
@@ -472,6 +473,12 @@ def _plan_roundtrip_price_text(plan: dict | None, scope: str | None = None) -> s
 
 def _display_price_tree_for_item(item: dict | None) -> dict:
     item = item or {}
+    mixed_tree = item.get("mixed_cabin_pricing")
+    if not isinstance(mixed_tree, dict):
+        pricing = item.get("passenger_pricing") or {}
+        mixed_tree = pricing if isinstance(pricing, dict) and pricing.get("mixed_cabin") else {}
+    if mixed_tree.get("mixed_cabin"):
+        return mixed_tree
     passengers, route_type = _plan_price_context(item)
     outbound_flight = item.get("outbound_flight") or item.get("outbound") or item.get("main_flight") or item.get("flight") or {}
     return_flight = item.get("return_flight") or item.get("return") or {}
@@ -3532,6 +3539,8 @@ def _round_trip_combinations(analysis_result: dict) -> list[dict]:
     combos = [combo for combo in (round_trip.get("top_combinations") or []) if combo]
     if not combos and round_trip.get("same_day_time_conflict"):
         return []
+    if not combos and "mixed_cabin_matching" in round_trip:
+        return []
     if not combos:
         outbound_flights = (round_trip.get("outbound_top3") or _round_trip_top_flights(analysis_result))[:3]
         return_analysis = analysis_result.get("return_analysis") or {}
@@ -5522,6 +5531,33 @@ def _payload_combo_plan(combo: dict, route_info: dict, index: int, variant: str)
         },
         "channel_prices": source_channel_rows or _payload_roundtrip_channel_rows(combo),
     }
+    if combo.get("mixed_cabin"):
+        mixed_tree = combo.get("mixed_cabin_pricing") or {}
+        plan.update(
+            {
+                "mixed_cabin": True,
+                "cabin_allocation": combo.get("cabin_allocation") or {},
+                "cabin_label": combo.get("cabin_label") or mixed_tree.get("cabin_label") or "",
+                "mixed_cabin_pricing": mixed_tree,
+                "passenger_pricing": mixed_tree,
+                "price_tiers": combo.get("price_tiers") or {},
+                "raw_passenger_total_price": combo.get("raw_passenger_total_price"),
+                "passenger_total_price": combo.get("passenger_total_price"),
+                "business_outbound": combo.get("business_outbound") or {},
+                "business_return": combo.get("business_return") or {},
+                "business_price_source": combo.get("business_price_source") or "serpapi",
+                "mixed_cabin_disclosure": combo.get("mixed_cabin_disclosure") or MIXED_CABIN_DISCLOSURE,
+                "mixed_cabin_price_notes": combo.get("mixed_cabin_price_notes") or {},
+            }
+        )
+        if mixed_tree.get("total") is not None:
+            plan["price"] = mixed_tree["total"]
+            plan["estimated_price"] = mixed_tree["total"]
+            plan["summary"] = f"混舱往返全员总价 {_price_text(mixed_tree['total'])}"
+        tags = list(plan.get("tags") or [])
+        if "混舱" not in tags:
+            tags.append("混舱")
+        plan["tags"] = tags
     lcc_summary = _combo_lcc_summary(outbound, return_flight)
     if lcc_summary.get("has_lcc"):
         plan["lcc_summary"] = lcc_summary
@@ -6731,6 +6767,17 @@ def _budget_value_in_scope(value, passengers, route_type, visible_scope, is_roun
 
 def _plan_price_in_budget_scope(primary_plan, fallback_price, passengers, route_type, is_roundtrip, visible_scope):
     primary_plan = primary_plan or {}
+    if primary_plan.get("mixed_cabin"):
+        if visible_scope != "all_passengers_roundtrip":
+            raise AssertionError(
+                "混舱预算必须使用全员往返总价口径: "
+                f"visible_scope={visible_scope}"
+            )
+        raw_total = _to_float(
+            primary_plan.get("raw_passenger_total_price")
+            or (primary_plan.get("mixed_cabin_pricing") or {}).get("raw_total")
+        )
+        return _round_payload_price(raw_total) if raw_total is not None else None
     tiers = primary_plan.get("price_tiers") or {}
     unit_oneway = tiers.get("unit_oneway") if isinstance(tiers.get("unit_oneway"), dict) else {}
     outbound = _to_float(unit_oneway.get("outbound"))
@@ -7736,6 +7783,19 @@ def build_notification_payload(
             _payload_combo_plan(combo, route_info, index, "推荐" if index < 2 else "备选")
             for index, combo in enumerate(_round_trip_combinations(analysis_result)[:5])
         ]
+        mixed_matching = (analysis_result.get("round_trip_analysis") or {}).get(
+            "mixed_cabin_matching"
+        )
+        if mixed_matching:
+            stats = mixed_matching.get("stats") or {}
+            render_matching = {
+                **stats,
+                "business_visible_count": mixed_matching.get("business_visible_count", 0),
+                "business_reference": mixed_matching.get("business_reference"),
+            }
+            for plan in all_items:
+                if plan.get("mixed_cabin"):
+                    plan["mixed_cabin_matching"] = render_matching
     else:
         flights = _single_flights_for_sections(analysis_result)
         all_items = [
@@ -8436,6 +8496,21 @@ def build_notification_payload(
             "constraint_sample_n": int(price_signal.get("sample_n") or 0),
         },
     }
+    roundtrip_analysis = analysis_result.get("round_trip_analysis") or {}
+    mixed_matching = roundtrip_analysis.get("mixed_cabin_matching") or {}
+    if primary_plan.get("mixed_cabin") or mixed_matching:
+        payload["mixed_cabin"] = {
+            "cabin_allocation": primary_plan.get("cabin_allocation") or {},
+            "cabin_label": primary_plan.get("cabin_label") or "",
+            "matching": mixed_matching,
+            "business_reference": mixed_matching.get("business_reference"),
+            "business_visible_count": mixed_matching.get("business_visible_count", 0),
+            "disclosure": mixed_matching.get("disclosure") or MIXED_CABIN_DISCLOSURE,
+            "provenance": {
+                "business_source": "serpapi",
+                "price_note": "SerpAPI展示价,税费构成未拆分,以支付页为准",
+            },
+        }
     print(f"[场景调试] 推送将显示 = {payload.get('travel_scenarios')}")
     return attach_payload_provenance(
         payload,
@@ -10661,6 +10736,28 @@ def _apply_passenger_pricing_to_plans(
         route = plan.get("route_type") or route_type or ""
         if route:
             plan["route_type"] = route
+        if plan.get("mixed_cabin"):
+            tree = plan.get("mixed_cabin_pricing") or plan.get("passenger_pricing") or {}
+            if not isinstance(tree, dict) or not tree.get("mixed_cabin"):
+                continue
+            pricing = dict(tree)
+            pricing.update(
+                {
+                    "applies": True,
+                    "scope": "roundtrip",
+                    "total_price": tree.get("total"),
+                    "estimated_total": tree.get("total"),
+                }
+            )
+            plan["passenger_pricing"] = pricing
+            plan["mixed_cabin_pricing"] = tree
+            plan["price_tiers"] = plan.get("price_tiers") or {}
+            plan["price"] = tree.get("total")
+            plan["roundtrip_price"] = tree.get("total")
+            plan["estimated_price"] = tree.get("total")
+            plan["passenger_total_price"] = tree.get("total")
+            plan["raw_passenger_total_price"] = tree.get("raw_total")
+            continue
         if plan.get("is_roundtrip"):
             outbound_unit = _to_float(plan.get("outbound_price") or (plan.get("outbound_flight") or {}).get("price"))
             return_unit = _to_float(plan.get("return_price") or (plan.get("return_flight") or {}).get("price"))
@@ -10834,6 +10931,114 @@ def _passenger_pricing_rows(plan: dict) -> list[tuple[str, str]]:
     pricing = plan.get("passenger_pricing") or {}
     if not _passenger_pricing_applies(pricing):
         return []
+    if pricing.get("mixed_cabin") or plan.get("mixed_cabin"):
+        tree = plan.get("mixed_cabin_pricing") or pricing
+        passengers, route_type = _plan_price_context(plan)
+        cabin_label = tree.get("cabin_label") or plan.get("cabin_label") or "混舱"
+        rows = [
+            (
+                f"往返全员总价({cabin_label})",
+                _price_text_with_caliber(
+                    tree.get("total"),
+                    "all_passengers_roundtrip",
+                    passengers,
+                    route_type,
+                ),
+            )
+        ]
+        matching = plan.get("mixed_cabin_matching") or {}
+        candidates = int(matching.get("candidates") or 0)
+        full = int(matching.get("full") or 0)
+        visible = int(matching.get("business_visible_count") or 0)
+        if candidates:
+            rows.append(
+                (
+                    "商务舱报价匹配",
+                    f"{full}/{candidates}个候选同航班两舱完整匹配；本轮可见{visible}个商务舱报价",
+                )
+            )
+        reference = matching.get("business_reference") or {}
+        if reference.get("price") is not None:
+            airline = html.escape(str(reference.get("airline") or "航司待确认"))
+            rows.append(
+                (
+                    "商务舱单程参考",
+                    f"{_price_text(reference.get('price'))}（{airline}；不限方案航班，非方案价）",
+                )
+            )
+        for direction, direction_label, economy_flight, business_flight in (
+            (
+                "outbound",
+                "去程",
+                plan.get("outbound_flight") or {},
+                plan.get("business_outbound") or {},
+            ),
+            (
+                "return",
+                "返程",
+                plan.get("return_flight") or {},
+                plan.get("business_return") or {},
+            ),
+        ):
+            leg = tree.get(direction) or {}
+            for cabin, cabin_label_text, flight in (
+                ("business", "商务舱", business_flight),
+                ("economy", "经济舱", economy_flight),
+            ):
+                cabin_tree = (leg.get("cabins") or {}).get(cabin) or {}
+                if not cabin_tree:
+                    continue
+                parts = []
+                for part in cabin_tree.get("parts") or []:
+                    parts.append(
+                        f"{part.get('label')}{part.get('count')}人"
+                        f"×{_price_text(part.get('unit_price'))}"
+                    )
+                combo = (
+                    flight.get("flight_combo")
+                    or flight.get("flight_no")
+                    or "同航班"
+                )
+                rows.append(
+                    (
+                        f"{direction_label}{cabin_label_text}",
+                        f"{html.escape(str(combo))}；单人成人价"
+                        f"{_price_text(cabin_tree.get('unit_price'))}；"
+                        f"{' + '.join(parts)} = {_price_text(cabin_tree.get('total'))}小计",
+                    )
+                )
+            rows.append(
+                (
+                    f"{direction_label}全员",
+                    _price_text_with_caliber(
+                        leg.get("total"),
+                        "all_passengers_oneway",
+                        passengers,
+                        route_type,
+                    ),
+                )
+            )
+        if tree.get("per_person_blended") is not None:
+            rows.append(
+                (
+                    _per_head_blended_label(tree.get("passenger_count")),
+                    f"约{_price_text(tree.get('per_person_blended'))}",
+                )
+            )
+        notes = plan.get("mixed_cabin_price_notes") or {}
+        if notes.get("economy"):
+            rows.append(("经济舱报价说明", html.escape(str(notes["economy"]))))
+        if notes.get("business"):
+            rows.append(("商务舱报价说明", html.escape(str(notes["business"]))))
+        rows.append(
+            (
+                "双舱库存核验",
+                html.escape(str(plan.get("mixed_cabin_disclosure") or MIXED_CABIN_DISCLOSURE)),
+            )
+        )
+        if tree.get("note"):
+            rows.append(("人数票价口径", html.escape(str(tree.get("note")))))
+        return rows
     label = pricing.get("passenger_label") or _passenger_label_from_counts(pricing.get("passengers"))
     note = str(pricing.get("note") or "").strip()
     passengers, route_type = _plan_price_context(plan)

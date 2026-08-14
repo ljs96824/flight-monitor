@@ -61,6 +61,7 @@ CONSTRAINT_FINGERPRINT_FIELDS = (
     "destination_airports_active",
     "excluded_airports",
     "cabin_classes",
+    "cabin_allocation",
 )
 
 EXPECTED_CONSTRAINT_FINGERPRINT_FIELDS = frozenset(
@@ -118,6 +119,7 @@ EXPECTED_CONSTRAINT_FINGERPRINT_FIELDS = frozenset(
         "destination_airports_active",
         "excluded_airports",
         "cabin_classes",
+        "cabin_allocation",
     }
 )
 
@@ -175,6 +177,7 @@ _DEFAULTS = {
     "destination_airports_active": [],
     "excluded_airports": [],
     "cabin_classes": [],
+    "cabin_allocation": {},
 }
 
 _LIST_FIELDS = {
@@ -196,6 +199,7 @@ _LIST_FIELDS = {
     "excluded_airports",
     "cabin_classes",
 }
+_MAPPING_FIELDS = {"cabin_allocation"}
 _BOOL_FIELDS = {
     "allow_red_eye",
     "no_redeye_strict",
@@ -360,6 +364,10 @@ def normalized_constraint_set(subscription: Mapping | None) -> dict:
         value = _first_value(containers, field)
         if field in _LIST_FIELDS:
             result[field] = _normalize_list(value)
+        elif field in _MAPPING_FIELDS:
+            normalized_mapping = _normalize_nested(value)
+            if normalized_mapping:
+                result[field] = normalized_mapping
         elif field in _BOOL_FIELDS:
             result[field] = _normalize_bool(value)
         elif field in _NUMERIC_FIELDS:

@@ -7,7 +7,7 @@ import sys
 import tempfile
 import types
 import unittest
-from contextlib import redirect_stdout
+from contextlib import closing, redirect_stdout
 from datetime import date
 from pathlib import Path
 from unittest.mock import patch
@@ -252,7 +252,7 @@ class SerpApiPanelReuseTest(unittest.TestCase):
             persist=True,
         )
 
-        with sqlite3.connect(self.db_path) as connection:
+        with closing(sqlite3.connect(self.db_path)) as connection:
             stored = connection.execute(
                 "SELECT source, cabin_class, COUNT(*) FROM observations GROUP BY source, cabin_class"
             ).fetchone()

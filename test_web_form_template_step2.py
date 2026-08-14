@@ -305,7 +305,7 @@ class WebFormTemplateStep2Test(unittest.TestCase):
             self.assertIn(f'data-confirm-edit="{section_id}"', self.full)
             self.assertIn(f'href="#{section_id}"', self.full)
 
-    def test_visibility_contracts_are_only_the_four_approved_contracts(self):
+    def test_visibility_contracts_are_only_the_five_approved_contracts(self):
         contracts = set(
             re.findall(r'data-visibility-contract="([^"]+)"', self.quick + self.full)
         )
@@ -316,6 +316,7 @@ class WebFormTemplateStep2Test(unittest.TestCase):
                 "notification-email",
                 "business-scenario",
                 "transfer-details",
+                "mixed-cabin",
             },
         )
         self.assertNotIn("data-show-if", self.quick + self.full)

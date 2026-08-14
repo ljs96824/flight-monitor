@@ -26,6 +26,11 @@ from airports import (
 from analyzer import apply_default_rules, build_price_hint_from_calendar
 from airlines import LCC_POLICIES, resolve_lcc_policy
 from build_info import PROCESS_BUILD_INFO
+from cabin_allocation import (
+    cabin_allocation_label,
+    cabin_allocation_from_form,
+    validate_cabin_allocation,
+)
 from constraint_summary import build_constraint_summary, format_constraint_summary
 from form_pages import FORM_PAGE_TEMPLATE, ROUTE_TYPE_LABELS, build_form_page_context
 from form_structure import (
@@ -286,6 +291,7 @@ SUCCESS_TEMPLATE = """
     <p><b>{{ summary.route }}</b></p>
     {% if summary.scenario_text %}<p data-confirmed-scenarios="true"><b>出行场景：</b>{{ summary.scenario_text }}</p>{% endif %}
     {% if summary.companion_constraints_text %}<p data-confirmed-companion-constraints="true"><b>同行约束：</b>{{ summary.companion_constraints_text }}</p>{% endif %}
+    {% if summary.cabin_text %}<p data-confirmed-cabin-allocation="true"><b>舱位安排：</b>{{ summary.cabin_text }}</p>{% endif %}
     {% if summary.meeting_text %}<p data-confirmed-meeting="true">{{ summary.meeting_text }}</p>{% endif %}
     {% if summary.time_window_text %}<p data-confirmed-time-windows="true">{{ summary.time_window_text }}</p>{% endif %}
     {% if summary.transfer_text %}<p data-confirmed-transfer="true">{{ summary.transfer_text }}</p>{% endif %}
@@ -1518,19 +1524,36 @@ def build_subscription(form) -> dict:
     user_level = form.get("user_level", "staff").strip() or "staff"
     business_seats = parse_int(form.get("business_seats"), 0)
     economy_seats = parse_int(form.get("economy_seats"), 0)
+    cabin_allocation, explicit_cabin_allocation = cabin_allocation_from_form(form)
     if cabin_arrangement == "business_all" and passenger_count:
         business_seats = passenger_count
         economy_seats = 0
         cabin_policy = "business_allowed"
+        budget_scope = max_budget_scope = target_price_scope = "all"
     elif cabin_arrangement == "economy_all" and passenger_count:
         business_seats = 0
         economy_seats = passenger_count
-    elif cabin_arrangement == "mixed" and business_seats + economy_seats > 0:
-        passenger_count = business_seats + economy_seats
+    elif cabin_arrangement == "mixed":
+        if explicit_cabin_allocation:
+            allocation_result = validate_cabin_allocation(
+                cabin_allocation,
+                precise_passengers,
+            )
+            cabin_allocation = allocation_result["allocation"]
+            business_seats = allocation_result["business_seats"]
+            economy_seats = allocation_result["economy_seats"]
+            passenger_count = business_seats + economy_seats
+            cabin_policy = "business_allowed"
+            budget_scope = max_budget_scope = target_price_scope = "all"
+        elif business_seats + economy_seats > 0:
+            # 旧版存量仅有两舱总人数，无法无损反推出各乘客类型，继续原样保存。
+            passenger_count = business_seats + economy_seats
+        else:
+            raise ValueError("混舱分配尚未填写，请为每类乘客选择商务舱或经济舱")
     team_date_flexibility = form.get("team_date_flexibility", "fixed").strip() or "fixed"
     same_flight_required = parse_bool(form.get("same_flight_required", "false"))
     reimburse_per_person = parse_int(form.get("reimburse_per_person"), 0)
-    if monitor_mode != "precise" or not business_context:
+    if monitor_mode != "precise":
         meeting_start = ""
         meeting_end = ""
         team_passenger_count = 0
@@ -1539,6 +1562,14 @@ def build_subscription(form) -> dict:
         user_level = "staff"
         business_seats = 0
         economy_seats = passenger_count
+        team_date_flexibility = "fixed"
+        same_flight_required = False
+        reimburse_per_person = 0
+        explicit_cabin_allocation = False
+    elif not business_context:
+        meeting_start = ""
+        meeting_end = ""
+        team_passenger_count = 0
         team_date_flexibility = "fixed"
         same_flight_required = False
         reimburse_per_person = 0
@@ -1619,6 +1650,7 @@ def build_subscription(form) -> dict:
             "user_level": user_level,
             "business_seats": business_seats,
             "economy_seats": economy_seats,
+            **({"cabin_allocation": cabin_allocation} if explicit_cabin_allocation else {}),
             "reimburse_per_person": reimburse_per_person or None,
         },
         "preferences": {
@@ -1697,6 +1729,15 @@ def build_subscription(form) -> dict:
         "lcc_policy": lcc_policy,
         "same_day_round_trip": same_day_round_trip,
         "passenger_count": passenger_count,
+        **({"cabin_allocation": cabin_allocation} if explicit_cabin_allocation else {}),
+        **(
+            {
+                "budget_scope": budget_scope,
+                "max_budget_scope": max_budget_scope,
+                "target_price_scope": target_price_scope,
+            }
+            if explicit_cabin_allocation else {}
+        ),
         "date_flexibility": parse_int(form.get("date_flexibility"), 0),
         "return_date_flexibility": (
             parse_int(form.get("return_date_flexibility"), 0) if round_trip else 0
@@ -1744,6 +1785,7 @@ def build_subscription(form) -> dict:
             "user_level": user_level,
             "business_seats": business_seats,
             "economy_seats": economy_seats,
+            **({"cabin_allocation": cabin_allocation} if explicit_cabin_allocation else {}),
             "reimburse_per_person": reimburse_per_person or None,
             "max_extra_duration_hours": max_extra_duration_hours,
             "max_total_duration_hours": max_total_duration_hours,
@@ -1958,6 +2000,14 @@ def build_success_summary(subscription: dict) -> dict:
     companion_constraints_text = " + ".join(
         COMPANION_CONSTRAINT_LABELS.get(str(item), str(item)) for item in companion_constraints
     )
+    cabin_text = ""
+    cabin_allocation = (
+        subscription.get("cabin_allocation")
+        or hard.get("cabin_allocation")
+        or {}
+    )
+    if hard.get("cabin_arrangement") == "mixed" and cabin_allocation:
+        cabin_text = cabin_allocation_label(cabin_allocation)
     meeting_text = ""
     if hard.get("same_day_round_trip"):
         meeting_start = hard.get("business_start") or hard.get("meeting_start")
@@ -1976,6 +2026,7 @@ def build_success_summary(subscription: dict) -> dict:
         "time_window_text": _success_time_window_text(hard),
         "scenario_text": scenario_text,
         "companion_constraints_text": companion_constraints_text,
+        "cabin_text": cabin_text,
         "transfer_text": _success_transfer_text(hard),
     }
 
