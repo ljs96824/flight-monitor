@@ -25,7 +25,19 @@ ROUTE_SOURCE_PROFILES = {
     },
     "international": {
         "sources": [
-            {"name": "juhe", "role": "primary", "weight": 1.0},
+            {
+                "name": "juhe",
+                "role": "primary",
+                "weight": 1.0,
+                "cabins": ["economy"],
+            },
+            {
+                "name": "serpapi",
+                "role": "business_primary",
+                "weight": 1.0,
+                "cabins": ["business"],
+                "active_from": "2026-08-14",
+            },
             {"name": "duffel", "role": "enrichment", "weight": 0.0},
         ],
         # HasData 自 2026-08-14 因 403/订阅终止退役；保留元数据供历史口径追溯。
@@ -36,6 +48,7 @@ ROUTE_SOURCE_PROFILES = {
                 "weight": 1.0,
                 "retired_on": "2026-08-14",
                 "reason": "403/订阅终止",
+                "cabins": ["economy"],
             }
         ],
         "query": {
@@ -48,7 +61,19 @@ ROUTE_SOURCE_PROFILES = {
     },
     "greater_china": {
         "sources": [
-            {"name": "juhe", "role": "primary", "weight": 1.0},
+            {
+                "name": "juhe",
+                "role": "primary",
+                "weight": 1.0,
+                "cabins": ["economy"],
+            },
+            {
+                "name": "serpapi",
+                "role": "business_primary",
+                "weight": 1.0,
+                "cabins": ["business"],
+                "active_from": "2026-08-14",
+            },
             {"name": "duffel", "role": "enrichment", "weight": 0.0},
         ],
         # HasData 自 2026-08-14 因 403/订阅终止退役；保留元数据供历史口径追溯。
@@ -59,6 +84,7 @@ ROUTE_SOURCE_PROFILES = {
                 "weight": 0.6,
                 "retired_on": "2026-08-14",
                 "reason": "403/订阅终止",
+                "cabins": ["economy"],
             }
         ],
         "query": {
@@ -103,26 +129,65 @@ def retired_listing_sources(route_type: str | None) -> list[dict]:
     ]
 
 
+def _normalized_cabin(value) -> str:
+    return str(value or "economy").strip().lower() or "economy"
+
+
+def _spec_supports_cabin(spec: dict, cabin_class: str) -> bool:
+    configured = spec.get("cabins")
+    if not configured:
+        return True
+    supported = {_normalized_cabin(item) for item in configured}
+    return _normalized_cabin(cabin_class) in supported
+
+
+def source_supports_cabin(source, cabin_class: str) -> bool:
+    configured = getattr(source, "supported_cabins", None)
+    if not configured:
+        return True
+    supported = {_normalized_cabin(item) for item in configured}
+    return _normalized_cabin(cabin_class) in supported
+
+
 def expected_listing_sources(
     route_type: str | None,
     *,
     observed_day: str | date | None = None,
+    cabin_class: str = "economy",
 ) -> set[str]:
-    """按观测日派生应到场的列表源；未给日期时采用当前策略。"""
+    """按观测日与舱位派生应到场的列表源；未给日期时采用当前策略。"""
     profile = get_source_profile(route_type)
-    expected = {
-        str(item.get("name") or "").strip().lower()
-        for item in profile.get("sources") or []
-        if str(item.get("role") or "").strip().lower() != "enrichment"
-        and str(item.get("name") or "").strip()
-    }
-    if observed_day in (None, ""):
-        return expected
+    day = None
     try:
-        day = observed_day if isinstance(observed_day, date) else date.fromisoformat(str(observed_day)[:10])
+        if observed_day not in (None, ""):
+            day = (
+                observed_day
+                if isinstance(observed_day, date)
+                else date.fromisoformat(str(observed_day)[:10])
+            )
     except (TypeError, ValueError):
+        day = None
+
+    expected = set()
+    for item in profile.get("sources") or []:
+        name = str(item.get("name") or "").strip().lower()
+        role = str(item.get("role") or "").strip().lower()
+        if not name or role == "enrichment" or not _spec_supports_cabin(item, cabin_class):
+            continue
+        if day is not None and item.get("active_from"):
+            try:
+                active_from = date.fromisoformat(str(item["active_from"])[:10])
+            except ValueError:
+                active_from = None
+            if active_from is not None and day < active_from:
+                continue
+        expected.add(name)
+
+    if day is None:
         return expected
     for item in retired_listing_sources(route_type):
+        if not _spec_supports_cabin(item, cabin_class):
+            continue
         try:
             retired_on = date.fromisoformat(str(item.get("retired_on") or "")[:10])
         except ValueError:

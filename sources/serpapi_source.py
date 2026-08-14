@@ -24,9 +24,32 @@ AIRLINE_BOOKING_URLS = {
     "DL": "https://zh.delta.com",
 }
 
+SERPAPI_PRICE_NOTE = "SerpAPI展示价,税费构成未拆分,以支付页为准"
+SERPAPI_TRAVEL_CLASS = {
+    "economy": 1,
+    "business": 3,
+}
+
+
+def _missing_key_result() -> dict:
+    aliases = "/".join(SERPAPI_KEY_ALIASES)
+    reason = f"缺少 SerpAPI 密钥（已检查 {aliases}）"
+    return {
+        "flights": [],
+        "source": "serpapi",
+        "raw": {},
+        "source_status": "not_configured",
+        "skipped_reason": reason,
+    }
+
 
 class SerpAPISource(FlightSource):
     name = "serpapi"
+    supported_cabins = frozenset(SERPAPI_TRAVEL_CLASS)
+
+    def preflight_skip(self, _origin, _dest, _date_str, _cabin_class):
+        api_key, _ = resolve_serpapi_key(announce=False)
+        return None if api_key else _missing_key_result()
 
     def fetch(
         self, origin: str, dest: str, date_str: str, cabin_class: str = "economy"
@@ -35,8 +58,7 @@ class SerpAPISource(FlightSource):
 
         api_key, _ = resolve_serpapi_key()
         if not api_key:
-            aliases = "/".join(SERPAPI_KEY_ALIASES)
-            raise RuntimeError(f"缺少 SerpAPI 密钥（已检查 {aliases}）")
+            return _missing_key_result()
 
         overrides = getattr(self, "query_overrides", {}) or {}
         params = {
@@ -46,34 +68,38 @@ class SerpAPISource(FlightSource):
             "outbound_date": date_str,
             "type": "2",
             "currency": overrides.get("currency") or "CNY",
-            "hl": overrides.get("hl") or "zh-CN",
+            "hl": overrides.get("hl") or "zh-cn",
             "gl": overrides.get("gl") or "cn",
             "sort": "2",
             "stops": _serpapi_stops_value(overrides.get("stops")),
+            "travel_class": _serpapi_travel_class(cabin_class),
             "api_key": api_key,
         }
-        selected_cabin = _google_cabin_code(cabin_class)
-        if selected_cabin:
-            params["selected_cabins"] = selected_cabin
 
         search = GoogleSearch(params)
         results = search.get_dict()
         if "error" in results:
             raise RuntimeError(results["error"])
 
+        flights = parse_google_flights(
+            results,
+            self.name,
+            cabin_class,
+            date_str,
+            marketing_fallback=True,
+            price_note=SERPAPI_PRICE_NOTE,
+        )
         return {
-            "flights": parse_google_flights(results, self.name, cabin_class, date_str),
+            "flights": flights,
             "price_insights": results.get("price_insights"),
             "source": self.name,
+            "source_status": "success" if flights else "empty",
             "raw": results,
         }
 
 
-def _google_cabin_code(cabin_class: str) -> str:
-    return {
-        "economy": "M",
-        "business": "C",
-    }.get(cabin_class, "M")
+def _serpapi_travel_class(cabin_class: str) -> int:
+    return SERPAPI_TRAVEL_CLASS.get(str(cabin_class or "economy").lower(), 1)
 
 
 def _serpapi_stops_value(value) -> str:
@@ -297,6 +323,9 @@ def parse_google_flights(
     source_name: str,
     cabin_class: str = "economy",
     date_str: str | None = None,
+    *,
+    marketing_fallback: bool = False,
+    price_note: str | None = None,
 ) -> list[dict]:
     all_flights = []
 
@@ -316,6 +345,7 @@ def parse_google_flights(
             for index, segment in enumerate(segments):
                 flight_no = segment.get("flight_number", "")
                 airline = segment.get("airline", "")
+                marketing_airline_code = _first_airline_code([flight_no])
                 flight_nos.append(flight_no)
                 airlines.append(airline)
 
@@ -352,6 +382,8 @@ def parse_google_flights(
                     "duration_min": segment.get("duration", 0) or 0,
                     "cabin_class": cabin_class,
                 }
+                if marketing_airline_code:
+                    segment_info["marketing_airline_code"] = marketing_airline_code
                 operating_airline = (
                     segment.get("operating_airline")
                     or segment.get("op_airline")
@@ -360,6 +392,8 @@ def parse_google_flights(
                 )
                 if operating_airline:
                     segment_info["operating_airline"] = operating_airline
+                elif marketing_fallback:
+                    segment_info["carrier_basis"] = "marketing_fallback"
                 if segment.get("is_codeshare") or segment.get("codeshare"):
                     segment_info["is_codeshare"] = True
                 parsed_segments.append(segment_info)
@@ -424,6 +458,8 @@ def parse_google_flights(
                     date_str,
                 ),
             }
+            if price_note:
+                parsed["price_note"] = str(price_note)
 
             if parsed["price"] is not None:
                 all_flights.append(parsed)

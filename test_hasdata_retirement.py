@@ -46,7 +46,7 @@ class HasDataRetirementTest(unittest.TestCase):
 
         self.assertEqual(
             [item["name"] for item in profile["sources"]],
-            ["juhe", "duffel"],
+            ["juhe", "serpapi", "duffel"],
         )
         self.assertEqual(profile["sources"][0]["role"], "primary")
         self.assertEqual(
@@ -58,6 +58,7 @@ class HasDataRetirementTest(unittest.TestCase):
                     "weight": 1.0,
                     "retired_on": "2026-08-14",
                     "reason": "403/订阅终止",
+                    "cabins": ["economy"],
                 }
             ],
         )
@@ -69,7 +70,7 @@ class HasDataRetirementTest(unittest.TestCase):
 
         self.assertEqual(
             [item["name"] for item in profile["sources"]],
-            ["juhe", "duffel"],
+            ["juhe", "serpapi", "duffel"],
         )
         self.assertEqual(profile["sources"][0]["role"], "primary")
         self.assertEqual(
@@ -81,6 +82,7 @@ class HasDataRetirementTest(unittest.TestCase):
                     "weight": 0.6,
                     "retired_on": "2026-08-14",
                     "reason": "403/订阅终止",
+                    "cabins": ["economy"],
                 }
             ],
         )

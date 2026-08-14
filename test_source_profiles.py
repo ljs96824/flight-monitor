@@ -74,8 +74,13 @@ class SourceProfilesTest(unittest.TestCase):
                     "PVG", "KIX", route_type="international"
                 )
 
-        self.assertEqual([source.name for source in search_sources], ["juhe"])
-        self.assertEqual([source.role for source in search_sources], ["primary"])
+        self.assertEqual([source.name for source in search_sources], ["juhe", "serpapi"])
+        self.assertEqual(
+            [source.role for source in search_sources],
+            ["primary", "business_primary"],
+        )
+        self.assertEqual(search_sources[0].supported_cabins, frozenset({"economy"}))
+        self.assertEqual(search_sources[1].supported_cabins, frozenset({"business"}))
         self.assertEqual([source.name for source in enrichment_sources], ["duffel"])
         self.assertEqual(search_sources[0].query_overrides["stops"], "two_stops_or_fewer")
 
@@ -86,8 +91,13 @@ class SourceProfilesTest(unittest.TestCase):
                     "PVG", "HKG", route_type="greater_china"
                 )
 
-        self.assertEqual([source.name for source in search_sources], ["juhe"])
-        self.assertEqual([source.role for source in search_sources], ["primary"])
+        self.assertEqual([source.name for source in search_sources], ["juhe", "serpapi"])
+        self.assertEqual(
+            [source.role for source in search_sources],
+            ["primary", "business_primary"],
+        )
+        self.assertEqual(search_sources[0].supported_cabins, frozenset({"economy"}))
+        self.assertEqual(search_sources[1].supported_cabins, frozenset({"business"}))
         self.assertEqual([source.name for source in enrichment_sources], ["duffel"])
         self.assertEqual(search_sources[0].query_overrides["stops"], "nonstop_preferred")
 
@@ -125,7 +135,7 @@ class SourceProfilesTest(unittest.TestCase):
                     "PVG", "KIX", route_type="domestic"
                 )
 
-        self.assertEqual([source.name for source in search_sources], ["juhe"])
+        self.assertEqual([source.name for source in search_sources], ["juhe", "serpapi"])
         self.assertEqual([source.name for source in enrichment_sources], ["duffel"])
 
     def test_ordered_sources_respect_route_profile_even_with_manual_sources(self):
@@ -144,8 +154,8 @@ class SourceProfilesTest(unittest.TestCase):
         greater_china = aggregator._ordered_search_sources("PVG", "HKG", route_type="greater_china")
 
         self.assertEqual([source.name for source in domestic], ["juhe"])
-        self.assertEqual([source.name for source in international], ["juhe"])
-        self.assertEqual([source.name for source in greater_china], ["juhe"])
+        self.assertEqual([source.name for source in international], ["juhe", "serpapi"])
+        self.assertEqual([source.name for source in greater_china], ["juhe", "serpapi"])
 
 
 if __name__ == "__main__":

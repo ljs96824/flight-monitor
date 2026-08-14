@@ -82,7 +82,7 @@ class SourceWeightingTest(unittest.TestCase):
         self.assertEqual(merged[0]["primary_source"], "juhe")
         self.assertEqual(merged[0]["data_source"], "serpapi+juhe")
 
-    def test_international_route_uses_only_juhe_after_hasdata_retirement(self):
+    def test_international_route_uses_juhe_economy_and_serpapi_business(self):
         aggregator = FlightAggregator(
             [DummySource("juhe"), DummySource("serpapi"), DummySource("hasdata")],
             [],
@@ -90,8 +90,13 @@ class SourceWeightingTest(unittest.TestCase):
 
         ordered = aggregator._ordered_search_sources("PVG", "KIX")
 
-        self.assertEqual([source.name for source in ordered], ["juhe"])
-        self.assertEqual([source.role for source in ordered], ["primary"])
+        self.assertEqual([source.name for source in ordered], ["juhe", "serpapi"])
+        self.assertEqual(
+            [source.role for source in ordered],
+            ["primary", "business_primary"],
+        )
+        self.assertEqual(ordered[0].supported_cabins, frozenset({"economy"}))
+        self.assertEqual(ordered[1].supported_cabins, frozenset({"business"}))
 
     def test_collect_merges_hasdata_and_juhe_same_combo_with_price_details(self):
         class FetchSource(DummySource):

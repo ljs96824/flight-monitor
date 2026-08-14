@@ -193,6 +193,9 @@ def classify_segment(segment: dict | None) -> dict:
     """按执飞航司判定单航段；无法取得执飞码时回退市场承运。"""
     segment = segment if isinstance(segment, dict) else {}
     operating_code = _first_carrier_code(segment, _OPERATING_FIELDS)
+    explicit_basis = str(segment.get("carrier_basis") or "").strip().lower()
+    if explicit_basis not in {"operating", "marketing_fallback"}:
+        explicit_basis = ""
     is_codeshare = _as_bool(
         segment.get("isCodeShare")
         if "isCodeShare" in segment
@@ -205,7 +208,7 @@ def classify_segment(segment: dict | None) -> dict:
         basis = "operating"
     else:
         carrier_code = _marketing_carrier_code(segment)
-        basis = "marketing_fallback" if is_codeshare else "operating"
+        basis = explicit_basis or ("marketing_fallback" if is_codeshare else "operating")
     return {
         "is_lcc": carrier_code in LCC_CARRIERS,
         "carrier_code": carrier_code,

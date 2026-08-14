@@ -130,12 +130,14 @@ def load_route_observations(
         if pair:
             raw_rows = connection.execute(
                 f"SELECT {columns} FROM observations "
-                "WHERE price_cny > 0 AND UPPER(origin_airport)=? AND UPPER(dest_airport)=?",
+                "WHERE price_cny > 0 AND LOWER(cabin_class)='economy' "
+                "AND UPPER(origin_airport)=? AND UPPER(dest_airport)=?",
                 pair,
             ).fetchall()
         else:
             raw_rows = connection.execute(
-                f"SELECT {columns} FROM observations WHERE price_cny > 0"
+                f"SELECT {columns} FROM observations "
+                "WHERE price_cny > 0 AND LOWER(cabin_class)='economy'"
             ).fetchall()
 
     rows = []

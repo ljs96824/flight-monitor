@@ -1,6 +1,10 @@
 source_quota_budget:
   juhe: 550
+  serpapi:
+    monthly: 250
+    reserve: 30
 source_quota_low_remaining_threshold: 50
+SERPAPI_ECONOMY_CROSS_CHECK: false
 FRESHNESS_HOURS: 6
 SUB_ROUND_FRESH_SCOPE: primary_only
 

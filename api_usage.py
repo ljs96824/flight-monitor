@@ -291,10 +291,20 @@ def usage_snapshot(payload: dict, *, day: str | None = None) -> dict:
         str(source): int(count or 0)
         for source, count in (dates.get(day_key) or {}).items()
     }
+    month_key = day_key[:7]
+    month_counts: dict[str, int] = {}
     cumulative: dict[str, int] = {}
-    for source_counts in dates.values():
+    for observed_day, source_counts in dates.items():
         if not isinstance(source_counts, dict):
             continue
         for source, count in source_counts.items():
-            cumulative[str(source)] = cumulative.get(str(source), 0) + int(count or 0)
-    return {"today": today_counts, "cumulative": cumulative}
+            source_name = str(source)
+            value = int(count or 0)
+            cumulative[source_name] = cumulative.get(source_name, 0) + value
+            if str(observed_day).startswith(f"{month_key}-"):
+                month_counts[source_name] = month_counts.get(source_name, 0) + value
+    return {
+        "today": today_counts,
+        "month": month_counts,
+        "cumulative": cumulative,
+    }

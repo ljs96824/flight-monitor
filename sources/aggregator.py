@@ -10,7 +10,11 @@ from datetime import datetime
 from flight_combo_utils import normalize_combo
 from log_utils import safe_log
 from serpapi_credentials import serpapi_key_available
-from source_profiles import get_source_profile, normalize_route_type
+from source_profiles import (
+    get_source_profile,
+    normalize_route_type,
+    source_supports_cabin,
+)
 from request_cache import cached_fetch
 from sources.base import FlightSource
 
@@ -502,6 +506,10 @@ def _apply_source_spec(source: FlightSource, spec: dict, route_type: str) -> Fli
     source.weight = float(spec.get("weight") or 0)
     source.query_overrides = _profile_query(route_type)
     source.route_type = route_type
+    if spec.get("cabins"):
+        source.supported_cabins = frozenset(
+            str(item or "economy").strip().lower() for item in spec["cabins"]
+        )
     return source
 
 
@@ -526,7 +534,10 @@ def _instantiate_source(source_name: str):
             from sources.juhe_source import JuheSource
 
             return JuheSource()
-        if source_name == "serpapi" and serpapi_key_available():
+        if source_name == "serpapi":
+            if not serpapi_key_available():
+                safe_log("[source-profile] skip serpapi: 缺少受支持的密钥变量")
+                return None
             from sources.serpapi_source import SerpAPISource
 
             return SerpAPISource()
@@ -726,6 +737,11 @@ class FlightAggregator:
         combo_normalization_logged_sources: set[str] = set()
 
         for source in search_sources:
+            applicable_cabins = [
+                cabin for cabin in cabin_classes if source_supports_cabin(source, cabin)
+            ]
+            if not applicable_cabins:
+                continue
             source_name = getattr(source, "name", type(source).__name__)
             source_role = getattr(source, "role", None) or (
                 "reference" if str(source_name).lower() == "travelpayouts" else "search"
@@ -737,7 +753,7 @@ class FlightAggregator:
             source_statuses = []
             cabin_counts = {}
 
-            for cabin_class in cabin_classes:
+            for cabin_class in applicable_cabins:
                 try:
                     cached_response = cached_fetch(
                         source,
@@ -852,7 +868,7 @@ class FlightAggregator:
                         flight["source_role"] = flight.get("source_role") or source_role
                         flight["source_weight"] = flight.get("source_weight") or source_weight
                         flight["route_type"] = resolved_route_type
-                        if source_role == "primary":
+                        if source_role in {"primary", "business_primary"}:
                             flight["primary_source"] = source_name
                         if source_role == "reference":
                             flight["reference_only"] = True
@@ -1001,11 +1017,16 @@ class FlightAggregator:
             if not unique_flights:
                 break
             source_name = getattr(source, "name", type(source).__name__)
+            applicable_cabins = [
+                cabin for cabin in cabin_classes if source_supports_cabin(source, cabin)
+            ]
+            if not applicable_cabins:
+                continue
             enrichment_count = 0
             enrichment_succeeded = False
             cabin_counts = {}
 
-            for cabin_class in cabin_classes:
+            for cabin_class in applicable_cabins:
                 try:
                     result = cached_fetch(
                         source,

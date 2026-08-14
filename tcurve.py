@@ -62,7 +62,11 @@ def expected_search_sources(
     observed_day: str | date | None = None,
 ) -> set[str]:
     """从生产源策略派生列表源集合，自动排除 enrichment。"""
-    return expected_listing_sources(route_type, observed_day=observed_day)
+    return expected_listing_sources(
+        route_type,
+        observed_day=observed_day,
+        cabin_class="economy",
+    )
 
 
 def _split_route(route: str) -> tuple[str, str]:
@@ -126,7 +130,7 @@ def _load_route_rows(
 ) -> list[dict]:
     columns = (
         "observed_at, route_type, origin_airport, dest_airport, "
-        "depart_date, days_to_departure, source, price_cny"
+        "depart_date, days_to_departure, cabin_class, source, price_cny"
     )
     with readonly_connection(db_path, timeout=timeout) as connection:
         available = {
@@ -140,6 +144,7 @@ def _load_route_rows(
             "dest_airport",
             "depart_date",
             "days_to_departure",
+            "cabin_class",
             "source",
             "price_cny",
         }
@@ -149,12 +154,14 @@ def _load_route_rows(
         if airport_pair:
             rows = connection.execute(
                 f"SELECT {columns} FROM observations "
-                "WHERE price_cny > 0 AND UPPER(origin_airport)=? AND UPPER(dest_airport)=?",
+                "WHERE price_cny > 0 AND LOWER(cabin_class)='economy' "
+                "AND UPPER(origin_airport)=? AND UPPER(dest_airport)=?",
                 airport_pair,
             ).fetchall()
         else:
             rows = connection.execute(
-                f"SELECT {columns} FROM observations WHERE price_cny > 0"
+                f"SELECT {columns} FROM observations "
+                "WHERE price_cny > 0 AND LOWER(cabin_class)='economy'"
             ).fetchall()
 
     selected = []

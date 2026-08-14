@@ -13,7 +13,9 @@ from request_cache import (
     cached_fetch,
     get_request_cache_stats,
     panel_reuse_result,
+    record_planned_source_skip,
 )
+from source_profiles import source_supports_cabin
 
 
 @dataclass
@@ -88,6 +90,8 @@ class CollectionPlan:
         self.expanded_total = 0
         self._requests: dict[tuple, PlannedRequest] = {}
         self._results: dict[tuple, dict] = {}
+        self._quota_protected_keys: set[tuple] = set()
+        self._quota_protection_reasons: dict[tuple, str] = {}
 
     @property
     def unique_count(self) -> int:
@@ -175,7 +179,7 @@ class CollectionPlan:
     def _panel_reuse_keys(self) -> set[tuple]:
         reusable = set()
         for key, request in self._requests.items():
-            if request.force_fresh or key[0] not in {"juhe", "hasdata"}:
+            if request.force_fresh or key[0] not in {"juhe", "hasdata", "serpapi"}:
                 continue
             if panel_reuse_result(
                 request.source,
@@ -192,7 +196,7 @@ class CollectionPlan:
     def log_summary(
         self,
         *,
-        quota_budgets: dict[str, int] | None = None,
+        quota_budgets: dict[str, object] | None = None,
         quota_low_remaining_threshold: int = 50,
         usage_snapshot: dict | None = None,
         freshness_hours: float | None = None,
@@ -211,21 +215,54 @@ class CollectionPlan:
             f"唯一请求={self.unique_count} "
             f"juhe={counts.get('juhe', 0)} "
             f"hasdata={counts.get('hasdata', 0)} "
+            f"serpapi={counts.get('serpapi', 0)} "
             f"duffel={counts.get('duffel', 0)} "
             f"订阅数={self.subscription_count} 篮子日期={self.basket_date_count} "
             f"复用节省={self.reuse_saved} 条件项={self.conditional_count} "
             f"预计面板复用={len(panel_reuse_keys)}"
         )
-        snapshot = usage_snapshot or {"today": {}, "cumulative": {}}
+        snapshot = usage_snapshot or {"today": {}, "month": {}, "cumulative": {}}
+        self._quota_protected_keys.clear()
+        self._quota_protection_reasons.clear()
         for source, raw_budget in (quota_budgets or {}).items():
+            planned_keys = {
+                key
+                for key in self._requests
+                if key[0] == source
+                and key not in panel_reuse_keys
+                and key not in self.panel_only_keys
+            }
+            planned = len(planned_keys)
+            if isinstance(raw_budget, dict):
+                monthly = max(0, int(raw_budget.get("monthly") or 0))
+                reserve = max(0, int(raw_budget.get("reserve") or 0))
+                monthly_used = int((snapshot.get("month") or {}).get(source, 0) or 0)
+                usable_limit = max(0, monthly - reserve)
+                remaining_after = usable_limit - monthly_used - planned
+                if monthly_used + planned > usable_limit:
+                    reason = (
+                        f"月度配额保护(本月已用={monthly_used},计划={planned},"
+                        f"可用上限={usable_limit})"
+                    )
+                    self._quota_protected_keys.update(planned_keys)
+                    self._quota_protection_reasons.update(
+                        {key: reason for key in planned_keys}
+                    )
+                    safe_log(
+                        f"[配额保护] 源={source} 本月已用={monthly_used} "
+                        f"计划消耗={planned} 月预算={monthly} 预留={reserve} "
+                        f"结果=计划项转源级跳过"
+                    )
+                elif remaining_after < int(quota_low_remaining_threshold):
+                    safe_log(
+                        f"⚠ [采集计划] 源={source} 计划消耗={planned} "
+                        f"本月已用={monthly_used} 月预算={monthly} 预留={reserve} "
+                        f"预计可用余量={remaining_after}"
+                    )
+                continue
+
             budget = int(raw_budget or 0)
             cumulative = int((snapshot.get("cumulative") or {}).get(source, 0) or 0)
-            planned = max(
-                0,
-                int(counts.get(source, 0) or 0)
-                - int(panel_reuse_by_source.get(source, 0) or 0)
-                - int(panel_only_missing_by_source.get(source, 0) or 0),
-            )
             remaining_after = budget - cumulative - planned
             if cumulative + planned > budget:
                 safe_log(
@@ -246,6 +283,17 @@ class CollectionPlan:
         ordered = list(self._requests.values())
         for request in ordered:
             if request.conditional:
+                continue
+            if request.key in self._quota_protected_keys:
+                self._results[request.key] = record_planned_source_skip(
+                    request.source,
+                    request.origin,
+                    request.dest,
+                    request.date_str,
+                    request.passengers,
+                    request.cabin_class,
+                    reason=self._quota_protection_reasons[request.key],
+                )
                 continue
             self._results[request.key] = cached_fetch(
                 request.source,
@@ -285,6 +333,17 @@ class CollectionPlan:
                 safe_log(
                     f"{prefix} 原因=无列表候选 类型={reason_label} "
                     f"航线={request.origin}->{request.dest} 日期={request.date_str}"
+                )
+                continue
+            if request.key in self._quota_protected_keys:
+                self._results[request.key] = record_planned_source_skip(
+                    request.source,
+                    request.origin,
+                    request.dest,
+                    request.date_str,
+                    request.passengers,
+                    request.cabin_class,
+                    reason=self._quota_protection_reasons[request.key],
                 )
                 continue
             self._results[request.key] = cached_fetch(
@@ -420,7 +479,13 @@ def _add_direction_requests(
 ) -> None:
     for cabin in cabins:
         group = f"{group_prefix}:{origin}:{dest}:{depart_date}:{cabin}"
-        for source in search_sources:
+        cabin_search_sources = [
+            source for source in search_sources if source_supports_cabin(source, cabin)
+        ]
+        cabin_enrichment_sources = [
+            source for source in enrichment_sources if source_supports_cabin(source, cabin)
+        ]
+        for source in cabin_search_sources:
             plan.add_request(
                 source,
                 origin,
@@ -432,7 +497,7 @@ def _add_direction_requests(
                 consumer=consumer,
                 reason="主行程",
             )
-        for source in enrichment_sources:
+        for source in cabin_enrichment_sources:
             plan.add_request(
                 source,
                 origin,
@@ -446,7 +511,7 @@ def _add_direction_requests(
                 reason="行李退改补充",
             )
         for flex_date in flex_dates:
-            for source in search_sources:
+            for source in cabin_search_sources:
                 plan.add_request(
                     source,
                     origin,
@@ -460,8 +525,8 @@ def _add_direction_requests(
                     consumer=consumer,
                     reason="弹性日期",
                 )
-        if include_calendar and search_sources:
-            calendar_source = search_sources[0]
+        if include_calendar and cabin_search_sources:
+            calendar_source = cabin_search_sources[0]
             for calendar_date in _calendar_dates(depart_date, origin, dest):
                 plan.add_request(
                     calendar_source,
@@ -587,6 +652,12 @@ def build_collection_plan(
             )
             continue
         required = {str(name).lower() for name in (item.get("sources") or [])}
+        cabin_class = str(item.get("cabin_class") or "economy")
+        search_sources = [
+            source
+            for source in search_sources
+            if source_supports_cabin(source, cabin_class)
+        ]
         if required:
             search_sources = [source for source in search_sources if _source_name(source) in required]
         for source in search_sources:
@@ -596,7 +667,7 @@ def build_collection_plan(
                 dest,
                 depart_date,
                 {"adult": 1},
-                str(item.get("cabin_class") or "economy"),
+                cabin_class,
                 force_fresh=True,
                 consumer=f"basket:{item.get('queue', index)}",
                 reason="固定篮子",
@@ -613,6 +684,7 @@ def load_collection_settings(path: str | Path) -> dict:
             "source_quota_low_remaining_threshold": 50,
             "freshness_hours": 6.0,
             "sub_round_fresh_scope": "primary_only",
+            "serpapi_economy_cross_check": False,
         }
     try:
         payload = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
@@ -628,5 +700,8 @@ def load_collection_settings(path: str | Path) -> dict:
             "all"
             if str(payload.get("SUB_ROUND_FRESH_SCOPE") or "").strip().lower() == "all"
             else "primary_only"
+        ),
+        "serpapi_economy_cross_check": _as_bool(
+            payload.get("SERPAPI_ECONOMY_CROSS_CHECK")
         ),
     }

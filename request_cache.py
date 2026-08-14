@@ -23,6 +23,7 @@ import observations_store
 
 DEFAULT_CACHE_DIR = Path(__file__).parent / "data" / "cache"
 DEFAULT_TTL_SECONDS = 15 * 60
+LISTING_OBSERVATION_SOURCES = frozenset({"juhe", "hasdata", "serpapi"})
 
 _request_cache: dict[tuple, dict] = {}
 _persistent_cache_dir_override: Path | None = None
@@ -67,7 +68,7 @@ _actual_request_keys_this_round: set[tuple] = set()
 _resolved_request_keys_this_round: set[tuple] = set()
 _track_usage_for_round = False
 _usage_path_for_round: Path | None = None
-_quota_budgets_for_round: dict[str, int] = {}
+_quota_budgets_for_round: dict[str, object] = {}
 _usage_flushed_for_round = False
 
 
@@ -270,8 +271,41 @@ def _store_round_only_result(key: tuple, result: dict, cache_status: str) -> Non
         _resolved_request_keys_this_round.add(key)
 
 
+def record_planned_source_skip(
+    source,
+    origin: str,
+    dest: str,
+    date_str: str,
+    passengers=None,
+    cabin_class: str = "economy",
+    *,
+    reason: str,
+) -> dict:
+    """把计划阶段的配额保护记为可复用的本轮源级跳过。"""
+    key = cache_key(source, origin, dest, date_str, passengers, cabin_class)
+    source_name = key[0]
+    _record_request(source_name)
+    _record_skip(source_name)
+    result = {
+        "flights": [],
+        "source": source_name,
+        "raw": {},
+        "source_status": "skipped_quota_protection",
+        "skipped_reason": str(reason),
+        "error": str(reason),
+        "collection_state": "quota_protected",
+        "collection_label": "配额保护跳过",
+    }
+    _store_round_only_result(key, result, "skipped")
+    safe_log(
+        f"[配额保护] 源={source_name} 航线={key[1]}->{key[2]} "
+        f"日期={key[3]} 舱位={key[5]} 结果=源级跳过 原因={reason}"
+    )
+    return copy.deepcopy(result)
+
+
 def _archive_listing_result(source_name: str, key: tuple, result: dict) -> None:
-    if source_name not in {"juhe", "hasdata"}:
+    if source_name not in LISTING_OBSERVATION_SOURCES:
         return
     cache_status = _result_cache_status(result)
     if cache_status == "persistent":
@@ -337,7 +371,7 @@ def _panel_label(observed_at: str) -> str:
 
 
 def _panel_snapshot_for_key(key: tuple, freshness_hours: float) -> dict | None:
-    if key[0] not in {"juhe", "hasdata"}:
+    if key[0] not in LISTING_OBSERVATION_SOURCES:
         return None
     _round_id, db_path = observations_store.get_current_round()
     return observations_store.load_fresh_observation_snapshot(
@@ -514,7 +548,7 @@ def _unmapped_aircraft_code(value: str) -> str | None:
 
 
 def _record_equipment_summary(source_name: str, result) -> None:
-    if source_name not in {"juhe", "hasdata"}:
+    if source_name not in LISTING_OBSERVATION_SOURCES:
         return
     round_key = str(_current_stats_round_id or "standalone")
     entry = _equipment_summary.setdefault(
@@ -549,7 +583,7 @@ def _flush_equipment_summary(round_id: str | None) -> None:
 
 def _record_observations_after_fetch(source, key: tuple, result, cabin_class: str) -> None:
     source_name = key[0]
-    if source_name not in {"juhe", "hasdata"}:
+    if source_name not in LISTING_OBSERVATION_SOURCES:
         return
     flights = _positive_price_flights(result)
     if not flights:
@@ -652,7 +686,7 @@ def cached_fetch(
         fresh_result = copy.deepcopy(skipped_result)
         return (fresh_result, "skipped") if include_cache_status else fresh_result
 
-    if not force_fresh and source_name in {"juhe", "hasdata"}:
+    if not force_fresh and source_name in LISTING_OBSERVATION_SOURCES:
         panel_result = panel_reuse_result(
             source,
             origin,
@@ -830,7 +864,7 @@ def start_request_cache_round(
     *,
     track_usage: bool = False,
     usage_path: str | Path | None = None,
-    quota_budgets: dict[str, int] | None = None,
+    quota_budgets: dict[str, object] | None = None,
 ) -> None:
     """开始新的采集轮，只清本轮统计，不清请求缓存和进程累计。"""
     global _current_stats_round_id
@@ -846,7 +880,7 @@ def start_request_cache_round(
     _track_usage_for_round = bool(track_usage)
     _usage_path_for_round = Path(usage_path) if usage_path else None
     _quota_budgets_for_round = {
-        str(source): int(value or 0)
+        str(source): copy.deepcopy(value) if isinstance(value, dict) else int(value or 0)
         for source, value in (quota_budgets or {}).items()
     }
     _usage_flushed_for_round = False
@@ -880,6 +914,17 @@ def _flush_api_usage_ledger() -> None:
     for source, budget in _quota_budgets_for_round.items():
         today_count = int((snapshot.get("today") or {}).get(source, 0) or 0)
         cumulative = int((snapshot.get("cumulative") or {}).get(source, 0) or 0)
+        if isinstance(budget, dict):
+            monthly_budget = max(0, int(budget.get("monthly") or 0))
+            reserve = max(0, int(budget.get("reserve") or 0))
+            month_count = int((snapshot.get("month") or {}).get(source, 0) or 0)
+            remaining = monthly_budget - month_count
+            safe_log(
+                f"[配额台账] {source} 今日={today_count} "
+                f"本月={month_count}/{monthly_budget} 余量估算={remaining} "
+                f"预留={reserve} (本地估算,以SerpAPI控制台为准)"
+            )
+            continue
         remaining = int(budget) - cumulative
         safe_log(
             f"[配额台账] {source} 今日={today_count} 累计={cumulative} "

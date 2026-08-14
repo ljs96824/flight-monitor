@@ -1,0 +1,234 @@
+{
+  "fixture_kind": "redacted_contract_sample",
+  "fixture_note": "用于离线锁定已确认的 SerpAPI Google Flights 响应结构；不含密钥，也不冒充缺失的成功审计原文。",
+  "search_parameters": {
+    "engine": "google_flights",
+    "departure_id": "PVG",
+    "arrival_id": "KIX",
+    "outbound_date": "2026-10-01",
+    "type": "2",
+    "travel_class": 3,
+    "currency": "CNY",
+    "hl": "zh-cn",
+    "gl": "cn"
+  },
+  "best_flights": [
+    {
+      "price": 11200,
+      "total_duration": 195,
+      "flights": [
+        {
+          "airline": "中国东方航空",
+          "flight_number": "MU 225",
+          "departure_airport": {"id": "PVG", "name": "上海浦东国际机场", "time": "2026-10-01 08:55"},
+          "arrival_airport": {"id": "KIX", "name": "关西国际机场", "time": "2026-10-01 12:10"},
+          "duration": 195,
+          "airplane": "空客 A330"
+        }
+      ],
+      "layovers": []
+    },
+    {
+      "price": 11980,
+      "total_duration": 165,
+      "flights": [
+        {
+          "airline": "日本航空",
+          "flight_number": "JL 86",
+          "departure_airport": {"id": "PVG", "time": "2026-10-01 09:40"},
+          "arrival_airport": {"id": "KIX", "time": "2026-10-01 13:25"},
+          "duration": 165,
+          "airplane": "波音 787"
+        }
+      ],
+      "layovers": []
+    },
+    {
+      "price": 12150,
+      "total_duration": 170,
+      "flights": [
+        {
+          "airline": "全日空",
+          "flight_number": "NH 920",
+          "departure_airport": {"id": "PVG", "time": "2026-10-01 13:05"},
+          "arrival_airport": {"id": "KIX", "time": "2026-10-01 16:55"},
+          "duration": 170,
+          "airplane": "波音 787"
+        }
+      ],
+      "layovers": []
+    },
+    {
+      "price": 9800,
+      "total_duration": 180,
+      "flights": [
+        {
+          "airline": "吉祥航空",
+          "flight_number": "HO 1333",
+          "departure_airport": {"id": "PVG", "time": "2026-10-01 07:20"},
+          "arrival_airport": {"id": "KIX", "time": "2026-10-01 11:20"},
+          "duration": 180,
+          "airplane": "空客 A321"
+        }
+      ],
+      "layovers": []
+    },
+    {
+      "price": 12660,
+      "total_duration": 175,
+      "flights": [
+        {
+          "airline": "中国国际航空",
+          "flight_number": "CA 163",
+          "departure_airport": {"id": "PVG", "time": "2026-10-01 10:10"},
+          "arrival_airport": {"id": "KIX", "time": "2026-10-01 14:05"},
+          "duration": 175,
+          "airplane": "空客 A320"
+        }
+      ],
+      "layovers": []
+    }
+  ],
+  "other_flights": [
+    {
+      "price": 10450,
+      "total_duration": 185,
+      "flights": [
+        {
+          "airline": "上海航空",
+          "flight_number": "FM 821",
+          "departure_airport": {"id": "PVG", "time": "2026-10-01 15:25"},
+          "arrival_airport": {"id": "KIX", "time": "2026-10-01 19:30"},
+          "duration": 185
+        }
+      ],
+      "layovers": []
+    },
+    {
+      "price": 10880,
+      "total_duration": 405,
+      "flights": [
+        {
+          "airline": "中国东方航空",
+          "flight_number": "MU 521",
+          "departure_airport": {"id": "PVG", "time": "2026-10-01 06:40"},
+          "arrival_airport": {"id": "HND", "name": "东京羽田机场", "time": "2026-10-01 10:35"},
+          "duration": 175
+        },
+        {
+          "airline": "日本航空",
+          "flight_number": "JL 121",
+          "departure_airport": {"id": "HND", "name": "东京羽田机场", "time": "2026-10-01 12:05"},
+          "arrival_airport": {"id": "ITM", "name": "大阪伊丹机场", "time": "2026-10-01 13:15"},
+          "duration": 70
+        }
+      ],
+      "layovers": [{"id": "HND", "duration": 90}]
+    },
+    {
+      "price": 10120,
+      "total_duration": 210,
+      "flights": [
+        {
+          "airline": "中国南方航空",
+          "flight_number": "CZ 8105",
+          "departure_airport": {"id": "PVG", "time": "2026-10-01 08:10"},
+          "arrival_airport": {"id": "KIX", "time": "2026-10-01 12:40"},
+          "duration": 210
+        }
+      ],
+      "layovers": []
+    },
+    {
+      "price": 11550,
+      "total_duration": 450,
+      "flights": [
+        {
+          "airline": "大韩航空",
+          "flight_number": "KE 894",
+          "departure_airport": {"id": "PVG", "time": "2026-10-01 11:10"},
+          "arrival_airport": {"id": "ICN", "time": "2026-10-01 14:05"},
+          "duration": 115
+        },
+        {
+          "airline": "大韩航空",
+          "flight_number": "KE 721",
+          "departure_airport": {"id": "ICN", "time": "2026-10-01 16:35"},
+          "arrival_airport": {"id": "KIX", "time": "2026-10-01 18:20"},
+          "duration": 105
+        }
+      ],
+      "layovers": [{"id": "ICN", "duration": 150}]
+    },
+    {
+      "price": 11720,
+      "total_duration": 430,
+      "flights": [
+        {
+          "airline": "韩亚航空",
+          "flight_number": "OZ 362",
+          "departure_airport": {"id": "PVG", "time": "2026-10-01 12:20"},
+          "arrival_airport": {"id": "ICN", "time": "2026-10-01 15:10"},
+          "duration": 110
+        },
+        {
+          "airline": "韩亚航空",
+          "flight_number": "OZ 116",
+          "departure_airport": {"id": "ICN", "time": "2026-10-01 17:25"},
+          "arrival_airport": {"id": "KIX", "time": "2026-10-01 19:10"},
+          "duration": 105
+        }
+      ],
+      "layovers": [{"id": "ICN", "duration": 135}]
+    },
+    {
+      "price": 9300,
+      "total_duration": 175,
+      "flights": [
+        {
+          "airline": "乐桃航空",
+          "flight_number": "MM 80",
+          "departure_airport": {"id": "PVG", "time": "2026-10-01 01:05"},
+          "arrival_airport": {"id": "KIX", "time": "2026-10-01 05:00"},
+          "duration": 175
+        }
+      ],
+      "layovers": []
+    },
+    {
+      "price": 12820,
+      "total_duration": 415,
+      "flights": [
+        {
+          "airline": "中国国际航空",
+          "flight_number": "CA 929",
+          "departure_airport": {"id": "PVG", "time": "2026-10-01 09:00"},
+          "arrival_airport": {"id": "NRT", "time": "2026-10-01 12:50"},
+          "duration": 170
+        },
+        {
+          "airline": "全日空",
+          "flight_number": "NH 2177",
+          "departure_airport": {"id": "NRT", "time": "2026-10-01 14:15"},
+          "arrival_airport": {"id": "ITM", "time": "2026-10-01 15:35"},
+          "duration": 80
+        }
+      ],
+      "layovers": [{"id": "NRT", "duration": 85}]
+    },
+    {
+      "price": 12340,
+      "total_duration": 180,
+      "flights": [
+        {
+          "airline": "日本航空",
+          "flight_number": "JL 894",
+          "departure_airport": {"id": "PVG", "time": "2026-10-01 17:45"},
+          "arrival_airport": {"id": "KIX", "time": "2026-10-01 21:45"},
+          "duration": 180
+        }
+      ],
+      "layovers": []
+    }
+  ]
+}

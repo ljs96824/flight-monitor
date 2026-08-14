@@ -94,7 +94,8 @@ def load_observations(db_path: str | Path = DEFAULT_DB_PATH) -> list[dict]:
             for column in OBSERVATION_COLUMNS
         ]
         rows = connection.execute(
-            f"SELECT {', '.join(select_columns)} FROM observations ORDER BY id"
+            f"SELECT {', '.join(select_columns)} FROM observations "
+            "WHERE LOWER(cabin_class)='economy' ORDER BY id"
         ).fetchall()
         return [dict(row) for row in rows]
     finally:
