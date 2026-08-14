@@ -81,6 +81,38 @@ async function clickSelector(selector) {
   await command("Input.dispatchMouseEvent", {type: "mousePressed", x: point.x, y: point.y, button: "left", clickCount: 1});
   await command("Input.dispatchMouseEvent", {type: "mouseReleased", x: point.x, y: point.y, button: "left", clickCount: 1});
 }
+function checkboxSelector(name, value) {
+  return `input[name="${name}"][value="${value}"]`;
+}
+
+async function checkedValues(name) {
+  return evaluate(`Array.from(document.querySelectorAll(${JSON.stringify(`input[name="${name}"]`)})).filter(element => element.checked).map(element => element.value)`);
+}
+
+async function setCheckboxValuesByClick(name, values) {
+  const desired = new Set(values);
+  const states = await evaluate(`Array.from(document.querySelectorAll(${JSON.stringify(`input[name="${name}"]`)})).map(element => ({value: element.value, checked: element.checked}))`);
+  if (!states.length) throw new Error(`复选组不存在: ${name}`);
+  for (const state of states) {
+    if (state.checked !== desired.has(state.value)) {
+      await clickSelector(checkboxSelector(name, state.value));
+    }
+  }
+  const selected = await checkedValues(name);
+  const expected = states.map(state => state.value).filter(value => desired.has(value));
+  if (JSON.stringify(selected) !== JSON.stringify(expected)) {
+    throw new Error(`复选组双选失败: ${name} expected=${JSON.stringify(expected)} actual=${JSON.stringify(selected)}`);
+  }
+  return selected;
+}
+
+async function assertPersistedCheckboxValues(name, values, label) {
+  const actual = await checkedValues(name);
+  if (JSON.stringify(actual) !== JSON.stringify(values)) {
+    throw new Error(`${label}回读失败: ${name} expected=${JSON.stringify(values)} actual=${JSON.stringify(actual)}`);
+  }
+}
+
 
 async function chooseNotificationMethod(value) {
   const targetIndex = await evaluate(`(() => {
@@ -122,14 +154,17 @@ const quickContract = await evaluate(`(() => {
     return !element.disabled && style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
   };
   const required = [...form.querySelectorAll('[required]')];
-  const controls = [...form.querySelectorAll('input[name]:not([type="hidden"]):not([type="submit"]),select[name],textarea[name]')].filter(visible);
+  const multiGroups = [...form.querySelectorAll('[data-multi-checkbox-group]')].filter(visible);
+  const controls = [...form.querySelectorAll('input[name]:not([type="hidden"]):not([type="submit"]),select[name],textarea[name]')]
+    .filter(visible)
+    .filter(control => !control.closest('[data-multi-checkbox-group]'));
   return {
     page: document.body.dataset.pageMode,
     form: Boolean(form),
     requiredCount: required.length,
     allRequiredVisible: required.every(visible),
-    visibleControlCount: controls.length,
-    visibleControlNames: controls.map(control => control.name),
+    visibleControlCount: controls.length + multiGroups.length,
+    visibleControlNames: [...controls.map(control => control.name), ...multiGroups.map(group => group.dataset.multiCheckboxGroup)],
   };
 })()`);
 if (quickContract.page !== "quick" || !quickContract.form || !quickContract.allRequiredVisible || quickContract.visibleControlCount > 12) {
@@ -162,17 +197,33 @@ await evaluate(`(() => {
   set('return_date', '${iso(returned)}');
   set('round_trip', 'true');
   set('passenger_count', '1');
-  const scenario = document.querySelector('[name="travel_scenario"]');
-  [...scenario.options].forEach(option => option.selected = option.value === 'personal');
-  scenario.dispatchEvent(new Event('change', {bubbles:true}));
   return true;
 })()`);
+await setCheckboxValuesByClick("travel_scenario", ["tourism", "family"]);
+await setCheckboxValuesByClick("companion_constraints", ["direct_preferred", "no_redeye"]);
+console.log("[UI smoke] 页1多选=PASS 场景2项+同行约束2项");
 await waitFor("document.querySelector('[data-route-type-badge=\"true\"]').dataset.routeType === 'domestic' && document.querySelector('[data-route-type-label]').textContent.trim() === '国内'", "航线类型自动识别");
 console.log("[UI smoke] 航线类型徽章=PASS 上海→北京识别为国内");
 await evaluate(`document.querySelector('form[data-page-mode="quick"]').requestSubmit(); true`);
 await waitFor("location.pathname === '/success'", "快速页提交确认", 15000);
 console.log("[UI smoke] 页1提交=PASS 已抵达/success");
 
+const quickConfirmation = await evaluate(`(() => {
+  const text = document.body.textContent;
+  return text.includes('旅游 + 家庭/亲子') && text.includes('需要尽量直飞 + 不接受红眼/凌晨到达');
+})()`);
+if (!quickConfirmation) throw new Error('页1确认页未完整回读场景与同行约束');
+await navigate("/settings?edit=0");
+await assertPersistedCheckboxValues(
+  "travel_scenario",
+  ["tourism", "family"],
+  "页1场景",
+);
+await assertPersistedCheckboxValues(
+  "companion_constraints",
+  ["direct_preferred", "no_redeye"],
+  "页1同行约束",
+);
 await navigate("/settings");
 const fullContract = await evaluate(`(() => {
   const ids = ['section-where','section-when','section-who','section-budget','section-flight-preferences','section-notifications'];
@@ -191,9 +242,9 @@ const fullContract = await evaluate(`(() => {
   const duplicates = [...controlsByName.entries()]
     .filter(([, controls]) => {
       if (controls.length === 1) return false;
-      const radioGroup = controls.every(control => control.tagName === 'INPUT' && control.type === 'radio');
+      const repeatableChoiceGroup = controls.every(control => control.tagName === 'INPUT' && ['radio', 'checkbox'].includes(control.type));
       const uniqueValues = new Set(controls.map(control => control.value)).size === controls.length;
-      return !radioGroup || !uniqueValues;
+      return !repeatableChoiceGroup || !uniqueValues;
     })
     .map(([name]) => name);
   return {
@@ -219,24 +270,21 @@ for (const id of ["section-where","section-when","section-who","section-budget",
 console.log(`[UI smoke] 页2六节=${fullContract.sectionCount} 全可见=True 目录锚点=${fullContract.anchorCount} 次级组锚点=${fullContract.groupAnchorCount} 重复name=0`);
 console.log(`[UI smoke] 版本信标=${fullContract.buildMarker}`);
 
-const businessVisibility = await evaluate(`(() => {
-  const scenario = document.querySelector('[name="travel_scenario"]');
+async function businessGroupVisible() {
+  return evaluate(`(() => {
   const group = document.getElementById('group-business-travel');
-  const visible = () => {
-    const style = getComputedStyle(group);
-    const rect = group.getBoundingClientRect();
-    return !group.hidden && style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
-  };
-  [...scenario.options].forEach(option => option.selected = option.value === 'business');
-  scenario.dispatchEvent(new Event('change', {bubbles:true}));
-  const shown = visible();
-  [...scenario.options].forEach(option => option.selected = option.value === 'tourism');
-  scenario.dispatchEvent(new Event('change', {bubbles:true}));
-  const hidden = group.hidden && !visible();
-  [...scenario.options].forEach(option => option.selected = ['tourism', 'business'].includes(option.value));
-  scenario.dispatchEvent(new Event('change', {bubbles:true}));
-  return {shown, hidden, finalVisible: visible()};
+  const style = getComputedStyle(group);
+  const rect = group.getBoundingClientRect();
+  return !group.hidden && style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
 })()`);
+}
+await setCheckboxValuesByClick("travel_scenario", ["business"]);
+const shown = await businessGroupVisible();
+await setCheckboxValuesByClick("travel_scenario", ["tourism"]);
+const hidden = !(await businessGroupVisible());
+await setCheckboxValuesByClick("travel_scenario", ["business", "tourism"]);
+const finalVisible = await businessGroupVisible();
+const businessVisibility = {shown, hidden, finalVisible};
 if (!businessVisibility.shown || !businessVisibility.hidden || !businessVisibility.finalVisible) {
   throw new Error(`商务组显隐契约失败: ${JSON.stringify(businessVisibility)}`);
 }
@@ -300,6 +348,9 @@ for (const state of [emailVisibility, bothVisibility]) {
 }
 console.log("[UI smoke] 渠道三态转换=PASS 微信→邮箱隐藏；邮件→邮箱可见可聚焦；两者→邮箱可见可聚焦");
 
+await setCheckboxValuesByClick("travel_scenario", ["business", "tourism"]);
+await setCheckboxValuesByClick("companion_constraints", ["direct_preferred", "no_redeye"]);
+console.log("[UI smoke] 页2多选=PASS 场景2项+同行约束2项");
 await evaluate(`(() => {
   const set = (name, value) => {
     const element = document.querySelector('[name="' + name + '"]');
@@ -338,9 +389,6 @@ await evaluate(`(() => {
   set('return_departure_window_end', '21:00');
 
   set('notification_email', 'ux31@example.com');
-  const scenario = document.querySelector('[name="travel_scenario"]');
-  [...scenario.options].forEach(option => option.selected = option.value === 'business');
-  scenario.dispatchEvent(new Event('change', {bubbles:true}));
   check('same_day_round_trip', true);
   document.querySelector('form[data-page-mode="full"]').requestSubmit();
   return true;
@@ -354,9 +402,11 @@ const confirmation = await evaluate(`(() => {
     meetingEnd: text.includes('17:00'),
     outboundWindow: text.includes('06:30-08:30'),
     returnWindow: text.includes('18:00-21:00'),
+    scenarios: text.includes('商务/会议 + 旅游'),
+    companionConstraints: text.includes('需要尽量直飞 + 不接受红眼/凌晨到达'),
   };
 })()`);
-if (!confirmation.email || !confirmation.meetingStart || !confirmation.meetingEnd || !confirmation.outboundWindow || !confirmation.returnWindow) {
+if (!confirmation.email || !confirmation.meetingStart || !confirmation.meetingEnd || !confirmation.outboundWindow || !confirmation.returnWindow || !confirmation.scenarios || !confirmation.companionConstraints) {
   throw new Error(`完整页回读失败: ${JSON.stringify(confirmation)}`);
 }
 console.log("[UI smoke] 页2邮箱提交=PASS value=ux31@example.com");
@@ -374,6 +424,17 @@ if (!editGroups.business || !editGroups.feasibility || !editGroups.customTime ||
   throw new Error(`编辑态次级组未自动展开: ${JSON.stringify(editGroups)}`);
 }
 console.log("[UI smoke] 编辑态details自动展开=PASS 商务出行+可行性参数+分层时间窗");
+await assertPersistedCheckboxValues(
+  "travel_scenario",
+  ["business", "tourism"],
+  "页2场景",
+);
+await assertPersistedCheckboxValues(
+  "companion_constraints",
+  ["direct_preferred", "no_redeye"],
+  "页2同行约束",
+);
+console.log("[UI smoke] 多选POST回读=PASS getlist双值 页1+页2");
 
 await sleep(350);
 if (browserErrors.length) throw new Error(`浏览器错误: ${browserErrors.join(' | ')}`);

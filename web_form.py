@@ -284,6 +284,8 @@ SUCCESS_TEMPLATE = """
     <p>💡 第一次判断稍后到达,你可以关掉此页,留意邮箱/微信推送。</p>
     <p><a href="{{ url_for('subscription_list') }}">查看我的所有监控</a> <a class="secondary-link" href="{{ url_for('index') }}">再创建一个</a></p>
     <p><b>{{ summary.route }}</b></p>
+    {% if summary.scenario_text %}<p data-confirmed-scenarios="true"><b>出行场景：</b>{{ summary.scenario_text }}</p>{% endif %}
+    {% if summary.companion_constraints_text %}<p data-confirmed-companion-constraints="true"><b>同行约束：</b>{{ summary.companion_constraints_text }}</p>{% endif %}
     {% if summary.meeting_text %}<p data-confirmed-meeting="true">{{ summary.meeting_text }}</p>{% endif %}
     {% if summary.time_window_text %}<p data-confirmed-time-windows="true">{{ summary.time_window_text }}</p>{% endif %}
     {% if summary.airport_coverage %}
@@ -1844,6 +1846,8 @@ def _success_time_window_text(hard: dict) -> str:
 def build_success_summary(subscription: dict) -> dict:
     subscription_with_defaults = apply_default_rules(subscription)
     hard = subscription.get("hard_constraints", {})
+    soft = subscription.get("soft_preferences") or {}
+    preferences = subscription.get("preferences") or {}
     notification_goals = normalize_notification_goals(
         subscription.get("notification_goals")
     )
@@ -1914,6 +1918,20 @@ def build_success_summary(subscription: dict) -> dict:
     notification_text = notification_labels.get(method, "你的邮箱 / PushPlus微信")
     if method in {"email", "both"} and notification_email:
         notification_text = f"{notification_text}（{notification_email}）"
+    scenario_text = _subscription_scenario_text(subscription)
+    if scenario_text == "未设置":
+        scenario_text = ""
+    companion_constraints = (
+        soft.get("companion_constraints")
+        or preferences.get("companion_constraints")
+        or hard.get("companion_constraints")
+        or []
+    )
+    if isinstance(companion_constraints, str):
+        companion_constraints = [item.strip() for item in companion_constraints.split(",") if item.strip()]
+    companion_constraints_text = " + ".join(
+        COMPANION_CONSTRAINT_LABELS.get(str(item), str(item)) for item in companion_constraints
+    )
     meeting_text = ""
     if hard.get("same_day_round_trip"):
         meeting_start = hard.get("business_start") or hard.get("meeting_start")
@@ -1930,6 +1948,8 @@ def build_success_summary(subscription: dict) -> dict:
         "notification_text": notification_text,
         "meeting_text": meeting_text,
         "time_window_text": _success_time_window_text(hard),
+        "scenario_text": scenario_text,
+        "companion_constraints_text": companion_constraints_text,
     }
 
 

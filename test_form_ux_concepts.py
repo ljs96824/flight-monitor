@@ -219,10 +219,15 @@ class FormUxConceptRenderingTest(unittest.TestCase):
             ]
             if len(tags) == 1:
                 continue
+            type_matches = [
+                re.search(r'\btype="(radio|checkbox)"', tag, re.I) for tag in tags
+            ]
             self.assertTrue(
-                all(re.search(r'\btype="radio"', tag, re.I) for tag in tags),
+                all(type_matches),
                 name,
             )
+            choice_types = {match.group(1).lower() for match in type_matches}
+            self.assertEqual(len(choice_types), 1, name)
             values = [
                 re.search(r'\bvalue="([^"]*)"', tag, re.I).group(1)
                 for tag in tags

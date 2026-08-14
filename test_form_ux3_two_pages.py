@@ -157,12 +157,12 @@ class FormUx3TwoPagesTest(unittest.TestCase):
         for name, controls in controls_by_name.items():
             if len(controls) == 1:
                 continue
-            radio_group = all(
-                tag == "input" and attrs.get("type") == "radio"
+            choice_group = all(
+                tag == "input" and attrs.get("type") in {"radio", "checkbox"}
                 for tag, attrs in controls
             )
             values = [attrs.get("value") for _, attrs in controls]
-            if not radio_group or len(values) != len(set(values)):
+            if not choice_group or len(values) != len(set(values)):
                 invalid[name] = len(controls)
         self.assertEqual(invalid, {})
 

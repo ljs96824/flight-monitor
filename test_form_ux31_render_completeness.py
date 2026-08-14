@@ -15,6 +15,7 @@ from werkzeug.datastructures import MultiDict
 
 
 FIXTURE = Path(__file__).parent / "tests" / "fixtures" / "form_normalization_baseline_v1.json"
+REPEATABLE_CHECKBOX_FIELDS = frozenset({"travel_scenario", "companion_constraints"})
 
 
 class _FormDom(HTMLParser):
@@ -91,6 +92,18 @@ class FormUx31RenderCompletenessTest(unittest.TestCase):
             for name in concept["canonical_input_names"]:
                 controls = dom.controls_by_name.get(name, [])
                 self.assertTrue(controls, f"{concept_name}:{name}")
+                if name in REPEATABLE_CHECKBOX_FIELDS:
+                    self.assertEqual(len(controls), len(form_pages.OPTIONS[name]), name)
+                    self.assertTrue(
+                        all(
+                            tag == "input" and attrs.get("type") == "checkbox"
+                            for tag, attrs in controls
+                        ),
+                        f"{concept_name}:{name}",
+                    )
+                    values = [attrs.get("value") for _, attrs in controls]
+                    self.assertEqual(len(values), len(set(values)), f"{concept_name}:{name}")
+                    continue
                 if counts[name] == 1:
                     continue
                 self.assertTrue(
@@ -127,7 +140,17 @@ class FormUx31RenderCompletenessTest(unittest.TestCase):
         counts = Counter(dom.names)
         self.assertTrue(hasattr(form_pages, "QUICK_CANONICAL_INPUT_NAMES"))
         for name in form_pages.QUICK_CANONICAL_INPUT_NAMES:
-            self.assertEqual(counts[name], 1, name)
+            if name in REPEATABLE_CHECKBOX_FIELDS:
+                self.assertEqual(counts[name], len(form_pages.OPTIONS[name]), name)
+                self.assertTrue(
+                    all(
+                        tag == "input" and attrs.get("type") == "checkbox"
+                        for tag, attrs in dom.controls_by_name[name]
+                    ),
+                    name,
+                )
+            else:
+                self.assertEqual(counts[name], 1, name)
 
     def test_mode_names_and_prominent_bidirectional_links_are_visible(self):
         quick = self._page("/")

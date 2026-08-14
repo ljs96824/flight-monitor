@@ -2,6 +2,7 @@ import re
 import unittest
 
 import web_form
+from form_pages import OPTIONS
 from web_form import build_subscription
 
 
@@ -31,7 +32,8 @@ class WebFormTemplateStep2Test(unittest.TestCase):
             "target_price",
             "travel_scenario",
         ):
-            self.assertEqual(self.quick.count(f'name="{name}"'), 1, name)
+            expected = len(OPTIONS[name]) if name == "travel_scenario" else 1
+            self.assertEqual(self.quick.count(f'name="{name}"'), expected, name)
         self.assertNotIn("required-missing-list", self.quick)
         self.assertNotIn("missingRequiredLabels", self.quick)
 
@@ -71,10 +73,15 @@ class WebFormTemplateStep2Test(unittest.TestCase):
             self.assertTrue(tags, name)
             if len(tags) == 1:
                 continue
+            type_matches = [
+                re.search(r'\btype="(radio|checkbox)"', tag, re.I) for tag in tags
+            ]
             self.assertTrue(
-                all(re.search(r'\btype="radio"', tag, re.I) for tag in tags),
+                all(type_matches),
                 name,
             )
+            choice_types = {match.group(1).lower() for match in type_matches}
+            self.assertEqual(len(choice_types), 1, name)
             values = [
                 re.search(r'\bvalue="([^"]*)"', tag, re.I).group(1)
                 for tag in tags
@@ -270,7 +277,11 @@ class WebFormTemplateStep2Test(unittest.TestCase):
         self.assertEqual(subscription["constraints"]["reimburse_per_person"], 5000)
 
     def test_duplicate_travel_scene_fields_are_removed_from_ui(self):
-        self.assertEqual(self.full.count('name="travel_scenario"'), 1)
+        tags = re.findall(
+            r'<input\b[^>]*\bname="travel_scenario"[^>]*>', self.full, re.I
+        )
+        self.assertEqual(len(tags), len(OPTIONS["travel_scenario"]))
+        self.assertTrue(all(re.search(r'\btype="checkbox"', tag, re.I) for tag in tags))
         self.assertNotIn('name="travel_purpose"', self.full)
         self.assertNotIn('name="trip_type"', self.full)
         self.assertNotIn("precise-only", self.quick + self.full)

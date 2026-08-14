@@ -147,6 +147,7 @@ OPTIONS = {
 MULTI_FIELDS = frozenset(
     {"travel_scenario", "trip_natures", "companion_constraints", "blocked_airlines_common", "secondary_goals"}
 )
+MULTI_CHECKBOX_FIELDS = frozenset({"travel_scenario", "companion_constraints"})
 
 BOOLEAN_FIELDS = frozenset(
     {
@@ -494,6 +495,7 @@ def _field_spec(name: str, values: Mapping, *, page_mode: str) -> dict:
         "id": f"field-{name.replace('_', '-')}",
         "label": LABELS.get(name, name.replace("_", " ")),
         "type": field_type,
+        "checkbox_group": name in MULTI_CHECKBOX_FIELDS,
         "value": "" if value is None else str(value),
         "checked": _truthy(value),
         "options": [
@@ -713,13 +715,18 @@ FORM_PAGE_TEMPLATE = r"""
     .route-type-badge { grid-column:1 / -1; display:flex; align-items:baseline; gap:6px; margin:0 0 14px; padding:8px 10px; border-left:3px solid var(--accent); background:var(--soft); font-size:14px; }
     .route-type-badge strong { color:var(--accent); }
     input:not([type="checkbox"]):not([type="radio"]), select, textarea { width:100%; min-height:42px; border:1px solid #aeb7c0; border-radius:6px; padding:8px 10px; background:#fff; color:var(--ink); }
-    select[multiple] { min-height:112px; }
     input:focus, select:focus, textarea:focus { outline:2px solid #8ccfba; outline-offset:1px; border-color:var(--accent); }
     .check-field { flex-direction:row; align-items:center; min-height:42px; padding-top:22px; }
     .check-field input { width:18px; height:18px; margin:0; }
     .radio-options { display:flex; flex-wrap:wrap; gap:10px 18px; min-height:42px; align-items:center; }
     .radio-option { display:inline-flex; align-items:center; gap:6px; font-weight:500; }
     .radio-option input { width:18px; height:18px; margin:0; }
+    .multi-checkbox-field { grid-column:1/-1; }
+    .multi-checkbox-label { font-size:14px; font-weight:700; }
+    .checkbox-options { display:grid; grid-template-columns:repeat(auto-fit,minmax(145px,1fr)); gap:8px 18px; min-height:42px; align-items:center; }
+    .checkbox-option { display:inline-flex; align-items:center; gap:7px; min-height:32px; font-weight:500; }
+    .checkbox-option input { width:18px; height:18px; margin:0; flex:0 0 auto; }
+    .quick-shell .checkbox-options { grid-template-columns:repeat(2,minmax(0,1fr)); }
     .time-window-details { grid-column:1/-1; border:1px solid var(--line); border-radius:6px; padding:0 14px; }
     .time-window-details > summary { cursor:pointer; padding:12px 0; font-weight:700; }
     .time-window-body { padding:4px 0 14px; }
@@ -749,6 +756,7 @@ FORM_PAGE_TEMPLATE = r"""
       .anchor-directory a { display:inline-block; padding:8px; }
       .field-grid, .route-fields { grid-template-columns:1fr; }
       .section-heading { display:block; }
+      .checkbox-options, .quick-shell .checkbox-options { grid-template-columns:1fr; }
       .section-summary { text-align:left; margin-top:5px; }
       .confirmation-row { grid-template-columns:1fr auto; }
       .confirmation-row span { grid-column:1/-1; }
@@ -770,7 +778,7 @@ FORM_PAGE_TEMPLATE = r"""
     {% if field.type == 'hidden' %}
       <input type="hidden" id="{{ field.id }}" name="{{ field.name }}" value="{{ field.value }}">
     {% else %}
-      <div class="field{% if field.name in ['origin_manual','destination','exclude_airlines','meeting_location'] %} field-wide{% endif %}{% if field.type == 'checkbox' %} check-field{% endif %}{% if field.visibility %} conditional-block{% endif %}"
+      <div class="field{% if field.name in ['origin_manual','destination','exclude_airlines','meeting_location'] or field.checkbox_group %} field-wide{% endif %}{% if field.checkbox_group %} multi-checkbox-field{% endif %}{% if field.type == 'checkbox' %} check-field{% endif %}{% if field.visibility %} conditional-block{% endif %}"
            {% if field.visibility %}data-visibility-contract="{{ field.visibility }}"{% endif %}
            {% if field.name == 'child_type' %}data-passenger-kind="child"{% elif field.name == 'elderly_condition' %}data-passenger-kind="elderly"{% endif %}
            {% if field.name == 'notification_email' %}data-email-field="true"{% endif %}>
@@ -783,6 +791,16 @@ FORM_PAGE_TEMPLATE = r"""
             {% for option in field.options %}
             <label class="radio-option" for="{{ field.id }}-{{ option.value }}">
               <input id="{{ field.id }}-{{ option.value }}" name="{{ field.name }}" type="radio" value="{{ option.value }}"{% if option.selected %} checked{% endif %}>
+              <span>{{ option.label }}</span>
+            </label>
+            {% endfor %}
+          </div>
+        {% elif field.checkbox_group %}
+          <span id="{{ field.id }}-label" class="multi-checkbox-label">{{ field.label }}</span>
+          <div class="checkbox-options" role="group" aria-labelledby="{{ field.id }}-label" data-multi-checkbox-group="{{ field.name }}">
+            {% for option in field.options %}
+            <label class="checkbox-option" for="{{ field.id }}-{{ option.value }}">
+              <input id="{{ field.id }}-{{ option.value }}" name="{{ field.name }}" type="checkbox" value="{{ option.value }}"{% if option.selected %} checked{% endif %}>
               <span>{{ option.label }}</span>
             </label>
             {% endfor %}
@@ -949,6 +967,9 @@ FORM_PAGE_TEMPLATE = r"""
       const canonicalNames = Object.keys(cityAirports);
 
       function field(name) { return form.elements.namedItem(name); }
+      function fields(name) {
+        return Array.from(form.querySelectorAll(`[name="${name}"]`));
+      }
       function scalar(name) {
         const element = field(name);
         if (!element) return '';
@@ -1042,11 +1063,16 @@ FORM_PAGE_TEMPLATE = r"""
       }
 
       function selectedScenarios() {
-        const element = field('travel_scenario');
-        if (!element) return [];
-        return element.multiple
-          ? Array.from(element.selectedOptions).map(option => option.value)
-          : [element.value];
+        const elements = fields('travel_scenario');
+        if (!elements.length) return [];
+        if (elements[0].type === 'checkbox') {
+          return elements.filter(element => element.checked).map(element => element.value);
+        }
+        const element = elements[0];
+        if (element.multiple) {
+          return Array.from(element.selectedOptions).map(option => option.value);
+        }
+        return [element.value];
       }
       function updatePassengerProfile() {
         const childCount = Number(scalar('child_count') || 0);
@@ -1093,11 +1119,14 @@ FORM_PAGE_TEMPLATE = r"""
       }
 
       ['origin_select','origin_manual','destination'].forEach(name => field(name)?.addEventListener('input', updateLocations));
-      ['child_count','elderly_count','travel_scenario'].forEach(name => field(name)?.addEventListener('change', updatePassengerProfile));
+      ['child_count','elderly_count'].forEach(name => field(name)?.addEventListener('change', updatePassengerProfile));
+      fields('travel_scenario').forEach(element => {
+        element.addEventListener('change', updatePassengerProfile);
+        element.addEventListener('change', updateBusinessVisibility);
+      });
       field('notification_method')?.addEventListener('change', updateEmailVisibility);
       form.addEventListener('input', scheduleSummary);
       form.addEventListener('change', scheduleSummary);
-      field('travel_scenario')?.addEventListener('change', updateBusinessVisibility);
       form.addEventListener('submit', event => {
         updateLocations();
         if (!resolveExact(originRaw()) || !resolveExact(scalar('destination'))) {

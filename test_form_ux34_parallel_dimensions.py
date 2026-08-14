@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import re
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -9,7 +11,7 @@ from werkzeug.datastructures import MultiDict
 
 import analyzer
 import web_form
-from form_pages import VISIBILITY_CONTRACTS, build_form_page_context
+from form_pages import OPTIONS, VISIBILITY_CONTRACTS, build_form_page_context
 
 
 FIXTURE = Path(__file__).parent / "tests" / "fixtures" / "form_normalization_baseline_v1.json"
@@ -38,6 +40,28 @@ class FormUx34ParallelDimensionsTest(unittest.TestCase):
             self.assertEqual(_field_by_name(page, "travel_scenario")["type"], "multi", mode)
             self.assertEqual(_field_by_name(page, "companion_constraints")["type"], "multi", mode)
 
+    def test_both_pages_render_scenarios_and_companions_as_shared_checkbox_groups(self):
+        client = web_form.app.test_client()
+        for path in ("/", "/settings"):
+            html = client.get(path).get_data(as_text=True)
+            for name in ("travel_scenario", "companion_constraints"):
+                self.assertEqual(
+                    html.count(f'data-multi-checkbox-group="{name}"'),
+                    1,
+                    f"{path}:{name}",
+                )
+                self.assertNotIn(f'<select id="field-{name.replace("_", "-")}"', html)
+                controls = re.findall(
+                    rf'<input[^>]+name="{name}"[^>]+type="checkbox"[^>]*>',
+                    html,
+                )
+                self.assertEqual(len(controls), len(OPTIONS[name]), f"{path}:{name}")
+                self.assertEqual(
+                    {re.search(r'value="([^"]+)"', control).group(1) for control in controls},
+                    {value for value, _label in OPTIONS[name]},
+                    f"{path}:{name}",
+                )
+
     def test_quick_submission_preserves_both_parallel_lists(self):
         form = MultiDict(
             [
@@ -59,6 +83,62 @@ class FormUx34ParallelDimensionsTest(unittest.TestCase):
         self.assertEqual(soft["travel_scenarios"], ["tourism", "family", "elderly"])
         self.assertEqual(soft["companion_constraints"], ["direct_preferred", "no_redeye"])
         self.assertEqual(soft["companions"], "multiple")
+
+    def test_quick_post_confirms_and_edit_replays_both_parallel_lists(self):
+        form = MultiDict(
+            [
+                ("form_page", "quick"),
+                ("monitor_mode", "quick"),
+                ("origin_select", "上海"),
+                ("destination", "北京"),
+                ("depart_date", "2026-12-01"),
+                ("round_trip", "false"),
+                ("passenger_count", "4"),
+                ("travel_scenario", "tourism"),
+                ("travel_scenario", "family"),
+                ("companion_constraints", "direct_preferred"),
+                ("companion_constraints", "no_redeye"),
+            ]
+        )
+        original = web_form.SUBSCRIPTIONS_PATH
+        with tempfile.TemporaryDirectory() as tmpdir:
+            web_form.SUBSCRIPTIONS_PATH = Path(tmpdir) / "subscriptions.json"
+            try:
+                with patch.object(web_form, "start_background_collection"):
+                    response = web_form.app.test_client().post(
+                        "/subscribe",
+                        data=form,
+                        follow_redirects=True,
+                    )
+                confirmation = response.get_data(as_text=True)
+                self.assertIn('data-confirmed-scenarios="true"', confirmation)
+                self.assertIn("旅游 + 家庭/亲子", confirmation)
+                self.assertIn('data-confirmed-companion-constraints="true"', confirmation)
+                self.assertIn("需要尽量直飞 + 不接受红眼/凌晨到达", confirmation)
+
+                edit_html = web_form.app.test_client().get("/settings?edit=0").get_data(as_text=True)
+                for name, values in {
+                    "travel_scenario": ("tourism", "family"),
+                    "companion_constraints": ("direct_preferred", "no_redeye"),
+                }.items():
+                    for value in values:
+                        self.assertRegex(
+                            edit_html,
+                            rf'<input[^>]+name="{name}"[^>]+value="{value}"[^>]+checked',
+                        )
+            finally:
+                web_form.SUBSCRIPTIONS_PATH = original
+
+    def test_ui_smoke_clicks_and_persists_both_multi_value_groups_on_both_pages(self):
+        driver = (Path(__file__).parent / "scripts" / "ui_smoke_driver.mjs").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("页1多选=PASS 场景2项+同行约束2项", driver)
+        self.assertIn("页2多选=PASS 场景2项+同行约束2项", driver)
+        self.assertIn("多选POST回读=PASS getlist双值", driver)
+        self.assertIn('input[name="${name}"]', driver)
+        self.assertIn("await clickSelector(checkboxSelector(name, state.value))", driver)
+        self.assertNotIn("scenario.options", driver)
 
     def test_passenger_mix_maps_to_single_companions_enum_and_complete_basis(self):
         profile = analyzer.build_travel_profile(
