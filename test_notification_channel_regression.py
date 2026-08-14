@@ -138,7 +138,7 @@ class NotificationChannelRegressionTest(unittest.TestCase):
         )
     def test_phase_one_fixture_adds_email_only_and_both_contracts(self):
         scenarios = json.loads(FIXTURE.read_text(encoding="utf-8"))["scenarios"]
-        self.assertEqual(len(scenarios), 9)
+        self.assertEqual(len(scenarios), 10)
         self.assertEqual(
             scenarios["email_only_notification"]["normalized_subscription"]["notification_goals"]["method"],
             "email",

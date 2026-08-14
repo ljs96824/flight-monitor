@@ -80,7 +80,7 @@ SECONDARY_CONCEPT_NAMES = frozenset(
     for concept_name in group["concept_names"]
 )
 
-VISIBILITY_CONTRACTS = frozenset({"passenger-profile", "notification-email"})
+VISIBILITY_CONTRACTS = frozenset({"passenger-profile", "notification-email", "business-scenario"})
 
 ORIGIN_OPTIONS = (
     ("上海", "上海（浦东PVG + 虹桥SHA）"),
@@ -94,8 +94,14 @@ ORIGIN_OPTIONS = (
 )
 
 
+ROUTE_TYPE_LABELS = {
+    "domestic": "国内",
+    "greater_china": "港澳台",
+    "international": "国际",
+}
+
 OPTIONS = {
-    "route_type": (("domestic", "国内"), ("greater_china", "港澳台"), ("international", "国际")),
+    "route_type": tuple(ROUTE_TYPE_LABELS.items()),
     "round_trip": (("false", "单程"), ("true", "往返")),
     "date_flexibility": (("0", "就这天"), ("1", "前后1天"), ("3", "前后3天"), ("7", "前后一周")),
     "return_date_flexibility": (("0", "就这天"), ("1", "前后1天"), ("3", "前后3天"), ("7", "前后一周")),
@@ -165,6 +171,7 @@ HIDDEN_FIELDS = frozenset(
     {
         "subscription_index",
         "monitor_mode",
+        "route_type",
         "origin_airports_active",
         "destination_airports_active",
         "max_budget_mode",
@@ -401,8 +408,8 @@ QUICK_GROUPS = (
     {"id": "route", "title": "出发与目的地", "fields": ("origin_select", "origin_airports_active", "destination", "destination_airports_active", "route_type")},
     {"id": "dates", "title": "日期与往返", "fields": ("depart_date", "round_trip", "return_date")},
     {"id": "passengers", "title": "乘客构成", "fields": ("passenger_count",)},
-    {"id": "budget", "title": "预算", "fields": ("price_strategy", "max_budget", "max_budget_scope", "target_price", "target_price_scope")},
-    {"id": "scenario", "title": "出行场景", "fields": ("travel_scenario", "child_type", "elderly_condition")},
+    {"id": "budget", "title": "预算", "fields": ("max_budget", "max_budget_scope", "target_price", "target_price_scope")},
+    {"id": "scenario", "title": "出行场景与同行要求", "fields": ("travel_scenario", "companion_constraints")},
 )
 QUICK_CANONICAL_INPUT_NAMES = (
     "form_page",
@@ -465,13 +472,8 @@ def _field_spec(name: str, values: Mapping, *, page_mode: str) -> dict:
     options = list(ORIGIN_OPTIONS if name == "origin_select" else OPTIONS.get(name, ()))
     if page_mode == "quick" and name == "origin_select":
         field_type = "text"
-    elif page_mode == "quick" and name == "route_type":
-        field_type = "hidden"
     elif page_mode == "quick" and name == "passenger_count":
         field_type = "number"
-    elif page_mode == "quick" and name == "travel_scenario":
-        field_type = "select"
-        value = _as_list(value)[0] if _as_list(value) else "personal"
     else:
         field_type = _field_type(name)
     selected_values = _as_list(value) if field_type == "multi" else []
@@ -594,9 +596,10 @@ def _secondary_groups(values: Mapping, *, editing: bool) -> list[dict]:
     scenarios = set(_as_list(values.get("travel_scenario")))
     groups = []
     for group in SECONDARY_GROUP_DEFINITIONS:
-        parent_selected = (
-            group["id"] == "business-travel" and "business" in scenarios
-        )
+        is_business = group["id"] == "business-travel"
+        parent_selected = is_business and "business" in scenarios
+        has_nondefault = _secondary_group_has_nondefault(group, values)
+        visible = not is_business or parent_selected or (editing and has_nondefault)
         groups.append(
             {
                 **group,
@@ -604,11 +607,9 @@ def _secondary_groups(values: Mapping, *, editing: bool) -> list[dict]:
                     _concept_spec(concept_name, CONCEPTS[concept_name], values)
                     for concept_name in group["concept_names"]
                 ],
-                "open": editing
-                and (
-                    parent_selected
-                    or _secondary_group_has_nondefault(group, values)
-                ),
+                "visibility": "business-scenario" if is_business else "",
+                "hidden": not visible,
+                "open": editing and (parent_selected or has_nondefault),
             }
         )
     return groups
@@ -633,6 +634,8 @@ def build_form_page_context(page_mode: str, values=None, *, edit_index=None) -> 
         data["monitor_mode"] = "quick"
     elif edit_index is None:
         data["monitor_mode"] = "precise"
+    route_type = str(data.get("route_type") or "").strip()
+    route_type_badge = {"code": route_type, "label": ROUTE_TYPE_LABELS.get(route_type, "待识别")}
     return {
         "mode": page_mode,
         "title": "快速创建监控" if page_mode == "quick" else "完整设置",
@@ -646,6 +649,7 @@ def build_form_page_context(page_mode: str, values=None, *, edit_index=None) -> 
         "monitor_mode": str(data.get("monitor_mode") or ("quick" if page_mode == "quick" else "precise")),
         "subscription_index": data.get("subscription_index", ""),
         "values": data,
+        "route_type_badge": route_type_badge,
     }
 
 
@@ -706,6 +710,8 @@ FORM_PAGE_TEMPLATE = r"""
     .field-wide { grid-column:1/-1; }
     label { font-size:14px; font-weight:600; }
     input, select, textarea, button { font:inherit; letter-spacing:0; }
+    .route-type-badge { grid-column:1 / -1; display:flex; align-items:baseline; gap:6px; margin:0 0 14px; padding:8px 10px; border-left:3px solid var(--accent); background:var(--soft); font-size:14px; }
+    .route-type-badge strong { color:var(--accent); }
     input:not([type="checkbox"]):not([type="radio"]), select, textarea { width:100%; min-height:42px; border:1px solid #aeb7c0; border-radius:6px; padding:8px 10px; background:#fff; color:var(--ink); }
     select[multiple] { min-height:112px; }
     input:focus, select:focus, textarea:focus { outline:2px solid #8ccfba; outline-offset:1px; border-color:var(--accent); }
@@ -833,7 +839,9 @@ FORM_PAGE_TEMPLATE = r"""
   {%- endmacro %}
 
   {% macro render_secondary_group(group) -%}
-    <details id="group-{{ group.id }}" class="secondary-group" data-secondary-group="{{ group.id }}"{% if group.open %} open{% endif %}>
+    <details id="group-{{ group.id }}" class="secondary-group{% if group.visibility %} conditional-block{% endif %}" data-secondary-group="{{ group.id }}"
+             {% if group.visibility %}data-visibility-contract="{{ group.visibility }}"{% endif %}
+             {% if group.hidden %} hidden{% endif %}{% if group.open %} open{% endif %}>
       <summary>
         <span class="secondary-group-title">{{ group.title }}</span>
         <span class="secondary-group-note">{{ group.description }}</span>
@@ -855,6 +863,9 @@ FORM_PAGE_TEMPLATE = r"""
         <section class="quick-group" data-ux-control="{{ group.id }}">
           <h2>{{ group.title }}</h2>
           <div class="field-grid">
+          {% if group.id == 'route' %}
+          <div class="route-type-badge" data-route-type-badge="true" data-route-type="{{ page.route_type_badge.code }}">航线类型：<strong data-route-type-label>{{ page.route_type_badge.label }}</strong><span>（自动识别）</span></div>
+          {% endif %}
             {% for field in group.fields %}{% if field.name not in ['monitor_mode','subscription_index'] %}{{ render_field(field) }}{% endif %}{% endfor %}
           </div>
           {% if group.id == 'route' %}<div id="price-hint" aria-live="polite"></div>{% endif %}
@@ -873,7 +884,7 @@ FORM_PAGE_TEMPLATE = r"""
       <strong>设置目录</strong>
       {% for section in page.sections %}
         <a href="#section-{{ section.html_id }}">{{ section.title }}</a>
-        {% for group in page.secondary_groups %}{% if group.after_section == section.id %}<a href="#group-{{ group.id }}">{{ group.title }}</a>{% endif %}{% endfor %}
+        {% for group in page.secondary_groups %}{% if group.after_section == section.id %}<a href="#group-{{ group.id }}"{% if group.visibility %} class="conditional-block" data-visibility-contract="{{ group.visibility }}"{% if group.hidden %} hidden{% endif %}{% endif %}>{{ group.title }}</a>{% endif %}{% endfor %}
       {% endfor %}
     </nav>
     <form id="subscription-form" method="post" action="{{ url_for('subscribe') }}" data-page-mode="full" novalidate>
@@ -885,6 +896,9 @@ FORM_PAGE_TEMPLATE = r"""
             <h2>{{ loop.index }}. {{ section.title }}</h2>
             <span class="section-summary" data-section-summary="{{ section.id }}">{{ section.summary }}</span>
           </div>
+          {% if section.id == 'where' %}
+          <div class="route-type-badge" data-route-type-badge="true" data-route-type="{{ page.route_type_badge.code }}">航线类型：<strong data-route-type-label>{{ page.route_type_badge.label }}</strong><span>（自动识别）</span></div>
+          {% endif %}
           {% for concept in section.concepts %}
             {{ render_concept(concept) }}
             {% for group in page.secondary_groups %}
@@ -1000,17 +1014,29 @@ FORM_PAGE_TEMPLATE = r"""
       let priceHintTimer = 0;
       function updatePriceHint(origin, destination) {
         const output = document.getElementById('price-hint');
-        if (!output) return;
+        const badge = document.querySelector('[data-route-type-badge="true"]');
+        const badgeLabel = badge?.querySelector('[data-route-type-label]');
         window.clearTimeout(priceHintTimer);
-        if (!origin || !destination) { output.textContent = ''; return; }
+        if (!origin || !destination) {
+          if (output) output.textContent = '';
+          if (badge) badge.dataset.routeType = '';
+          if (badgeLabel) badgeLabel.textContent = '待识别';
+          return;
+        }
         priceHintTimer = window.setTimeout(async () => {
           try {
             const params = new URLSearchParams({origin: origin[0], dest: destination[0]});
             const response = await fetch(`/price_hint?${params.toString()}`);
             const data = await response.json();
-            output.textContent = data.has_data ? `历史单程参考：${data.text || data.price || '已有观测'}` : '暂无历史价格参考';
+            if (output) output.textContent = data.has_data ? `历史单程参考：${data.text || data.price || '已有观测'}` : '暂无历史价格参考';
+            if (badge) badge.dataset.routeType = data.route_type || '';
+            if (badgeLabel) badgeLabel.textContent = data.route_type_label || '待识别';
+            const routeTypeField = field('route_type');
+            if (routeTypeField) routeTypeField.value = data.route_type || '';
           } catch (_) {
-            output.textContent = '价格参考暂不可用';
+            if (output) output.textContent = '价格参考暂不可用';
+            if (badge) badge.dataset.routeType = '';
+            if (badgeLabel) badgeLabel.textContent = '待识别';
           }
         }, 180);
       }
@@ -1041,6 +1067,12 @@ FORM_PAGE_TEMPLATE = r"""
       }
 
       let summaryTimer = 0;
+      function updateBusinessVisibility() {
+        const enabled = selectedScenarios().includes('business');
+        document.querySelectorAll('[data-visibility-contract="business-scenario"]').forEach(element => {
+          element.hidden = !enabled;
+        });
+      }
       function scheduleSummary() {
         if (pageMode !== 'full') return;
         window.clearTimeout(summaryTimer);
@@ -1065,6 +1097,7 @@ FORM_PAGE_TEMPLATE = r"""
       field('notification_method')?.addEventListener('change', updateEmailVisibility);
       form.addEventListener('input', scheduleSummary);
       form.addEventListener('change', scheduleSummary);
+      field('travel_scenario')?.addEventListener('change', updateBusinessVisibility);
       form.addEventListener('submit', event => {
         updateLocations();
         if (!resolveExact(originRaw()) || !resolveExact(scalar('destination'))) {

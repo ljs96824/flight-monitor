@@ -90,7 +90,7 @@ def run_smoke() -> int:
         "[UI smoke] 模式=本地Edge CDP，零Selenium/零外部API",
     ]
 
-    with tempfile.TemporaryDirectory(prefix="flight-ui-smoke-") as tmpdir:
+    with tempfile.TemporaryDirectory(prefix="flight-ui-smoke-", ignore_cleanup_errors=True) as tmpdir:
         tmp = Path(tmpdir)
         server = subprocess.Popen(
             [

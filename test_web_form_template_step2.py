@@ -121,7 +121,7 @@ class WebFormTemplateStep2Test(unittest.TestCase):
         ):
             self.assertEqual(self.full.count(f'name="{name}"'), 1, name)
 
-    def test_route_type_and_domestic_invoice_fields_exist_once(self):
+    def test_route_type_is_read_only_and_domestic_invoice_fields_exist_once(self):
         for name in (
             "route_type",
             "invoice_needed",
@@ -129,8 +129,10 @@ class WebFormTemplateStep2Test(unittest.TestCase):
             "invoice_cabin_limit",
         ):
             self.assertEqual(self.full.count(f'name="{name}"'), 1, name)
-        for value in ("domestic", "international", "greater_china"):
-            self.assertIn(f'value="{value}"', self.full)
+        self.assertIn('type="hidden" id="field-route-type" name="route_type"', self.full)
+        self.assertIn('data-route-type-badge="true"', self.full)
+        self.assertIn('data-route-type-label>待识别</strong>', self.full)
+        self.assertNotIn('<select id="field-route-type"', self.full)
 
     def test_same_day_round_trip_is_saved_as_constraint(self):
         form = Form(
@@ -292,11 +294,14 @@ class WebFormTemplateStep2Test(unittest.TestCase):
             self.assertIn(f'data-confirm-edit="{section_id}"', self.full)
             self.assertIn(f'href="#{section_id}"', self.full)
 
-    def test_visibility_contracts_are_only_passenger_profile_and_notification_email(self):
+    def test_visibility_contracts_are_only_the_three_approved_contracts(self):
         contracts = set(
             re.findall(r'data-visibility-contract="([^"]+)"', self.quick + self.full)
         )
-        self.assertEqual(contracts, {"passenger-profile", "notification-email"})
+        self.assertEqual(
+            contracts,
+            {"passenger-profile", "notification-email", "business-scenario"},
+        )
         self.assertNotIn("data-show-if", self.quick + self.full)
         self.assertNotIn("data-advanced-depth", self.quick + self.full)
 

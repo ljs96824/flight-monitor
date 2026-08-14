@@ -129,6 +129,7 @@ const quickContract = await evaluate(`(() => {
     requiredCount: required.length,
     allRequiredVisible: required.every(visible),
     visibleControlCount: controls.length,
+    visibleControlNames: controls.map(control => control.name),
   };
 })()`);
 if (quickContract.page !== "quick" || !quickContract.form || !quickContract.allRequiredVisible || quickContract.visibleControlCount > 12) {
@@ -161,13 +162,14 @@ await evaluate(`(() => {
   set('return_date', '${iso(returned)}');
   set('round_trip', 'true');
   set('passenger_count', '1');
-  set('price_strategy', 'auto_judge');
   const scenario = document.querySelector('[name="travel_scenario"]');
   [...scenario.options].forEach(option => option.selected = option.value === 'personal');
   scenario.dispatchEvent(new Event('change', {bubbles:true}));
-  document.querySelector('form[data-page-mode="quick"]').requestSubmit();
   return true;
 })()`);
+await waitFor("document.querySelector('[data-route-type-badge=\"true\"]').dataset.routeType === 'domestic' && document.querySelector('[data-route-type-label]').textContent.trim() === '国内'", "航线类型自动识别");
+console.log("[UI smoke] 航线类型徽章=PASS 上海→北京识别为国内");
+await evaluate(`document.querySelector('form[data-page-mode="quick"]').requestSubmit(); true`);
 await waitFor("location.pathname === '/success'", "快速页提交确认", 15000);
 console.log("[UI smoke] 页1提交=PASS 已抵达/success");
 
@@ -202,11 +204,12 @@ const fullContract = await evaluate(`(() => {
     groupCount: groupIds.filter(id => document.getElementById(id)?.tagName === 'DETAILS').length,
     groupAnchorCount: groupIds.filter(id => document.querySelector('a[href="#' + id + '"]')).length,
     groupsClosed: groupIds.every(id => !document.getElementById(id)?.hasAttribute('open')),
+    businessInitiallyHidden: document.getElementById('group-business-travel')?.hidden || false,
     duplicates,
     buildMarker: document.querySelector('[data-build-marker="true"]')?.textContent.trim() || '',
   };
 })()`);
-if (fullContract.page !== "full" || !fullContract.sectionsVisible || fullContract.anchorCount !== 6 || fullContract.groupCount !== 2 || fullContract.groupAnchorCount !== 2 || !fullContract.groupsClosed || fullContract.duplicates.length || !fullContract.buildMarker) {
+if (fullContract.page !== "full" || !fullContract.sectionsVisible || fullContract.anchorCount !== 6 || fullContract.groupCount !== 2 || fullContract.groupAnchorCount !== 2 || !fullContract.groupsClosed || !fullContract.businessInitiallyHidden || fullContract.duplicates.length || !fullContract.buildMarker) {
   throw new Error(`完整页契约失败: ${JSON.stringify(fullContract)}`);
 }
 for (const id of ["section-where","section-when","section-who","section-budget","section-flight-preferences","section-notifications"]) {
@@ -215,6 +218,29 @@ for (const id of ["section-where","section-when","section-who","section-budget",
 }
 console.log(`[UI smoke] 页2六节=${fullContract.sectionCount} 全可见=True 目录锚点=${fullContract.anchorCount} 次级组锚点=${fullContract.groupAnchorCount} 重复name=0`);
 console.log(`[UI smoke] 版本信标=${fullContract.buildMarker}`);
+
+const businessVisibility = await evaluate(`(() => {
+  const scenario = document.querySelector('[name="travel_scenario"]');
+  const group = document.getElementById('group-business-travel');
+  const visible = () => {
+    const style = getComputedStyle(group);
+    const rect = group.getBoundingClientRect();
+    return !group.hidden && style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+  };
+  [...scenario.options].forEach(option => option.selected = option.value === 'business');
+  scenario.dispatchEvent(new Event('change', {bubbles:true}));
+  const shown = visible();
+  [...scenario.options].forEach(option => option.selected = option.value === 'tourism');
+  scenario.dispatchEvent(new Event('change', {bubbles:true}));
+  const hidden = group.hidden && !visible();
+  [...scenario.options].forEach(option => option.selected = ['tourism', 'business'].includes(option.value));
+  scenario.dispatchEvent(new Event('change', {bubbles:true}));
+  return {shown, hidden, finalVisible: visible()};
+})()`);
+if (!businessVisibility.shown || !businessVisibility.hidden || !businessVisibility.finalVisible) {
+  throw new Error(`商务组显隐契约失败: ${JSON.stringify(businessVisibility)}`);
+}
+console.log("[UI smoke] 商务场景显隐=PASS 勾选商务→显示；取消商务→隐藏；DOM常驻");
 
 await clickSelector('#group-business-travel > summary');
 await waitFor("document.getElementById('group-business-travel').hasAttribute('open')", '商务出行展开');

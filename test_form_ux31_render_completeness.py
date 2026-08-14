@@ -147,7 +147,8 @@ class FormUx31RenderCompletenessTest(unittest.TestCase):
         self.assertEqual(
             html.count('data-visibility-contract="'),
             html.count('data-visibility-contract="passenger-profile"')
-            + html.count('data-visibility-contract="notification-email"'),
+            + html.count('data-visibility-contract="notification-email"')
+            + html.count('data-visibility-contract="business-scenario"'),
         )
 
     def test_same_day_execution_fields_roundtrip_without_guessing(self):
@@ -196,11 +197,12 @@ class FormUx31RenderCompletenessTest(unittest.TestCase):
         self.assertIn("10:30", html)
         self.assertIn("17:00", html)
 
-    def test_normalization_baseline_contains_ninth_directional_time_scene(self):
+    def test_normalization_baseline_contains_directional_and_parallel_scenes(self):
         fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))["scenarios"]
-        self.assertEqual(len(fixture), 9)
+        self.assertEqual(len(fixture), 10)
         self.assertIn("same_day_meeting_complete", fixture)
         self.assertIn("directional_time_windows", fixture)
+        self.assertIn("parallel_scenarios_elderly_child", fixture)
 
     def test_ui_smoke_drives_bidirectional_links_email_and_meeting(self):
         driver = (

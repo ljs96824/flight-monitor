@@ -27,7 +27,7 @@ from analyzer import apply_default_rules, build_price_hint_from_calendar
 from airlines import LCC_POLICIES, resolve_lcc_policy
 from build_info import PROCESS_BUILD_INFO
 from constraint_summary import build_constraint_summary, format_constraint_summary
-from form_pages import FORM_PAGE_TEMPLATE, build_form_page_context
+from form_pages import FORM_PAGE_TEMPLATE, ROUTE_TYPE_LABELS, build_form_page_context
 from form_structure import (
     build_default_chips,
     derive_time_concept_fields,
@@ -1459,7 +1459,6 @@ def build_subscription(form) -> dict:
     refund_flexibility = form.get("refund_flexibility", "preferred")
     price_sensitivity = form.get("price_sensitivity", "low")
     if monitor_mode != "precise":
-        companion_constraints = []
         elderly_condition = ""
         child_type = ""
         solo_travel = False
@@ -2067,15 +2066,30 @@ def price_hint():
     origin_info = resolve_location(request.args.get("origin", ""))
     dest_info = resolve_location(request.args.get("dest", ""))
     if origin_info.get("type") == "unknown" or dest_info.get("type") == "unknown":
-        return jsonify({"has_data": False, "scope": "oneway"})
+        return jsonify(
+            {
+                "has_data": False,
+                "scope": "oneway",
+                "route_type": "",
+                "route_type_label": "待识别",
+            }
+        )
+    route_type = infer_route_type(
+        list(origin_info.get("airports") or []),
+        list(dest_info.get("airports") or []),
+    )
+    route_meta = {
+        "route_type": route_type,
+        "route_type_label": ROUTE_TYPE_LABELS[route_type],
+    }
     for origin in origin_info.get("airports") or []:
         for dest in dest_info.get("airports") or []:
             for route in (f"{origin}-{dest}", f"{origin}_{dest}", f"{origin}→{dest}"):
                 hint = build_price_hint_from_calendar(load_calendar(route))
                 if hint.get("has_data"):
                     hint["route"] = route
-                    return jsonify(hint)
-    return jsonify({"has_data": False, "scope": "oneway"})
+                    return jsonify({**hint, **route_meta})
+    return jsonify({"has_data": False, "scope": "oneway", **route_meta})
 
 
 @app.post("/subscribe")

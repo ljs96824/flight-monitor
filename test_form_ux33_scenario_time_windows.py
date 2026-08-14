@@ -285,11 +285,13 @@ class FormUx33RenderingTest(unittest.TestCase):
 
 
 class FormUx33FixtureAndSmokeTest(unittest.TestCase):
-    def test_ninth_directional_time_fixture_is_frozen(self):
+    def test_directional_and_parallel_dimension_fixtures_are_frozen(self):
         fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))["scenarios"]
-        self.assertEqual(len(fixture), 9)
+        self.assertEqual(len(fixture), 10)
         self.assertIn("directional_time_windows", fixture)
+        self.assertIn("parallel_scenarios_elderly_child", fixture)
         self.assertIn("directional_time_windows", SCENARIOS)
+        self.assertIn("parallel_scenarios_elderly_child", SCENARIOS)
         normalized = fixture["directional_time_windows"]["normalized_subscription"]
         hard = normalized["hard_constraints"]
         self.assertEqual(hard["departure_time_windows"], [["08:00", "12:00"]])
