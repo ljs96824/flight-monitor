@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from cabin_allocation import cabin_allocation_label
+from cabin_allocation import (
+    business_types_from_allocation,
+    cabin_allocation_detail_label,
+)
 from notification_config import DEFAULT_NOTIFICATION_METHOD
 from form_concepts import (
     CONCEPTS,
@@ -90,7 +93,6 @@ FORM_STATIONS = (
             "infant_count",
             "child_type",
             "elderly_condition",
-            "companion_constraints",
             "outbound_set_off",
             "return_set_off",
             "origin_transport_min",
@@ -144,6 +146,7 @@ FORM_STATIONS = (
             "baggage",
             "refund_flexibility",
             "price_sensitivity",
+            "mobility_limited",
             "airline_policy",
             "exclude_airlines",
             "blocked_airlines_common",
@@ -153,6 +156,8 @@ FORM_STATIONS = (
             "business_seats",
             "economy_seats",
             "cabin_business_adult",
+            "cabin_allocation_ui",
+            "cabin_business_types",
             "cabin_business_child",
             "cabin_business_elderly",
             "cabin_business_infant",
@@ -216,6 +221,7 @@ ADVANCED_FIELD_NAMES = frozenset(
         "airline_policy",
         "exclude_airlines",
         "refund_flexibility",
+        "mobility_limited",
         "origin_transport_min",
         "destination_transport_min",
         "airport_advance_min",
@@ -318,6 +324,7 @@ OPTIONAL_SECTION_DEFAULTS = {
         "refund_flexibility": "preferred",
         "price_sensitivity": "low",
         "airline_policy": "any",
+        "mobility_limited": "false",
         "exclude_airlines": "",
         "blocked_airlines_common": (),
         "lcc_policy": "any",
@@ -327,6 +334,8 @@ OPTIONAL_SECTION_DEFAULTS = {
         "economy_seats": "0",
         "cabin_business_adult": "0",
         "cabin_business_child": "0",
+        "cabin_allocation_ui": "types",
+        "cabin_business_types": (),
         "cabin_business_elderly": "0",
         "cabin_business_infant": "0",
         "cabin_economy_adult": "0",
@@ -739,7 +748,7 @@ def _preference_summary(values) -> str:
             for cabin in ("business", "economy")
         }
         if any(int(value or 0) for cabin in allocation.values() for value in cabin.values()):
-            parts.append(cabin_allocation_label(allocation))
+            parts.append(cabin_allocation_detail_label(allocation))
     return " · ".join(parts)
 
 
@@ -1044,6 +1053,10 @@ def subscription_to_form_values(subscription: Mapping | None) -> dict:
             "elderly_condition": _first_defined(soft.get("elderly_condition"), preferences.get("elderly_condition"), default=""),
             "solo_travel": bool(_first_defined(soft.get("solo_travel"), preferences.get("solo_travel"), default=False)),
             "no_late_arrival": bool(_first_defined(soft.get("no_late_arrival"), preferences.get("no_late_arrival"), default=False)),
+            "mobility_limited": bool(
+                _first_defined(soft.get("mobility_limited"), preferences.get("mobility_limited"), default=False)
+                or "limited_mobility" in (soft.get("companion_constraints") or preferences.get("companion_constraints") or [])
+            ),
             "prefer_daytime_arrival": bool(_first_defined(soft.get("prefer_daytime_arrival"), preferences.get("prefer_daytime_arrival"), default=False)),
         }
     )
@@ -1130,6 +1143,26 @@ def subscription_to_form_values(subscription: Mapping | None) -> dict:
     trip_natures = hard.get("trip_natures") or constraints.get("trip_natures") or soft.get("trip_natures") or []
     if isinstance(trip_natures, str):
         trip_natures = [trip_natures]
+    saved_cabin_allocation = (
+        hard.get("cabin_allocation")
+        or constraints.get("cabin_allocation")
+        or {}
+    )
+    saved_cabin_arrangement = _first_defined(
+        hard.get("cabin_arrangement"), constraints.get("cabin_arrangement"), default="economy_all"
+    )
+    cabin_business_types, type_allocation_supported = business_types_from_allocation(
+        saved_cabin_allocation,
+        passengers,
+    )
+    cabin_allocation_ui = (
+        "legacy"
+        if saved_cabin_arrangement == "mixed" and not saved_cabin_allocation
+        else "types"
+        if not saved_cabin_allocation or type_allocation_supported
+        else "legacy"
+    )
+
     values.update(
         {
             "trip_natures": list(trip_natures),
@@ -1163,6 +1196,8 @@ def subscription_to_form_values(subscription: Mapping | None) -> dict:
             "user_level": _first_defined(hard.get("user_level"), constraints.get("user_level"), default="staff"),
             "business_seats": _first_defined(hard.get("business_seats"), constraints.get("business_seats"), default=0),
             "economy_seats": _first_defined(hard.get("economy_seats"), constraints.get("economy_seats"), default=passenger_count),
+            "cabin_allocation_ui": cabin_allocation_ui,
+            "cabin_business_types": cabin_business_types,
             "cabin_business_adult": _first_defined(
                 (hard.get("cabin_allocation") or {}).get("business", {}).get("adult"),
                 (constraints.get("cabin_allocation") or {}).get("business", {}).get("adult"),

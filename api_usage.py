@@ -308,3 +308,32 @@ def usage_snapshot(payload: dict, *, day: str | None = None) -> dict:
         "month": month_counts,
         "cumulative": cumulative,
     }
+
+
+def format_quota_overview(
+    payload: dict,
+    quota_budgets: dict,
+    *,
+    day: str | None = None,
+) -> str:
+    """用既有台账快照生成轮末与详情页共用的配额总览。"""
+    snapshot = usage_snapshot(payload, day=day)
+    budgets = quota_budgets or {}
+
+    juhe_budget = int(budgets.get("juhe") or 0)
+    juhe_used = int((snapshot.get("cumulative") or {}).get("juhe", 0) or 0)
+    juhe_remaining = max(0, juhe_budget - juhe_used)
+
+    serpapi_budget = budgets.get("serpapi") or {}
+    if not isinstance(serpapi_budget, dict):
+        serpapi_budget = {"monthly": int(serpapi_budget or 0), "reserve": 0}
+    serpapi_monthly = int(serpapi_budget.get("monthly") or 0)
+    serpapi_reserve = int(serpapi_budget.get("reserve") or 0)
+    serpapi_used = int((snapshot.get("month") or {}).get("serpapi", 0) or 0)
+    serpapi_remaining = max(0, serpapi_monthly - serpapi_used)
+
+    return (
+        f"[配额总览] juhe 余量估算={juhe_remaining}/{juhe_budget}(买断) · "
+        f"serpapi 本月余量={serpapi_remaining}/{serpapi_monthly}"
+        f"(reserve={serpapi_reserve}) · duffel=不限额"
+    )

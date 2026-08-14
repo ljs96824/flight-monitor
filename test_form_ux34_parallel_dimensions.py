@@ -34,33 +34,22 @@ class FormUx34ParallelDimensionsTest(unittest.TestCase):
     def setUp(self):
         web_form.app.config.update(TESTING=True)
 
-    def test_scenarios_and_companion_constraints_are_parallel_multi_selects(self):
+    def test_scenarios_remain_multi_select_and_mobility_is_canonical_control(self):
         for mode in ("quick", "full"):
             page = build_form_page_context(mode)
             self.assertEqual(_field_by_name(page, "travel_scenario")["type"], "multi", mode)
-            self.assertEqual(_field_by_name(page, "companion_constraints")["type"], "multi", mode)
+            with self.assertRaisesRegex(AssertionError, "companion_constraints"):
+                _field_by_name(page, "companion_constraints")
+        self.assertEqual(_field_by_name(build_form_page_context("full"), "mobility_limited")["type"], "checkbox")
 
-    def test_both_pages_render_scenarios_and_companions_as_shared_checkbox_groups(self):
+    def test_both_pages_remove_legacy_companion_group(self):
         client = web_form.app.test_client()
         for path in ("/", "/settings"):
             html = client.get(path).get_data(as_text=True)
-            for name in ("travel_scenario", "companion_constraints"):
-                self.assertEqual(
-                    html.count(f'data-multi-checkbox-group="{name}"'),
-                    1,
-                    f"{path}:{name}",
-                )
-                self.assertNotIn(f'<select id="field-{name.replace("_", "-")}"', html)
-                controls = re.findall(
-                    rf'<input[^>]+name="{name}"[^>]+type="checkbox"[^>]*>',
-                    html,
-                )
-                self.assertEqual(len(controls), len(OPTIONS[name]), f"{path}:{name}")
-                self.assertEqual(
-                    {re.search(r'value="([^"]+)"', control).group(1) for control in controls},
-                    {value for value, _label in OPTIONS[name]},
-                    f"{path}:{name}",
-                )
+            self.assertEqual(html.count('data-multi-checkbox-group="travel_scenario"'), 1)
+            self.assertNotIn('name="companion_constraints"', html)
+        full = client.get("/settings").get_data(as_text=True)
+        self.assertEqual(full.count('name="mobility_limited"'), 1)
 
     def test_quick_submission_preserves_both_parallel_lists(self):
         form = MultiDict(
@@ -117,27 +106,22 @@ class FormUx34ParallelDimensionsTest(unittest.TestCase):
                 self.assertIn("需要尽量直飞 + 不接受红眼/凌晨到达", confirmation)
 
                 edit_html = web_form.app.test_client().get("/settings?edit=0").get_data(as_text=True)
-                for name, values in {
-                    "travel_scenario": ("tourism", "family"),
-                    "companion_constraints": ("direct_preferred", "no_redeye"),
-                }.items():
-                    for value in values:
-                        self.assertRegex(
-                            edit_html,
-                            rf'<input[^>]+name="{name}"[^>]+value="{value}"[^>]+checked',
-                        )
+                for value in ("tourism", "family"):
+                    self.assertRegex(
+                        edit_html,
+                        rf'<input[^>]+name="travel_scenario"[^>]+value="{value}"[^>]+checked',
+                    )
+                self.assertNotIn('name="companion_constraints"', edit_html)
+                self.assertIn('name="companion_constraints_seed" value="direct_preferred,no_redeye"', edit_html)
             finally:
                 web_form.SUBSCRIPTIONS_PATH = original
 
-    def test_ui_smoke_clicks_and_persists_both_multi_value_groups_on_both_pages(self):
+    def test_ui_smoke_covers_scenario_multiselect_and_companion_derivation(self):
         driver = (Path(__file__).parent / "scripts" / "ui_smoke_driver.mjs").read_text(
             encoding="utf-8"
         )
-        self.assertIn("页1多选=PASS 场景2项+同行约束2项", driver)
-        self.assertIn("页2多选=PASS 场景2项+同行约束2项", driver)
-        self.assertIn("多选POST回读=PASS getlist双值", driver)
-        self.assertIn('input[name="${name}"]', driver)
-        self.assertIn("await clickSelector(checkboxSelector(name, state.value))", driver)
+        self.assertIn("同行派生=PASS 飞行偏好→旧schema", driver)
+        self.assertIn("多选POST回读=PASS 场景getlist双值", driver)
         self.assertNotIn("scenario.options", driver)
 
     def test_passenger_mix_maps_to_single_companions_enum_and_complete_basis(self):

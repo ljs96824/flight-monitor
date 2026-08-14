@@ -120,7 +120,6 @@ OPTIONS = {
     "user_level": (("staff", "普通员工"), ("manager", "经理"), ("executive", "高管"), ("vip", "重要嘉宾")),
     "child_type": (("", "不补充"), ("infant", "婴儿"), ("preschool", "学龄前"), ("school_age", "学龄儿童")),
     "elderly_condition": (("normal", "普通"), ("mobility_limited", "不适合长时间步行/换乘"), ("no_early_late", "不适合红眼或早班")),
-    "companion_constraints": (("direct_preferred", "尽量直飞"), ("no_redeye", "不接受红眼"), ("avoid_long_layover", "避免长中转"), ("need_baggage", "需要托运行李"), ("need_refund_change", "需要可退改"), ("daytime_arrival", "希望白天到达"), ("limited_mobility", "行动不便")),
     "transport_margin_mode": (("tight", "紧凑"), ("standard", "标准"), ("loose", "保守")),
     "transport_mode": (("", "系统自动估算"), ("taxi", "驾车/出租车"), ("transit", "公共交通")),
     "price_strategy": (("explicit", "填写具体金额"), ("auto_judge", "由系统判断"), ("low_price_alert", "进入低价区时提醒")),
@@ -142,6 +141,7 @@ OPTIONS = {
     "lcc_policy": (("any", "不限"), ("exclude_lcc", "排除廉航"), ("lcc_only", "仅看廉航")),
     "cabin_policy": (("economy_only", "仅经济舱"), ("premium_allowed", "可含高端经济舱"), ("business_allowed", "可含商务舱")),
     "cabin_arrangement": (("economy_all", "全员经济舱"), ("business_all", "全员商务舱"), ("mixed", "混合舱位")),
+    "cabin_business_types": (("adult", "成人"), ("child", "儿童"), ("elderly", "老人"), ("infant", "婴儿")),
     "primary_goal": (("price_drop_alert", "合适价格提醒"), ("buy_timing", "判断购买时机"), ("cheaper_date", "找更便宜日期"), ("best_overall", "找综合合适方案")),
     "notification_method": (("email", "邮件"), ("pushplus", "微信 PushPlus"), ("both", "两者")),
     "notification_frequency": (("important_only", "仅重要变化"), ("daily_digest", "每日摘要"), ("price_change", "每次价格变化")),
@@ -153,9 +153,9 @@ OPTIONS = {
 
 
 MULTI_FIELDS = frozenset(
-    {"travel_scenario", "trip_natures", "companion_constraints", "blocked_airlines_common", "secondary_goals"}
+    {"travel_scenario", "trip_natures", "cabin_business_types", "blocked_airlines_common", "secondary_goals"}
 )
-MULTI_CHECKBOX_FIELDS = frozenset({"travel_scenario", "companion_constraints"})
+MULTI_CHECKBOX_FIELDS = frozenset({"travel_scenario", "cabin_business_types"})
 
 BOOLEAN_FIELDS = frozenset(
     {
@@ -169,6 +169,7 @@ BOOLEAN_FIELDS = frozenset(
         "accept_overnight_transfer",
         "accept_self_transfer",
         "allow_redeye",
+        "mobility_limited",
         "separate_direction_times",
         "outbound_allow_redeye",
         "return_allow_redeye",
@@ -183,6 +184,7 @@ HIDDEN_FIELDS = frozenset(
         "route_type",
         "origin_airports_active",
         "destination_airports_active",
+        "cabin_allocation_ui",
         "max_budget_mode",
         "budget_scope",
         "target_price_mode",
@@ -271,7 +273,7 @@ LABELS = {
     "infant_count": "婴儿",
     "child_type": "儿童情况",
     "elderly_condition": "老人情况",
-    "companion_constraints": "同行约束",
+    "mobility_limited": "有行动不便者",
     "outbound_set_off": "去程最早可出门",
     "return_set_off": "返程最早可动身",
     "user_transport_min": "机场到会场车程（分钟）",
@@ -333,6 +335,7 @@ LABELS = {
     "lcc_policy": "廉价航空",
     "cabin_policy": "允许舱位",
     "cabin_arrangement": "团队舱位安排",
+    "cabin_business_types": "谁坐商务舱",
     "business_seats": "商务舱人数",
     "economy_seats": "经济舱人数",
     "cabin_business_adult": "商务舱·成人",
@@ -415,6 +418,9 @@ DEFAULTS = {
     "lcc_policy": "any",
     "cabin_policy": "economy_only",
     "cabin_arrangement": "economy_all",
+    "cabin_allocation_ui": "types",
+    "cabin_business_types": (),
+    "mobility_limited": "false",
     "business_seats": "0",
     "economy_seats": "0",
     "cabin_business_adult": "0",
@@ -439,7 +445,7 @@ QUICK_GROUPS = (
     {"id": "dates", "title": "日期与往返", "fields": ("depart_date", "round_trip", "return_date")},
     {"id": "passengers", "title": "乘客构成", "fields": ("passenger_count",)},
     {"id": "budget", "title": "预算", "fields": ("max_budget", "max_budget_scope", "target_price", "target_price_scope")},
-    {"id": "scenario", "title": "出行场景与同行要求", "fields": ("travel_scenario", "companion_constraints")},
+    {"id": "scenario", "title": "出行场景", "fields": ("travel_scenario",)},
 )
 QUICK_CANONICAL_INPUT_NAMES = (
     "form_page",
@@ -559,9 +565,14 @@ def _concept_spec(
     editing: bool = False,
 ) -> dict:
     fields = [_field_spec(name, values, page_mode="full") for name in concept["fields"]]
+    allocation_names = tuple(
+        f"cabin_{cabin}_{passenger_type}"
+        for cabin in ("business", "economy")
+        for passenger_type in ("adult", "child", "elderly", "infant")
+    )
     if concept_name == "cabin":
         for field in fields:
-            if field["name"] in {"business_seats", "economy_seats"}:
+            if field["name"] in {"business_seats", "economy_seats", "cabin_allocation_ui"} or field["name"] in allocation_names:
                 field["type"] = "hidden"
     visible = [field for field in fields if field["type"] != "hidden"]
     hidden = [field for field in fields if field["type"] == "hidden"]
@@ -617,19 +628,14 @@ def _concept_spec(
             editing and detail_nondefault
         )
     if concept_name == "cabin":
-        fields_by_name = {field["name"]: field for field in visible}
-        allocation_names = tuple(
-            f"cabin_{cabin}_{passenger_type}"
-            for cabin in ("business", "economy")
-            for passenger_type in ("adult", "child", "elderly", "infant")
-        )
+        fields_by_name = {field["name"]: field for field in fields}
         result["fields"] = [
             fields_by_name[name]
             for name in ("cabin_policy", "cabin_arrangement")
         ]
-        result["cabin_allocation_fields"] = [
-            fields_by_name[name] for name in allocation_names
-        ]
+        result["cabin_business_types_field"] = fields_by_name["cabin_business_types"]
+        result["legacy_cabin_allocation_fields"] = [fields_by_name[name] for name in allocation_names]
+        result["cabin_allocation_ui"] = str(values.get("cabin_allocation_ui") or "types")
         arrangement = str(values.get("cabin_arrangement") or "economy_all")
         allocation_nondefault = any(
             int(values.get(name) or 0) > 0 for name in allocation_names
@@ -738,6 +744,8 @@ def build_form_page_context(page_mode: str, values=None, *, edit_index=None) -> 
             if page_mode == "full"
             else []
         ),
+        "companion_constraints_seed": ",".join(_as_list(data.get("companion_constraints"))),
+        "companion_constraints_seed_present": edit_index is not None,
         "monitor_mode": str(data.get("monitor_mode") or ("quick" if page_mode == "quick" else "precise")),
         "subscription_index": data.get("subscription_index", ""),
         "values": data,
@@ -952,11 +960,19 @@ FORM_PAGE_TEMPLATE = r"""
           <div class="field-wide conditional-block" data-visibility-contract="mixed-cabin"
                data-mixed-cabin-initial-visible="{{ 'true' if concept.mixed_cabin_initial_visible else 'false' }}"
                {% if not concept.mixed_cabin_initial_visible %} hidden{% endif %}>
-            <p class="hint">按每类乘客分配舱位；每类在商务舱与经济舱的人数之和必须等于乘客构成。</p>
-            <div class="field-grid">
-              {% for field in concept.cabin_allocation_fields %}{{ render_field(field) }}{% endfor %}
+            <p class="hint">勾选代表该类型全员坐商务舱，未勾选代表坐经济舱。</p>
+            <div class="checkbox-options" role="group" aria-label="谁坐商务舱" data-cabin-business-types="true">
+              {% for option in concept.cabin_business_types_field.options %}
+              <label class="checkbox-option" for="{{ concept.cabin_business_types_field.id }}-{{ option.value }}">
+                <input id="{{ concept.cabin_business_types_field.id }}-{{ option.value }}"
+                       name="cabin_business_types" type="checkbox" value="{{ option.value }}"
+                       {% if option.selected %} checked{% endif %}>
+                <span>{{ option.label }}<span data-cabin-type-count="{{ option.value }}">×0</span></span>
+              </label>
+              {% endfor %}
             </div>
             <p class="hint" data-cabin-allocation-status role="status"></p>
+            <p class="hint">同类型拆分不同舱位暂不支持；存量细粒度分配仍可原样保存。</p>
           </div>
           <p class="hint field-wide" data-cabin-budget-note hidden>
             混舱或全员商务下“单人价”无唯一定义，预算按全员总价填写。
@@ -987,6 +1003,9 @@ FORM_PAGE_TEMPLATE = r"""
     <form id="subscription-form" method="post" action="{{ url_for('subscribe') }}" data-page-mode="quick" novalidate>
       <input type="hidden" name="form_page" value="quick">
       <input type="hidden" name="monitor_mode" value="quick">
+      <input type="hidden" name="derive_companion_constraints" value="true">
+      <input type="hidden" name="companion_constraints_seed" value="{{ page.companion_constraints_seed }}">
+      <input type="hidden" name="companion_constraints_seed_present" value="{{ 'true' if page.companion_constraints_seed_present else 'false' }}">
       <input type="hidden" name="subscription_index" value="{{ page.subscription_index }}">
       {% if form_error %}<div class="server-error" role="alert">{{ form_error }}</div>{% endif %}
       {% for group in page.groups %}
@@ -1019,6 +1038,9 @@ FORM_PAGE_TEMPLATE = r"""
     </nav>
     <form id="subscription-form" method="post" action="{{ url_for('subscribe') }}" data-page-mode="full" novalidate>
       <input type="hidden" name="form_page" value="full">
+      <input type="hidden" name="derive_companion_constraints" value="true">
+      <input type="hidden" name="companion_constraints_seed" value="{{ page.companion_constraints_seed }}">
+      <input type="hidden" name="companion_constraints_seed_present" value="{{ 'true' if page.companion_constraints_seed_present else 'false' }}">
       {% if form_error %}<div class="server-error" role="alert">{{ form_error }}</div>{% endif %}
       {% for section in page.sections %}
         <section id="section-{{ section.html_id }}" class="form-section" data-form-section="{{ section.id }}">
@@ -1234,6 +1256,13 @@ FORM_PAGE_TEMPLATE = r"""
       function updateMixedCabinVisibility(preserveInitial = false) {
         const arrangement = scalar('cabin_arrangement') || 'economy_all';
         const isMixed = arrangement === 'mixed';
+        const labels = {adult:'成人', child:'儿童', elderly:'老人', infant:'婴儿'};
+        const expected = {
+          adult: Number(scalar('adult_count') || 0),
+          child: Number(scalar('child_count') || 0),
+          elderly: Number(scalar('elderly_count') || 0),
+          infant: Number(scalar('infant_count') || 0),
+        };
         document.querySelectorAll('[data-visibility-contract="mixed-cabin"]').forEach(element => {
           const preserveSaved = preserveInitial && element.dataset.mixedCabinInitialVisible === 'true';
           const visible = isMixed || preserveSaved;
@@ -1251,20 +1280,21 @@ FORM_PAGE_TEMPLATE = r"""
             setRadioOrValue(name, 'total');
           });
         }
-        const expected = {
-          adult: Number(scalar('adult_count') || 0),
-          child: Number(scalar('child_count') || 0),
-          elderly: Number(scalar('elderly_count') || 0),
-          infant: Number(scalar('infant_count') || 0),
-        };
-        const mismatches = Object.entries(expected).filter(([kind, count]) => (
-          Number(scalar(`cabin_business_${kind}`) || 0)
-          + Number(scalar(`cabin_economy_${kind}`) || 0)
-        ) !== count);
+        Object.entries(expected).forEach(([kind, count]) => {
+          document.querySelectorAll(`[data-cabin-type-count="${kind}"]`).forEach(element => {
+            element.textContent = `×${count}`;
+          });
+        });
+        const selected = new Set(fields('cabin_business_types').filter(control => control.checked).map(control => control.value));
+        const describe = business => Object.entries(expected)
+          .filter(([kind, count]) => count > 0 && selected.has(kind) === business)
+          .map(([kind, count]) => `${labels[kind]}×${count}`)
+          .join('+') || '无';
+        const uiMode = scalar('cabin_allocation_ui') || 'types';
         document.querySelectorAll('[data-cabin-allocation-status]').forEach(element => {
-          element.textContent = !isMixed ? '' : mismatches.length
-            ? `尚未对齐：${mismatches.map(([kind]) => ({adult:'成人',child:'儿童',elderly:'老人',infant:'婴儿'}[kind])).join('、')}`
-            : '人数已与乘客构成对齐。';
+          element.textContent = !isMixed ? '' : uiMode === 'legacy'
+            ? '当前保留存量细分分舱；勾选任一类型后切换为按类型整体分舱。'
+            : `商务:${describe(true)} / 经济:${describe(false)}`;
         });
       }
 
@@ -1300,8 +1330,13 @@ FORM_PAGE_TEMPLATE = r"""
       });
       ['adult','child','elderly','infant'].forEach(kind => {
         field(`${kind}_count`)?.addEventListener('input', () => updateMixedCabinVisibility(false));
-        field(`cabin_business_${kind}`)?.addEventListener('input', () => updateMixedCabinVisibility(false));
-        field(`cabin_economy_${kind}`)?.addEventListener('input', () => updateMixedCabinVisibility(false));
+      });
+      fields('cabin_business_types').forEach(element => {
+        element.addEventListener('change', () => {
+          const mode = field('cabin_allocation_ui');
+          if (mode) mode.value = 'types';
+          updateMixedCabinVisibility(false);
+        });
       });
       form.addEventListener('input', scheduleSummary);
       form.addEventListener('change', scheduleSummary);

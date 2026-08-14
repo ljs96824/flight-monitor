@@ -27,10 +27,11 @@ from analyzer import apply_default_rules, build_price_hint_from_calendar
 from airlines import LCC_POLICIES, resolve_lcc_policy
 from build_info import PROCESS_BUILD_INFO
 from cabin_allocation import (
-    cabin_allocation_label,
+    cabin_allocation_detail_label,
     cabin_allocation_from_form,
     validate_cabin_allocation,
 )
+from companion_constraints import derive_companion_constraints
 from constraint_summary import build_constraint_summary, format_constraint_summary
 from form_pages import FORM_PAGE_TEMPLATE, ROUTE_TYPE_LABELS, build_form_page_context
 from form_structure import (
@@ -1446,7 +1447,7 @@ def build_subscription(form) -> dict:
         companions = "multiple"
     else:
         companions = form.get("companions", "solo")
-    companion_constraints = form.getlist("companion_constraints")
+    explicit_companion_constraints = form.getlist("companion_constraints")
     elderly_condition = form.get("elderly_condition", "normal").strip()
     child_type = form.get("child_type", "").strip()
     solo_travel = parse_bool(form.get("solo_travel", "false"))
@@ -1483,6 +1484,45 @@ def build_subscription(form) -> dict:
     if not raw_trip_natures:
         legacy_trip_nature = form.get("trip_nature", "").strip()
         raw_trip_natures = [legacy_trip_nature] if legacy_trip_nature else []
+
+    mobility_limited = parse_bool(form.get("mobility_limited", "false"))
+    companion_constraints_seed = [
+        item.strip() for item in str(form.get("companion_constraints_seed") or "").split(",") if item.strip()
+    ]
+    if ux2_time_fields is not None:
+        departure_slot_fields = (
+            ("outbound_departure_slots", "return_departure_slots")
+            if round_trip
+            else ("departure_slots",)
+        )
+        companion_allows_redeye = any(
+            "redeye" in (ux2_time_fields.get(field_name) or [])
+            for field_name in departure_slot_fields
+        )
+    else:
+        companion_allows_redeye = parse_bool(form.get("allow_redeye", "false"))
+    if explicit_companion_constraints:
+        companion_constraints = explicit_companion_constraints
+    elif parse_bool(form.get("companion_constraints_seed_present", "false")):
+        companion_constraints = companion_constraints_seed
+    elif parse_bool(form.get("derive_companion_constraints", "false")):
+        companion_constraints = derive_companion_constraints(
+            {
+                "transfer_policy": transfer_policy,
+                "short_transfer_limit": form.get("short_transfer_limit", "extra_6"),
+                "departure_time_policy": departure_time_policy,
+                "time_preference": time_mode,
+                "allow_redeye": companion_allows_redeye,
+                "arrival_time_policy": arrival_time_policy,
+                "arrival_preference": form.get("arrival_preference"),
+                "prefer_daytime_arrival": prefer_daytime_arrival,
+                "baggage": form.get("baggage", "required"),
+                "refund_flexibility": refund_flexibility,
+                "mobility_limited": mobility_limited,
+            }
+        )
+    else:
+        companion_constraints = []
     trip_nature_map = {
         "business_meeting": "meeting",
         "business_trip": "business",
@@ -1524,7 +1564,8 @@ def build_subscription(form) -> dict:
     user_level = form.get("user_level", "staff").strip() or "staff"
     business_seats = parse_int(form.get("business_seats"), 0)
     economy_seats = parse_int(form.get("economy_seats"), 0)
-    cabin_allocation, explicit_cabin_allocation = cabin_allocation_from_form(form)
+    cabin_allocation = {}
+    explicit_cabin_allocation = False
     if cabin_arrangement == "business_all" and passenger_count:
         business_seats = passenger_count
         economy_seats = 0
@@ -1534,6 +1575,9 @@ def build_subscription(form) -> dict:
         business_seats = 0
         economy_seats = passenger_count
     elif cabin_arrangement == "mixed":
+        cabin_allocation, explicit_cabin_allocation = cabin_allocation_from_form(
+            form, precise_passengers
+        )
         if explicit_cabin_allocation:
             allocation_result = validate_cabin_allocation(
                 cabin_allocation,
@@ -1663,7 +1707,7 @@ def build_subscription(form) -> dict:
             "companion_constraints": companion_constraints,
             "elderly_condition": elderly_condition,
             "child_type": child_type,
-            "mobility_limited": "limited_mobility" in companion_constraints,
+            "mobility_limited": mobility_limited or "limited_mobility" in companion_constraints,
             "solo_travel": solo_travel,
             "no_late_arrival": no_late_arrival,
             "prefer_daytime_arrival": prefer_daytime_arrival,
@@ -1821,7 +1865,7 @@ def build_subscription(form) -> dict:
             "companion_constraints": companion_constraints,
             "elderly_condition": elderly_condition,
             "child_type": child_type,
-            "mobility_limited": "limited_mobility" in companion_constraints,
+            "mobility_limited": mobility_limited or "limited_mobility" in companion_constraints,
             "solo_travel": solo_travel,
             "no_late_arrival": no_late_arrival,
             "prefer_daytime_arrival": prefer_daytime_arrival,
@@ -2007,7 +2051,7 @@ def build_success_summary(subscription: dict) -> dict:
         or {}
     )
     if hard.get("cabin_arrangement") == "mixed" and cabin_allocation:
-        cabin_text = cabin_allocation_label(cabin_allocation)
+        cabin_text = cabin_allocation_detail_label(cabin_allocation)
     meeting_text = ""
     if hard.get("same_day_round_trip"):
         meeting_start = hard.get("business_start") or hard.get("meeting_start")

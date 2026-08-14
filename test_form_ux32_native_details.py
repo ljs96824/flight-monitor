@@ -4,7 +4,7 @@ from html.parser import HTMLParser
 
 import web_form
 from form_concepts import BUSINESS_SCENARIO_CONCEPTS, CONCEPTS
-from form_pages import FORM_PAGE_TEMPLATE, build_form_page_context
+from form_pages import FORM_PAGE_TEMPLATE, OPTIONS, build_form_page_context
 
 
 BUSINESS_CONCEPTS = set(BUSINESS_SCENARIO_CONCEPTS)
@@ -81,7 +81,10 @@ class FormUx32NativeDetailsTest(unittest.TestCase):
                 self.assertEqual(dom.group_by_name.get(name), "feasibility", name)
 
         for name in CONCEPTS["cabin"]["canonical_input_names"]:
-            self.assertEqual(counts[name], 1, name)
+            expected_count = (
+                len(OPTIONS[name]) if name == "cabin_business_types" else 1
+            )
+            self.assertEqual(counts[name], expected_count, name)
             self.assertNotIn(name, dom.group_by_name, name)
 
     def test_edit_context_opens_only_groups_with_nondefault_values(self):

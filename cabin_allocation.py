@@ -64,6 +64,42 @@ def cabin_allocation_label(allocation) -> str:
     return "+".join(parts) or "未分配舱位"
 
 
+def cabin_allocation_detail_label(allocation) -> str:
+    """确认页按舱位列出实际乘客类型，不把同舱人群压成一个总数。"""
+    normalized = normalize_cabin_allocation(allocation)
+    display_order = ("adult", "child", "elderly", "infant")
+    cabin_parts = []
+    for cabin in CABIN_ORDER:
+        passenger_parts = [
+            f"{PASSENGER_TYPE_LABELS[key]}×{normalized[cabin][key]}"
+            for key in display_order
+            if normalized[cabin][key] > 0
+        ]
+        if passenger_parts:
+            cabin_parts.append(f"{CABIN_LABELS[cabin]}:{'+'.join(passenger_parts)}")
+    return " / ".join(cabin_parts) or "未分配舱位"
+
+def business_types_from_allocation(allocation, passengers) -> tuple[list[str], bool]:
+    """投影整类分舱；细粒度拆分返回representable=False以保留旧矩阵。"""
+    normalized = normalize_cabin_allocation(allocation)
+    passenger_counts = normalize_passenger_counts(passengers)
+    selected = []
+    representable = True
+    for key in PASSENGER_TYPE_ORDER:
+        expected = passenger_counts[key]
+        business = normalized["business"][key]
+        economy = normalized["economy"][key]
+        if expected == 0:
+            representable = representable and business == 0 and economy == 0
+            continue
+        if business == expected and economy == 0:
+            selected.append(key)
+            continue
+        if business == 0 and economy == expected:
+            continue
+        representable = False
+    return selected, representable
+
 def validate_cabin_allocation(allocation, passengers) -> dict:
     normalized = normalize_cabin_allocation(allocation)
     passenger_counts = normalize_passenger_counts(passengers)
@@ -97,8 +133,23 @@ def find_explicit_cabin_allocation(*containers):
     return None
 
 
-def cabin_allocation_from_form(form) -> tuple[dict, bool]:
-    """读取页面分舱表；八个字段全空/零时视为未显式启用。"""
+def cabin_allocation_from_form(form, passengers=None) -> tuple[dict, bool]:
+    """读取类型勾选或旧矩阵；旧八字段继续用于直接POST兼容。"""
+    ui_mode = str(form.get("cabin_allocation_ui") or "").strip()
+    if ui_mode == "types":
+        passenger_counts = normalize_passenger_counts(passengers)
+        selected = set(form.getlist("cabin_business_types")) if hasattr(form, "getlist") else set()
+        unknown = selected - set(PASSENGER_TYPE_ORDER)
+        if unknown:
+            raise ValueError(f"未知乘客类型: {','.join(sorted(unknown))}")
+        allocation = {cabin: {} for cabin in CABIN_ORDER}
+        for key in PASSENGER_TYPE_ORDER:
+            count = passenger_counts[key]
+            allocation["business"][key] = count if key in selected else 0
+            allocation["economy"][key] = 0 if key in selected else count
+        return allocation, sum(passenger_counts.values()) > 0
+
+    # 旧客户端仍可直接提交细粒度矩阵；没有显式模式时维持原语义。
     allocation = {cabin: {} for cabin in CABIN_ORDER}
     explicit = False
     for cabin in CABIN_ORDER:

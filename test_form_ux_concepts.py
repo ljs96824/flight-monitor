@@ -200,7 +200,12 @@ class FormUxConceptRenderingTest(unittest.TestCase):
             self.assertNotIn('type="hidden"', self.tag_for_name(name))
         self.assertIn('type="hidden"', self.tag_for_name("separate_direction_times"))
     def test_every_rendered_business_field_is_owned_by_the_concept_registry(self):
-        allowed_page_fields = {"form_page"}
+        allowed_page_fields = {
+            "form_page",
+            "derive_companion_constraints",
+            "companion_constraints_seed",
+            "companion_constraints_seed_present",
+        }
         self.assertEqual(
             sorted(
                 set(self.rendered_names())

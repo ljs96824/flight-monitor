@@ -15,7 +15,7 @@ from werkzeug.datastructures import MultiDict
 
 
 FIXTURE = Path(__file__).parent / "tests" / "fixtures" / "form_normalization_baseline_v1.json"
-REPEATABLE_CHECKBOX_FIELDS = frozenset({"travel_scenario", "companion_constraints"})
+REPEATABLE_CHECKBOX_FIELDS = frozenset({"travel_scenario", "cabin_business_types"})
 
 
 class _FormDom(HTMLParser):

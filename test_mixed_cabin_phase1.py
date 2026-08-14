@@ -308,7 +308,7 @@ class MixedCabinFingerprintTest(unittest.TestCase):
 
 
 class MixedCabinFormContractTest(unittest.TestCase):
-    def test_full_page_renders_allocation_once_and_submits_total_scope(self):
+    def test_full_page_renders_type_checkboxes_and_submits_total_scope(self):
         import web_form
 
         web_form.app.config.update(TESTING=True)
@@ -317,6 +317,8 @@ class MixedCabinFormContractTest(unittest.TestCase):
             for passenger_type in ("adult", "elderly", "child", "infant"):
                 name = f"cabin_{cabin}_{passenger_type}"
                 self.assertEqual(page.count(f'name="{name}"'), 1, name)
+                self.assertNotIn(f'name="{name}" type="number"', page, name)
+        self.assertEqual(page.count('name="cabin_business_types"'), 4)
         self.assertIn('data-visibility-contract="mixed-cabin"', page)
 
         from scripts.capture_form_normalization_baseline import _base_form
@@ -330,14 +332,8 @@ class MixedCabinFormContractTest(unittest.TestCase):
             elderly_count="2",
             infant_count="0",
             cabin_arrangement="mixed",
-            cabin_business_adult="2",
-            cabin_business_child="0",
-            cabin_business_elderly="0",
-            cabin_business_infant="0",
-            cabin_economy_adult="0",
-            cabin_economy_child="1",
-            cabin_economy_elderly="2",
-            cabin_economy_infant="0",
+            cabin_allocation_ui="types",
+            cabin_business_types=["adult"],
         )
         subscription = build_subscription(MultiDict(form))
         self.assertEqual(subscription["cabin_allocation"], MIXED_ALLOCATION)
@@ -349,7 +345,7 @@ class MixedCabinFormContractTest(unittest.TestCase):
         from web_form import build_success_summary
 
         summary = build_success_summary(subscription)
-        self.assertEqual(summary["cabin_text"], "商务2人+经济3人")
+        self.assertEqual(summary["cabin_text"], "商务:成人×2 / 经济:儿童×1+老人×2")
 
     def test_form_rejects_mismatched_allocation(self):
         from scripts.capture_form_normalization_baseline import _base_form
@@ -369,13 +365,14 @@ class MixedCabinFormContractTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "老人.*2人.*1人"):
             build_subscription(MultiDict(form))
 
-    def test_ui_smoke_covers_mixed_cabin_visibility_roundtrip_and_rejection(self):
+    def test_ui_smoke_covers_type_selection_dynamic_counts_and_roundtrip(self):
         from pathlib import Path
 
         driver = (Path(__file__).parent / "scripts" / "ui_smoke_driver.mjs").read_text(encoding="utf-8")
         self.assertIn("混舱显隐=PASS", driver)
+        self.assertIn("混舱类型勾选=PASS", driver)
+        self.assertIn("人数随动", driver)
         self.assertIn("混舱分配回读=PASS", driver)
-        self.assertIn("混舱错误回显=PASS", driver)
 
 
 class MixedCabinAnalyzerIntegrationTest(unittest.TestCase):

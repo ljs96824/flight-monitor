@@ -892,7 +892,13 @@ def _flush_api_usage_ledger() -> None:
     global _usage_flushed_for_round
     if not _track_usage_for_round or _usage_flushed_for_round:
         return
-    from api_usage import DEFAULT_USAGE_PATH, load_usage, record_actual_requests, usage_snapshot
+    from api_usage import (
+        DEFAULT_USAGE_PATH,
+        format_quota_overview,
+        load_usage,
+        record_actual_requests,
+        usage_snapshot,
+    )
 
     path = _usage_path_for_round or DEFAULT_USAGE_PATH
     actual_by_source = {
@@ -932,6 +938,7 @@ def _flush_api_usage_ledger() -> None:
             f"(本地估算,以聚合数据控制台为准)"
         )
     _usage_flushed_for_round = True
+    safe_log(format_quota_overview(payload, _quota_budgets_for_round))
 
 
 def print_request_cache_stats() -> None:

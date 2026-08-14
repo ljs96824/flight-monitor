@@ -12443,6 +12443,26 @@ def _email_technical_source_body(payload: dict) -> str:
     return _email_source_body(payload) + "<hr style='border:0;border-top:1px solid #eee;margin:10px 0;'>" + "".join(rows)
 
 
+def _detail_technical_source_body(payload: dict) -> str:
+    """详情页专用：在既有来源明细尾部追加本地配额概览。"""
+    return (
+        _email_technical_source_body(payload)
+        + "<hr style='border:0;border-top:1px solid #eee;margin:10px 0;'>"
+        + f"<div>{html.escape(_quota_overview_text())}</div>"
+    )
+
+
+def _quota_overview_text() -> str:
+    """只读现有台账；与轮末日志共用同一格式函数。"""
+    from api_usage import DEFAULT_USAGE_PATH, format_quota_overview, load_usage
+    from collection_plan import load_collection_settings
+
+    settings = load_collection_settings(BASE_DIR / "config.yaml")
+    return format_quota_overview(
+        load_usage(DEFAULT_USAGE_PATH),
+        settings.get("source_quota_budget") or {},
+    )
+
 def _provenance_value_text(stat_key: str, value) -> str:
     if isinstance(value, dict):
         return json.dumps(value, ensure_ascii=False, sort_keys=True)
@@ -13967,7 +13987,7 @@ def render_detail_html(payload: dict) -> str:
     cards.append(_detail_section("展开:置信度拆解", confidence_body))
 
     cards.append(_detail_section("数据依据", _detail_provenance_body(payload)))
-    cards.append(_detail_section("展开:详细数据来源", _email_technical_source_body(payload)))
+    cards.append(_detail_section("展开:详细数据来源", _detail_technical_source_body(payload)))
 
     cards.append(
         _email_card(
