@@ -9,6 +9,7 @@ from datetime import datetime
 
 from flight_combo_utils import normalize_combo
 from log_utils import safe_log
+from serpapi_credentials import serpapi_key_available
 from source_profiles import get_source_profile, normalize_route_type
 from request_cache import cached_fetch
 from sources.base import FlightSource
@@ -525,7 +526,7 @@ def _instantiate_source(source_name: str):
             from sources.juhe_source import JuheSource
 
             return JuheSource()
-        if source_name == "serpapi" and os.environ.get("SERPAPI_KEY"):
+        if source_name == "serpapi" and serpapi_key_available():
             from sources.serpapi_source import SerpAPISource
 
             return SerpAPISource()
@@ -641,7 +642,7 @@ def build_default_sources(
 
         search_sources.append(JuheSource())
 
-    if os.environ.get("SERPAPI_KEY"):
+    if serpapi_key_available():
         from sources.serpapi_source import SerpAPISource
 
         search_sources.append(SerpAPISource())

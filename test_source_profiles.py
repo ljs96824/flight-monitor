@@ -7,6 +7,7 @@ from unittest.mock import patch
 from source_profiles import normalize_route_type
 from sources.aggregator import (
     FlightAggregator,
+    _instantiate_source,
     build_default_sources,
     classify_route,
     classify_route_with_rule,
@@ -34,6 +35,17 @@ class SourceProfilesTest(unittest.TestCase):
             "serpapi": types.SimpleNamespace(GoogleSearch=object),
             "httpx": types.SimpleNamespace(get=lambda *a, **k: None, post=lambda *a, **k: None),
         }
+
+    def test_serpapi_factory_accepts_each_supported_key_alias(self):
+        aliases = ("SERPAPI_KEY", "SERPAPI_API_KEY", "SERP_API_KEY")
+        for alias in aliases:
+            with self.subTest(alias=alias), patch.dict(
+                sys.modules, self.fake_modules
+            ), patch.dict(os.environ, {alias: "serpapi-key"}, clear=True):
+                source = _instantiate_source("serpapi")
+
+            self.assertIsNotNone(source)
+            self.assertEqual(source.name, "serpapi")
 
     def test_classify_route_distinguishes_domestic_greater_china_and_international(self):
         self.assertEqual(classify_route("PVG", "PEK"), "domestic")

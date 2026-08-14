@@ -1,6 +1,12 @@
+import io
+import os
+import sys
 import tempfile
+import types
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 
 class _FakeResponse:
@@ -106,6 +112,89 @@ class SerpApiCapabilityAuditTest(unittest.TestCase):
         self.assertEqual(usage["entries"][-2]["counts"], {"serpapi": 1})
         self.assertEqual(usage["entries"][-1]["counts"], {"serpapi": 1})
         self.assertNotIn("secret", str(report))
+
+    def test_audit_accepts_each_supported_key_alias_and_logs_only_its_name(self):
+        from scripts.serpapi_capability_audit import run_audit
+
+        def fake_get(_url, *, params, timeout):
+            self.assertGreater(timeout, 0)
+            return _FakeResponse(_fixture(int(params["travel_class"]), 9230))
+
+        aliases = ("SERPAPI_KEY", "SERPAPI_API_KEY", "SERP_API_KEY")
+        with tempfile.TemporaryDirectory() as tmp:
+            for alias in aliases:
+                with self.subTest(alias=alias):
+                    secret = f"secret-for-{alias}"
+                    output = io.StringIO()
+                    with redirect_stdout(output):
+                        report = run_audit(
+                            execute=True,
+                            env={alias: secret},
+                            usage_path=Path(tmp) / f"{alias}.json",
+                            http_get=fake_get,
+                            round_id=f"audit-{alias}",
+                        )
+                    rendered = output.getvalue()
+                    self.assertTrue(report["production_gate_passed"])
+                    self.assertIn(f"[密钥] 已识别 来源变量={alias}", rendered)
+                    self.assertNotIn(secret, rendered)
+                    self.assertNotIn(secret, str(report))
+
+    def test_source_accepts_each_supported_key_alias(self):
+        from sources.serpapi_source import SerpAPISource
+
+        aliases = ("SERPAPI_KEY", "SERPAPI_API_KEY", "SERP_API_KEY")
+        for alias in aliases:
+            with self.subTest(alias=alias):
+                captured = []
+
+                class FakeGoogleSearch:
+                    def __init__(self, params):
+                        captured.append(dict(params))
+
+                    def get_dict(self):
+                        return {"best_flights": [], "other_flights": []}
+
+                secret = f"source-secret-for-{alias}"
+                output = io.StringIO()
+                with patch.dict(
+                    sys.modules,
+                    {"serpapi": types.SimpleNamespace(GoogleSearch=FakeGoogleSearch)},
+                ), patch.dict(os.environ, {alias: secret}, clear=True), redirect_stdout(
+                    output
+                ):
+                    SerpAPISource().fetch("PVG", "KIX", "2026-10-01", "business")
+
+                self.assertEqual(captured[0]["api_key"], secret)
+                self.assertIn(f"[密钥] 已识别 来源变量={alias}", output.getvalue())
+                self.assertNotIn(secret, output.getvalue())
+
+    def test_missing_key_gate_reason_lists_env_variable_names_without_values(self):
+        from scripts.serpapi_capability_audit import run_audit
+
+        def fail(*_args, **_kwargs):
+            raise AssertionError("缺少密钥时不得访问网络")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            env_path = Path(tmp) / ".env"
+            env_path.write_text(
+                "OTHER_TOKEN=do-not-log-this\nSMTP_HOST=smtp.example.com\n",
+                encoding="utf-8",
+            )
+            report = run_audit(
+                execute=True,
+                env={},
+                env_path=env_path,
+                usage_path=Path(tmp) / "api_usage.json",
+                http_get=fail,
+            )
+
+        reason = report["gate_reason"]
+        self.assertIn("SERPAPI_KEY/SERPAPI_API_KEY/SERP_API_KEY", reason)
+        self.assertIn(".env 实际变量名=[OTHER_TOKEN, SMTP_HOST]", reason)
+        self.assertNotIn("do-not-log-this", reason)
+        self.assertNotIn("smtp.example.com", reason)
+        self.assertEqual(report["actual_calls"], {})
 
     def test_dry_run_is_zero_io_and_lists_public_parameters(self):
         from scripts.serpapi_capability_audit import run_audit

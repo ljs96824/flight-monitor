@@ -1,6 +1,7 @@
 """SerpAPI Google Flights 舱位能力审计。
 
-默认 dry-run。只有显式传入 ``--execute`` 才会读取 ``SERPAPI_KEY`` 并发起
+默认 dry-run。只有显式传入 ``--execute`` 才会读取受支持的 SerpAPI 密钥
+环境变量并发起
 真实请求。审计预算硬限制为总计 6 次、SerpAPI 最多 3 次；当前方案固定执行
 商务舱和经济舱各 1 次。
 """
@@ -27,6 +28,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from api_usage import DEFAULT_USAGE_PATH, load_usage, record_actual_requests, usage_snapshot
+from serpapi_credentials import (
+    SERPAPI_KEY_ALIASES,
+    dotenv_variable_names,
+    resolve_serpapi_key,
+)
 
 
 SERPAPI_URL = "https://serpapi.com/search.json"
@@ -186,6 +192,7 @@ def run_audit(
     dest: str = DEFAULT_DESTINATION,
     depart_date: str = DEFAULT_DEPART_DATE,
     env: Mapping[str, str] | None = None,
+    env_path: str | Path = ROOT / ".env",
     usage_path: str | Path = DEFAULT_USAGE_PATH,
     http_get: Callable | None = None,
     round_id: str | None = None,
@@ -218,11 +225,16 @@ def run_audit(
         report["gate_reason"] = "dry-run 未产生商务舱能力证据"
         return report
 
-    api_key = environment.get("SERPAPI_KEY")
+    api_key, _ = resolve_serpapi_key(environment)
     if not api_key:
         report["ledger_after"] = report["ledger_before"]
         report["production_gate_passed"] = False
-        report["gate_reason"] = "缺少 SERPAPI_KEY，未发起请求"
+        aliases = "/".join(SERPAPI_KEY_ALIASES)
+        available_names = ", ".join(dotenv_variable_names(env_path))
+        report["gate_reason"] = (
+            f"缺少 SerpAPI 密钥（已检查 {aliases}）；"
+            f".env 实际变量名=[{available_names}]；未发起请求"
+        )
         return report
 
     budget = AuditBudget()

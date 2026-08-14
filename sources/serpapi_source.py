@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import os
 import re
 from datetime import datetime, time, timedelta
 
+from serpapi_credentials import SERPAPI_KEY_ALIASES, resolve_serpapi_key
 from sources.base import FlightSource
 
 
@@ -33,6 +33,11 @@ class SerpAPISource(FlightSource):
     ) -> dict:
         from serpapi import GoogleSearch
 
+        api_key, _ = resolve_serpapi_key()
+        if not api_key:
+            aliases = "/".join(SERPAPI_KEY_ALIASES)
+            raise RuntimeError(f"缺少 SerpAPI 密钥（已检查 {aliases}）")
+
         overrides = getattr(self, "query_overrides", {}) or {}
         params = {
             "engine": "google_flights",
@@ -45,7 +50,7 @@ class SerpAPISource(FlightSource):
             "gl": overrides.get("gl") or "cn",
             "sort": "2",
             "stops": _serpapi_stops_value(overrides.get("stops")),
-            "api_key": os.environ.get("SERPAPI_KEY"),
+            "api_key": api_key,
         }
         selected_cabin = _google_cabin_code(cabin_class)
         if selected_cabin:
