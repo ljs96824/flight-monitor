@@ -168,10 +168,17 @@ class FormUx34ParallelDimensionsTest(unittest.TestCase):
         self.assertEqual(payload["route_type"], "international")
         self.assertEqual(payload["route_type_label"], "国际")
 
-    def test_business_group_is_third_visibility_contract_and_edit_opens_it(self):
+    def test_business_group_and_transfer_details_are_whitelisted_visibility_contracts(self):
         self.assertEqual(
             VISIBILITY_CONTRACTS,
-            frozenset({"passenger-profile", "notification-email", "business-scenario"}),
+            frozenset(
+                {
+                    "passenger-profile",
+                    "notification-email",
+                    "business-scenario",
+                    "transfer-details",
+                }
+            ),
         )
         default_groups = {
             item["id"]: item for item in build_form_page_context("full")["secondary_groups"]

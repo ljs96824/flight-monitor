@@ -49,8 +49,17 @@ ROUTE_SOURCE_PROFILES = {
     "greater_china": {
         "sources": [
             {"name": "juhe", "role": "primary", "weight": 1.0},
-            {"name": "hasdata", "role": "cross_check", "weight": 0.6},
             {"name": "duffel", "role": "enrichment", "weight": 0.0},
+        ],
+        # HasData 自 2026-08-14 因 403/订阅终止退役；保留元数据供历史口径追溯。
+        "retired_sources": [
+            {
+                "name": "hasdata",
+                "role": "cross_check",
+                "weight": 0.6,
+                "retired_on": "2026-08-14",
+                "reason": "403/订阅终止",
+            }
         ],
         "query": {
             "currency": "CNY",
@@ -58,7 +67,7 @@ ROUTE_SOURCE_PROFILES = {
             "gl": "cn",
             "stops": "nonstop_preferred",
         },
-        "primary_source": "juhe+hasdata",
+        "primary_source": "juhe",
     },
 }
 

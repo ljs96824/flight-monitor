@@ -288,6 +288,7 @@ SUCCESS_TEMPLATE = """
     {% if summary.companion_constraints_text %}<p data-confirmed-companion-constraints="true"><b>同行约束：</b>{{ summary.companion_constraints_text }}</p>{% endif %}
     {% if summary.meeting_text %}<p data-confirmed-meeting="true">{{ summary.meeting_text }}</p>{% endif %}
     {% if summary.time_window_text %}<p data-confirmed-time-windows="true">{{ summary.time_window_text }}</p>{% endif %}
+    {% if summary.transfer_text %}<p data-confirmed-transfer="true">{{ summary.transfer_text }}</p>{% endif %}
     {% if summary.airport_coverage %}
     <p>{{ summary.airport_coverage }}</p>
     {% endif %}
@@ -1843,6 +1844,31 @@ def _success_time_window_text(hard: dict) -> str:
                 items.append(f"{label}{text}")
     return f"时间窗：{'；'.join(items)}" if items else ""
 
+def _success_transfer_text(hard: dict) -> str:
+    policy = str(hard.get("transfer_policy") or "reasonable")
+    policy_text = {
+        "direct_only": "必须直飞",
+        "reasonable": "合理中转",
+        "short_ok": "短中转",
+        "price_first": "价格优先",
+    }.get(policy, "合理中转")
+    parts = [policy_text]
+    if policy == "direct_only":
+        return f"中转设置：{' · '.join(parts)}"
+
+    max_total = hard.get("max_total_duration_hours")
+    max_extra = hard.get("max_extra_duration_hours")
+    if max_total not in (None, ""):
+        parts.append(f"总时长不超{max_total}小时")
+    elif max_extra not in (None, ""):
+        parts.append(f"中转最多多{max_extra}小时")
+    if hard.get("accept_overnight_transfer"):
+        parts.append("接受过夜中转")
+    if hard.get("accept_self_transfer"):
+        parts.append("接受非联程自行中转")
+    return f"中转设置：{' · '.join(parts)}"
+
+
 def build_success_summary(subscription: dict) -> dict:
     subscription_with_defaults = apply_default_rules(subscription)
     hard = subscription.get("hard_constraints", {})
@@ -1950,6 +1976,7 @@ def build_success_summary(subscription: dict) -> dict:
         "time_window_text": _success_time_window_text(hard),
         "scenario_text": scenario_text,
         "companion_constraints_text": companion_constraints_text,
+        "transfer_text": _success_transfer_text(hard),
     }
 
 

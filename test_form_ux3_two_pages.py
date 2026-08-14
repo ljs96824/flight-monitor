@@ -166,7 +166,7 @@ class FormUx3TwoPagesTest(unittest.TestCase):
                 invalid[name] = len(controls)
         self.assertEqual(invalid, {})
 
-    def test_conditional_visibility_is_limited_to_three_whitelisted_contracts(self):
+    def test_conditional_visibility_is_limited_to_four_whitelisted_contracts(self):
         quick = self._page("/")
         full = self._page("/settings")
         dom = _Dom()
@@ -175,7 +175,15 @@ class FormUx3TwoPagesTest(unittest.TestCase):
             attrs["data-visibility-contract"]
             for attrs in dom.attributes(name="data-visibility-contract")
         }
-        self.assertEqual(contracts, {"passenger-profile", "notification-email", "business-scenario"})
+        self.assertEqual(
+            contracts,
+            {
+                "passenger-profile",
+                "notification-email",
+                "business-scenario",
+                "transfer-details",
+            },
+        )
         for html in (quick, full):
             self.assertNotIn("data-show-if", html)
             self.assertNotIn("data-advanced-depth", html)
@@ -219,11 +227,12 @@ class FormUx3TwoPagesTest(unittest.TestCase):
         self.assertIn('name="passenger_count" type="number"', html)
         self.assertNotIn('id="field-passenger-count" name="passenger_count" type="hidden"', html)
 
-    def test_interaction_script_only_toggles_the_three_whitelisted_contracts(self):
-        self.assertEqual(FORM_PAGE_TEMPLATE.count("element.hidden ="), 3)
+    def test_interaction_script_only_toggles_the_four_whitelisted_contracts(self):
+        self.assertEqual(FORM_PAGE_TEMPLATE.count("element.hidden ="), 4)
         self.assertIn('data-visibility-contract="passenger-profile"', FORM_PAGE_TEMPLATE)
         self.assertIn('data-visibility-contract="notification-email"', FORM_PAGE_TEMPLATE)
         self.assertIn('data-visibility-contract="business-scenario"', FORM_PAGE_TEMPLATE)
+        self.assertIn('data-visibility-contract="transfer-details"', FORM_PAGE_TEMPLATE)
         self.assertNotIn("classList.toggle('open'", FORM_PAGE_TEMPLATE)
 
     def test_page_marker_does_not_change_eight_fixture_normalization(self):

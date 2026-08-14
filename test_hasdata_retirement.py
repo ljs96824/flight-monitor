@@ -62,6 +62,29 @@ class HasDataRetirementTest(unittest.TestCase):
             ],
         )
 
+    def test_greater_china_profile_retires_hasdata_but_keeps_metadata(self):
+        from source_profiles import get_source_profile
+
+        profile = get_source_profile("greater_china")
+
+        self.assertEqual(
+            [item["name"] for item in profile["sources"]],
+            ["juhe", "duffel"],
+        )
+        self.assertEqual(profile["sources"][0]["role"], "primary")
+        self.assertEqual(
+            profile["retired_sources"],
+            [
+                {
+                    "name": "hasdata",
+                    "role": "cross_check",
+                    "weight": 0.6,
+                    "retired_on": "2026-08-14",
+                    "reason": "403/订阅终止",
+                }
+            ],
+        )
+
     def test_expected_sources_are_date_aware_across_retirement(self):
         from source_profiles import expected_listing_sources
 
@@ -74,6 +97,16 @@ class HasDataRetirementTest(unittest.TestCase):
             {"juhe"},
         )
         self.assertEqual(expected_listing_sources("international"), {"juhe"})
+
+        self.assertEqual(
+            expected_listing_sources("greater_china", observed_day="2026-08-13"),
+            {"hasdata", "juhe"},
+        )
+        self.assertEqual(
+            expected_listing_sources("greater_china", observed_day="2026-08-14"),
+            {"juhe"},
+        )
+        self.assertEqual(expected_listing_sources("greater_china"), {"juhe"})
 
     def test_collection_plan_for_international_route_has_no_hasdata_request(self):
         from collection_plan import build_collection_plan

@@ -4,6 +4,15 @@ from unittest.mock import patch
 from sources.aggregator import FlightAggregator, _flight_departure_time
 from sources.juhe_source import JuheSource
 from sources.serpapi_source import parse_google_flights
+DUAL_SOURCE_PROFILE = {
+    "sources": [
+        {"name": "juhe", "role": "primary", "weight": 1.0},
+        {"name": "hasdata", "role": "cross_check", "weight": 0.6},
+    ],
+    "query": {},
+}
+
+
 
 
 class FetchSource:
@@ -131,6 +140,7 @@ class TimeFormatTraceTest(unittest.TestCase):
         with (
             patch("sources.aggregator.cached_fetch", side_effect=direct_cached_fetch),
             patch("sources.aggregator.safe_log") as log,
+            patch("sources.aggregator.get_source_profile", return_value=DUAL_SOURCE_PROFILE),
         ):
             result = aggregator.collect(
                 "PVG",

@@ -12,6 +12,15 @@ sys.modules.setdefault(
 
 from notifier import _email_source_body
 from sources.aggregator import FlightAggregator
+DUAL_SOURCE_PROFILE = {
+    "sources": [
+        {"name": "juhe", "role": "primary", "weight": 1.0},
+        {"name": "hasdata", "role": "cross_check", "weight": 0.6},
+    ],
+    "query": {},
+}
+
+
 
 
 class DummySource:
@@ -115,7 +124,10 @@ class SourceWeightingTest(unittest.TestCase):
             [FetchSource("hasdata", "MU 225", 1000), FetchSource("juhe", "MU225", 1200)],
             [],
         )
-        with patch("sources.aggregator.cached_fetch", side_effect=direct_cached_fetch):
+        with (
+            patch("sources.aggregator.cached_fetch", side_effect=direct_cached_fetch),
+            patch("sources.aggregator.get_source_profile", return_value=DUAL_SOURCE_PROFILE),
+        ):
             result = aggregator.collect("PVG", "HKG", "2026-07-01", route_type="greater_china")
 
         self.assertIsNotNone(result)
@@ -165,7 +177,10 @@ class SourceWeightingTest(unittest.TestCase):
             [],
             route_type="greater_china",
         )
-        with patch("sources.aggregator.cached_fetch", side_effect=direct_cached_fetch):
+        with (
+            patch("sources.aggregator.cached_fetch", side_effect=direct_cached_fetch),
+            patch("sources.aggregator.get_source_profile", return_value=DUAL_SOURCE_PROFILE),
+        ):
             result = aggregator.collect("PVG", "HKG", "2026-08-20")
 
         self.assertEqual(result["source_stats"]["hasdata"]["status"], "成功")
@@ -254,6 +269,7 @@ class SourceWeightingTest(unittest.TestCase):
         with (
             patch("sources.aggregator.cached_fetch", side_effect=direct_cached_fetch),
             patch("sources.aggregator.safe_log") as log,
+            patch("sources.aggregator.get_source_profile", return_value=DUAL_SOURCE_PROFILE),
         ):
             result = aggregator.collect("PVG", "HKG", "2026-07-01", route_type="greater_china")
 
@@ -302,7 +318,10 @@ class SourceWeightingTest(unittest.TestCase):
             [FetchSource("hasdata", "BR705+BR182", 2000), FetchSource("juhe", "BR0705|BR0182", 2100)],
             [],
         )
-        with patch("sources.aggregator.cached_fetch", side_effect=direct_cached_fetch):
+        with (
+            patch("sources.aggregator.cached_fetch", side_effect=direct_cached_fetch),
+            patch("sources.aggregator.get_source_profile", return_value=DUAL_SOURCE_PROFILE),
+        ):
             result = aggregator.collect("PVG", "HKG", "2026-07-01", route_type="greater_china")
 
         self.assertEqual(result["source_stats"]["after_dedup"], 1)

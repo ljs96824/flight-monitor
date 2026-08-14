@@ -162,7 +162,7 @@ class FormUx31RenderCompletenessTest(unittest.TestCase):
         self.assertIn('data-mode-link="quick"', full)
         self.assertIn("返回快速创建", full)
 
-    def test_same_day_meeting_fields_use_native_business_group_without_new_visibility(self):
+    def test_same_day_meeting_fields_use_native_business_group_and_whitelisted_visibility(self):
         html = self._page("/settings")
         self.assertIn('data-secondary-group="business-travel"', html)
         self.assertIn("商务类型、会议、团队、报销与发票设置；非商务行程可保持关闭。", html)
@@ -171,7 +171,8 @@ class FormUx31RenderCompletenessTest(unittest.TestCase):
             html.count('data-visibility-contract="'),
             html.count('data-visibility-contract="passenger-profile"')
             + html.count('data-visibility-contract="notification-email"')
-            + html.count('data-visibility-contract="business-scenario"'),
+            + html.count('data-visibility-contract="business-scenario"')
+            + html.count('data-visibility-contract="transfer-details"'),
         )
 
     def test_same_day_execution_fields_roundtrip_without_guessing(self):

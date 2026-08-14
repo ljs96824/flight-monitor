@@ -141,6 +141,47 @@ async function chooseNotificationMethod(value) {
   })()`);
 }
 
+async function chooseSelectValue(name, value) {
+  const targetIndex = await evaluate(`(() => {
+    const element = document.querySelector('[name="${name}"]');
+    return [...element.options].findIndex(option => option.value === ${JSON.stringify(value)});
+  })()`);
+  if (targetIndex < 0) throw new Error(`选项不存在: ${name}=${value}`);
+  await clickSelector(`[name="${name}"]`);
+  await pressKey("Home", "Home", 36);
+  for (let index = 0; index < targetIndex; index += 1) {
+    await pressKey("ArrowDown", "ArrowDown", 40);
+  }
+  await pressKey("Enter", "Enter", 13);
+  await waitFor(
+    `document.querySelector('[name="${name}"]').value === ${JSON.stringify(value)}`,
+    `${name}切换为${value}`,
+  );
+}
+
+async function transferDetailsState() {
+  return evaluate(`(() => {
+    const wrapper = document.querySelector('[data-visibility-contract="transfer-details"]');
+    if (!wrapper) throw new Error('missing transfer-details');
+    const controls = [...wrapper.querySelectorAll('input,select,textarea')];
+    const style = getComputedStyle(wrapper);
+    const rect = wrapper.getBoundingClientRect();
+    return {
+      hidden: wrapper.hidden,
+      visible: !wrapper.hidden && style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0,
+      controlCount: controls.length,
+      allDisabled: controls.length > 0 && controls.every(control => control.disabled),
+      noneDisabled: controls.length > 0 && controls.every(control => !control.disabled),
+    };
+  })()`);
+}
+
+async function setBooleanCheckboxByClick(name, checked) {
+  const current = await evaluate(`document.querySelector('[name="${name}"]').checked`);
+  if (current !== checked) await clickSelector(`[name="${name}"]`);
+  await waitFor(`document.querySelector('[name="${name}"]').checked === ${checked}`, `${name}=${checked}`);
+}
+
 await command("Runtime.enable");
 await command("Page.enable");
 await command("Log.enable");
@@ -290,6 +331,33 @@ if (!businessVisibility.shown || !businessVisibility.hidden || !businessVisibili
 }
 console.log("[UI smoke] 商务场景显隐=PASS 勾选商务→显示；取消商务→隐藏；DOM常驻");
 
+const initialTransfer = await transferDetailsState();
+await chooseSelectValue("transfer_policy", "direct_only");
+const directTransfer = await transferDetailsState();
+await chooseSelectValue("transfer_policy", "price_first");
+const allowedTransfer = await transferDetailsState();
+if (
+  !initialTransfer.visible || !initialTransfer.noneDisabled
+  || !directTransfer.hidden || !directTransfer.allDisabled
+  || !allowedTransfer.visible || !allowedTransfer.noneDisabled
+) {
+  throw new Error(`中转族显隐契约失败: ${JSON.stringify({initialTransfer, directTransfer, allowedTransfer})}`);
+}
+console.log("[UI smoke] 中转族显隐=PASS 必须直飞→隐藏禁用；允许中转→显示启用；DOM常驻");
+
+await chooseSelectValue("short_transfer_limit", "total_18");
+await setBooleanCheckboxByClick("accept_overnight_transfer", true);
+await setBooleanCheckboxByClick("accept_self_transfer", true);
+const transferInput = await evaluate(`(() => ({
+  policy: document.querySelector('[name="transfer_policy"]').value,
+  limit: document.querySelector('[name="short_transfer_limit"]').value,
+  overnight: document.querySelector('[name="accept_overnight_transfer"]').checked,
+  selfTransfer: document.querySelector('[name="accept_self_transfer"]').checked,
+}))()`);
+if (transferInput.policy !== "price_first" || transferInput.limit !== "total_18" || !transferInput.overnight || !transferInput.selfTransfer) {
+  throw new Error(`中转细节填写失败: ${JSON.stringify(transferInput)}`);
+}
+
 await clickSelector('#group-business-travel > summary');
 await waitFor("document.getElementById('group-business-travel').hasAttribute('open')", '商务出行展开');
 const businessBranch = await evaluate(`(() => {
@@ -404,14 +472,16 @@ const confirmation = await evaluate(`(() => {
     returnWindow: text.includes('18:00-21:00'),
     scenarios: text.includes('商务/会议 + 旅游'),
     companionConstraints: text.includes('需要尽量直飞 + 不接受红眼/凌晨到达'),
+    transfer: text.includes('中转设置：价格优先 · 总时长不超18小时 · 接受过夜中转 · 接受非联程自行中转'),
   };
 })()`);
-if (!confirmation.email || !confirmation.meetingStart || !confirmation.meetingEnd || !confirmation.outboundWindow || !confirmation.returnWindow || !confirmation.scenarios || !confirmation.companionConstraints) {
+if (!confirmation.email || !confirmation.meetingStart || !confirmation.meetingEnd || !confirmation.outboundWindow || !confirmation.returnWindow || !confirmation.scenarios || !confirmation.companionConstraints || !confirmation.transfer) {
   throw new Error(`完整页回读失败: ${JSON.stringify(confirmation)}`);
 }
 console.log("[UI smoke] 页2邮箱提交=PASS value=ux31@example.com");
 console.log("[UI smoke] 页2当天往返会议=PASS 10:30-17:00");
 console.log("[UI smoke] 分方向时间窗回读=PASS 去程06:30-08:30 返程18:00-21:00");
+console.log("[UI smoke] 中转细节回读=PASS 价格优先+总时长18小时+过夜+自行中转");
 
 await navigate("/settings?edit=1");
 const editGroups = await evaluate(`(() => ({
@@ -419,8 +489,9 @@ const editGroups = await evaluate(`(() => ({
   feasibility: document.getElementById('group-feasibility')?.hasAttribute('open') || false,
   customTime: document.querySelector('[data-time-window-group="custom"]')?.hasAttribute('open') || false,
   directionalTime: document.querySelector('[data-time-window-group="directional"]')?.hasAttribute('open') || false,
+  transferDetails: document.querySelector('[data-visibility-contract="transfer-details"]')?.hidden === false,
 }))()`);
-if (!editGroups.business || !editGroups.feasibility || !editGroups.customTime || !editGroups.directionalTime) {
+if (!editGroups.business || !editGroups.feasibility || !editGroups.customTime || !editGroups.directionalTime || !editGroups.transferDetails) {
   throw new Error(`编辑态次级组未自动展开: ${JSON.stringify(editGroups)}`);
 }
 console.log("[UI smoke] 编辑态details自动展开=PASS 商务出行+可行性参数+分层时间窗");
@@ -435,6 +506,58 @@ await assertPersistedCheckboxValues(
   "页2同行约束",
 );
 console.log("[UI smoke] 多选POST回读=PASS getlist双值 页1+页2");
+
+
+await navigate("/settings");
+await chooseSelectValue("transfer_policy", "direct_only");
+const hiddenBeforeSubmit = await transferDetailsState();
+if (!hiddenBeforeSubmit.hidden || !hiddenBeforeSubmit.allDisabled) {
+  throw new Error(`直飞隐藏态提交前契约失败: ${JSON.stringify(hiddenBeforeSubmit)}`);
+}
+await chooseSelectValue("notification_method", "pushplus");
+await evaluate(`(() => {
+  const set = (name, value) => {
+    const element = document.querySelector('[name="' + name + '"]');
+    if (!element) throw new Error('missing ' + name);
+    element.value = value;
+    element.dispatchEvent(new Event('input', {bubbles:true}));
+    element.dispatchEvent(new Event('change', {bubbles:true}));
+  };
+  set('origin_select', '上海');
+  set('destination', '北京');
+  set('depart_date', '${iso(depart)}');
+  set('round_trip', 'true');
+  set('return_date', '${iso(returned)}');
+  document.querySelector('form[data-page-mode="full"]').requestSubmit();
+  return true;
+})()`);
+await waitFor("location.pathname === '/success'", "直飞隐藏态提交确认", 15000);
+const hiddenConfirmation = await evaluate(`(() => {
+  const text = document.body.textContent;
+  return {
+    directOnly: text.includes('中转设置：必须直飞'),
+    noStaleDetails: !text.includes('总时长不超18小时') && !text.includes('接受过夜中转') && !text.includes('接受非联程自行中转'),
+  };
+})()`);
+if (!hiddenConfirmation.directOnly || !hiddenConfirmation.noStaleDetails) {
+  throw new Error(`中转隐藏提交确认失败: ${JSON.stringify(hiddenConfirmation)}`);
+}
+await navigate("/settings?edit=2");
+const hiddenPersisted = await evaluate(`(() => {
+  const wrapper = document.querySelector('[data-visibility-contract="transfer-details"]');
+  return {
+    policy: document.querySelector('[name="transfer_policy"]').value,
+    hidden: wrapper.hidden,
+    allDisabled: [...wrapper.querySelectorAll('input,select,textarea')].every(control => control.disabled),
+    limit: document.querySelector('[name="short_transfer_limit"]').value,
+    overnight: document.querySelector('[name="accept_overnight_transfer"]').checked,
+    selfTransfer: document.querySelector('[name="accept_self_transfer"]').checked,
+  };
+})()`);
+if (hiddenPersisted.policy !== 'direct_only' || !hiddenPersisted.hidden || !hiddenPersisted.allDisabled || hiddenPersisted.limit !== 'extra_6' || hiddenPersisted.overnight || hiddenPersisted.selfTransfer) {
+  throw new Error(`中转隐藏提交默认回填失败: ${JSON.stringify(hiddenPersisted)}`);
+}
+console.log("[UI smoke] 中转隐藏提交默认=PASS 直飞态不提交细节；服务端回填extra_6/false/false");
 
 await sleep(350);
 if (browserErrors.length) throw new Error(`浏览器错误: ${browserErrors.join(' | ')}`);

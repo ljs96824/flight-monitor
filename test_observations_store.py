@@ -7,6 +7,15 @@ from unittest.mock import patch
 from contextlib import closing, redirect_stdout
 from io import StringIO
 
+DUAL_SOURCE_PROFILE = {
+    "sources": [
+        {"name": "juhe", "role": "primary", "weight": 1.0},
+        {"name": "hasdata", "role": "cross_check", "weight": 0.6},
+    ],
+    "query": {},
+}
+
+
 
 class ObservationSource:
     def __init__(self, name, price):
@@ -174,12 +183,13 @@ class ObservationsStoreTest(unittest.TestCase):
 
             set_current_round("round-gc", db_path=db_path)
             self.addCleanup(clear_current_round)
-            result = aggregator.collect(
-                "PVG",
-                "HKG",
-                "2099-12-28",
-                route_type="greater_china",
-            )
+            with patch(
+                "sources.aggregator.get_source_profile",
+                return_value=DUAL_SOURCE_PROFILE,
+            ):
+                result = aggregator.collect(
+                    "PVG", "HKG", "2099-12-28", route_type="greater_china"
+                )
 
             self.assertEqual(result["source_stats"]["after_dedup"], 1)
             with closing(sqlite3.connect(db_path)) as conn, conn:

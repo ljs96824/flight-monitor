@@ -79,15 +79,15 @@ class SourceProfilesTest(unittest.TestCase):
         self.assertEqual([source.name for source in enrichment_sources], ["duffel"])
         self.assertEqual(search_sources[0].query_overrides["stops"], "two_stops_or_fewer")
 
-    def test_greater_china_profile_uses_hasdata_then_juhe_search_sources(self):
+    def test_greater_china_profile_uses_juhe_search_and_duffel_enrichment(self):
         with patch.dict(sys.modules, self.fake_modules):
             with patch.dict(os.environ, self.env, clear=True):
                 search_sources, enrichment_sources = build_default_sources(
                     "PVG", "HKG", route_type="greater_china"
                 )
 
-        self.assertEqual([source.name for source in search_sources], ["juhe", "hasdata"])
-        self.assertEqual([source.role for source in search_sources], ["primary", "cross_check"])
+        self.assertEqual([source.name for source in search_sources], ["juhe"])
+        self.assertEqual([source.role for source in search_sources], ["primary"])
         self.assertEqual([source.name for source in enrichment_sources], ["duffel"])
         self.assertEqual(search_sources[0].query_overrides["stops"], "nonstop_preferred")
 
@@ -145,7 +145,7 @@ class SourceProfilesTest(unittest.TestCase):
 
         self.assertEqual([source.name for source in domestic], ["juhe"])
         self.assertEqual([source.name for source in international], ["juhe"])
-        self.assertEqual([source.name for source in greater_china], ["juhe", "hasdata"])
+        self.assertEqual([source.name for source in greater_china], ["juhe"])
 
 
 if __name__ == "__main__":

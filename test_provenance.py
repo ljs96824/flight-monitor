@@ -712,7 +712,7 @@ class ProvenanceTest(unittest.TestCase):
         )
         self.assertEqual(
             expected_search_sources("greater_china"),
-            {"hasdata", "juhe"},
+            {"juhe"},
         )
         with self.assertRaises(KeyError):
             build_envelope(

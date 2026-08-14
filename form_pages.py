@@ -80,7 +80,14 @@ SECONDARY_CONCEPT_NAMES = frozenset(
     for concept_name in group["concept_names"]
 )
 
-VISIBILITY_CONTRACTS = frozenset({"passenger-profile", "notification-email", "business-scenario"})
+VISIBILITY_CONTRACTS = frozenset(
+    {
+        "passenger-profile",
+        "notification-email",
+        "business-scenario",
+        "transfer-details",
+    }
+)
 
 ORIGIN_OPTIONS = (
     ("上海", "上海（浦东PVG + 虹桥SHA）"),
@@ -522,7 +529,13 @@ def _field_spec(name: str, values: Mapping, *, page_mode: str) -> dict:
     }
 
 
-def _concept_spec(concept_name: str, concept: Mapping, values: Mapping) -> dict:
+def _concept_spec(
+    concept_name: str,
+    concept: Mapping,
+    values: Mapping,
+    *,
+    editing: bool = False,
+) -> dict:
     fields = [_field_spec(name, values, page_mode="full") for name in concept["fields"]]
     visible = [field for field in fields if field["type"] != "hidden"]
     hidden = [field for field in fields if field["type"] == "hidden"]
@@ -551,6 +564,32 @@ def _concept_spec(concept_name: str, concept: Mapping, values: Mapping) -> dict:
         result["directional_window_open"] = any(
             field["value"].strip() for field in result["directional_window_fields"]
         )
+    if concept_name == "transfer":
+        fields_by_name = {field["name"]: field for field in visible}
+        detail_names = (
+            "short_transfer_limit",
+            "accept_overnight_transfer",
+            "accept_self_transfer",
+        )
+        result["fields"] = [fields_by_name["transfer_policy"]]
+        result["transfer_detail_fields"] = [
+            fields_by_name[name] for name in detail_names
+        ]
+        detail_nondefault = any(
+            _normalized_group_value(name, values.get(name, DEFAULTS.get(name, "")))
+            != _normalized_group_value(
+                name,
+                DEFAULTS.get(name, False if name in BOOLEAN_FIELDS else ""),
+            )
+            for name in detail_names
+        )
+        policy_allows_transfer = (
+            str(values.get("transfer_policy") or DEFAULTS["transfer_policy"])
+            != "direct_only"
+        )
+        result["transfer_details_initial_visible"] = policy_allows_transfer or (
+            editing and detail_nondefault
+        )
     if hidden:
         result["hidden_fields"] = hidden
     return result
@@ -574,14 +613,14 @@ def _secondary_group_has_nondefault(group: Mapping, values: Mapping) -> bool:
     return False
 
 
-def _full_sections(values: Mapping) -> list[dict]:
+def _full_sections(values: Mapping, *, editing: bool) -> list[dict]:
     sections = []
     for section_id in SECTION_IDS:
         concepts = []
         for concept_name, concept in CONCEPTS.items():
             if concept["station_id"] != section_id or concept_name in SECONDARY_CONCEPT_NAMES:
                 continue
-            concepts.append(_concept_spec(concept_name, concept, values))
+            concepts.append(_concept_spec(concept_name, concept, values, editing=editing))
         sections.append(
             {
                 "id": section_id,
@@ -606,7 +645,7 @@ def _secondary_groups(values: Mapping, *, editing: bool) -> list[dict]:
             {
                 **group,
                 "concepts": [
-                    _concept_spec(concept_name, CONCEPTS[concept_name], values)
+                    _concept_spec(concept_name, CONCEPTS[concept_name], values, editing=editing)
                     for concept_name in group["concept_names"]
                 ],
                 "visibility": "business-scenario" if is_business else "",
@@ -642,7 +681,11 @@ def build_form_page_context(page_mode: str, values=None, *, edit_index=None) -> 
         "mode": page_mode,
         "title": "快速创建监控" if page_mode == "quick" else "完整设置",
         "groups": _quick_groups(data) if page_mode == "quick" else [],
-        "sections": _full_sections(data) if page_mode == "full" else [],
+        "sections": (
+            _full_sections(data, editing=edit_index is not None)
+            if page_mode == "full"
+            else []
+        ),
         "secondary_groups": (
             _secondary_groups(data, editing=edit_index is not None)
             if page_mode == "full"
@@ -836,6 +879,16 @@ FORM_PAGE_TEMPLATE = r"""
         <legend>{{ concept.title }}</legend>
         <div class="field-grid">
           {% for field in concept.fields %}{{ render_field(field) }}{% endfor %}
+          {% if concept.name == 'transfer' %}
+          <div class="field-wide conditional-block" data-visibility-contract="transfer-details"
+               data-transfer-initial-visible="{{ 'true' if concept.transfer_details_initial_visible else 'false' }}"
+               {% if not concept.transfer_details_initial_visible %} hidden{% endif %}>
+            <div class="field-grid">
+              {% for field in concept.transfer_detail_fields %}{{ render_field(field) }}{% endfor %}
+            </div>
+            <p class="hint">仅在允许中转时生效；必须直飞时这些字段不提交，由服务端补回默认。</p>
+          </div>
+          {% endif %}
           {% if concept.name == 'time' %}
           <details class="time-window-details" data-time-window-group="custom"{% if concept.custom_window_open %} open{% endif %}>
             <summary>自定义时间窗（可选，填写即覆盖上方偏好，留空不生效）</summary>
@@ -1099,6 +1152,18 @@ FORM_PAGE_TEMPLATE = r"""
           element.hidden = !enabled;
         });
       }
+      function updateTransferVisibility(preserveInitial = false) {
+        const allowsTransfer = scalar('transfer_policy') !== 'direct_only';
+        document.querySelectorAll('[data-visibility-contract="transfer-details"]').forEach(element => {
+          const preserveSavedDetails = preserveInitial && element.dataset.transferInitialVisible === 'true';
+          const visible = allowsTransfer || preserveSavedDetails;
+          element.hidden = !visible;
+          element.querySelectorAll('input,select,textarea').forEach(control => {
+            control.disabled = !visible;
+          });
+        });
+      }
+
       function scheduleSummary() {
         if (pageMode !== 'full') return;
         window.clearTimeout(summaryTimer);
@@ -1125,6 +1190,7 @@ FORM_PAGE_TEMPLATE = r"""
         element.addEventListener('change', updateBusinessVisibility);
       });
       field('notification_method')?.addEventListener('change', updateEmailVisibility);
+      field('transfer_policy')?.addEventListener('change', () => updateTransferVisibility(false));
       form.addEventListener('input', scheduleSummary);
       form.addEventListener('change', scheduleSummary);
       form.addEventListener('submit', event => {
@@ -1139,6 +1205,7 @@ FORM_PAGE_TEMPLATE = r"""
       updateLocations();
       updatePassengerProfile();
       updateEmailVisibility();
+      updateTransferVisibility(true);
       scheduleSummary();
     })();
   </script>

@@ -237,7 +237,7 @@ class TCurveTest(unittest.TestCase):
 
         self.assertEqual(expected_search_sources("domestic"), {"juhe"})
         self.assertEqual(expected_search_sources("international"), {"juhe"})
-        self.assertEqual(expected_search_sources("greater_china"), {"hasdata", "juhe"})
+        self.assertEqual(expected_search_sources("greater_china"), {"juhe"})
 
     def test_notification_curve_omits_raw_daily_cells(self):
         from tcurve import build_notification_tcurve
