@@ -1,5 +1,7 @@
+import json
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -17,6 +19,26 @@ class CountingSource:
                 {
                     "flight_combo": f"{origin}{dest}{date_str}{cabin_class}",
                     "price": 100,
+                }
+            ],
+            "source": self.name,
+        }
+
+class AlternateCountingSource:
+    name = "fake"
+
+    def __init__(self):
+        self.calls = []
+
+    def fetch(self, origin, dest, date_str, cabin_class="economy"):
+        self.calls.append((origin, dest, date_str, cabin_class))
+        return {
+            "flights": [
+                {
+                    "flight_combo": "ALT1",
+                    "price": 200,
+                    "departure_time": f"{date_str} 08:00",
+                    "arrival_time": f"{date_str} 10:00",
                 }
             ],
             "source": self.name,
@@ -205,6 +227,61 @@ class RequestCacheTest(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual((first_status, second_status), ("fresh", "cache"))
         self.assertEqual(len(source.calls), 1)
+
+    def test_persistent_cache_rejects_different_source_implementation_with_same_name(self):
+        from request_cache import cached_fetch, reset_request_cache
+
+        first_source = CountingSource()
+        cached_fetch(first_source, "PVG", "KIX", "2099-10-01")
+        reset_request_cache()
+
+        second_source = AlternateCountingSource()
+        result, status = cached_fetch(
+            second_source,
+            "PVG",
+            "KIX",
+            "2099-10-01",
+            include_cache_status=True,
+        )
+
+        self.assertEqual(status, "fresh")
+        self.assertEqual(len(second_source.calls), 1)
+        self.assertEqual(result["flights"][0]["flight_combo"], "ALT1")
+
+    def test_legacy_listing_cache_without_complete_flight_details_is_rejected(self):
+        from request_cache import _cache_path, cache_key, cached_fetch
+
+        source = AlternateCountingSource()
+        source.name = "juhe"
+        key = cache_key(source, "PVG", "KIX", "2099-10-01")
+        path = _cache_path(key)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "fetched_at": datetime.now().isoformat(timespec="seconds"),
+                    "key": list(key),
+                    "result": {
+                        "source_status": "success",
+                        "flights": [{"flight_combo": "TEST1", "price": 100}],
+                    },
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        result, status = cached_fetch(
+            source,
+            "PVG",
+            "KIX",
+            "2099-10-01",
+            include_cache_status=True,
+        )
+
+        self.assertEqual(status, "fresh")
+        self.assertEqual(len(source.calls), 1)
+        self.assertEqual(result["flights"][0]["flight_combo"], "ALT1")
 
     def test_same_request_reuses_in_memory_result(self):
         from request_cache import cached_fetch, reset_request_cache

@@ -8963,6 +8963,23 @@ def _no_primary_plan_state(payload: dict) -> bool:
     return not _has_primary_plans(payload)
 
 
+def _mixed_cabin_unavailable_text(payload: dict) -> str:
+    mixed = payload.get("mixed_cabin")
+    if not isinstance(mixed, dict) or not mixed:
+        return ""
+    matching = mixed.get("matching")
+    if not isinstance(matching, dict) or not matching:
+        return ""
+    stats = matching.get("stats") or {}
+    if int(stats.get("candidates") or 0) != 0:
+        return ""
+    reason = str(
+        matching.get("economy_candidate_reason")
+        or "本轮未形成可配对的去返经济舱组合"
+    ).strip()
+    return f"经济舱候选为空(原因={reason}),混舱计价不可用"
+
+
 def _no_primary_cause_key(text: str | None) -> str:
     text = str(text or "")
     if "【去程时间】" in text or "去程时间" in text or "outbound_time" in text:
@@ -9656,6 +9673,7 @@ def render_pushplus(payload: dict) -> str:
         route = html.escape(str(payload.get("route") or "航班监控"))
         reason_text = _no_primary_reason(payload)
         reason = html.escape(reason_text)
+        mixed_notice = _mixed_cabin_unavailable_text(payload)
         max_line = _no_primary_max_bottleneck_text(payload)
         alt_labels = _alternative_labels(alternatives)
         alt_text = f"{len(alternatives[:3])}个"
@@ -9670,6 +9688,7 @@ def render_pushplus(payload: dict) -> str:
             "",
             "当前判断:❌ 未找到完全符合条件的方案",
             f"主因:{reason}",
+            f"分舱报价:{html.escape(mixed_notice)}" if mixed_notice else "",
             f"价格:{html.escape(price_hint)}" if price_hint else "",
             html.escape(max_line) if max_line else "",
             f"可用备选:{alt_text}",
@@ -11150,9 +11169,11 @@ def _email_action_panel_body(
             alt_text = "暂无可展示备选"
         price_hint = _candidate_price_summary_text(payload)
         max_line = _no_primary_max_bottleneck_text(payload)
+        mixed_notice = _mixed_cabin_unavailable_text(payload)
         blocks = [
             "<div style='font-weight:600;color:#b91c1c;'>当前判断:❌ 未找到完全符合条件的方案</div>",
             f"<div><strong>主因:</strong>{html.escape(reason)}</div>",
+            f"<div><strong>分舱报价:</strong>{html.escape(mixed_notice)}</div>" if mixed_notice else "",
             f"<div><strong>价格:</strong>{html.escape(price_hint)}</div>" if price_hint else "",
             "<div style='margin:8px 0;border-top:1px solid #e5e7eb;'></div>",
             f"<div style='color:#666;font-size:12px;'>{html.escape(max_line)}</div>" if max_line else "",

@@ -430,6 +430,64 @@ class MixedCabinAnalyzerIntegrationTest(unittest.TestCase):
         self.assertEqual(result["budget_price_compare"], 40416)
         self.assertEqual(result["mixed_cabin_matching"]["stats"], {"candidates": 1, "full": 1, "partial": 0})
 
+    def test_roundtrip_seam_treats_missing_cabin_as_economy_and_preserves_candidates(self):
+        from analyzer import analyze_round_trip
+
+        outbound = self._analysis("MU225", 3000, 5683)
+        outbound_second = self._analysis("JL51", 3100, 5900)
+        return_leg = self._analysis("JL891", 3200, 6000)
+        first_economy = dict(outbound["economy_recommendations"][0])
+        second_economy = dict(outbound_second["economy_recommendations"][0])
+        first_economy.pop("cabin_class", None)
+        second_economy["cabin_class"] = None
+        outbound["economy_recommendations"] = [first_economy, second_economy]
+        outbound["all_flights"] = [first_economy, second_economy]
+        outbound["business_flights"] = [
+            outbound["business_flights"][0],
+            outbound_second["business_flights"][0],
+        ]
+
+        result = analyze_round_trip(
+            outbound,
+            return_leg,
+            target_price=80000,
+            max_budget=90000,
+            emit_diagnostics=False,
+        )
+
+        self.assertEqual(result["mixed_cabin_matching"]["stats"]["candidates"], 2)
+        self.assertEqual(result["mixed_cabin_matching"]["stats"]["full"], 2)
+
+    def test_roundtrip_empty_economy_pool_carries_a_specific_reason(self):
+        from analyzer import analyze_round_trip
+
+        outbound = self._analysis("MU225", 3000, 5683)
+        outbound.update(
+            {
+                "error": "no_economy_candidates",
+                "economy_recommendations": [],
+                "all_flights": [],
+                "reference_flights": [
+                    {"flight_combo": "TEST1", "price": 100, "reference_only": True}
+                ],
+                "total_reference_options": 1,
+            }
+        )
+        result = analyze_round_trip(
+            outbound,
+            self._analysis("JL891", 3200, 6000),
+            target_price=80000,
+            max_budget=90000,
+            emit_diagnostics=False,
+        )
+
+        matching = result["mixed_cabin_matching"]
+        self.assertEqual(matching["stats"]["candidates"], 0)
+        self.assertEqual(
+            matching["economy_candidate_reason"],
+            "去程经济舱记录缺少完整航段信息",
+        )
+
 
 class MixedCabinNotifierTest(unittest.TestCase):
     def test_mixed_cabin_without_business_match_never_falls_back_to_economy_combo(self):
@@ -451,6 +509,49 @@ class MixedCabinNotifierTest(unittest.TestCase):
         }
 
         self.assertEqual(_round_trip_combinations(analysis_result), [])
+
+    def test_empty_economy_candidates_are_disclosed_in_all_no_plan_channels(self):
+        from notifier import render_detail_html, render_email, render_pushplus
+
+        expected = "经济舱候选为空(原因=去程经济舱记录缺少完整航段信息),混舱计价不可用"
+        payload = {
+            "push_type": "无符合方案",
+            "route": "上海 → 大阪",
+            "recommended_plans": [],
+            "same_day_alternatives": [],
+            "mixed_cabin": {
+                "matching": {
+                    "stats": {"candidates": 0, "full": 0, "partial": 0},
+                    "economy_candidate_reason": "去程经济舱记录缺少完整航段信息",
+                }
+            },
+        }
+
+        push = render_pushplus(payload)
+        _subject, email_html = render_email(payload)
+        detail_html = render_detail_html(payload)
+
+        self.assertIn(expected, push)
+        self.assertIn(expected, email_html)
+        self.assertIn(expected, detail_html)
+
+    def test_non_mixed_no_plan_never_shows_mixed_cabin_unavailable_notice(self):
+        from notifier import render_detail_html, render_email, render_pushplus
+
+        payload = {
+            "push_type": "无符合方案",
+            "route": "上海 → 北京",
+            "recommended_plans": [],
+            "same_day_alternatives": [],
+        }
+
+        push = render_pushplus(payload)
+        _subject, email_html = render_email(payload)
+        detail_html = render_detail_html(payload)
+
+        for rendered in (push, email_html, detail_html):
+            self.assertNotIn("经济舱候选为空", rendered)
+            self.assertNotIn("混舱计价不可用", rendered)
 
     def test_payload_plan_preserves_mixed_tree_and_disclosure(self):
         from mixed_cabin import match_mixed_cabin_combinations

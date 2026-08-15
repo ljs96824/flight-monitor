@@ -9526,7 +9526,18 @@ def analyze_all_flights(
             if (flight.get("cabin_class") or "economy") == "economy"
         ]
         if not usable_flights:
-            return {"error": "no_economy_candidates", "business_flights": mixed_business_flights}
+            economy_reason = (
+                "经济舱记录缺少完整航段信息"
+                if detail_reference_flights
+                else "无可用经济舱报价"
+            )
+            return {
+                "error": "no_economy_candidates",
+                "business_flights": mixed_business_flights,
+                "reference_flights": detail_reference_flights,
+                "total_reference_options": len(detail_reference_flights),
+                "economy_candidate_reason": economy_reason,
+            }
     roundtrip_purchase_context = bool(
         merged_preferences.get("round_trip")
         or merged_preferences.get("same_day_round_trip")
@@ -9938,6 +9949,39 @@ def analyze_all_flights(
         "excluded_flights": _excluded_flight_summary(excluded_flights),
         "preference_summary": preference_summary,
     }
+
+
+def _mixed_economy_leg_reason(analysis: dict, leg_label: str) -> str:
+    explicit = str(analysis.get("economy_candidate_reason") or "").strip()
+    if explicit:
+        return explicit if explicit.startswith(leg_label) else f"{leg_label}{explicit}"
+    reference_count = int(
+        analysis.get("total_reference_options")
+        or len(analysis.get("reference_flights") or [])
+        or 0
+    )
+    if reference_count:
+        return f"{leg_label}经济舱记录缺少完整航段信息"
+    error = str(analysis.get("error") or "").strip()
+    if error == "no_valid_prices":
+        return f"{leg_label}经济舱未获取到有效价格"
+    if error in {"no_actionable_flights", "no_economy_candidates"}:
+        return f"{leg_label}无可执行经济舱候选"
+    return f"{leg_label}无可用经济舱候选"
+
+
+def _mixed_economy_candidate_reason(
+    outbound_analysis: dict,
+    return_analysis: dict,
+    outbound_top: list[dict],
+    return_top: list[dict],
+) -> str:
+    reasons = []
+    if not outbound_top:
+        reasons.append(_mixed_economy_leg_reason(outbound_analysis, "去程"))
+    if not return_top:
+        reasons.append(_mixed_economy_leg_reason(return_analysis, "返程"))
+    return "；".join(reasons) or "本轮未形成可配对的去返经济舱组合"
 
 
 def _top_flights_for_round_trip(analysis: dict, limit: int = 3) -> list[dict]:
@@ -11242,6 +11286,19 @@ def analyze_round_trip(
             route_type=pricing_route_type,
         )
         stats = mixed_cabin_matching.get("stats") or {}
+        mixed_cabin_matching["economy_candidate_counts"] = {
+            "outbound": len(outbound_top),
+            "return": len(return_top),
+        }
+        if int(stats.get("candidates") or 0) == 0:
+            mixed_cabin_matching["economy_candidate_reason"] = (
+                _mixed_economy_candidate_reason(
+                    outbound_analysis,
+                    return_analysis,
+                    outbound_top,
+                    return_top,
+                )
+            )
         safe_log(
             "[混舱匹配] "
             f"候选={stats.get('candidates', 0)} "

@@ -91,10 +91,21 @@ def fresh_source_builder(origin, dest, route_type=None):
 
 class BasketCollectTest(unittest.TestCase):
     def setUp(self):
+        from request_cache import reset_for_tests
+
+        self._request_cache_tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        reset_for_tests(Path(self._request_cache_tmp.name) / self._testMethodName)
+        self.addCleanup(self._cleanup_request_cache)
         FakeAggregator.instances.clear()
         FakeAggregator.collect_calls.clear()
         FakeSource.calls.clear()
         FreshObservationSource.calls.clear()
+
+    def _cleanup_request_cache(self):
+        from request_cache import reset_for_tests
+
+        reset_for_tests(None)
+        self._request_cache_tmp.cleanup()
 
     def test_initial_queue_dates_are_fixed_after_first_creation(self):
         from basket_collect import load_or_create_state

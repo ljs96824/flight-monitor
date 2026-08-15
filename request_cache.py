@@ -88,6 +88,11 @@ def _source_name(source) -> str:
     return str(getattr(source, "name", type(source).__name__)).lower()
 
 
+def _source_producer(source) -> str:
+    source_type = type(source)
+    return f"{source_type.__module__}.{source_type.__qualname__}"
+
+
 def cache_key(source, origin, dest, date_str, passengers=None, cabin_class="economy") -> tuple:
     request_passengers = (
         passengers
@@ -343,11 +348,65 @@ def _read_persistent_payload(key: tuple, cache_dir: Path | None = None) -> dict 
     return payload if isinstance(payload, dict) else None
 
 
-def _read_persistent(key: tuple, ttl_seconds: int, cache_dir: Path | None = None):
+def _cached_flight_has_actionable_detail(flight: dict) -> bool:
+    segments = flight.get("segments") or []
+    if not isinstance(segments, (list, tuple)) or not segments:
+        return False
+    first = segments[0] if isinstance(segments[0], dict) else {}
+    last = segments[-1] if isinstance(segments[-1], dict) else {}
+    departure_time = (
+        flight.get("departure_time")
+        or flight.get("dep_time")
+        or first.get("departure_time")
+        or first.get("dep_time")
+    )
+    arrival_time = (
+        flight.get("arrival_time")
+        or flight.get("arr_time")
+        or last.get("arrival_time")
+        or last.get("arr_time")
+    )
+    combo = normalize_combo(flight.get("flight_combo") or flight.get("flight_no"))
+    return bool(combo and departure_time and arrival_time)
+
+
+def _persistent_payload_matches_source(payload: dict, key: tuple, source) -> bool:
+    if source is None:
+        return True
+    expected = _source_producer(source)
+    cached = str(payload.get("producer_class") or "").strip()
+    if cached:
+        if cached == expected:
+            return True
+        safe_log(
+            f"[缓存失效] {key[:4]} 缓存生产者={cached} 当前生产者={expected},不复用"
+        )
+        return False
+    if key[0] not in LISTING_OBSERVATION_SOURCES:
+        return True
+    result = payload.get("result")
+    flights = _positive_price_flights(result)
+    if any(_cached_flight_has_actionable_detail(flight) for flight in flights):
+        return True
+    safe_log(
+        f"[缓存失效] {key[:4]} 旧缓存缺生产者标识且无完整航段信息,不复用"
+    )
+    return False
+
+
+def _read_persistent(
+    key: tuple,
+    ttl_seconds: int,
+    cache_dir: Path | None = None,
+    *,
+    source=None,
+):
     payload = _read_persistent_payload(key, cache_dir)
     if payload is None:
         return None
     if not _fresh(payload.get("fetched_at"), ttl_seconds):
+        return None
+    if not _persistent_payload_matches_source(payload, key, source):
         return None
     result = payload.get("result")
     if _result_cache_status(result) != "persistent":
@@ -389,6 +448,7 @@ def _rebuild_panel_result(
     key: tuple,
     snapshot: dict,
     *,
+    source,
     cache_dir: Path | None = None,
     freshness_hours: float,
 ) -> dict | None:
@@ -398,6 +458,8 @@ def _rebuild_panel_result(
         persisted.get("fetched_at"),
         max(1, int(float(freshness_hours) * 60 * 60)),
     ):
+        return None
+    if not _persistent_payload_matches_source(persisted, key, source):
         return None
     result = persisted.get("result")
     if not isinstance(result, dict):
@@ -462,6 +524,7 @@ def panel_reuse_result(
     return _rebuild_panel_result(
         key,
         snapshot,
+        source=source,
         cache_dir=cache_dir,
         freshness_hours=freshness_hours,
     )
@@ -486,7 +549,13 @@ def _request_is_panel_only(
     return "弹性日期" in reason_text or "低价日历" in reason_text
 
 
-def _write_persistent(key: tuple, result, cache_dir: Path | None = None) -> None:
+def _write_persistent(
+    key: tuple,
+    result,
+    cache_dir: Path | None = None,
+    *,
+    source=None,
+) -> None:
     path = _cache_path(key, cache_dir)
     disabled_key = str(path.parent)
     if disabled_key in _disabled_persistent_dirs:
@@ -494,6 +563,7 @@ def _write_persistent(key: tuple, result, cache_dir: Path | None = None) -> None
     payload = {
         "fetched_at": datetime.now().isoformat(timespec="seconds"),
         "key": list(key),
+        "producer_class": _source_producer(source) if source is not None else "",
         "result": result,
     }
     try:
@@ -750,7 +820,7 @@ def cached_fetch(
             return (cached_result, "cache") if include_cache_status else cached_result
 
         if persist:
-            persisted = _read_persistent(key, ttl_seconds, cache_dir)
+            persisted = _read_persistent(key, ttl_seconds, cache_dir, source=source)
             if persisted is not None:
                 _record_hit(source_name)
                 safe_log(f"[缓存命中] {key[:4]} 复用持久缓存,不重复调API")
@@ -844,7 +914,7 @@ def cached_fetch(
         if _current_stats_round_id:
             _resolved_request_keys_this_round.add(key)
         if persist:
-            _write_persistent(key, stored, cache_dir)
+            _write_persistent(key, stored, cache_dir, source=source)
     else:
         _store_round_only_result(key, stored, cache_status)
     fresh_result = copy.deepcopy(result)
