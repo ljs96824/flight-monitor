@@ -461,16 +461,21 @@ def get_lowest_price_history(
     constraint_fingerprint: str | None = None,
     *,
     include_metadata: bool = False,
+    since: str | None = None,
 ) -> list:
     """Get the lowest flight price for each recent collection snapshot."""
     init_db()
 
     with _connect() as connection:
         fingerprint_clause = ""
+        since_clause = ""
         parameters: list = [route, depart_date]
         if constraint_fingerprint is not None:
             fingerprint_clause = " AND constraint_fingerprint = ?"
             parameters.append(constraint_fingerprint)
+        if since:
+            since_clause = " AND snapshot_time > ?"
+            parameters.append(str(since))
         rows = connection.execute(
             f"""
             SELECT
@@ -480,6 +485,7 @@ def get_lowest_price_history(
             WHERE route = ?
               AND depart_date = ?
               {fingerprint_clause}
+              {since_clause}
               AND price IS NOT NULL
             ORDER BY snapshot_time DESC, id ASC
             """,
@@ -625,15 +631,21 @@ def get_roundtrip_price_history(
     return_date: str,
     limit: int = 14,
     constraint_fingerprint: str | None = None,
+    *,
+    since: str | None = None,
 ) -> list[dict]:
     """Get recent round-trip lowest-price snapshots."""
     init_db()
     with _connect() as connection:
         fingerprint_clause = ""
+        since_clause = ""
         parameters: list = [route, depart_date, return_date]
         if constraint_fingerprint is not None:
             fingerprint_clause = " AND constraint_fingerprint = ?"
             parameters.append(constraint_fingerprint)
+        if since:
+            since_clause = " AND snapshot_time > ?"
+            parameters.append(str(since))
         parameters.append(limit)
         rows = connection.execute(
             f"""
@@ -643,6 +655,7 @@ def get_roundtrip_price_history(
               AND depart_date = ?
               AND return_date = ?
               {fingerprint_clause}
+              {since_clause}
             ORDER BY snapshot_time DESC
             LIMIT ?
             """,
@@ -796,6 +809,73 @@ def get_last_push_snapshot(
     return dict(row) if row else None
 
 
+def get_constraint_epoch_boundary(
+    route: str,
+    depart_date: str,
+    return_date: str | None,
+    current_fingerprint: str | None,
+    *,
+    subscription_id: str | None = None,
+) -> str | None:
+    """返回本订阅最近一次不同约束指纹的已推送时间边界。"""
+    current = str(current_fingerprint or "").strip()
+    if not route or not depart_date or not current:
+        return None
+    init_db()
+    key = _last_push_key(route, depart_date, return_date, subscription_id)
+    with _connect() as connection:
+        rows = connection.execute(
+            """
+            SELECT pushed_at, constraint_fingerprint
+            FROM push_snapshots
+            WHERE subscription_key = ?
+            ORDER BY pushed_at DESC, id DESC
+            """,
+            (key,),
+        ).fetchall()
+    for row in rows:
+        previous = str(row["constraint_fingerprint"] or "").strip()
+        pushed_at = str(row["pushed_at"] or "").strip()
+        if previous and pushed_at and previous != current:
+            return pushed_at
+    return None
+
+
+def get_constraint_history_limit(
+    route: str,
+    depart_date: str,
+    return_date: str | None,
+    current_fingerprint: str | None,
+    *,
+    subscription_id: str | None = None,
+    default_limit: int = 14,
+) -> int:
+    """按本订阅连续约束口径限制历史样本数。"""
+    try:
+        limit = max(1, int(default_limit))
+    except (TypeError, ValueError):
+        limit = 14
+    current = str(current_fingerprint or "").strip()
+    if not current:
+        return limit
+    last_snapshot = get_last_push_snapshot(
+        route,
+        depart_date,
+        return_date,
+        subscription_id=subscription_id,
+    )
+    previous = str((last_snapshot or {}).get("constraint_fingerprint") or "").strip()
+    if not previous:
+        return limit
+    if previous != current:
+        return 1
+    try:
+        previous_n = int((last_snapshot or {}).get("constraint_sample_n") or 0)
+    except (TypeError, ValueError):
+        previous_n = 0
+    return min(limit, previous_n + 1) if previous_n > 0 else limit
+
+
 def save_push_snapshot(
     route: str,
     depart_date: str,
@@ -811,14 +891,16 @@ def save_push_snapshot(
     subscription_id: str | None = None,
 ) -> None:
     """Save one notification snapshot for comparing with the next push."""
-    if not route or not depart_date or price is None:
+    if not route or not depart_date:
         return
-    try:
-        price_value = float(price)
-    except (TypeError, ValueError):
-        return
-    if price_value <= 0:
-        return
+    price_value = None
+    if price is not None:
+        try:
+            price_value = float(price)
+        except (TypeError, ValueError):
+            return
+        if price_value <= 0:
+            return
 
     init_db()
     key = _last_push_key(route, depart_date, return_date, subscription_id)

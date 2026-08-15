@@ -341,6 +341,144 @@ class ConstraintFingerprintTest(unittest.TestCase):
         self.assertEqual(history[0]["total"], 13452)
         self.assertEqual(history[0]["sources"], ["juhe"])
 
+    def test_roundtrip_history_restarts_when_fingerprint_returns_after_other_regime(self):
+        fingerprint_a = "a" * 64
+        fingerprint_b = "b" * 64
+        subscription_id = "roundtrip-a-b-a"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "prices.db"
+            with patch.object(storage, "DB_PATH", db_path):
+                for observed_at, price, fingerprint in (
+                    ("2026-08-14T09:00:00", 10939, fingerprint_a),
+                    ("2026-08-14T17:00:00", 10939, fingerprint_a),
+                    ("2026-08-15T12:54:00", 10089, fingerprint_b),
+                    ("2026-08-15T15:13:45", 10917, fingerprint_a),
+                    ("2026-08-15T15:13:59", 10917, fingerprint_a),
+                    ("2026-08-15T17:07:00", 10917, fingerprint_a),
+                ):
+                    storage.save_roundtrip_snapshot(
+                        "上海-大阪",
+                        "2026-10-01",
+                        "2026-10-06",
+                        price / 2,
+                        price / 2,
+                        price,
+                        observed_at,
+                        constraint_fingerprint=fingerprint,
+                        sources=["juhe"],
+                    )
+                storage.save_push_snapshot(
+                    "上海-大阪",
+                    "2026-10-01",
+                    "2026-10-06",
+                    None,
+                    pushed_at="2026-08-15T12:54:00",
+                    push_type="无符合方案·备选参考",
+                    constraint_fingerprint=fingerprint_b,
+                    constraint_sample_n=1,
+                    subscription_id=subscription_id,
+                )
+                boundary = storage.get_constraint_epoch_boundary(
+                    "上海-大阪",
+                    "2026-10-01",
+                    "2026-10-06",
+                    fingerprint_a,
+                    subscription_id=subscription_id,
+                )
+                history_limit = storage.get_constraint_history_limit(
+                    "上海-大阪",
+                    "2026-10-01",
+                    "2026-10-06",
+                    fingerprint_a,
+                    subscription_id=subscription_id,
+                )
+                history = storage.get_roundtrip_price_history(
+                    "上海-大阪",
+                    "2026-10-01",
+                    "2026-10-06",
+                    history_limit,
+                    constraint_fingerprint=fingerprint_a,
+                    since=boundary,
+                )
+                storage.save_push_snapshot(
+                    "上海-大阪",
+                    "2026-10-01",
+                    "2026-10-06",
+                    10917,
+                    pushed_at="2026-08-15T17:07:10",
+                    constraint_fingerprint=fingerprint_a,
+                    constraint_sample_n=1,
+                    subscription_id=subscription_id,
+                )
+                next_history_limit = storage.get_constraint_history_limit(
+                    "上海-大阪",
+                    "2026-10-01",
+                    "2026-10-06",
+                    fingerprint_a,
+                    subscription_id=subscription_id,
+                )
+
+        self.assertEqual(boundary, "2026-08-15T12:54:00")
+        self.assertEqual(history_limit, 1)
+        self.assertEqual(next_history_limit, 2)
+        self.assertEqual([row["total"] for row in history], [10917])
+        self.assertEqual(
+            [row["constraint_fingerprint"] for row in history],
+            [fingerprint_a],
+        )
+
+    def test_oneway_history_restarts_when_fingerprint_returns_after_other_regime(self):
+        fingerprint_a = "a" * 64
+        fingerprint_b = "b" * 64
+        subscription_id = "oneway-a-b-a"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "prices.db"
+            with patch.object(storage, "DB_PATH", db_path), patch.object(
+                storage, "datetime"
+            ) as mocked_datetime:
+                for observed_at, price, fingerprint in (
+                    (datetime(2026, 8, 14, 9, 0, 0), 5000, fingerprint_a),
+                    (datetime(2026, 8, 15, 12, 54, 0), 7000, fingerprint_b),
+                    (datetime(2026, 8, 15, 17, 7, 0), 5100, fingerprint_a),
+                ):
+                    mocked_datetime.now.return_value = observed_at
+                    storage.save_flight_details(
+                        "PVG-KIX",
+                        "2026-10-01",
+                        [_flight(price)],
+                        constraint_fingerprint=fingerprint,
+                    )
+                storage.save_push_snapshot(
+                    "PVG-KIX",
+                    "2026-10-01",
+                    None,
+                    None,
+                    pushed_at="2026-08-15T12:54:00",
+                    push_type="无符合方案·备选参考",
+                    constraint_fingerprint=fingerprint_b,
+                    constraint_sample_n=1,
+                    subscription_id=subscription_id,
+                )
+                boundary = storage.get_constraint_epoch_boundary(
+                    "PVG-KIX",
+                    "2026-10-01",
+                    None,
+                    fingerprint_a,
+                    subscription_id=subscription_id,
+                )
+                history = storage.get_lowest_price_history(
+                    "PVG-KIX",
+                    "2026-10-01",
+                    14,
+                    constraint_fingerprint=fingerprint_a,
+                    include_metadata=True,
+                    since=boundary,
+                )
+
+        self.assertEqual(boundary, "2026-08-15T12:54:00")
+        self.assertEqual([row["price"] for row in history], [5100])
+        self.assertEqual(history[0]["constraint_fingerprint"], fingerprint_a)
+
     def test_push_snapshot_constraint_comparison_is_subscription_scoped(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir) / "prices.db"
@@ -377,6 +515,33 @@ class ConstraintFingerprintTest(unittest.TestCase):
 
         self.assertEqual(snapshot_a["constraint_fingerprint"], "a" * 64)
         self.assertEqual(snapshot_b["constraint_fingerprint"], "b" * 64)
+
+    def test_no_price_push_snapshot_keeps_constraint_fingerprint(self):
+        fingerprint = "b" * 64
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "prices.db"
+            with patch.object(storage, "DB_PATH", db_path):
+                storage.save_push_snapshot(
+                    "上海-大阪",
+                    "2026-10-01",
+                    "2026-10-06",
+                    None,
+                    push_type="无符合方案·备选参考",
+                    constraint_fingerprint=fingerprint,
+                    constraint_sample_n=1,
+                    subscription_id="no-primary-example",
+                )
+                snapshot = storage.get_last_push_snapshot(
+                    "上海-大阪",
+                    "2026-10-01",
+                    "2026-10-06",
+                    subscription_id="no-primary-example",
+                )
+
+        self.assertIsNotNone(snapshot)
+        self.assertIsNone(snapshot["price"])
+        self.assertEqual(snapshot["constraint_fingerprint"], fingerprint)
+        self.assertEqual(snapshot["constraint_sample_n"], 1)
 
     def test_zero_subscription_index_is_a_valid_snapshot_identity(self):
         self.assertEqual(
@@ -728,10 +893,11 @@ class ConstraintFingerprintTest(unittest.TestCase):
             },
         }
         previous_snapshot = {
-            "price": 7387,
+            "price": None,
             "constraint_fingerprint": previous_fp,
-            "constraint_sample_n": 14,
+            "constraint_sample_n": 1,
             "channels": '["hasdata", "juhe"]',
+            "push_type": "无符合方案·备选参考",
         }
         output = io.StringIO()
         with patch(
@@ -753,9 +919,10 @@ class ConstraintFingerprintTest(unittest.TestCase):
                 subscription=subscription,
             )
 
-        disclosure = "筛选条件已变更，旧条件样本(n=14)不再计入，同条件样本重新积累"
+        disclosure = "筛选条件已变更，旧条件样本(n=1)不再计入，同条件样本重新积累"
         self.assertEqual(payload["push_type"], "筛选条件已变更")
-        self.assertEqual(payload["price_signal"]["summary"].split("（n=")[0], disclosure)
+        self.assertIn(disclosure, payload["price_signal"]["summary"])
+        self.assertIn("同条件样本不足（当前n=1）", payload["price_signal"]["summary"])
         self.assertEqual(payload["trend_summary"], disclosure)
         self.assertFalse(payload["diff_from_last"]["comparable"])
         visible_history_text = " ".join(

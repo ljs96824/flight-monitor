@@ -34,6 +34,7 @@ from airlines import classify_itinerary, classify_segment
 from flight_combo_utils import normalize_combo
 from log_utils import safe_log
 from analyzer import (
+    MIN_SAMPLE_FOR_PRICE_SIGNAL,
     build_execution_advice,
     build_budget_gap,
     build_cabin_policy_summary,
@@ -7239,7 +7240,18 @@ def _apply_constraint_change_to_price_signal(
     if not change.get("changed"):
         return result
     result["label"] = "待积累"
-    result["summary"] = str(change.get("disclosure") or "同条件样本重新积累")
+    disclosure = str(change.get("disclosure") or "同条件样本重新积累")
+    try:
+        sample_n = int(result.get("sample_n") or 0)
+    except (TypeError, ValueError):
+        sample_n = 0
+    if sample_n < MIN_SAMPLE_FOR_PRICE_SIGNAL:
+        result["summary"] = (
+            f"{disclosure}；同条件样本不足（当前n={sample_n}），"
+            "继续积累中，暂不给出价格位置判断"
+        )
+    else:
+        result["summary"] = disclosure
     result["percentile"] = None
     result["constraint_change"] = dict(change)
     return result
@@ -12961,8 +12973,6 @@ def _no_primary_history_text(payload: dict, *, kind: str) -> str:
 
     signal = payload.get("price_signal") or {}
     sample_n = int(signal.get("sample_n") or len(payload.get("price_history") or []))
-    from analyzer import MIN_SAMPLE_FOR_PRICE_SIGNAL
-
     if sample_n < MIN_SAMPLE_FOR_PRICE_SIGNAL:
         return f"同条件样本不足(当前n={sample_n}),继续积累中,暂不给出价格{kind}判断"
     if kind == "走势":

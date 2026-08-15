@@ -72,6 +72,8 @@ from sources.aggregator import (
     route_type_for,
 )
 from storage import (
+    get_constraint_epoch_boundary,
+    get_constraint_history_limit,
     get_roundtrip_price_history,
     get_lowest_price_history,
     get_previous_snapshot_prices,
@@ -1725,6 +1727,33 @@ def process_subscription(
     round_id = collection_round_id or _make_round_id(sub)
     route = f"{sub['origin']}-{sub['destination']}"
     constraint_fp = constraint_fingerprint(sub)
+    history_return_date = None
+    if _as_bool(sub.get("round_trip", False)):
+        history_return_date = sub.get("return_date") or sub.get(
+            "hard_constraints", {}
+        ).get("return_date")
+    subscription_snapshot_id = _subscription_identifier(sub, route)
+    constraint_history_since = get_constraint_epoch_boundary(
+        route,
+        sub["depart_date"],
+        history_return_date,
+        constraint_fp,
+        subscription_id=subscription_snapshot_id,
+    )
+    constraint_history_limit = get_constraint_history_limit(
+        route,
+        sub["depart_date"],
+        history_return_date,
+        constraint_fp,
+        subscription_id=subscription_snapshot_id,
+        default_limit=14,
+    )
+    if constraint_history_since:
+        safe_log(
+            f"[约束桶] 订阅={subscription_snapshot_id} "
+            f"当前={constraint_fp[:8]} 序列起点>{constraint_history_since} "
+            f"样本上限={constraint_history_limit}"
+        )
     logging.info(f"开始处理 {route}")
     agg = None
     managed_plan_active = False
@@ -1865,9 +1894,10 @@ def process_subscription(
         lowest_price_history = get_lowest_price_history(
             route,
             sub["depart_date"],
-            limit=14,
+            limit=constraint_history_limit,
             constraint_fingerprint=constraint_fp,
             include_metadata=True,
+            since=constraint_history_since,
         )
         days_to_dept = (date.fromisoformat(sub["depart_date"]) - date.today()).days
         current_min_price = (
@@ -2202,8 +2232,9 @@ def process_subscription(
                     route,
                     sub["depart_date"],
                     return_date,
-                    14,
+                    constraint_history_limit,
                     constraint_fingerprint=constraint_fp,
+                    since=constraint_history_since,
                 )
                 roundtrip_current = snapshot_total
                 analysis["price_position"] = price_position_description(

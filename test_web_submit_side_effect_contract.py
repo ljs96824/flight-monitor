@@ -13,7 +13,6 @@ class WebSubmitSideEffectContractTest(unittest.TestCase):
 
     def test_successful_submit_saves_before_starting_background_collection(self):
         subscription = {
-            "_index": 72,
             "origin": "PVG",
             "destination": "KIX",
             "notification_goals": {
@@ -21,6 +20,7 @@ class WebSubmitSideEffectContractTest(unittest.TestCase):
                 "email": "user@example.com",
             },
         }
+        background_subscription = {**subscription, "_index": 72}
         lifecycle = Mock()
 
         with (
@@ -47,10 +47,10 @@ class WebSubmitSideEffectContractTest(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertTrue(response.headers["Location"].endswith("/success?index=72"))
         save_subscription.assert_called_once_with(subscription, 72)
-        start_background_collection.assert_called_once_with(subscription)
+        start_background_collection.assert_called_once_with(background_subscription)
         self.assertEqual(
             lifecycle.mock_calls,
-            [call.save(subscription, 72), call.start(subscription)],
+            [call.save(subscription, 72), call.start(background_subscription)],
         )
 
     def test_notification_dispatch_calls_only_channels_selected_by_method(self):

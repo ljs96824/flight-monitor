@@ -2256,7 +2256,7 @@ def subscribe():
         print(f"[表单] 订阅保存完成: index={index}")
 
         print("[表单] 开始触发后台采集")
-        start_background_collection(subscription)
+        start_background_collection({**subscription, "_index": index})
         print("[表单] 后台采集触发完成")
 
         return redirect(url_for("success", index=index))
