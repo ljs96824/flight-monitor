@@ -1,0 +1,18 @@
+{
+  "fixture_version": "economy_email_v1",
+  "renderer": "notifier.render_email",
+  "algorithm": "sha256",
+  "encoding": "utf-8",
+  "sha256": "1dd353d2b7bcafc02087957ccccb6661478e20472a22fb3e15dae6a56473ee6b",
+  "html_bytes": 53307,
+  "previous_local_sha256": "d3350c1b9fd1ec8374a7e10dbb3649446a09ad5a9a77b523d598c6ab48b65b12",
+  "frozen_date": "2026-08-15",
+  "reason": "脱敏入库",
+  "approved_by": "用户",
+  "redactions": {
+    "subscription_ids": 2,
+    "snapshot_ids": 1,
+    "pii_values": 3,
+    "tokens": 6
+  }
+}

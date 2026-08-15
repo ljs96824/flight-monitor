@@ -1,0 +1,5289 @@
+{
+  "push_type": "前后日期更便宜",
+  "route": "上海 → 大阪",
+  "subscription_id": "<SUBSCRIPTION_ID>",
+  "route_airports": "PVG/SHA → KIX/ITM",
+  "origin_airports_active": [
+    "PVG",
+    "SHA"
+  ],
+  "destination_airports_active": [
+    "KIX",
+    "ITM"
+  ],
+  "origin_airports": [
+    "PVG",
+    "SHA"
+  ],
+  "destination_airports": [
+    "KIX",
+    "ITM"
+  ],
+  "route_info": {
+    "origin_airports_active": [
+      "PVG",
+      "SHA"
+    ],
+    "destination_airports_active": [
+      "KIX",
+      "ITM"
+    ],
+    "origin_airports": [
+      "PVG",
+      "SHA"
+    ],
+    "destination_airports": [
+      "KIX",
+      "ITM"
+    ]
+  },
+  "depart_date": "2026-10-01",
+  "return_date": "2026-10-06",
+  "route_type": "international",
+  "invoice_preferences": {
+    "invoice_needed": false,
+    "invoice_special_vat": false,
+    "invoice_cabin_limit": false,
+    "cabin_policy": "economy_only"
+  },
+  "trip_type": "round_trip",
+  "is_roundtrip": true,
+  "current_price": 42983.0,
+  "display_price": 42983.0,
+  "transaction_price": 42983.0,
+  "verify_price": 8000.0,
+  "ideal_price": 6000,
+  "max_price": 8000,
+  "budget_scope": "per_person",
+  "max_budget_scope": "per_person",
+  "target_price_scope": "per_person",
+  "budget_compare_scope": "per_person_roundtrip",
+  "target_compare_scope": "per_person_roundtrip",
+  "budget_compare_price": 9049,
+  "budget_input_ideal_price": 6000,
+  "budget_input_max_price": 8000,
+  "max_budget_pp_oneway": 4000,
+  "target_price_pp_oneway": 3000,
+  "price_tiers": {
+    "unit_oneway": {
+      "outbound": 4923,
+      "return": 4126,
+      "scope": "single_person_oneway"
+    },
+    "unit_roundtrip": 9049,
+    "total_roundtrip_ref": 42983,
+    "total_estimated": 42983,
+    "per_person_estimated": 8597,
+    "passenger_count": 5,
+    "passengers": {
+      "adult": 2,
+      "child": 1,
+      "elderly": 2,
+      "infant": 0
+    },
+    "passenger_label": "2成人+1儿童+2老人",
+    "factor": 4.75,
+    "is_roundtrip": true,
+    "purchase_type": "两个单程拼接",
+    "route_type": "international",
+    "note": "儿童票按国际航线常见约75折估算,婴儿票按约1折估算,实际以支付页为准；多人价格按单人参考价估算，低价舱库存不足时多人下单可能重新定价，请以支付页选择实际乘机人数后的总价为准"
+  },
+  "dual_source_price_anomalies": [
+    {
+      "direction": "outbound",
+      "flight_combo": "CA857",
+      "min_price": 4923.0,
+      "max_price": 7184.0,
+      "diff_pct": 45.9,
+      "price_source": "juhe",
+      "sources": [
+        {
+          "source": "hasdata",
+          "flight_combo": "CA857",
+          "price": 7184.0
+        },
+        {
+          "source": "juhe",
+          "flight_combo": "CA857",
+          "price": 4923.0
+        }
+      ]
+    },
+    {
+      "direction": "outbound",
+      "flight_combo": "HO1505",
+      "min_price": 4939.0,
+      "max_price": 8674.0,
+      "diff_pct": 75.6,
+      "price_source": "juhe",
+      "sources": [
+        {
+          "source": "hasdata",
+          "flight_combo": "HO1505",
+          "price": 8674.0
+        },
+        {
+          "source": "juhe",
+          "flight_combo": "HO1505",
+          "price": 4939.0
+        }
+      ]
+    },
+    {
+      "direction": "return",
+      "flight_combo": "CA858",
+      "min_price": 3512.0,
+      "max_price": 11567.0,
+      "diff_pct": 229.4,
+      "price_source": "juhe",
+      "sources": [
+        {
+          "source": "hasdata",
+          "flight_combo": "CA858",
+          "price": 11567.0
+        },
+        {
+          "source": "juhe",
+          "flight_combo": "CA858",
+          "price": 3512.0
+        }
+      ]
+    },
+    {
+      "direction": "return",
+      "flight_combo": "HO1506",
+      "min_price": 3734.0,
+      "max_price": 11567.0,
+      "diff_pct": 209.8,
+      "price_source": "juhe",
+      "sources": [
+        {
+          "source": "hasdata",
+          "flight_combo": "HO1506",
+          "price": 11567.0
+        },
+        {
+          "source": "juhe",
+          "flight_combo": "HO1506",
+          "price": 3734.0
+        }
+      ]
+    },
+    {
+      "direction": "return",
+      "flight_combo": "MU730",
+      "min_price": 4126.0,
+      "max_price": 12038.0,
+      "diff_pct": 191.8,
+      "price_source": "juhe",
+      "sources": [
+        {
+          "source": "hasdata",
+          "flight_combo": "MU730",
+          "price": 12038.0
+        },
+        {
+          "source": "juhe",
+          "flight_combo": "MU730",
+          "price": 4126.0
+        }
+      ]
+    },
+    {
+      "direction": "return",
+      "flight_combo": "MU226",
+      "min_price": 4126.0,
+      "max_price": 12038.0,
+      "diff_pct": 191.8,
+      "price_source": "juhe",
+      "sources": [
+        {
+          "source": "hasdata",
+          "flight_combo": "MU226",
+          "price": 12038.0
+        },
+        {
+          "source": "juhe",
+          "flight_combo": "MU226",
+          "price": 4126.0
+        }
+      ]
+    },
+    {
+      "direction": "return",
+      "flight_combo": "MU516",
+      "min_price": 4126.0,
+      "max_price": 12038.0,
+      "diff_pct": 191.8,
+      "price_source": "juhe",
+      "sources": [
+        {
+          "source": "hasdata",
+          "flight_combo": "MU516",
+          "price": 12038.0
+        },
+        {
+          "source": "juhe",
+          "flight_combo": "MU516",
+          "price": 4126.0
+        }
+      ]
+    },
+    {
+      "direction": "return",
+      "flight_combo": "HO1338",
+      "min_price": 4487.0,
+      "max_price": 11733.0,
+      "diff_pct": 161.5,
+      "price_source": "juhe",
+      "sources": [
+        {
+          "source": "hasdata",
+          "flight_combo": "HO1338",
+          "price": 11733.0
+        },
+        {
+          "source": "juhe",
+          "flight_combo": "HO1338",
+          "price": 4487.0
+        }
+      ]
+    }
+  ],
+  "last_push_price": 42422.0,
+  "recommendation": "单人参考价(成人口径)约¥9,049(单人往返)已超过你的最高可接受价¥8,000(单人往返)，不满足购买条件，建议继续保持监控本条航线",
+  "price_policy_reason": "单人参考价(成人口径)已超过最高可接受价（你的设置）",
+  "price_signal": {
+    "label": "强",
+    "summary": "搜索参考价处于近期低位（近14次同条件采集）",
+    "percentile": 7
+  },
+  "execution_advice": {
+    "label": "保持监控本条航线",
+    "conclusion": "单人参考价(成人口径)约¥9,049(单人往返)已超过你的最高可接受价¥8,000(单人往返)，不满足购买条件，建议继续保持监控本条航线",
+    "summary": "单人参考价(成人口径)已超过最高可接受价（你的设置）",
+    "condition": "支付页单人价≤¥8,000(单人往返)，且含托运行李"
+  },
+  "no_primary_diagnosis": {},
+  "no_primary_reason": "",
+  "candidate_price_summary": {},
+  "budget_gap": {
+    "over_max": 1049.0,
+    "over_ideal": 3049.0,
+    "items": [
+      "高于最高价¥1,049",
+      "高于理想价¥3,049"
+    ],
+    "text": "高于最高价¥1,049 | 高于理想价¥3,049",
+    "is_over_budget": true,
+    "budget_scope": "per_person",
+    "target_price_scope": "per_person",
+    "budget_compare_scope": "per_person_roundtrip",
+    "target_compare_scope": "per_person_roundtrip"
+  },
+  "purchase_budget_decision": {
+    "status": "over_budget",
+    "price": 9049.0,
+    "target_price": 6000.0,
+    "max_budget": 8000.0,
+    "is_over_budget": true,
+    "price_scope": "per_person_roundtrip",
+    "budget_scope": "per_person_roundtrip"
+  },
+  "next_step_guidance": {
+    "rigid": true,
+    "items": [
+      {
+        "label": "继续监控等降价",
+        "summary": "系统会在跌破¥8,000时提醒你",
+        "action": "保持监控"
+      },
+      {
+        "label": "调整预算或日期",
+        "summary": "当前日期偏贵,换日期可能更便宜",
+        "action": "修改监控"
+      },
+      {
+        "label": "因刚需必须出行",
+        "summary": "你的出行场景偏刚性,若会议或行程无法改期,可只验证最终价和库存",
+        "action": "验证方案A渠道"
+      }
+    ]
+  },
+  "confidence": "中高",
+  "confidence_dimensions": {
+    "价格新鲜度": "高",
+    "历史样本量": "高",
+    "渠道一致性": "高",
+    "票规完整度": "低",
+    "可购买性": "中高"
+  },
+  "confidence_details": {
+    "价格新鲜度": "0分钟前采集",
+    "历史样本量": "近期14次采集",
+    "渠道一致性": "Google Flights多源交叉验证",
+    "票规完整度": "行李/退改签仍需支付页确认",
+    "可购买性": "有多个渠道可验证，但最终价格和票规以支付页为准"
+  },
+  "travel_profile": {
+    "price": "high",
+    "time": "high",
+    "comfort": "high",
+    "risk_averse": "high",
+    "baggage": "high",
+    "stock_check": "high",
+    "passenger_profile": {
+      "adults": 2,
+      "children": 1,
+      "elderly": 2,
+      "infants": 0,
+      "has_child": true,
+      "has_elderly": true,
+      "has_infant": false,
+      "needs_low_fatigue": true,
+      "needs_baggage_clarity": true,
+      "needs_time_stability": true,
+      "needs_refund_flexibility": false,
+      "mobility_sensitive": true,
+      "mobility_limited": false,
+      "no_redeye_strict": false,
+      "transfer_sensitive": false,
+      "child_type": "",
+      "elderly_condition": ""
+    },
+    "passenger_rules": {
+      "prefer_direct": true,
+      "allow_red_eye": false,
+      "allow_self_transfer": false,
+      "allow_airport_change": false,
+      "allow_overnight_transfer": false,
+      "require_baggage_clarity": true,
+      "max_transfers": 1,
+      "min_connection_min": 120,
+      "prefer_daytime": true,
+      "allow_transfer": true,
+      "mobility_penalty": "high",
+      "prefer_near_city_airport": true,
+      "seat_together_priority": "normal",
+      "weights": {
+        "price": 0.18,
+        "time": 0.22,
+        "comfort": 0.22,
+        "execution_risk": 0.22,
+        "baggage": 0.1,
+        "refund": 0.06
+      },
+      "w_price": 0.18,
+      "w_time": 0.22,
+      "w_comfort": 0.22,
+      "w_execution_risk": 0.22,
+      "w_baggage": 0.1,
+      "w_refund": 0.06,
+      "route_type": ""
+    },
+    "score_weights": {
+      "price": 0.18,
+      "time": 0.22,
+      "comfort": 0.22,
+      "execution_risk": 0.22,
+      "baggage": 0.1,
+      "refund": 0.06
+    },
+    "scenario": "tourism",
+    "scenarios": [
+      "tourism",
+      "family",
+      "elderly"
+    ],
+    "scenario_combo": "tourism+family+elderly",
+    "travelers": "with_elderly_child",
+    "trip_natures": [],
+    "passengers": {
+      "adult": 2,
+      "child": 1,
+      "elderly": 2,
+      "infant": 0
+    },
+    "passenger_count": 5
+  },
+  "passenger_profile": {
+    "adults": 2,
+    "children": 1,
+    "elderly": 2,
+    "infants": 0,
+    "has_child": true,
+    "has_elderly": true,
+    "has_infant": false,
+    "needs_low_fatigue": true,
+    "needs_baggage_clarity": true,
+    "needs_time_stability": true,
+    "needs_refund_flexibility": false,
+    "mobility_sensitive": true,
+    "mobility_limited": false,
+    "no_redeye_strict": false,
+    "transfer_sensitive": false,
+    "child_type": "",
+    "elderly_condition": ""
+  },
+  "passenger_rules": {
+    "prefer_direct": true,
+    "allow_red_eye": false,
+    "allow_self_transfer": false,
+    "allow_airport_change": false,
+    "allow_overnight_transfer": false,
+    "require_baggage_clarity": true,
+    "max_transfers": 1,
+    "min_connection_min": 120,
+    "prefer_daytime": true,
+    "allow_transfer": true,
+    "mobility_penalty": "high",
+    "prefer_near_city_airport": true,
+    "seat_together_priority": "normal",
+    "weights": {
+      "price": 0.18,
+      "time": 0.22,
+      "comfort": 0.22,
+      "execution_risk": 0.22,
+      "baggage": 0.1,
+      "refund": 0.06
+    },
+    "w_price": 0.18,
+    "w_time": 0.22,
+    "w_comfort": 0.22,
+    "w_execution_risk": 0.22,
+    "w_baggage": 0.1,
+    "w_refund": 0.06,
+    "route_type": "international"
+  },
+  "passenger_pricing": {
+    "applies": true,
+    "scope": "roundtrip",
+    "passengers": {
+      "adult": 2,
+      "child": 1,
+      "elderly": 2,
+      "infant": 0
+    },
+    "passenger_label": "2成人+1儿童+2老人",
+    "factor": 4.75,
+    "route_type": "international",
+    "outbound": {
+      "unit_price": 4923.0,
+      "total": 23384,
+      "factor": 4.75,
+      "passengers": {
+        "adult": 2,
+        "child": 1,
+        "elderly": 2,
+        "infant": 0
+      },
+      "passenger_label": "2成人+1儿童+2老人",
+      "parts": [
+        {
+          "type": "adult",
+          "label": "成人",
+          "count": 2,
+          "ratio": 1.0,
+          "unit_price": 4923,
+          "total": 9846
+        },
+        {
+          "type": "elderly",
+          "label": "老人",
+          "count": 2,
+          "ratio": 1.0,
+          "unit_price": 4923,
+          "total": 9846
+        },
+        {
+          "type": "child",
+          "label": "儿童",
+          "count": 1,
+          "ratio": 0.75,
+          "unit_price": 3692,
+          "total": 3692
+        }
+      ],
+      "cabin": "economy",
+      "route_type": "international",
+      "note": "儿童票按国际航线常见约75折估算,婴儿票按约1折估算,实际以支付页为准"
+    },
+    "return": {
+      "unit_price": 4126.0,
+      "total": 19599,
+      "factor": 4.75,
+      "passengers": {
+        "adult": 2,
+        "child": 1,
+        "elderly": 2,
+        "infant": 0
+      },
+      "passenger_label": "2成人+1儿童+2老人",
+      "parts": [
+        {
+          "type": "adult",
+          "label": "成人",
+          "count": 2,
+          "ratio": 1.0,
+          "unit_price": 4126,
+          "total": 8252
+        },
+        {
+          "type": "elderly",
+          "label": "老人",
+          "count": 2,
+          "ratio": 1.0,
+          "unit_price": 4126,
+          "total": 8252
+        },
+        {
+          "type": "child",
+          "label": "儿童",
+          "count": 1,
+          "ratio": 0.75,
+          "unit_price": 3094,
+          "total": 3094
+        }
+      ],
+      "cabin": "economy",
+      "route_type": "international",
+      "note": "儿童票按国际航线常见约75折估算,婴儿票按约1折估算,实际以支付页为准"
+    },
+    "total_price": 42983,
+    "estimated_total": 42983,
+    "single_adult_price": 9049.0,
+    "note": "儿童票按国际航线常见约75折估算,婴儿票按约1折估算,实际以支付页为准",
+    "price_tiers": {
+      "unit_oneway": {
+        "outbound": 4923,
+        "return": 4126,
+        "scope": "single_person_oneway"
+      },
+      "unit_roundtrip": 9049,
+      "total_roundtrip_ref": 42983,
+      "total_estimated": 42983,
+      "per_person_estimated": 8597,
+      "passenger_count": 5,
+      "passengers": {
+        "adult": 2,
+        "child": 1,
+        "elderly": 2,
+        "infant": 0
+      },
+      "passenger_label": "2成人+1儿童+2老人",
+      "factor": 4.75,
+      "is_roundtrip": true,
+      "purchase_type": "两个单程拼接",
+      "route_type": "international",
+      "note": "儿童票按国际航线常见约75折估算,婴儿票按约1折估算,实际以支付页为准；多人价格按单人参考价估算，低价舱库存不足时多人下单可能重新定价，请以支付页选择实际乘机人数后的总价为准"
+    }
+  },
+  "travel_profile_explanation": {
+    "scenario": "tourism",
+    "scenarios": [
+      "tourism",
+      "family",
+      "elderly"
+    ],
+    "scenario_label": "旅游 + 家庭/亲子 + 有老人同行",
+    "basis": "系统合并了多个场景的需求：旅游保留价格敏感和日期弹性。；家庭/亲子提高白天直飞、行李明确和低中转风险权重。；老人同行提高白天到达、全服务航司和低转机风险权重。",
+    "tradeoff": "旅游保留价格敏感，但家庭/亲子的安全舒适要求会优先于纯低价。",
+    "dimensions": {
+      "价格敏感度": "高",
+      "时间刚性": "高",
+      "舒适度需求": "高",
+      "执行风险厌恶": "高",
+      "行李票规重要性": "高"
+    },
+    "stock_check": "high"
+  },
+  "travel_scenarios": [
+    "tourism",
+    "family",
+    "elderly"
+  ],
+  "recommendation_basis": {
+    "scenarios": [
+      "tourism",
+      "family",
+      "elderly"
+    ],
+    "trip_natures": [],
+    "scenario_labels": [
+      "旅游",
+      "家庭/亲子",
+      "有老人同行"
+    ],
+    "applied_rules": [
+      "价格敏感，关注低价和日期弹性（旅游）",
+      "优先白天直飞（家庭/亲子）",
+      "行李明确优先（家庭/亲子）",
+      "降低红眼和长中转风险（家庭/亲子）",
+      "优先直飞、白天到达和低转机风险（老人同行）",
+      "全服务航司和可退改更优先（老人同行）"
+    ],
+    "sort_factors": [
+      [
+        "价格",
+        "高"
+      ],
+      [
+        "时间",
+        "高"
+      ],
+      [
+        "舒适度",
+        "高"
+      ],
+      [
+        "执行风险厌恶",
+        "高"
+      ],
+      [
+        "行李重要性",
+        "高"
+      ]
+    ],
+    "conflict_note": "孩子安全舒适优先于纯低价",
+    "plain_language": "先保证适合带孩子（白天/直飞/行李），再在其中挑便宜的。",
+    "recommendation_text": "该方案白天直飞、行李明确，价格也在合理区间，适合带孩子的旅行，兼顾省心和性价比。",
+    "defaults_applied": []
+  },
+  "time_filter_note": "",
+  "scenario_recommendation": "该方案白天直飞、行李明确，价格也在合理区间，适合带孩子的旅行，兼顾省心和性价比。",
+  "alert_policy": {
+    "price_drop_threshold": 100,
+    "risk_quality_gate": "high_confidence_only",
+    "trigger_focus": "价格小幅下降也提醒"
+  },
+  "buy_condition": "支付页单人价≤¥8,000(单人往返)，且含托运行李",
+  "buy_condition_explanation": "本次验证价¥8,000受你的最高可接受价¥8,000封顶，当前搜索参考价¥9,049已超过该上限，不满足购买条件。",
+  "action_range": {
+    "current": 9049.0,
+    "target": 6000.0,
+    "max": 8000.0,
+    "ranges": [
+      {
+        "label": "强烈建议验证并购买",
+        "min": null,
+        "max": 6000.0,
+        "text": "≤¥6,000"
+      },
+      {
+        "label": "值得购买",
+        "min": 6000.0,
+        "max": 6300.0,
+        "text": "¥6,000-¥6,300"
+      },
+      {
+        "label": "可以考虑",
+        "min": 6300.0,
+        "max": 7000.0,
+        "text": "¥6,300-¥7,000"
+      },
+      {
+        "label": "仅刚需建议",
+        "min": 7000.0,
+        "max": 8000.0,
+        "text": "¥7,000-¥8,000"
+      },
+      {
+        "label": "不建议购买",
+        "min": 8000.0,
+        "max": null,
+        "text": ">¥8,000"
+      }
+    ],
+    "current_label": "不建议购买"
+  },
+  "trigger_reason": [
+    "上次推荐:FM821去+MU730回,单人往返¥8,931。本次同组合:单人往返¥8,931(价格稳定)。（同单人往返口径对比）",
+    "单人参考价(成人口径)已超过最高可接受价（你的设置）",
+    "搜索参考价距离理想入手价还差¥3,049（你的设置）",
+    "当前搜索价高于大多数相似历史样本（近14次同条件采集）"
+  ],
+  "recommended_plans": [
+    {
+      "label": "方案A",
+      "variant": "首选推荐:直飞省心，适合家庭/老人同行",
+      "is_roundtrip": true,
+      "price": 42983,
+      "estimated_price": 42983,
+      "outbound_price": 4923.0,
+      "return_price": 4126.0,
+      "outbound_flight": {
+        "flight_no": "CA0857",
+        "flight_combo": "CA857",
+        "airline": "CA",
+        "airline_name": "中国国际航空公司",
+        "aircraft": "空客A330-300",
+        "aircraft_code": "333",
+        "departure_airport": "PVG",
+        "arrival_airport": "KIX",
+        "departure_name": "浦东国际机场",
+        "arrival_name": "关西国际机场",
+        "departure_date": "2026-10-01",
+        "arrival_date": "2026-10-01",
+        "departure_time": "2026-10-01 11:50",
+        "arrival_time": "2026-10-01 15:25",
+        "duration_str": "02h35m",
+        "duration_min": 155,
+        "total_duration_min": 155,
+        "stops": 0,
+        "transfer_num": 1,
+        "price": 4923.0,
+        "ticket_price": 4923.0,
+        "is_codeshare": false,
+        "data_source": "hasdata+juhe",
+        "source": "juhe",
+        "source_role": "cross_check",
+        "domestic_realtime_quote": true,
+        "collected_at": "2026-07-21T18:03:11",
+        "price_note": "票面价，实付以支付页为准",
+        "price_includes": "票面价，不含机建燃油拆分",
+        "segments": [
+          {
+            "flight_no": "CA0857",
+            "airline": "中国国际航空公司",
+            "dep_airport": "PVG",
+            "arr_airport": "KIX",
+            "dep_time": "2026-10-01 11:50",
+            "arr_time": "2026-10-01 15:25",
+            "aircraft": "空客A330-300"
+          }
+        ],
+        "layovers": [],
+        "raw": {
+          "airline": "CA",
+          "airlineName": "中国国际航空公司",
+          "flightNo": "CA0857",
+          "isCodeShare": false,
+          "equipment": "333",
+          "departure": "PVG",
+          "departureName": "浦东国际机场",
+          "departureDate": "2026-10-01",
+          "departureTime": "11:50",
+          "arrivalDate": "2026-10-01",
+          "arrivalTime": "15:25",
+          "arrival": "KIX",
+          "arrivalName": "关西国际机场",
+          "duration": "02h35m",
+          "transferNum": 1,
+          "ticketPrice": 4923,
+          "segments": []
+        },
+        "raw_flight_combo": "CA0857",
+        "cabin_class": "economy",
+        "source_weight": 0.6,
+        "route_type": "international",
+        "price_source": "juhe",
+        "source_price_details": [
+          {
+            "source": "juhe",
+            "price": 4923.0
+          },
+          {
+            "source": "hasdata",
+            "price": 7184.0
+          }
+        ],
+        "flight_nos": [
+          "CA 857"
+        ],
+        "airlines": [
+          "国航"
+        ],
+        "airline_summary": "国航",
+        "route_summary": "PVG → KIX",
+        "total_hours": 2.6,
+        "duration_hours": 2.58,
+        "stopovers": 0,
+        "layover_summary": "直飞",
+        "primary_source": "hasdata",
+        "booking_options": [
+          {
+            "platform": "Google Flights 预订",
+            "price": 7184,
+            "url": "https://www.google.com/travel/flights/booking?token=%3CTOKEN%3E",
+            "verified": true,
+            "source": "booking_token",
+            "direct_booking": true
+          },
+          {
+            "platform": "CA 航司官网",
+            "price": null,
+            "url": "https://www.airchina.com.cn",
+            "verified": false,
+            "source": "inferred_airline"
+          },
+          {
+            "platform": "携程搜索",
+            "price": null,
+            "url": "https://flights.ctrip.com/online/list/oneway-PVG-KIX?depdate=2026-10-01&cabin=y&flightno=CA857",
+            "verified": false,
+            "source": "inferred_ota"
+          },
+          {
+            "platform": "飞猪搜索",
+            "price": null,
+            "url": "https://www.fliggy.com/flight/international-search?depCity=PVG&arrCity=KIX&depDate=2026-10-01&flightNo=CA857",
+            "verified": false,
+            "source": "inferred_ota"
+          }
+        ],
+        "extra": {
+          "baggage": [
+            {
+              "type": "checked",
+              "quantity": 2,
+              "weight": null,
+              "weight_unit": null
+            },
+            {
+              "type": "carry_on",
+              "quantity": 1,
+              "weight": null,
+              "weight_unit": null
+            }
+          ],
+          "baggage_detail": {
+            "checked": {
+              "quantity": 2,
+              "weight_kg": null,
+              "is_free": true
+            },
+            "carry_on": {
+              "quantity": 1,
+              "weight_kg": null,
+              "is_free": true
+            }
+          },
+          "seat_detail": {
+            "cabin_class": "economy",
+            "seat_selectable": false,
+            "seat_free": false,
+            "seat_price": null,
+            "seat_currency": null,
+            "cabin_class_name": "Economy"
+          },
+          "refund_change": {
+            "changeable": false,
+            "refundable": false,
+            "change_fee": null,
+            "refund_fee": null
+          },
+          "changeable": false,
+          "refundable": false
+        },
+        "has_baggage_info": true,
+        "search_origin": "PVG",
+        "search_destination": "KIX",
+        "fare_rules": {
+          "flight_combo": "CA857",
+          "baggage": {
+            "carry_on_kg": null,
+            "checked_kg": null,
+            "checked_pieces": 2,
+            "extra_bag_price": null
+          },
+          "change": {
+            "allowed": false,
+            "fee": null,
+            "deadline_hours": null,
+            "conditions": ""
+          },
+          "refund": {
+            "allowed": false,
+            "fee": null,
+            "deadline_hours": null,
+            "conditions": ""
+          },
+          "cabin_class": "economy"
+        },
+        "previous_price": 4927.0,
+        "passenger_friendly": {
+          "active": true,
+          "profile": {
+            "adults": 2,
+            "children": 1,
+            "elderly": 2,
+            "infants": 0,
+            "has_child": true,
+            "has_elderly": true,
+            "has_infant": false,
+            "needs_low_fatigue": true,
+            "needs_baggage_clarity": true,
+            "needs_time_stability": true,
+            "needs_refund_flexibility": false,
+            "mobility_sensitive": true,
+            "mobility_limited": false,
+            "no_redeye_strict": false,
+            "transfer_sensitive": false,
+            "child_type": "",
+            "elderly_condition": ""
+          },
+          "rules": {
+            "prefer_direct": true,
+            "allow_red_eye": false,
+            "allow_self_transfer": false,
+            "allow_airport_change": false,
+            "allow_overnight_transfer": false,
+            "require_baggage_clarity": true,
+            "max_transfers": 1,
+            "min_connection_min": 120,
+            "prefer_daytime": true,
+            "allow_transfer": true,
+            "mobility_penalty": "high",
+            "prefer_near_city_airport": true,
+            "seat_together_priority": "normal",
+            "weights": {
+              "price": 0.18,
+              "time": 0.22,
+              "comfort": 0.22,
+              "execution_risk": 0.22,
+              "baggage": 0.1,
+              "refund": 0.06
+            },
+            "w_price": 0.18,
+            "w_time": 0.22,
+            "w_comfort": 0.22,
+            "w_execution_risk": 0.22,
+            "w_baggage": 0.1,
+            "w_refund": 0.06,
+            "route_type": "international"
+          }
+        },
+        "preference_notes": [
+          "含免费托运",
+          "适合家庭出行：直飞",
+          "适合家庭出行：白天时段",
+          "适合家庭出行：总时长较短",
+          "适合家庭出行：含免费托运",
+          "行程确定：关注价格锁定"
+        ],
+        "preference_penalties": [
+          "未确认可退改"
+        ],
+        "preference_penalty": 5,
+        "value_score": 0.401,
+        "scores": {
+          "total": 7.3,
+          "price_score": 8.0,
+          "duration_score": 0.0,
+          "stops_score": 10,
+          "layover_score": 10
+        },
+        "transfer_risk": {
+          "level": "none",
+          "label": "直飞",
+          "score": 0,
+          "factors": []
+        },
+        "fare_verification": {
+          "level": "mismatch",
+          "label": "票规需确认",
+          "matches": [
+            "含托运行李 标准kg/2件"
+          ],
+          "issues": [
+            "该票退改规则不满足要求",
+            "该票退改签较严格"
+          ]
+        },
+        "domestic_tags": [],
+        "price_estimate": {
+          "display_price": 4923.0,
+          "extra_total": 0,
+          "transaction_price": 4923.0,
+          "extra_items": [],
+          "is_lcc": false,
+          "price_includes": "票面价，不含机建燃油拆分",
+          "price_excludes": [
+            "无额外费用"
+          ],
+          "estimated_price": 4923.0,
+          "extra_cost": 0,
+          "price_range": [
+            4824,
+            5169
+          ],
+          "adjustments": [],
+          "tax_included": true,
+          "confidence": "high"
+        },
+        "availability": {
+          "status": "likely_available",
+          "label": "大概率可购买",
+          "age_minutes": 0,
+          "source_count": 2
+        },
+        "buyability": {
+          "status": "need_verify",
+          "label": "需支付页确认",
+          "note": "国内报价，最终库存和实付价需支付页确认"
+        },
+        "execution_risk": {
+          "level": "medium",
+          "label": "执行风险中等",
+          "score": 25,
+          "factors": [
+            "票规与需求不匹配"
+          ],
+          "advice": "建议购买前仔细核对支付页的价格、行李和退改规则"
+        },
+        "execution_grade": "B",
+        "execution_label": "B级 - 建议确认后购买",
+        "execution_reasons": [
+          "票规与需求不匹配",
+          "该票退改规则不满足要求",
+          "该票退改签较严格"
+        ],
+        "execution_score": 75,
+        "preference_score": 2.3,
+        "score_components": {
+          "price": 82.0,
+          "time": 100,
+          "comfort": 85.0,
+          "risk": 75.0,
+          "baggage": 100,
+          "refund": 50,
+          "preference": 23.0,
+          "weights": {
+            "price": 0.18,
+            "time": 0.22,
+            "comfort": 0.22,
+            "risk": 0.22,
+            "baggage": 0.1,
+            "refund": 0.06
+          }
+        },
+        "travel_profile": {
+          "price": "high",
+          "time": "high",
+          "comfort": "high",
+          "risk_averse": "high",
+          "baggage": "high",
+          "stock_check": "high",
+          "passenger_profile": {
+            "adults": 2,
+            "children": 1,
+            "elderly": 2,
+            "infants": 0,
+            "has_child": true,
+            "has_elderly": true,
+            "has_infant": false,
+            "needs_low_fatigue": true,
+            "needs_baggage_clarity": true,
+            "needs_time_stability": true,
+            "needs_refund_flexibility": false,
+            "mobility_sensitive": true,
+            "mobility_limited": false,
+            "no_redeye_strict": false,
+            "transfer_sensitive": false,
+            "child_type": "",
+            "elderly_condition": ""
+          },
+          "passenger_rules": {
+            "prefer_direct": true,
+            "allow_red_eye": false,
+            "allow_self_transfer": false,
+            "allow_airport_change": false,
+            "allow_overnight_transfer": false,
+            "require_baggage_clarity": true,
+            "max_transfers": 1,
+            "min_connection_min": 120,
+            "prefer_daytime": true,
+            "allow_transfer": true,
+            "mobility_penalty": "high",
+            "prefer_near_city_airport": true,
+            "seat_together_priority": "normal",
+            "weights": {
+              "price": 0.18,
+              "time": 0.22,
+              "comfort": 0.22,
+              "execution_risk": 0.22,
+              "baggage": 0.1,
+              "refund": 0.06
+            },
+            "w_price": 0.18,
+            "w_time": 0.22,
+            "w_comfort": 0.22,
+            "w_execution_risk": 0.22,
+            "w_baggage": 0.1,
+            "w_refund": 0.06,
+            "route_type": "international"
+          },
+          "score_weights": {
+            "price": 0.18,
+            "time": 0.22,
+            "comfort": 0.22,
+            "execution_risk": 0.22,
+            "baggage": 0.1,
+            "refund": 0.06
+          },
+          "scenario": "tourism",
+          "scenarios": [
+            "tourism",
+            "family",
+            "elderly"
+          ],
+          "scenario_combo": "tourism+family+elderly",
+          "travelers": "with_elderly_child",
+          "trip_natures": [],
+          "passengers": {
+            "adult": 2,
+            "child": 1,
+            "elderly": 2,
+            "infant": 0
+          },
+          "passenger_count": 5
+        },
+        "final_score": 75.7,
+        "source_price_anomaly": {
+          "flight_combo": "CA857",
+          "min_price": 4923.0,
+          "max_price": 7184.0,
+          "diff_pct": 45.9,
+          "price_source": "juhe",
+          "sources": [
+            {
+              "source": "hasdata",
+              "flight_combo": "CA857",
+              "price": 7184.0
+            },
+            {
+              "source": "juhe",
+              "flight_combo": "CA857",
+              "price": 4923.0
+            }
+          ]
+        }
+      },
+      "return_flight": {
+        "flight_no": "MU0730",
+        "flight_combo": "MU730",
+        "airline": "MU",
+        "airline_name": "中国东方航空公司",
+        "aircraft": "空客A330",
+        "aircraft_code": "33J",
+        "departure_airport": "KIX",
+        "arrival_airport": "PVG",
+        "departure_name": "关西国际机场",
+        "arrival_name": "浦东国际机场",
+        "departure_date": "2026-10-06",
+        "arrival_date": "2026-10-06",
+        "departure_time": "2026-10-06 09:30",
+        "arrival_time": "2026-10-06 11:00",
+        "duration_str": "02h30m",
+        "duration_min": 150,
+        "total_duration_min": 150,
+        "stops": 0,
+        "transfer_num": 1,
+        "price": 4126.0,
+        "ticket_price": 4126.0,
+        "is_codeshare": false,
+        "data_source": "hasdata+juhe",
+        "source": "juhe",
+        "source_role": "cross_check",
+        "domestic_realtime_quote": true,
+        "collected_at": "2026-07-21T18:04:39",
+        "price_note": "票面价，实付以支付页为准",
+        "price_includes": "票面价，不含机建燃油拆分",
+        "segments": [
+          {
+            "flight_no": "MU0730",
+            "airline": "中国东方航空公司",
+            "dep_airport": "KIX",
+            "arr_airport": "PVG",
+            "dep_time": "2026-10-06 09:30",
+            "arr_time": "2026-10-06 11:00",
+            "aircraft": "空客A330"
+          }
+        ],
+        "layovers": [],
+        "raw": {
+          "airline": "MU",
+          "airlineName": "中国东方航空公司",
+          "flightNo": "MU0730",
+          "isCodeShare": false,
+          "equipment": "33J",
+          "departure": "KIX",
+          "departureName": "关西国际机场",
+          "departureDate": "2026-10-06",
+          "departureTime": "09:30",
+          "arrivalDate": "2026-10-06",
+          "arrivalTime": "11:00",
+          "arrival": "PVG",
+          "arrivalName": "浦东国际机场",
+          "duration": "02h30m",
+          "transferNum": 1,
+          "ticketPrice": 4126,
+          "segments": []
+        },
+        "raw_flight_combo": "MU0730",
+        "cabin_class": "economy",
+        "source_weight": 0.6,
+        "route_type": "international",
+        "price_source": "juhe",
+        "source_price_details": [
+          {
+            "source": "juhe",
+            "price": 4126.0
+          },
+          {
+            "source": "hasdata",
+            "price": 12038.0
+          }
+        ],
+        "flight_nos": [
+          "MU 730"
+        ],
+        "airlines": [
+          "东航"
+        ],
+        "airline_summary": "东航",
+        "route_summary": "KIX → PVG",
+        "total_hours": 2.5,
+        "duration_hours": 2.5,
+        "stopovers": 0,
+        "layover_summary": "直飞",
+        "primary_source": "hasdata",
+        "booking_options": [
+          {
+            "platform": "Google Flights 预订",
+            "price": 12038,
+            "url": "https://www.google.com/travel/flights/booking?token=%3CTOKEN%3E",
+            "verified": true,
+            "source": "booking_token",
+            "direct_booking": true
+          },
+          {
+            "platform": "MU 航司官网",
+            "price": null,
+            "url": "https://www.ceair.com",
+            "verified": false,
+            "source": "inferred_airline"
+          },
+          {
+            "platform": "携程搜索",
+            "price": null,
+            "url": "https://flights.ctrip.com/online/list/oneway-KIX-PVG?depdate=2026-10-06&cabin=y&flightno=MU730",
+            "verified": false,
+            "source": "inferred_ota"
+          },
+          {
+            "platform": "飞猪搜索",
+            "price": null,
+            "url": "https://www.fliggy.com/flight/international-search?depCity=KIX&arrCity=PVG&depDate=2026-10-06&flightNo=MU730",
+            "verified": false,
+            "source": "inferred_ota"
+          }
+        ],
+        "extra": {
+          "baggage": [
+            {
+              "type": "checked",
+              "quantity": 2,
+              "weight": null,
+              "weight_unit": null
+            },
+            {
+              "type": "carry_on",
+              "quantity": 1,
+              "weight": null,
+              "weight_unit": null
+            }
+          ],
+          "baggage_detail": {
+            "checked": {
+              "quantity": 2,
+              "weight_kg": null,
+              "is_free": true
+            },
+            "carry_on": {
+              "quantity": 1,
+              "weight_kg": null,
+              "is_free": true
+            }
+          },
+          "seat_detail": {
+            "cabin_class": "economy",
+            "seat_selectable": false,
+            "seat_free": false,
+            "seat_price": null,
+            "seat_currency": null,
+            "cabin_class_name": "Economy"
+          },
+          "refund_change": {
+            "changeable": false,
+            "refundable": false,
+            "change_fee": null,
+            "refund_fee": null
+          },
+          "changeable": false,
+          "refundable": false
+        },
+        "has_baggage_info": true,
+        "search_origin": "KIX",
+        "search_destination": "PVG",
+        "fare_rules": {
+          "flight_combo": "MU730",
+          "baggage": {
+            "carry_on_kg": null,
+            "checked_kg": null,
+            "checked_pieces": 2,
+            "extra_bag_price": null
+          },
+          "change": {
+            "allowed": false,
+            "fee": null,
+            "deadline_hours": null,
+            "conditions": ""
+          },
+          "refund": {
+            "allowed": false,
+            "fee": null,
+            "deadline_hours": null,
+            "conditions": ""
+          },
+          "cabin_class": "economy"
+        },
+        "passenger_friendly": {
+          "active": true,
+          "profile": {
+            "adults": 2,
+            "children": 1,
+            "elderly": 2,
+            "infants": 0,
+            "has_child": true,
+            "has_elderly": true,
+            "has_infant": false,
+            "needs_low_fatigue": true,
+            "needs_baggage_clarity": true,
+            "needs_time_stability": true,
+            "needs_refund_flexibility": false,
+            "mobility_sensitive": true,
+            "mobility_limited": false,
+            "no_redeye_strict": false,
+            "transfer_sensitive": false,
+            "child_type": "",
+            "elderly_condition": ""
+          },
+          "rules": {
+            "prefer_direct": true,
+            "allow_red_eye": false,
+            "allow_self_transfer": false,
+            "allow_airport_change": false,
+            "allow_overnight_transfer": false,
+            "require_baggage_clarity": true,
+            "max_transfers": 1,
+            "min_connection_min": 120,
+            "prefer_daytime": true,
+            "allow_transfer": true,
+            "mobility_penalty": "high",
+            "prefer_near_city_airport": true,
+            "seat_together_priority": "normal",
+            "weights": {
+              "price": 0.18,
+              "time": 0.22,
+              "comfort": 0.22,
+              "execution_risk": 0.22,
+              "baggage": 0.1,
+              "refund": 0.06
+            },
+            "w_price": 0.18,
+            "w_time": 0.22,
+            "w_comfort": 0.22,
+            "w_execution_risk": 0.22,
+            "w_baggage": 0.1,
+            "w_refund": 0.06,
+            "route_type": "international"
+          }
+        },
+        "preference_notes": [
+          "含免费托运",
+          "适合家庭出行：直飞",
+          "适合家庭出行：白天时段",
+          "适合家庭出行：总时长较短",
+          "适合家庭出行：含免费托运",
+          "行程确定：关注价格锁定"
+        ],
+        "preference_penalties": [
+          "未确认可退改"
+        ],
+        "preference_penalty": 5,
+        "value_score": 0.146,
+        "scores": {
+          "total": 8.5,
+          "price_score": 7.7,
+          "duration_score": 9.0,
+          "stops_score": 10,
+          "layover_score": 10
+        },
+        "transfer_risk": {
+          "level": "none",
+          "label": "直飞",
+          "score": 0,
+          "factors": []
+        },
+        "fare_verification": {
+          "level": "mismatch",
+          "label": "票规需确认",
+          "matches": [
+            "含托运行李 标准kg/2件"
+          ],
+          "issues": [
+            "该票退改规则不满足要求",
+            "该票退改签较严格"
+          ]
+        },
+        "domestic_tags": [],
+        "price_estimate": {
+          "display_price": 4126.0,
+          "extra_total": 0,
+          "transaction_price": 4126.0,
+          "extra_items": [],
+          "is_lcc": false,
+          "price_includes": "票面价，不含机建燃油拆分",
+          "price_excludes": [
+            "无额外费用"
+          ],
+          "estimated_price": 4126.0,
+          "extra_cost": 0,
+          "price_range": [
+            4043,
+            4332
+          ],
+          "adjustments": [],
+          "tax_included": true,
+          "confidence": "high"
+        },
+        "availability": {
+          "status": "likely_available",
+          "label": "大概率可购买",
+          "age_minutes": 0,
+          "source_count": 2
+        },
+        "buyability": {
+          "status": "need_verify",
+          "label": "需支付页确认",
+          "note": "国内报价，最终库存和实付价需支付页确认"
+        },
+        "execution_risk": {
+          "level": "medium",
+          "label": "执行风险中等",
+          "score": 25,
+          "factors": [
+            "票规与需求不匹配"
+          ],
+          "advice": "建议购买前仔细核对支付页的价格、行李和退改规则"
+        },
+        "execution_grade": "B",
+        "execution_label": "B级 - 建议确认后购买",
+        "execution_reasons": [
+          "票规与需求不匹配",
+          "该票退改规则不满足要求",
+          "该票退改签较严格"
+        ],
+        "execution_score": 75,
+        "preference_score": 3.5,
+        "score_components": {
+          "price": 68.8,
+          "time": 100,
+          "comfort": 85.0,
+          "risk": 75.0,
+          "baggage": 100,
+          "refund": 50,
+          "preference": 35.0,
+          "weights": {
+            "price": 0.18,
+            "time": 0.22,
+            "comfort": 0.22,
+            "risk": 0.22,
+            "baggage": 0.1,
+            "refund": 0.06
+          }
+        },
+        "travel_profile": {
+          "price": "high",
+          "time": "high",
+          "comfort": "high",
+          "risk_averse": "high",
+          "baggage": "high",
+          "stock_check": "high",
+          "passenger_profile": {
+            "adults": 2,
+            "children": 1,
+            "elderly": 2,
+            "infants": 0,
+            "has_child": true,
+            "has_elderly": true,
+            "has_infant": false,
+            "needs_low_fatigue": true,
+            "needs_baggage_clarity": true,
+            "needs_time_stability": true,
+            "needs_refund_flexibility": false,
+            "mobility_sensitive": true,
+            "mobility_limited": false,
+            "no_redeye_strict": false,
+            "transfer_sensitive": false,
+            "child_type": "",
+            "elderly_condition": ""
+          },
+          "passenger_rules": {
+            "prefer_direct": true,
+            "allow_red_eye": false,
+            "allow_self_transfer": false,
+            "allow_airport_change": false,
+            "allow_overnight_transfer": false,
+            "require_baggage_clarity": true,
+            "max_transfers": 1,
+            "min_connection_min": 120,
+            "prefer_daytime": true,
+            "allow_transfer": true,
+            "mobility_penalty": "high",
+            "prefer_near_city_airport": true,
+            "seat_together_priority": "normal",
+            "weights": {
+              "price": 0.18,
+              "time": 0.22,
+              "comfort": 0.22,
+              "execution_risk": 0.22,
+              "baggage": 0.1,
+              "refund": 0.06
+            },
+            "w_price": 0.18,
+            "w_time": 0.22,
+            "w_comfort": 0.22,
+            "w_execution_risk": 0.22,
+            "w_baggage": 0.1,
+            "w_refund": 0.06,
+            "route_type": "international"
+          },
+          "score_weights": {
+            "price": 0.18,
+            "time": 0.22,
+            "comfort": 0.22,
+            "execution_risk": 0.22,
+            "baggage": 0.1,
+            "refund": 0.06
+          },
+          "scenario": "tourism",
+          "scenarios": [
+            "tourism",
+            "family",
+            "elderly"
+          ],
+          "scenario_combo": "tourism+family+elderly",
+          "travelers": "with_elderly_child",
+          "trip_natures": [],
+          "passengers": {
+            "adult": 2,
+            "child": 1,
+            "elderly": 2,
+            "infant": 0
+          },
+          "passenger_count": 5
+        },
+        "final_score": 75.4,
+        "source_price_anomaly": {
+          "flight_combo": "MU730",
+          "min_price": 4126.0,
+          "max_price": 12038.0,
+          "diff_pct": 191.8,
+          "price_source": "juhe",
+          "sources": [
+            {
+              "source": "hasdata",
+              "flight_combo": "MU730",
+              "price": 12038.0
+            },
+            {
+              "source": "juhe",
+              "flight_combo": "MU730",
+              "price": 4126.0
+            }
+          ]
+        }
+      },
+      "outbound_line": "去程:CA0857｜中国国际航空 | 浦东(PVG) 11:50(上海当地) → 关西(KIX) 15:25(大阪当地) | 直飞｜空客A330-300 | ¥4,923 ~ ¥7,184 (多平台报价) (来源:Google Flights（via HasData）+聚合数据（国内报价）, 采集于18:03)",
+      "return_line": "返程:MU0730｜东方航空 | 关西(KIX) 09:30(大阪当地) → 浦东(PVG) 11:00(上海当地) | 直飞｜空客A330 | ¥4,126 ~ ¥12,038 (多平台报价) (来源:Google Flights（via HasData）+聚合数据（国内报价）, 采集于18:04)",
+      "outbound_push_line": "去程:CA0857｜中国国际航空\n浦东(PVG) 11:50(上海当地) → 关西(KIX) 15:25(大阪当地)\n直飞｜空客A330-300",
+      "return_push_line": "返程:MU0730｜东方航空\n关西(KIX) 09:30(大阪当地) → 浦东(PVG) 11:00(上海当地)\n直飞｜空客A330",
+      "summary": "往返总价 ¥9,049",
+      "baggage_line": "行李:去回程已含托运",
+      "purchase_mode": "两个单程拼接",
+      "purchase_note": "该方案为去程和返程分别购买，退改签和售后可能分别处理",
+      "same_day_round_trip": false,
+      "stay_hours": null,
+      "same_day_tag": "",
+      "same_day_windows": {},
+      "business_feasibility": {},
+      "business_feasibility_rank": null,
+      "meeting_arrival_margin_min": null,
+      "return_departure_margin_min": null,
+      "schedule_note": "",
+      "tags": "超预算 | 可买性待确认 | 置信度中 | 风险中 | 亲子·老人友好 | 白天直飞 | 退改清晰 | 低折腾 | 需调整动身时间",
+      "risk": "B",
+      "buy_condition": "单人参考价(成人口径)约¥9,049(单人往返)已超过你的最高可接受价¥8,000(单人往返)，不满足购买条件，建议继续保持监控本条航线",
+      "links": {
+        "outbound": "<a href=\"https://flights.ctrip.com/online/list/oneway-PVG-KIX?depdate=2026-10-01&cabin=y_s\" target=\"_blank\">携程</a> | <a href=\"https://s.fliggy.com/search?keyword=%E4%B8%8A%E6%B5%B7%E5%88%B0%E5%A4%A7%E9%98%AA%E6%9C%BA%E7%A5%A8%202026-10-01\" target=\"_blank\">飞猪</a> | <a href=\"https://flight.qunar.com/site/oneway_list.htm?searchDepartureAirport=%E4%B8%8A%E6%B5%B7&searchArrivalAirport=%E5%A4%A7%E9%98%AA&searchDepartureTime=2026-10-01\" target=\"_blank\">去哪儿</a> | <a href=\"https://www.trip.com/flights/pvg-to-kix/tickets-pvg-kix?dcity=PVG&acity=KIX&ddate=2026-10-01&class=Y\" target=\"_blank\">Trip.com</a> | <a href=\"https://www.tianxun.com/transport/flights/PVG/KIX/2026-10-01/?adultsv2=1&cabinclass=economy&currency=CNY\" target=\"_blank\">天巡</a> | <a href=\"https://www.google.com/travel/flights?q=flights+from+Shanghai+to+Osaka+on+2026-10-01&curr=CNY&hl=zh-CN\" target=\"_blank\">Google Flights</a>",
+        "return": "<a href=\"https://flights.ctrip.com/online/list/oneway-KIX-PVG?depdate=2026-10-06&cabin=y_s\" target=\"_blank\">携程</a> | <a href=\"https://s.fliggy.com/search?keyword=%E5%A4%A7%E9%98%AA%E5%88%B0%E4%B8%8A%E6%B5%B7%E6%9C%BA%E7%A5%A8%202026-10-06\" target=\"_blank\">飞猪</a> | <a href=\"https://flight.qunar.com/site/oneway_list.htm?searchDepartureAirport=%E5%A4%A7%E9%98%AA&searchArrivalAirport=%E4%B8%8A%E6%B5%B7&searchDepartureTime=2026-10-06\" target=\"_blank\">去哪儿</a> | <a href=\"https://www.trip.com/flights/kix-to-pvg/tickets-kix-pvg?dcity=KIX&acity=PVG&ddate=2026-10-06&class=Y\" target=\"_blank\">Trip.com</a> | <a href=\"https://www.tianxun.com/transport/flights/KIX/PVG/2026-10-06/?adultsv2=1&cabinclass=economy&currency=CNY\" target=\"_blank\">天巡</a> | <a href=\"https://www.google.com/travel/flights?q=flights+from+Osaka+to+Shanghai+on+2026-10-06&curr=CNY&hl=zh-CN\" target=\"_blank\">Google Flights</a>"
+      },
+      "channel_prices": [
+        {
+          "label": "去程 CA857 · Google",
+          "value": 7184.0,
+          "scope": "oneway",
+          "price_scope": "per_person_oneway",
+          "direction": "outbound",
+          "flight_combo": "CA857",
+          "source": "hasdata",
+          "provider": "Google",
+          "selected": false
+        },
+        {
+          "label": "去程 CA857 · OTA",
+          "value": 4923.0,
+          "scope": "oneway",
+          "price_scope": "per_person_oneway",
+          "direction": "outbound",
+          "flight_combo": "CA857",
+          "source": "juhe",
+          "provider": "OTA",
+          "selected": true
+        },
+        {
+          "label": "返程 MU730 · Google",
+          "value": 12038.0,
+          "scope": "oneway",
+          "price_scope": "per_person_oneway",
+          "direction": "return",
+          "flight_combo": "MU730",
+          "source": "hasdata",
+          "provider": "Google",
+          "selected": false
+        },
+        {
+          "label": "返程 MU730 · OTA",
+          "value": 4126.0,
+          "scope": "oneway",
+          "price_scope": "per_person_oneway",
+          "direction": "return",
+          "flight_combo": "MU730",
+          "source": "juhe",
+          "provider": "OTA",
+          "selected": true
+        }
+      ],
+      "tier": "首选推荐",
+      "tier_reason": "直飞省心，适合家庭/老人同行",
+      "suitable_condition": "适合更重视直飞、省心和执行稳定性的行程",
+      "route_type": "international",
+      "passenger_pricing": {
+        "applies": true,
+        "scope": "roundtrip",
+        "passengers": {
+          "adult": 2,
+          "child": 1,
+          "elderly": 2,
+          "infant": 0
+        },
+        "passenger_label": "2成人+1儿童+2老人",
+        "factor": 4.75,
+        "route_type": "international",
+        "outbound": {
+          "unit_price": 4923.0,
+          "total": 23384,
+          "factor": 4.75,
+          "passengers": {
+            "adult": 2,
+            "child": 1,
+            "elderly": 2,
+            "infant": 0
+          },
+          "passenger_label": "2成人+1儿童+2老人",
+          "parts": [
+            {
+              "type": "adult",
+              "label": "成人",
+              "count": 2,
+              "ratio": 1.0,
+              "unit_price": 4923,
+              "total": 9846
+            },
+            {
+              "type": "elderly",
+              "label": "老人",
+              "count": 2,
+              "ratio": 1.0,
+              "unit_price": 4923,
+              "total": 9846
+            },
+            {
+              "type": "child",
+              "label": "儿童",
+              "count": 1,
+              "ratio": 0.75,
+              "unit_price": 3692,
+              "total": 3692
+            }
+          ],
+          "cabin": "economy",
+          "route_type": "international",
+          "note": "儿童票按国际航线常见约75折估算,婴儿票按约1折估算,实际以支付页为准"
+        },
+        "return": {
+          "unit_price": 4126.0,
+          "total": 19599,
+          "factor": 4.75,
+          "passengers": {
+            "adult": 2,
+            "child": 1,
+            "elderly": 2,
+            "infant": 0
+          },
+          "passenger_label": "2成人+1儿童+2老人",
+          "parts": [
+            {
+              "type": "adult",
+              "label": "成人",
+              "count": 2,
+              "ratio": 1.0,
+              "unit_price": 4126,
+              "total": 8252
+            },
+            {
+              "type": "elderly",
+              "label": "老人",
+              "count": 2,
+              "ratio": 1.0,
+              "unit_price": 4126,
+              "total": 8252
+            },
+            {
+              "type": "child",
+              "label": "儿童",
+              "count": 1,
+              "ratio": 0.75,
+              "unit_price": 3095,
+              "total": 3095
+            }
+          ],
+          "cabin": "economy",
+          "route_type": "international",
+          "note": "儿童票按国际航线常见约75折估算,婴儿票按约1折估算,实际以支付页为准"
+        },
+        "total_price": 42983,
+        "estimated_total": 42983,
+        "single_adult_price": 9049.0,
+        "note": "儿童票按国际航线常见约75折估算,婴儿票按约1折估算,实际以支付页为准",
+        "price_tiers": {
+          "unit_oneway": {
+            "outbound": 4923,
+            "return": 4126,
+            "scope": "single_person_oneway"
+          },
+          "unit_roundtrip": 9049,
+          "total_roundtrip_ref": 42983,
+          "total_estimated": 42983,
+          "per_person_estimated": 8597,
+          "passenger_count": 5,
+          "passengers": {
+            "adult": 2,
+            "child": 1,
+            "elderly": 2,
+            "infant": 0
+          },
+          "passenger_label": "2成人+1儿童+2老人",
+          "factor": 4.75,
+          "is_roundtrip": true,
+          "purchase_type": "两个单程拼接",
+          "route_type": "international",
+          "note": "儿童票按国际航线常见约75折估算,婴儿票按约1折估算,实际以支付页为准；多人价格按单人参考价估算，低价舱库存不足时多人下单可能重新定价，请以支付页选择实际乘机人数后的总价为准"
+        }
+      },
+      "price_tiers": {
+        "unit_oneway": {
+          "outbound": 4923,
+          "return": 4126,
+          "scope": "single_person_oneway"
+        },
+        "unit_roundtrip": 9049,
+        "total_roundtrip_ref": 42983,
+        "total_estimated": 42983,
+        "per_person_estimated": 8597,
+        "passenger_count": 5,
+        "passengers": {
+          "adult": 2,
+          "child": 1,
+          "elderly": 2,
+          "infant": 0
+        },
+        "passenger_label": "2成人+1儿童+2老人",
+        "factor": 4.75,
+        "is_roundtrip": true,
+        "purchase_type": "两个单程拼接",
+        "route_type": "international",
+        "note": "儿童票按国际航线常见约75折估算,婴儿票按约1折估算,实际以支付页为准；多人价格按单人参考价估算，低价舱库存不足时多人下单可能重新定价，请以支付页选择实际乘机人数后的总价为准"
+      },
+      "single_adult_price": 9049.0,
+      "adult_roundtrip_price": 9049.0,
+      "roundtrip_price": 42983,
+      "friendly_reason": "白天直飞、行李和退改信息更清楚，适合老人/小孩同行；系统已降低纯价格权重，优先执行稳定性。",
+      "feasibility": {
+        "outbound": {
+          "set_off_time": "09:00",
+          "flight_departure_time": "11:50",
+          "departure_airport": "PVG",
+          "route_type": "international",
+          "transport_min": 50,
+          "transport_margin_min": 20,
+          "transport_margin_ratio": 0.4,
+          "transport_rush": true,
+          "departure_buffer_min": 180,
+          "buffer_label": "值机+出境边检海关",
+          "safety_min": 25,
+          "total_reserve": 275,
+          "earliest_catchable": "13:35",
+          "level": "不可行",
+          "short_min": 105,
+          "need_set_off": "07:15"
+        },
+        "return": {
+          "set_off_time": "16:00",
+          "flight_departure_time": "09:30",
+          "departure_airport": "KIX",
+          "route_type": "international",
+          "transport_min": 50,
+          "transport_margin_min": 15,
+          "transport_margin_ratio": 0.3,
+          "transport_rush": false,
+          "departure_buffer_min": 150,
+          "buffer_label": "值机+出境边检海关",
+          "safety_min": 25,
+          "total_reserve": 240,
+          "earliest_catchable": "20:00",
+          "level": "可行",
+          "margin_min": 810
+        }
+      },
+      "feasibility_rank": 2,
+      "budget_compare_price": 9049,
+      "budget_compare_scope": "per_person_roundtrip",
+      "purchase_budget_decision": {
+        "status": "over_budget",
+        "price": 9049.0,
+        "target_price": 6000.0,
+        "max_budget": 8000.0,
+        "is_over_budget": true,
+        "price_scope": "per_person_roundtrip",
+        "budget_scope": "per_person_roundtrip"
+      },
+      "purchase_advice": {
+        "label": "保持监控本条航线",
+        "conclusion": "单人参考价(成人口径)约¥9,049(单人往返)已超过你的最高可接受价¥8,000(单人往返)，不满足购买条件，建议继续保持监控本条航线",
+        "summary": "单人参考价(成人口径)已超过最高可接受价（你的设置）",
+        "condition": "支付页单人价≤¥8,000(单人往返)，且含托运行李"
+      }
+    }
+  ],
+  "alternative_plans": [],
+  "adjustment_required_plans": [
+    {
+      "label": "方案A",
+      "variant": "首选推荐:直飞省心，适合家庭/老人同行",
+      "is_roundtrip": true,
+      "price": 42983,
+      "estimated_price": 42983,
+      "outbound_price": 4923.0,
+      "return_price": 4126.0,
+      "outbound_flight": {
+        "flight_no": "CA0857",
+        "flight_combo": "CA857",
+        "airline": "CA",
+        "airline_name": "中国国际航空公司",
+        "aircraft": "空客A330-300",
+        "aircraft_code": "333",
+        "departure_airport": "PVG",
+        "arrival_airport": "KIX",
+        "departure_name": "浦东国际机场",
+        "arrival_name": "关西国际机场",
+        "departure_date": "2026-10-01",
+        "arrival_date": "2026-10-01",
+        "departure_time": "2026-10-01 11:50",
+        "arrival_time": "2026-10-01 15:25",
+        "duration_str": "02h35m",
+        "duration_min": 155,
+        "total_duration_min": 155,
+        "stops": 0,
+        "transfer_num": 1,
+        "price": 4923.0,
+        "ticket_price": 4923.0,
+        "is_codeshare": false,
+        "data_source": "hasdata+juhe",
+        "source": "juhe",
+        "source_role": "cross_check",
+        "domestic_realtime_quote": true,
+        "collected_at": "2026-07-21T18:03:11",
+        "price_note": "票面价，实付以支付页为准",
+        "price_includes": "票面价，不含机建燃油拆分",
+        "segments": [
+          {
+            "flight_no": "CA0857",
+            "airline": "中国国际航空公司",
+            "dep_airport": "PVG",
+            "arr_airport": "KIX",
+            "dep_time": "2026-10-01 11:50",
+            "arr_time": "2026-10-01 15:25",
+            "aircraft": "空客A330-300"
+          }
+        ],
+        "layovers": [],
+        "raw": {
+          "airline": "CA",
+          "airlineName": "中国国际航空公司",
+          "flightNo": "CA0857",
+          "isCodeShare": false,
+          "equipment": "333",
+          "departure": "PVG",
+          "departureName": "浦东国际机场",
+          "departureDate": "2026-10-01",
+          "departureTime": "11:50",
+          "arrivalDate": "2026-10-01",
+          "arrivalTime": "15:25",
+          "arrival": "KIX",
+          "arrivalName": "关西国际机场",
+          "duration": "02h35m",
+          "transferNum": 1,
+          "ticketPrice": 4923,
+          "segments": []
+        },
+        "raw_flight_combo": "CA0857",
+        "cabin_class": "economy",
+        "source_weight": 0.6,
+        "route_type": "international",
+        "price_source": "juhe",
+        "source_price_details": [
+          {
+            "source": "juhe",
+            "price": 4923.0
+          },
+          {
+            "source": "hasdata",
+            "price": 7184.0
+          }
+        ],
+        "flight_nos": [
+          "CA 857"
+        ],
+        "airlines": [
+          "国航"
+        ],
+        "airline_summary": "国航",
+        "route_summary": "PVG → KIX",
+        "total_hours": 2.6,
+        "duration_hours": 2.58,
+        "stopovers": 0,
+        "layover_summary": "直飞",
+        "primary_source": "hasdata",
+        "booking_options": [
+          {
+            "platform": "Google Flights 预订",
+            "price": 7184,
+            "url": "https://www.google.com/travel/flights/booking?token=%3CTOKEN%3E",
+            "verified": true,
+            "source": "booking_token",
+            "direct_booking": true
+          },
+          {
+            "platform": "CA 航司官网",
+            "price": null,
+            "url": "https://www.airchina.com.cn",
+            "verified": false,
+            "source": "inferred_airline"
+          },
+          {
+            "platform": "携程搜索",
+            "price": null,
+            "url": "https://flights.ctrip.com/online/list/oneway-PVG-KIX?depdate=2026-10-01&cabin=y&flightno=CA857",
+            "verified": false,
+            "source": "inferred_ota"
+          },
+          {
+            "platform": "飞猪搜索",
+            "price": null,
+            "url": "https://www.fliggy.com/flight/international-search?depCity=PVG&arrCity=KIX&depDate=2026-10-01&flightNo=CA857",
+            "verified": false,
+            "source": "inferred_ota"
+          }
+        ],
+        "extra": {
+          "baggage": [
+            {
+              "type": "checked",
+              "quantity": 2,
+              "weight": null,
+              "weight_unit": null
+            },
+            {
+              "type": "carry_on",
+              "quantity": 1,
+              "weight": null,
+              "weight_unit": null
+            }
+          ],
+          "baggage_detail": {
+            "checked": {
+              "quantity": 2,
+              "weight_kg": null,
+              "is_free": true
+            },
+            "carry_on": {
+              "quantity": 1,
+              "weight_kg": null,
+              "is_free": true
+            }
+          },
+          "seat_detail": {
+            "cabin_class": "economy",
+            "seat_selectable": false,
+            "seat_free": false,
+            "seat_price": null,
+            "seat_currency": null,
+            "cabin_class_name": "Economy"
+          },
+          "refund_change": {
+            "changeable": false,
+            "refundable": false,
+            "change_fee": null,
+            "refund_fee": null
+          },
+          "changeable": false,
+          "refundable": false
+        },
+        "has_baggage_info": true,
+        "search_origin": "PVG",
+        "search_destination": "KIX",
+        "fare_rules": {
+          "flight_combo": "CA857",
+          "baggage": {
+            "carry_on_kg": null,
+            "checked_kg": null,
+            "checked_pieces": 2,
+            "extra_bag_price": null
+          },
+          "change": {
+            "allowed": false,
+            "fee": null,
+            "deadline_hours": null,
+            "conditions": ""
+          },
+          "refund": {
+            "allowed": false,
+            "fee": null,
+            "deadline_hours": null,
+            "conditions": ""
+          },
+          "cabin_class": "economy"
+        },
+        "previous_price": 4927.0,
+        "passenger_friendly": {
+          "active": true,
+          "profile": {
+            "adults": 2,
+            "children": 1,
+            "elderly": 2,
+            "infants": 0,
+            "has_child": true,
+            "has_elderly": true,
+            "has_infant": false,
+            "needs_low_fatigue": true,
+            "needs_baggage_clarity": true,
+            "needs_time_stability": true,
+            "needs_refund_flexibility": false,
+            "mobility_sensitive": true,
+            "mobility_limited": false,
+            "no_redeye_strict": false,
+            "transfer_sensitive": false,
+            "child_type": "",
+            "elderly_condition": ""
+          },
+          "rules": {
+            "prefer_direct": true,
+            "allow_red_eye": false,
+            "allow_self_transfer": false,
+            "allow_airport_change": false,
+            "allow_overnight_transfer": false,
+            "require_baggage_clarity": true,
+            "max_transfers": 1,
+            "min_connection_min": 120,
+            "prefer_daytime": true,
+            "allow_transfer": true,
+            "mobility_penalty": "high",
+            "prefer_near_city_airport": true,
+            "seat_together_priority": "normal",
+            "weights": {
+              "price": 0.18,
+              "time": 0.22,
+              "comfort": 0.22,
+              "execution_risk": 0.22,
+              "baggage": 0.1,
+              "refund": 0.06
+            },
+            "w_price": 0.18,
+            "w_time": 0.22,
+            "w_comfort": 0.22,
+            "w_execution_risk": 0.22,
+            "w_baggage": 0.1,
+            "w_refund": 0.06,
+            "route_type": "international"
+          }
+        },
+        "preference_notes": [
+          "含免费托运",
+          "适合家庭出行：直飞",
+          "适合家庭出行：白天时段",
+          "适合家庭出行：总时长较短",
+          "适合家庭出行：含免费托运",
+          "行程确定：关注价格锁定"
+        ],
+        "preference_penalties": [
+          "未确认可退改"
+        ],
+        "preference_penalty": 5,
+        "value_score": 0.401,
+        "scores": {
+          "total": 7.3,
+          "price_score": 8.0,
+          "duration_score": 0.0,
+          "stops_score": 10,
+          "layover_score": 10
+        },
+        "transfer_risk": {
+          "level": "none",
+          "label": "直飞",
+          "score": 0,
+          "factors": []
+        },
+        "fare_verification": {
+          "level": "mismatch",
+          "label": "票规需确认",
+          "matches": [
+            "含托运行李 标准kg/2件"
+          ],
+          "issues": [
+            "该票退改规则不满足要求",
+            "该票退改签较严格"
+          ]
+        },
+        "domestic_tags": [],
+        "price_estimate": {
+          "display_price": 4923.0,
+          "extra_total": 0,
+          "transaction_price": 4923.0,
+          "extra_items": [],
+          "is_lcc": false,
+          "price_includes": "票面价，不含机建燃油拆分",
+          "price_excludes": [
+            "无额外费用"
+          ],
+          "estimated_price": 4923.0,
+          "extra_cost": 0,
+          "price_range": [
+            4824,
+            5169
+          ],
+          "adjustments": [],
+          "tax_included": true,
+          "confidence": "high"
+        },
+        "availability": {
+          "status": "likely_available",
+          "label": "大概率可购买",
+          "age_minutes": 0,
+          "source_count": 2
+        },
+        "buyability": {
+          "status": "need_verify",
+          "label": "需支付页确认",
+          "note": "国内报价，最终库存和实付价需支付页确认"
+        },
+        "execution_risk": {
+          "level": "medium",
+          "label": "执行风险中等",
+          "score": 25,
+          "factors": [
+            "票规与需求不匹配"
+          ],
+          "advice": "建议购买前仔细核对支付页的价格、行李和退改规则"
+        },
+        "execution_grade": "B",
+        "execution_label": "B级 - 建议确认后购买",
+        "execution_reasons": [
+          "票规与需求不匹配",
+          "该票退改规则不满足要求",
+          "该票退改签较严格"
+        ],
+        "execution_score": 75,
+        "preference_score": 2.3,
+        "score_components": {
+          "price": 82.0,
+          "time": 100,
+          "comfort": 85.0,
+          "risk": 75.0,
+          "baggage": 100,
+          "refund": 50,
+          "preference": 23.0,
+          "weights": {
+            "price": 0.18,
+            "time": 0.22,
+            "comfort": 0.22,
+            "risk": 0.22,
+            "baggage": 0.1,
+            "refund": 0.06
+          }
+        },
+        "travel_profile": {
+          "price": "high",
+          "time": "high",
+          "comfort": "high",
+          "risk_averse": "high",
+          "baggage": "high",
+          "stock_check": "high",
+          "passenger_profile": {
+            "adults": 2,
+            "children": 1,
+            "elderly": 2,
+            "infants": 0,
+            "has_child": true,
+            "has_elderly": true,
+            "has_infant": false,
+            "needs_low_fatigue": true,
+            "needs_baggage_clarity": true,
+            "needs_time_stability": true,
+            "needs_refund_flexibility": false,
+            "mobility_sensitive": true,
+            "mobility_limited": false,
+            "no_redeye_strict": false,
+            "transfer_sensitive": false,
+            "child_type": "",
+            "elderly_condition": ""
+          },
+          "passenger_rules": {
+            "prefer_direct": true,
+            "allow_red_eye": false,
+            "allow_self_transfer": false,
+            "allow_airport_change": false,
+            "allow_overnight_transfer": false,
+            "require_baggage_clarity": true,
+            "max_transfers": 1,
+            "min_connection_min": 120,
+            "prefer_daytime": true,
+            "allow_transfer": true,
+            "mobility_penalty": "high",
+            "prefer_near_city_airport": true,
+            "seat_together_priority": "normal",
+            "weights": {
+              "price": 0.18,
+              "time": 0.22,
+              "comfort": 0.22,
+              "execution_risk": 0.22,
+              "baggage": 0.1,
+              "refund": 0.06
+            },
+            "w_price": 0.18,
+            "w_time": 0.22,
+            "w_comfort": 0.22,
+            "w_execution_risk": 0.22,
+            "w_baggage": 0.1,
+            "w_refund": 0.06,
+            "route_type": "international"
+          },
+          "score_weights": {
+            "price": 0.18,
+            "time": 0.22,
+            "comfort": 0.22,
+            "execution_risk": 0.22,
+            "baggage": 0.1,
+            "refund": 0.06
+          },
+          "scenario": "tourism",
+          "scenarios": [
+            "tourism",
+            "family",
+            "elderly"
+          ],
+          "scenario_combo": "tourism+family+elderly",
+          "travelers": "with_elderly_child",
+          "trip_natures": [],
+          "passengers": {
+            "adult": 2,
+            "child": 1,
+            "elderly": 2,
+            "infant": 0
+          },
+          "passenger_count": 5
+        },
+        "final_score": 75.7,
+        "source_price_anomaly": {
+          "flight_combo": "CA857",
+          "min_price": 4923.0,
+          "max_price": 7184.0,
+          "diff_pct": 45.9,
+          "price_source": "juhe",
+          "sources": [
+            {
+              "source": "hasdata",
+              "flight_combo": "CA857",
+              "price": 7184.0
+            },
+            {
+              "source": "juhe",
+              "flight_combo": "CA857",
+              "price": 4923.0
+            }
+          ]
+        }
+      },
+      "return_flight": {
+        "flight_no": "MU0730",
+        "flight_combo": "MU730",
+        "airline": "MU",
+        "airline_name": "中国东方航空公司",
+        "aircraft": "空客A330",
+        "aircraft_code": "33J",
+        "departure_airport": "KIX",
+        "arrival_airport": "PVG",
+        "departure_name": "关西国际机场",
+        "arrival_name": "浦东国际机场",
+        "departure_date": "2026-10-06",
+        "arrival_date": "2026-10-06",
+        "departure_time": "2026-10-06 09:30",
+        "arrival_time": "2026-10-06 11:00",
+        "duration_str": "02h30m",
+        "duration_min": 150,
+        "total_duration_min": 150,
+        "stops": 0,
+        "transfer_num": 1,
+        "price": 4126.0,
+        "ticket_price": 4126.0,
+        "is_codeshare": false,
+        "data_source": "hasdata+juhe",
+        "source": "juhe",
+        "source_role": "cross_check",
+        "domestic_realtime_quote": true,
+        "collected_at": "2026-07-21T18:04:39",
+        "price_note": "票面价，实付以支付页为准",
+        "price_includes": "票面价，不含机建燃油拆分",
+        "segments": [
+          {
+            "flight_no": "MU0730",
+            "airline": "中国东方航空公司",
+            "dep_airport": "KIX",
+            "arr_airport": "PVG",
+            "dep_time": "2026-10-06 09:30",
+            "arr_time": "2026-10-06 11:00",
+            "aircraft": "空客A330"
+          }
+        ],
+        "layovers": [],
+        "raw": {
+          "airline": "MU",
+          "airlineName": "中国东方航空公司",
+          "flightNo": "MU0730",
+          "isCodeShare": false,
+          "equipment": "33J",
+          "departure": "KIX",
+          "departureName": "关西国际机场",
+          "departureDate": "2026-10-06",
+          "departureTime": "09:30",
+          "arrivalDate": "2026-10-06",
+          "arrivalTime": "11:00",
+          "arrival": "PVG",
+          "arrivalName": "浦东国际机场",
+          "duration": "02h30m",
+          "transferNum": 1,
+          "ticketPrice": 4126,
+          "segments": []
+        },
+        "raw_flight_combo": "MU0730",
+        "cabin_class": "economy",
+        "source_weight": 0.6,
+        "route_type": "international",
+        "price_source": "juhe",
+        "source_price_details": [
+          {
+            "source": "juhe",
+            "price": 4126.0
+          },
+          {
+            "source": "hasdata",
+            "price": 12038.0
+          }
+        ],
+        "flight_nos": [
+          "MU 730"
+        ],
+        "airlines": [
+          "东航"
+        ],
+        "airline_summary": "东航",
+        "route_summary": "KIX → PVG",
+        "total_hours": 2.5,
+        "duration_hours": 2.5,
+        "stopovers": 0,
+        "layover_summary": "直飞",
+        "primary_source": "hasdata",
+        "booking_options": [
+          {
+            "platform": "Google Flights 预订",
+            "price": 12038,
+            "url": "https://www.google.com/travel/flights/booking?token=%3CTOKEN%3E",
+            "verified": true,
+            "source": "booking_token",
+            "direct_booking": true
+          },
+          {
+            "platform": "MU 航司官网",
+            "price": null,
+            "url": "https://www.ceair.com",
+            "verified": false,
+            "source": "inferred_airline"
+          },
+          {
+            "platform": "携程搜索",
+            "price": null,
+            "url": "https://flights.ctrip.com/online/list/oneway-KIX-PVG?depdate=2026-10-06&cabin=y&flightno=MU730",
+            "verified": false,
+            "source": "inferred_ota"
+          },
+          {
+            "platform": "飞猪搜索",
+            "price": null,
+            "url": "https://www.fliggy.com/flight/international-search?depCity=KIX&arrCity=PVG&depDate=2026-10-06&flightNo=MU730",
+            "verified": false,
+            "source": "inferred_ota"
+          }
+        ],
+        "extra": {
+          "baggage": [
+            {
+              "type": "checked",
+              "quantity": 2,
+              "weight": null,
+              "weight_unit": null
+            },
+            {
+              "type": "carry_on",
+              "quantity": 1,
+              "weight": null,
+              "weight_unit": null
+            }
+          ],
+          "baggage_detail": {
+            "checked": {
+              "quantity": 2,
+              "weight_kg": null,
+              "is_free": true
+            },
+            "carry_on": {
+              "quantity": 1,
+              "weight_kg": null,
+              "is_free": true
+            }
+          },
+          "seat_detail": {
+            "cabin_class": "economy",
+            "seat_selectable": false,
+            "seat_free": false,
+            "seat_price": null,
+            "seat_currency": null,
+            "cabin_class_name": "Economy"
+          },
+          "refund_change": {
+            "changeable": false,
+            "refundable": false,
+            "change_fee": null,
+            "refund_fee": null
+          },
+          "changeable": false,
+          "refundable": false
+        },
+        "has_baggage_info": true,
+        "search_origin": "KIX",
+        "search_destination": "PVG",
+        "fare_rules": {
+          "flight_combo": "MU730",
+          "baggage": {
+            "carry_on_kg": null,
+            "checked_kg": null,
+            "checked_pieces": 2,
+            "extra_bag_price": null
+          },
+          "change": {
+            "allowed": false,
+            "fee": null,
+            "deadline_hours": null,
+            "conditions": ""
+          },
+          "refund": {
+            "allowed": false,
+            "fee": null,
+            "deadline_hours": null,
+            "conditions": ""
+          },
+          "cabin_class": "economy"
+        },
+        "passenger_friendly": {
+          "active": true,
+          "profile": {
+            "adults": 2,
+            "children": 1,
+            "elderly": 2,
+            "infants": 0,
+            "has_child": true,
+            "has_elderly": true,
+            "has_infant": false,
+            "needs_low_fatigue": true,
+            "needs_baggage_clarity": true,
+            "needs_time_stability": true,
+            "needs_refund_flexibility": false,
+            "mobility_sensitive": true,
+            "mobility_limited": false,
+            "no_redeye_strict": false,
+            "transfer_sensitive": false,
+            "child_type": "",
+            "elderly_condition": ""
+          },
+          "rules": {
+            "prefer_direct": true,
+            "allow_red_eye": false,
+            "allow_self_transfer": false,
+            "allow_airport_change": false,
+            "allow_overnight_transfer": false,
+            "require_baggage_clarity": true,
+            "max_transfers": 1,
+            "min_connection_min": 120,
+            "prefer_daytime": true,
+            "allow_transfer": true,
+            "mobility_penalty": "high",
+            "prefer_near_city_airport": true,
+            "seat_together_priority": "normal",
+            "weights": {
+              "price": 0.18,
+              "time": 0.22,
+              "comfort": 0.22,
+              "execution_risk": 0.22,
+              "baggage": 0.1,
+              "refund": 0.06
+            },
+            "w_price": 0.18,
+            "w_time": 0.22,
+            "w_comfort": 0.22,
+            "w_execution_risk": 0.22,
+            "w_baggage": 0.1,
+            "w_refund": 0.06,
+            "route_type": "international"
+          }
+        },
+        "preference_notes": [
+          "含免费托运",
+          "适合家庭出行：直飞",
+          "适合家庭出行：白天时段",
+          "适合家庭出行：总时长较短",
+          "适合家庭出行：含免费托运",
+          "行程确定：关注价格锁定"
+        ],
+        "preference_penalties": [
+          "未确认可退改"
+        ],
+        "preference_penalty": 5,
+        "value_score": 0.146,
+        "scores": {
+          "total": 8.5,
+          "price_score": 7.7,
+          "duration_score": 9.0,
+          "stops_score": 10,
+          "layover_score": 10
+        },
+        "transfer_risk": {
+          "level": "none",
+          "label": "直飞",
+          "score": 0,
+          "factors": []
+        },
+        "fare_verification": {
+          "level": "mismatch",
+          "label": "票规需确认",
+          "matches": [
+            "含托运行李 标准kg/2件"
+          ],
+          "issues": [
+            "该票退改规则不满足要求",
+            "该票退改签较严格"
+          ]
+        },
+        "domestic_tags": [],
+        "price_estimate": {
+          "display_price": 4126.0,
+          "extra_total": 0,
+          "transaction_price": 4126.0,
+          "extra_items": [],
+          "is_lcc": false,
+          "price_includes": "票面价，不含机建燃油拆分",
+          "price_excludes": [
+            "无额外费用"
+          ],
+          "estimated_price": 4126.0,
+          "extra_cost": 0,
+          "price_range": [
+            4043,
+            4332
+          ],
+          "adjustments": [],
+          "tax_included": true,
+          "confidence": "high"
+        },
+        "availability": {
+          "status": "likely_available",
+          "label": "大概率可购买",
+          "age_minutes": 0,
+          "source_count": 2
+        },
+        "buyability": {
+          "status": "need_verify",
+          "label": "需支付页确认",
+          "note": "国内报价，最终库存和实付价需支付页确认"
+        },
+        "execution_risk": {
+          "level": "medium",
+          "label": "执行风险中等",
+          "score": 25,
+          "factors": [
+            "票规与需求不匹配"
+          ],
+          "advice": "建议购买前仔细核对支付页的价格、行李和退改规则"
+        },
+        "execution_grade": "B",
+        "execution_label": "B级 - 建议确认后购买",
+        "execution_reasons": [
+          "票规与需求不匹配",
+          "该票退改规则不满足要求",
+          "该票退改签较严格"
+        ],
+        "execution_score": 75,
+        "preference_score": 3.5,
+        "score_components": {
+          "price": 68.8,
+          "time": 100,
+          "comfort": 85.0,
+          "risk": 75.0,
+          "baggage": 100,
+          "refund": 50,
+          "preference": 35.0,
+          "weights": {
+            "price": 0.18,
+            "time": 0.22,
+            "comfort": 0.22,
+            "risk": 0.22,
+            "baggage": 0.1,
+            "refund": 0.06
+          }
+        },
+        "travel_profile": {
+          "price": "high",
+          "time": "high",
+          "comfort": "high",
+          "risk_averse": "high",
+          "baggage": "high",
+          "stock_check": "high",
+          "passenger_profile": {
+            "adults": 2,
+            "children": 1,
+            "elderly": 2,
+            "infants": 0,
+            "has_child": true,
+            "has_elderly": true,
+            "has_infant": false,
+            "needs_low_fatigue": true,
+            "needs_baggage_clarity": true,
+            "needs_time_stability": true,
+            "needs_refund_flexibility": false,
+            "mobility_sensitive": true,
+            "mobility_limited": false,
+            "no_redeye_strict": false,
+            "transfer_sensitive": false,
+            "child_type": "",
+            "elderly_condition": ""
+          },
+          "passenger_rules": {
+            "prefer_direct": true,
+            "allow_red_eye": false,
+            "allow_self_transfer": false,
+            "allow_airport_change": false,
+            "allow_overnight_transfer": false,
+            "require_baggage_clarity": true,
+            "max_transfers": 1,
+            "min_connection_min": 120,
+            "prefer_daytime": true,
+            "allow_transfer": true,
+            "mobility_penalty": "high",
+            "prefer_near_city_airport": true,
+            "seat_together_priority": "normal",
+            "weights": {
+              "price": 0.18,
+              "time": 0.22,
+              "comfort": 0.22,
+              "execution_risk": 0.22,
+              "baggage": 0.1,
+              "refund": 0.06
+            },
+            "w_price": 0.18,
+            "w_time": 0.22,
+            "w_comfort": 0.22,
+            "w_execution_risk": 0.22,
+            "w_baggage": 0.1,
+            "w_refund": 0.06,
+            "route_type": "international"
+          },
+          "score_weights": {
+            "price": 0.18,
+            "time": 0.22,
+            "comfort": 0.22,
+            "execution_risk": 0.22,
+            "baggage": 0.1,
+            "refund": 0.06
+          },
+          "scenario": "tourism",
+          "scenarios": [
+            "tourism",
+            "family",
+            "elderly"
+          ],
+          "scenario_combo": "tourism+family+elderly",
+          "travelers": "with_elderly_child",
+          "trip_natures": [],
+          "passengers": {
+            "adult": 2,
+            "child": 1,
+            "elderly": 2,
+            "infant": 0
+          },
+          "passenger_count": 5
+        },
+        "final_score": 75.4,
+        "source_price_anomaly": {
+          "flight_combo": "MU730",
+          "min_price": 4126.0,
+          "max_price": 12038.0,
+          "diff_pct": 191.8,
+          "price_source": "juhe",
+          "sources": [
+            {
+              "source": "hasdata",
+              "flight_combo": "MU730",
+              "price": 12038.0
+            },
+            {
+              "source": "juhe",
+              "flight_combo": "MU730",
+              "price": 4126.0
+            }
+          ]
+        }
+      },
+      "outbound_line": "去程:CA0857｜中国国际航空 | 浦东(PVG) 11:50(上海当地) → 关西(KIX) 15:25(大阪当地) | 直飞｜空客A330-300 | ¥4,923 ~ ¥7,184 (多平台报价) (来源:Google Flights（via HasData）+聚合数据（国内报价）, 采集于18:03)",
+      "return_line": "返程:MU0730｜东方航空 | 关西(KIX) 09:30(大阪当地) → 浦东(PVG) 11:00(上海当地) | 直飞｜空客A330 | ¥4,126 ~ ¥12,038 (多平台报价) (来源:Google Flights（via HasData）+聚合数据（国内报价）, 采集于18:04)",
+      "outbound_push_line": "去程:CA0857｜中国国际航空\n浦东(PVG) 11:50(上海当地) → 关西(KIX) 15:25(大阪当地)\n直飞｜空客A330-300",
+      "return_push_line": "返程:MU0730｜东方航空\n关西(KIX) 09:30(大阪当地) → 浦东(PVG) 11:00(上海当地)\n直飞｜空客A330",
+      "summary": "往返总价 ¥9,049",
+      "baggage_line": "行李:去回程已含托运",
+      "purchase_mode": "两个单程拼接",
+      "purchase_note": "该方案为去程和返程分别购买，退改签和售后可能分别处理",
+      "same_day_round_trip": false,
+      "stay_hours": null,
+      "same_day_tag": "",
+      "same_day_windows": {},
+      "business_feasibility": {},
+      "business_feasibility_rank": null,
+      "meeting_arrival_margin_min": null,
+      "return_departure_margin_min": null,
+      "schedule_note": "",
+      "tags": "超预算 | 可买性待确认 | 置信度中 | 风险中 | 亲子·老人友好 | 白天直飞 | 退改清晰 | 低折腾 | 需调整动身时间",
+      "risk": "B",
+      "buy_condition": "单人参考价(成人口径)约¥9,049(单人往返)已超过你的最高可接受价¥8,000(单人往返)，不满足购买条件，建议继续保持监控本条航线",
+      "links": {
+        "outbound": "<a href=\"https://flights.ctrip.com/online/list/oneway-PVG-KIX?depdate=2026-10-01&cabin=y_s\" target=\"_blank\">携程</a> | <a href=\"https://s.fliggy.com/search?keyword=%E4%B8%8A%E6%B5%B7%E5%88%B0%E5%A4%A7%E9%98%AA%E6%9C%BA%E7%A5%A8%202026-10-01\" target=\"_blank\">飞猪</a> | <a href=\"https://flight.qunar.com/site/oneway_list.htm?searchDepartureAirport=%E4%B8%8A%E6%B5%B7&searchArrivalAirport=%E5%A4%A7%E9%98%AA&searchDepartureTime=2026-10-01\" target=\"_blank\">去哪儿</a> | <a href=\"https://www.trip.com/flights/pvg-to-kix/tickets-pvg-kix?dcity=PVG&acity=KIX&ddate=2026-10-01&class=Y\" target=\"_blank\">Trip.com</a> | <a href=\"https://www.tianxun.com/transport/flights/PVG/KIX/2026-10-01/?adultsv2=1&cabinclass=economy&currency=CNY\" target=\"_blank\">天巡</a> | <a href=\"https://www.google.com/travel/flights?q=flights+from+Shanghai+to+Osaka+on+2026-10-01&curr=CNY&hl=zh-CN\" target=\"_blank\">Google Flights</a>",
+        "return": "<a href=\"https://flights.ctrip.com/online/list/oneway-KIX-PVG?depdate=2026-10-06&cabin=y_s\" target=\"_blank\">携程</a> | <a href=\"https://s.fliggy.com/search?keyword=%E5%A4%A7%E9%98%AA%E5%88%B0%E4%B8%8A%E6%B5%B7%E6%9C%BA%E7%A5%A8%202026-10-06\" target=\"_blank\">飞猪</a> | <a href=\"https://flight.qunar.com/site/oneway_list.htm?searchDepartureAirport=%E5%A4%A7%E9%98%AA&searchArrivalAirport=%E4%B8%8A%E6%B5%B7&searchDepartureTime=2026-10-06\" target=\"_blank\">去哪儿</a> | <a href=\"https://www.trip.com/flights/kix-to-pvg/tickets-kix-pvg?dcity=KIX&acity=PVG&ddate=2026-10-06&class=Y\" target=\"_blank\">Trip.com</a> | <a href=\"https://www.tianxun.com/transport/flights/KIX/PVG/2026-10-06/?adultsv2=1&cabinclass=economy&currency=CNY\" target=\"_blank\">天巡</a> | <a href=\"https://www.google.com/travel/flights?q=flights+from+Osaka+to+Shanghai+on+2026-10-06&curr=CNY&hl=zh-CN\" target=\"_blank\">Google Flights</a>"
+      },
+      "channel_prices": [
+        {
+          "label": "去程 CA857 · Google",
+          "value": 7184.0,
+          "scope": "oneway",
+          "price_scope": "per_person_oneway",
+          "direction": "outbound",
+          "flight_combo": "CA857",
+          "source": "hasdata",
+          "provider": "Google",
+          "selected": false
+        },
+        {
+          "label": "去程 CA857 · OTA",
+          "value": 4923.0,
+          "scope": "oneway",
+          "price_scope": "per_person_oneway",
+          "direction": "outbound",
+          "flight_combo": "CA857",
+          "source": "juhe",
+          "provider": "OTA",
+          "selected": true
+        },
+        {
+          "label": "返程 MU730 · Google",
+          "value": 12038.0,
+          "scope": "oneway",
+          "price_scope": "per_person_oneway",
+          "direction": "return",
+          "flight_combo": "MU730",
+          "source": "hasdata",
+          "provider": "Google",
+          "selected": false
+        },
+        {
+          "label": "返程 MU730 · OTA",
+          "value": 4126.0,
+          "scope": "oneway",
+          "price_scope": "per_person_oneway",
+          "direction": "return",
+          "flight_combo": "MU730",
+          "source": "juhe",
+          "provider": "OTA",
+          "selected": true
+        }
+      ],
+      "tier": "首选推荐",
+      "tier_reason": "直飞省心，适合家庭/老人同行",
+      "suitable_condition": "适合更重视直飞、省心和执行稳定性的行程",
+      "route_type": "international",
+      "passenger_pricing": {
+        "applies": true,
+        "scope": "roundtrip",
+        "passengers": {
+          "adult": 2,
+          "child": 1,
+          "elderly": 2,
+          "infant": 0
+        },
+        "passenger_label": "2成人+1儿童+2老人",
+        "factor": 4.75,
+        "route_type": "international",
+        "outbound": {
+          "unit_price": 4923.0,
+          "total": 23384,
+          "factor": 4.75,
+          "passengers": {
+            "adult": 2,
+            "child": 1,
+            "elderly": 2,
+            "infant": 0
+          },
+          "passenger_label": "2成人+1儿童+2老人",
+          "parts": [
+            {
+              "type": "adult",
+              "label": "成人",
+              "count": 2,
+              "ratio": 1.0,
+              "unit_price": 4923,
+              "total": 9846
+            },
+            {
+              "type": "elderly",
+              "label": "老人",
+              "count": 2,
+              "ratio": 1.0,
+              "unit_price": 4923,
+              "total": 9846
+            },
+            {
+              "type": "child",
+              "label": "儿童",
+              "count": 1,
+              "ratio": 0.75,
+              "unit_price": 3692,
+              "total": 3692
+            }
+          ],
+          "cabin": "economy",
+          "route_type": "international",
+          "note": "儿童票按国际航线常见约75折估算,婴儿票按约1折估算,实际以支付页为准"
+        },
+        "return": {
+          "unit_price": 4126.0,
+          "total": 19599,
+          "factor": 4.75,
+          "passengers": {
+            "adult": 2,
+            "child": 1,
+            "elderly": 2,
+            "infant": 0
+          },
+          "passenger_label": "2成人+1儿童+2老人",
+          "parts": [
+            {
+              "type": "adult",
+              "label": "成人",
+              "count": 2,
+              "ratio": 1.0,
+              "unit_price": 4126,
+              "total": 8252
+            },
+            {
+              "type": "elderly",
+              "label": "老人",
+              "count": 2,
+              "ratio": 1.0,
+              "unit_price": 4126,
+              "total": 8252
+            },
+            {
+              "type": "child",
+              "label": "儿童",
+              "count": 1,
+              "ratio": 0.75,
+              "unit_price": 3095,
+              "total": 3095
+            }
+          ],
+          "cabin": "economy",
+          "route_type": "international",
+          "note": "儿童票按国际航线常见约75折估算,婴儿票按约1折估算,实际以支付页为准"
+        },
+        "total_price": 42983,
+        "estimated_total": 42983,
+        "single_adult_price": 9049.0,
+        "note": "儿童票按国际航线常见约75折估算,婴儿票按约1折估算,实际以支付页为准",
+        "price_tiers": {
+          "unit_oneway": {
+            "outbound": 4923,
+            "return": 4126,
+            "scope": "single_person_oneway"
+          },
+          "unit_roundtrip": 9049,
+          "total_roundtrip_ref": 42983,
+          "total_estimated": 42983,
+          "per_person_estimated": 8597,
+          "passenger_count": 5,
+          "passengers": {
+            "adult": 2,
+            "child": 1,
+            "elderly": 2,
+            "infant": 0
+          },
+          "passenger_label": "2成人+1儿童+2老人",
+          "factor": 4.75,
+          "is_roundtrip": true,
+          "purchase_type": "两个单程拼接",
+          "route_type": "international",
+          "note": "儿童票按国际航线常见约75折估算,婴儿票按约1折估算,实际以支付页为准；多人价格按单人参考价估算，低价舱库存不足时多人下单可能重新定价，请以支付页选择实际乘机人数后的总价为准"
+        }
+      },
+      "price_tiers": {
+        "unit_oneway": {
+          "outbound": 4923,
+          "return": 4126,
+          "scope": "single_person_oneway"
+        },
+        "unit_roundtrip": 9049,
+        "total_roundtrip_ref": 42983,
+        "total_estimated": 42983,
+        "per_person_estimated": 8597,
+        "passenger_count": 5,
+        "passengers": {
+          "adult": 2,
+          "child": 1,
+          "elderly": 2,
+          "infant": 0
+        },
+        "passenger_label": "2成人+1儿童+2老人",
+        "factor": 4.75,
+        "is_roundtrip": true,
+        "purchase_type": "两个单程拼接",
+        "route_type": "international",
+        "note": "儿童票按国际航线常见约75折估算,婴儿票按约1折估算,实际以支付页为准；多人价格按单人参考价估算，低价舱库存不足时多人下单可能重新定价，请以支付页选择实际乘机人数后的总价为准"
+      },
+      "single_adult_price": 9049.0,
+      "adult_roundtrip_price": 9049.0,
+      "roundtrip_price": 42983,
+      "friendly_reason": "白天直飞、行李和退改信息更清楚，适合老人/小孩同行；系统已降低纯价格权重，优先执行稳定性。",
+      "feasibility": {
+        "outbound": {
+          "set_off_time": "09:00",
+          "flight_departure_time": "11:50",
+          "departure_airport": "PVG",
+          "route_type": "international",
+          "transport_min": 50,
+          "transport_margin_min": 20,
+          "transport_margin_ratio": 0.4,
+          "transport_rush": true,
+          "departure_buffer_min": 180,
+          "buffer_label": "值机+出境边检海关",
+          "safety_min": 25,
+          "total_reserve": 275,
+          "earliest_catchable": "13:35",
+          "level": "不可行",
+          "short_min": 105,
+          "need_set_off": "07:15"
+        },
+        "return": {
+          "set_off_time": "16:00",
+          "flight_departure_time": "09:30",
+          "departure_airport": "KIX",
+          "route_type": "international",
+          "transport_min": 50,
+          "transport_margin_min": 15,
+          "transport_margin_ratio": 0.3,
+          "transport_rush": false,
+          "departure_buffer_min": 150,
+          "buffer_label": "值机+出境边检海关",
+          "safety_min": 25,
+          "total_reserve": 240,
+          "earliest_catchable": "20:00",
+          "level": "可行",
+          "margin_min": 810
+        }
+      },
+      "feasibility_rank": 2,
+      "budget_compare_price": 9049,
+      "budget_compare_scope": "per_person_roundtrip",
+      "purchase_budget_decision": {
+        "status": "over_budget",
+        "price": 9049.0,
+        "target_price": 6000.0,
+        "max_budget": 8000.0,
+        "is_over_budget": true,
+        "price_scope": "per_person_roundtrip",
+        "budget_scope": "per_person_roundtrip"
+      },
+      "purchase_advice": {
+        "label": "保持监控本条航线",
+        "conclusion": "单人参考价(成人口径)约¥9,049(单人往返)已超过你的最高可接受价¥8,000(单人往返)，不满足购买条件，建议继续保持监控本条航线",
+        "summary": "单人参考价(成人口径)已超过最高可接受价",
+        "condition": "支付页单人价≤¥8,000(单人往返)，且含托运行李"
+      }
+    }
+  ],
+  "excluded_plans": [
+    {
+      "scope": "roundtrip",
+      "is_roundtrip": true,
+      "outbound": {
+        "flight_no": "BR0705 | BR0182",
+        "flight_combo": "BR705+BR182",
+        "airline": "BR",
+        "airline_name": "长荣航空公司",
+        "aircraft": "空客A321",
+        "aircraft_code": "321",
+        "departure_airport": "PVG",
+        "arrival_airport": "KIX",
+        "departure_name": "浦东国际机场",
+        "arrival_name": "关西国际机场",
+        "departure_date": "2026-10-01",
+        "arrival_date": "2026-10-02",
+        "departure_time": "2026-10-01 20:05",
+        "arrival_time": "2026-10-02 11:10",
+        "duration_str": "14h05m",
+        "duration_min": 845,
+        "total_duration_min": 845,
+        "stops": 1,
+        "transfer_num": 2,
+        "price": 1770.0,
+        "ticket_price": 1770.0,
+        "is_codeshare": false,
+        "data_source": "juhe",
+        "source": "juhe",
+        "source_role": "cross_check",
+        "domestic_realtime_quote": true,
+        "collected_at": "2026-07-21T18:03:11",
+        "price_note": "票面价，实付以支付页为准",
+        "price_includes": "票面价，不含机建燃油拆分",
+        "segments": [
+          {
+            "flight_no": "BR0705 | BR0182",
+            "airline": "长荣航空公司",
+            "dep_airport": "PVG",
+            "arr_airport": "KIX",
+            "dep_time": "2026-10-01 20:05",
+            "arr_time": "2026-10-02 11:10",
+            "aircraft": "空客A321"
+          }
+        ],
+        "layovers": [],
+        "raw": {
+          "airline": "BR",
+          "airlineName": "长荣航空公司",
+          "flightNo": "BR0705 | BR0182",
+          "isCodeShare": false,
+          "equipment": "321",
+          "departure": "PVG",
+          "departureName": "浦东国际机场",
+          "departureDate": "2026-10-01",
+          "departureTime": "20:05",
+          "arrivalDate": "2026-10-02",
+          "arrivalTime": "11:10",
+          "arrival": "KIX",
+          "arrivalName": "关西国际机场",
+          "duration": "14h05m",
+          "transferNum": 2,
+          "ticketPrice": 1770,
+          "segments": [
+            {
+              "airline": "BR",
+              "flightNo": "BR0705",
+              "isCodeShare": false,
+              "opAirline": "",
+              "opFlightNo": "",
+              "equipment": "333",
+              "mealType": "",
+              "departure": "PVG",
+              "departureDate": "2026-10-01",
+              "departureTime": "20:05",
+              "arrival": "KHH",
+              "arrivalDate": "2026-10-01",
+              "arrivalTime": "22:20",
+              "flightTime": "02h15m",
+              "airlineName": "长荣航空公司",
+              "departureName": "浦东国际机场",
+              "arrivalName": "高雄国际机场"
+            },
+            {
+              "airline": "BR",
+              "flightNo": "BR0182",
+              "isCodeShare": false,
+              "opAirline": "",
+              "opFlightNo": "",
+              "equipment": "321",
+              "mealType": "",
+              "departure": "KHH",
+              "departureDate": "2026-10-02",
+              "departureTime": "07:05",
+              "arrival": "KIX",
+              "arrivalDate": "2026-10-02",
+              "arrivalTime": "11:10",
+              "flightTime": "03h05m",
+              "airlineName": "长荣航空公司",
+              "departureName": "高雄国际机场",
+              "arrivalName": "关西国际机场"
+            }
+          ]
+        },
+        "raw_flight_combo": "BR0705 | BR0182",
+        "cabin_class": "economy",
+        "source_weight": 0.6,
+        "route_type": "international",
+        "price_source": "juhe",
+        "source_price_details": [
+          {
+            "source": "juhe",
+            "price": 1770.0
+          }
+        ],
+        "primary_source": "juhe",
+        "extra": {
+          "baggage": [
+            {
+              "type": "checked",
+              "quantity": 2,
+              "weight": null,
+              "weight_unit": null
+            },
+            {
+              "type": "carry_on",
+              "quantity": 1,
+              "weight": null,
+              "weight_unit": null
+            },
+            {
+              "type": "checked",
+              "quantity": 2,
+              "weight": null,
+              "weight_unit": null
+            },
+            {
+              "type": "carry_on",
+              "quantity": 1,
+              "weight": null,
+              "weight_unit": null
+            }
+          ],
+          "baggage_detail": {
+            "checked": {
+              "quantity": 2,
+              "weight_kg": null,
+              "is_free": true
+            },
+            "carry_on": {
+              "quantity": 1,
+              "weight_kg": null,
+              "is_free": true
+            }
+          },
+          "seat_detail": {
+            "cabin_class": "economy",
+            "seat_selectable": false,
+            "seat_free": false,
+            "seat_price": null,
+            "seat_currency": null,
+            "cabin_class_name": "Economy"
+          },
+          "refund_change": {
+            "changeable": false,
+            "refundable": false,
+            "change_fee": null,
+            "refund_fee": null
+          },
+          "changeable": false,
+          "refundable": false
+        },
+        "has_baggage_info": true,
+        "search_origin": "PVG",
+        "search_destination": "KIX",
+        "total_hours": 14.1,
+        "stopovers": 1,
+        "flight_nos": [
+          "BR0705 | BR0182"
+        ],
+        "airlines": [
+          "长荣航空公司"
+        ],
+        "airline_summary": "长荣航空公司",
+        "route_summary": "PVG → KIX",
+        "layover_summary": "中转1次",
+        "fare_rules": {
+          "flight_combo": "BR705+BR182",
+          "baggage": {
+            "carry_on_kg": null,
+            "checked_kg": null,
+            "checked_pieces": 2,
+            "extra_bag_price": null
+          },
+          "change": {
+            "allowed": false,
+            "fee": null,
+            "deadline_hours": null,
+            "conditions": ""
+          },
+          "refund": {
+            "allowed": false,
+            "fee": null,
+            "deadline_hours": null,
+            "conditions": ""
+          },
+          "cabin_class": "economy"
+        },
+        "previous_price": 1753.0,
+        "exclude_reason": "超过合理中转最长可接受总行程时间",
+        "filter_reason_code": "max_total_duration",
+        "filter_reason_value": "total_duration_min=845",
+        "price_estimate": {},
+        "fare_verification": {},
+        "availability": {},
+        "transfer_risk": {}
+      },
+      "return": {
+        "flight_no": "NX855 | NX0120",
+        "flight_combo": "NX855+NX120",
+        "airline": "NX",
+        "airline_name": "澳门航空公司",
+        "aircraft": "空客A321",
+        "aircraft_code": "321",
+        "departure_airport": "KIX",
+        "arrival_airport": "SHA",
+        "departure_name": "关西国际机场",
+        "arrival_name": "上海虹桥国际机场",
+        "departure_date": "2026-10-06",
+        "arrival_date": "2026-10-06",
+        "departure_time": "2026-10-06 13:55",
+        "arrival_time": "2026-10-06 21:40",
+        "duration_str": "08h45m",
+        "duration_min": 525,
+        "total_duration_min": 525,
+        "stops": 1,
+        "transfer_num": 2,
+        "price": 3167.0,
+        "ticket_price": 3167.0,
+        "is_codeshare": false,
+        "data_source": "juhe",
+        "source": "juhe",
+        "source_role": "cross_check",
+        "domestic_realtime_quote": true,
+        "collected_at": "2026-07-21T18:04:39",
+        "price_note": "票面价，实付以支付页为准",
+        "price_includes": "票面价，不含机建燃油拆分",
+        "segments": [
+          {
+            "flight_no": "NX855 | NX0120",
+            "airline": "澳门航空公司",
+            "dep_airport": "KIX",
+            "arr_airport": "SHA",
+            "dep_time": "2026-10-06 13:55",
+            "arr_time": "2026-10-06 21:40",
+            "aircraft": "空客A321"
+          }
+        ],
+        "layovers": [],
+        "raw": {
+          "airline": "NX",
+          "airlineName": "澳门航空公司",
+          "flightNo": "NX855 | NX0120",
+          "isCodeShare": false,
+          "equipment": "321",
+          "departure": "KIX",
+          "departureName": "关西国际机场",
+          "departureDate": "2026-10-06",
+          "departureTime": "13:55",
+          "arrivalDate": "2026-10-06",
+          "arrivalTime": "21:40",
+          "arrival": "SHA",
+          "arrivalName": "上海虹桥国际机场",
+          "duration": "08h45m",
+          "transferNum": 2,
+          "ticketPrice": 3167,
+          "segments": [
+            {
+              "airline": "NX",
+              "flightNo": "NX855",
+              "isCodeShare": false,
+              "opAirline": "",
+              "opFlightNo": "",
+              "equipment": "320",
+              "mealType": "",
+              "departure": "KIX",
+              "departureDate": "2026-10-06",
+              "departureTime": "13:55",
+              "arrival": "MFM",
+              "arrivalDate": "2026-10-06",
+              "arrivalTime": "16:55",
+              "flightTime": "04h00m",
+              "airlineName": "澳门航空公司",
+              "departureName": "关西国际机场",
+              "arrivalName": "澳门国际机场"
+            },
+            {
+              "airline": "NX",
+              "flightNo": "NX0120",
+              "isCodeShare": false,
+              "opAirline": "",
+              "opFlightNo": "",
+              "equipment": "321",
+              "mealType": "",
+              "departure": "MFM",
+              "departureDate": "2026-10-06",
+              "departureTime": "19:25",
+              "arrival": "SHA",
+              "arrivalDate": "2026-10-06",
+              "arrivalTime": "21:40",
+              "flightTime": "02h15m",
+              "airlineName": "澳门航空公司",
+              "departureName": "澳门国际机场",
+              "arrivalName": "上海虹桥国际机场"
+            }
+          ]
+        },
+        "raw_flight_combo": "NX855 | NX0120",
+        "cabin_class": "economy",
+        "source_weight": 0.6,
+        "route_type": "international",
+        "price_source": "juhe",
+        "source_price_details": [
+          {
+            "source": "juhe",
+            "price": 3167.0
+          }
+        ],
+        "primary_source": "juhe",
+        "has_baggage_info": false,
+        "search_origin": "KIX",
+        "search_destination": "PVG",
+        "total_hours": 8.8,
+        "stopovers": 1,
+        "flight_nos": [
+          "NX855 | NX0120"
+        ],
+        "airlines": [
+          "澳门航空公司"
+        ],
+        "airline_summary": "澳门航空公司",
+        "route_summary": "KIX → SHA",
+        "layover_summary": "中转1次",
+        "fare_rules": {
+          "flight_combo": "NX855+NX120",
+          "baggage": {
+            "carry_on_kg": null,
+            "checked_kg": null,
+            "checked_pieces": 0,
+            "extra_bag_price": null
+          },
+          "change": {
+            "allowed": null,
+            "fee": null,
+            "deadline_hours": null,
+            "conditions": ""
+          },
+          "refund": {
+            "allowed": null,
+            "fee": null,
+            "deadline_hours": null,
+            "conditions": ""
+          },
+          "cabin_class": "economy"
+        },
+        "exclude_reason": "超过合理中转最长可接受总行程时间",
+        "filter_reason_code": "max_total_duration",
+        "filter_reason_value": "total_duration_min=525",
+        "price_estimate": {},
+        "fare_verification": {},
+        "availability": {},
+        "transfer_risk": {}
+      },
+      "outbound_price": 1770.0,
+      "return_price": 3167.0,
+      "unit_roundtrip_price": 4937.0,
+      "total_price": 23451,
+      "roundtrip_price": 23451,
+      "passenger_pricing": {
+        "applies": true,
+        "scope": "roundtrip",
+        "passengers": {
+          "adult": 2,
+          "child": 1,
+          "elderly": 2,
+          "infant": 0
+        },
+        "passenger_label": "2成人+1儿童+2老人",
+        "factor": 4.75,
+        "route_type": "international",
+        "outbound": {
+          "unit_price": 1770.0,
+          "total": 8408,
+          "factor": 4.75,
+          "passengers": {
+            "adult": 2,
+            "child": 1,
+            "elderly": 2,
+            "infant": 0
+          },
+          "passenger_label": "2成人+1儿童+2老人",
+          "parts": [
+            {
+              "type": "adult",
+              "label": "成人",
+              "count": 2,
+              "ratio": 1.0,
+              "unit_price": 1770,
+              "total": 3540
+            },
+            {
+              "type": "elderly",
+              "label": "老人",
+              "count": 2,
+              "ratio": 1.0,
+              "unit_price": 1770,
+              "total": 3540
+            },
+            {
+              "type": "child",
+              "label": "儿童",
+              "count": 1,
+              "ratio": 0.75,
+              "unit_price": 1328,
+              "total": 1328
+            }
+          ],
+          "cabin": "economy",
+          "route_type": "international",
+          "note": "儿童票按国际航线常见约75折估算,婴儿票按约1折估算,实际以支付页为准"
+        },
+        "return": {
+          "unit_price": 3167.0,
+          "total": 15043,
+          "factor": 4.75,
+          "passengers": {
+            "adult": 2,
+            "child": 1,
+            "elderly": 2,
+            "infant": 0
+          },
+          "passenger_label": "2成人+1儿童+2老人",
+          "parts": [
+            {
+              "type": "adult",
+              "label": "成人",
+              "count": 2,
+              "ratio": 1.0,
+              "unit_price": 3167,
+              "total": 6334
+            },
+            {
+              "type": "elderly",
+              "label": "老人",
+              "count": 2,
+              "ratio": 1.0,
+              "unit_price": 3167,
+              "total": 6334
+            },
+            {
+              "type": "child",
+              "label": "儿童",
+              "count": 1,
+              "ratio": 0.75,
+              "unit_price": 2375,
+              "total": 2375
+            }
+          ],
+          "cabin": "economy",
+          "route_type": "international",
+          "note": "儿童票按国际航线常见约75折估算,婴儿票按约1折估算,实际以支付页为准"
+        },
+        "total_price": 23451,
+        "single_adult_price": 4937.0,
+        "note": "儿童票按国际航线常见约75折估算,婴儿票按约1折估算,实际以支付页为准",
+        "price_tiers": {
+          "unit_oneway": {
+            "outbound": 1770,
+            "return": 3167,
+            "scope": "single_person_oneway"
+          },
+          "unit_roundtrip": 4937,
+          "total_roundtrip_ref": 23451,
+          "total_estimated": 23451,
+          "per_person_estimated": 4690,
+          "passenger_count": 5,
+          "passengers": {
+            "adult": 2,
+            "child": 1,
+            "elderly": 2,
+            "infant": 0
+          },
+          "passenger_label": "2成人+1儿童+2老人",
+          "factor": 4.75,
+          "is_roundtrip": true,
+          "purchase_type": "roundtrip",
+          "route_type": "international",
+          "note": "儿童票按国际航线常见约75折估算,婴儿票按约1折估算,实际以支付页为准；多人价格按单人参考价估算，低价舱库存不足时多人下单可能重新定价，请以支付页选择实际乘机人数后的总价为准"
+        }
+      },
+      "price_tiers": {
+        "unit_oneway": {
+          "outbound": 1770,
+          "return": 3167,
+          "scope": "single_person_oneway"
+        },
+        "unit_roundtrip": 4937,
+        "total_roundtrip_ref": 23451,
+        "total_estimated": 23451,
+        "per_person_estimated": 4690,
+        "passenger_count": 5,
+        "passengers": {
+          "adult": 2,
+          "child": 1,
+          "elderly": 2,
+          "infant": 0
+        },
+        "passenger_label": "2成人+1儿童+2老人",
+        "factor": 4.75,
+        "is_roundtrip": true,
+        "purchase_type": "roundtrip",
+        "route_type": "international",
+        "note": "儿童票按国际航线常见约75折估算,婴儿票按约1折估算,实际以支付页为准；多人价格按单人参考价估算，低价舱库存不足时多人下单可能重新定价，请以支付页选择实际乘机人数后的总价为准"
+      },
+      "diff": 19532.0,
+      "reasons": [
+        "价格虽低但时间或其他条件不满足"
+      ],
+      "reason": "价格虽低但时间或其他条件不满足",
+      "filter_reasons": [
+        {
+          "direction": "去程",
+          "code": "max_total_duration",
+          "value": "total_duration_min=845"
+        },
+        {
+          "direction": "返程",
+          "code": "max_total_duration",
+          "value": "total_duration_min=525"
+        }
+      ],
+      "recommended_price": 42983.0,
+      "max_budget": 38000.0,
+      "recommended_over_budget": true,
+      "all_over_budget_reference": false,
+      "exclusion_basis": [
+        "必须含托运",
+        "最高可接受价¥38,000(全员,=单人¥8,000×4.75)"
+      ],
+      "comparison_points": [
+        "去程:此方案BR705+BR182 11:10到达",
+        "价格:此方案¥23,451,比推荐便宜¥19,532 ✓",
+        "返程时间:此方案13:55(需确认) vs 推荐09:30(可用) ✗"
+      ],
+      "route_type": "international",
+      "single_adult_price": 4937.0,
+      "price": 23451
+    },
+    {
+      "scope": "roundtrip",
+      "is_roundtrip": true,
+      "outbound": {
+        "flight_no": "BR0705 | BR0182",
+        "flight_combo": "BR705+BR182",
+        "airline": "BR",
+        "airline_name": "长荣航空公司",
+        "aircraft": "空客A321",
+        "aircraft_code": "321",
+        "departure_airport": "PVG",
+        "arrival_airport": "KIX",
+        "departure_name": "浦东国际机场",
+        "arrival_name": "关西国际机场",
+        "departure_date": "2026-10-01",
+        "arrival_date": "2026-10-02",
+        "departure_time": "2026-10-01 20:05",
+        "arrival_time": "2026-10-02 11:10",
+        "duration_str": "14h05m",
+        "duration_min": 845,
+        "total_duration_min": 845,
+        "stops": 1,
+        "transfer_num": 2,
+        "price": 1770.0,
+        "ticket_price": 1770.0,
+        "is_codeshare": false,
+        "data_source": "juhe",
+        "source": "juhe",
+        "source_role": "cross_check",
+        "domestic_realtime_quote": true,
+        "collected_at": "2026-07-21T18:03:11",
+        "price_note": "票面价，实付以支付页为准",
+        "price_includes": "票面价，不含机建燃油拆分",
+        "segments": [
+          {
+            "flight_no": "BR0705 | BR0182",
+            "airline": "长荣航空公司",
+            "dep_airport": "PVG",
+            "arr_airport": "KIX",
+            "dep_time": "2026-10-01 20:05",
+            "arr_time": "2026-10-02 11:10",
+            "aircraft": "空客A321"
+          }
+        ],
+        "layovers": [],
+        "raw": {
+          "airline": "BR",
+          "airlineName": "长荣航空公司",
+          "flightNo": "BR0705 | BR0182",
+          "isCodeShare": false,
+          "equipment": "321",
+          "departure": "PVG",
+          "departureName": "浦东国际机场",
+          "departureDate": "2026-10-01",
+          "departureTime": "20:05",
+          "arrivalDate": "2026-10-02",
+          "arrivalTime": "11:10",
+          "arrival": "KIX",
+          "arrivalName": "关西国际机场",
+          "duration": "14h05m",
+          "transferNum": 2,
+          "ticketPrice": 1770,
+          "segments": [
+            {
+              "airline": "BR",
+              "flightNo": "BR0705",
+              "isCodeShare": false,
+              "opAirline": "",
+              "opFlightNo": "",
+              "equipment": "333",
+              "mealType": "",
+              "departure": "PVG",
+              "departureDate": "2026-10-01",
+              "departureTime": "20:05",
+              "arrival": "KHH",
+              "arrivalDate": "2026-10-01",
+              "arrivalTime": "22:20",
+              "flightTime": "02h15m",
+              "airlineName": "长荣航空公司",
+              "departureName": "浦东国际机场",
+              "arrivalName": "高雄国际机场"
+            },
+            {
+              "airline": "BR",
+              "flightNo": "BR0182",
+              "isCodeShare": false,
+              "opAirline": "",
+              "opFlightNo": "",
+              "equipment": "321",
+              "mealType": "",
+              "departure": "KHH",
+              "departureDate": "2026-10-02",
+              "departureTime": "07:05",
+              "arrival": "KIX",
+              "arrivalDate": "2026-10-02",
+              "arrivalTime": "11:10",
+              "flightTime": "03h05m",
+              "airlineName": "长荣航空公司",
+              "departureName": "高雄国际机场",
+              "arrivalName": "关西国际机场"
+            }
+          ]
+        },
+        "raw_flight_combo": "BR0705 | BR0182",
+        "cabin_class": "economy",
+        "source_weight": 0.6,
+        "route_type": "international",
+        "price_source": "juhe",
+        "source_price_details": [
+          {
+            "source": "juhe",
+            "price": 1770.0
+          }
+        ],
+        "primary_source": "juhe",
+        "extra": {
+          "baggage": [
+            {
+              "type": "checked",
+              "quantity": 2,
+              "weight": null,
+              "weight_unit": null
+            },
+            {
+              "type": "carry_on",
+              "quantity": 1,
+              "weight": null,
+              "weight_unit": null
+            },
+            {
+              "type": "checked",
+              "quantity": 2,
+              "weight": null,
+              "weight_unit": null
+            },
+            {
+              "type": "carry_on",
+              "quantity": 1,
+              "weight": null,
+              "weight_unit": null
+            }
+          ],
+          "baggage_detail": {
+            "checked": {
+              "quantity": 2,
+              "weight_kg": null,
+              "is_free": true
+            },
+            "carry_on": {
+              "quantity": 1,
+              "weight_kg": null,
+              "is_free": true
+            }
+          },
+          "seat_detail": {
+            "cabin_class": "economy",
+            "seat_selectable": false,
+            "seat_free": false,
+            "seat_price": null,
+            "seat_currency": null,
+            "cabin_class_name": "Economy"
+          },
+          "refund_change": {
+            "changeable": false,
+            "refundable": false,
+            "change_fee": null,
+            "refund_fee": null
+          },
+          "changeable": false,
+          "refundable": false
+        },
+        "has_baggage_info": true,
+        "search_origin": "PVG",
+        "search_destination": "KIX",
+        "total_hours": 14.1,
+        "stopovers": 1,
+        "flight_nos": [
+          "BR0705 | BR0182"
+        ],
+        "airlines": [
+          "长荣航空公司"
+        ],
+        "airline_summary": "长荣航空公司",
+        "route_summary": "PVG → KIX",
+        "layover_summary": "中转1次",
+        "fare_rules": {
+          "flight_combo": "BR705+BR182",
+          "baggage": {
+            "carry_on_kg": null,
+            "checked_kg": null,
+            "checked_pieces": 2,
+            "extra_bag_price": null
+          },
+          "change": {
+            "allowed": false,
+            "fee": null,
+            "deadline_hours": null,
+            "conditions": ""
+          },
+          "refund": {
+            "allowed": false,
+            "fee": null,
+            "deadline_hours": null,
+            "conditions": ""
+          },
+          "cabin_class": "economy"
+        },
+        "previous_price": 1753.0,
+        "exclude_reason": "超过合理中转最长可接受总行程时间",
+        "filter_reason_code": "max_total_duration",
+        "filter_reason_value": "total_duration_min=845",
+        "price_estimate": {},
+        "fare_verification": {},
+        "availability": {},
+        "transfer_risk": {}
+      },
+      "return": {
+        "flight_no": "KE0738 | OZ0361",
+        "flight_combo": "KE738+OZ361",
+        "airline": "KE",
+        "airline_name": "大韩航空公司",
+        "aircraft": "空客A330-300",
+        "aircraft_code": "333",
+        "departure_airport": "KIX",
+        "arrival_airport": "PVG",
+        "departure_name": "关西国际机场",
+        "arrival_name": "浦东国际机场",
+        "departure_date": "2026-10-06",
+        "arrival_date": "2026-10-06",
+        "departure_time": "2026-10-06 02:15",
+        "arrival_time": "2026-10-06 10:05",
+        "duration_str": "08h50m",
+        "duration_min": 530,
+        "total_duration_min": 530,
+        "stops": 1,
+        "transfer_num": 2,
+        "price": 3217.0,
+        "ticket_price": 3217.0,
+        "is_codeshare": false,
+        "data_source": "hasdata+juhe",
+        "source": "juhe",
+        "source_role": "cross_check",
+        "domestic_realtime_quote": true,
+        "collected_at": "2026-07-21T18:04:39",
+        "price_note": "票面价，实付以支付页为准",
+        "price_includes": "票面价，不含机建燃油拆分",
+        "segments": [
+          {
+            "flight_no": "KE 738",
+            "airline": "大韩航空",
+            "aircraft": "Airbus A321neo",
+            "dep_airport": "KIX",
+            "dep_city": "关西国际机场",
+            "dep_time": "2026-10-06 2:15",
+            "arr_airport": "ICN",
+            "arr_city": "仁川国际机场",
+            "arr_time": "2026-10-06 4:05",
+            "duration_min": 110,
+            "cabin_class": "economy"
+          },
+          {
+            "flight_no": "OZ 361",
+            "airline": "韩亚",
+            "aircraft": "Airbus A330",
+            "dep_airport": "ICN",
+            "dep_city": "仁川国际机场",
+            "dep_time": "2026-10-06 9:00",
+            "arr_airport": "PVG",
+            "arr_city": "上海浦东国际机场",
+            "arr_time": "2026-10-06 10:05",
+            "duration_min": 125,
+            "cabin_class": "economy"
+          }
+        ],
+        "layovers": [
+          {
+            "city": "仁川国际机场",
+            "airport": "ICN",
+            "wait_minutes": 295
+          }
+        ],
+        "raw": {
+          "airline": "KE",
+          "airlineName": "大韩航空公司",
+          "flightNo": "KE0738 | OZ0361",
+          "isCodeShare": false,
+          "equipment": "333",
+          "departure": "KIX",
+          "departureName": "关西国际机场",
+          "departureDate": "2026-10-06",
+          "departureTime": "02:15",
+          "arrivalDate": "2026-10-06",
+          "arrivalTime": "10:05",
+          "arrival": "PVG",
+          "arrivalName": "浦东国际机场",
+          "duration": "08h50m",
+          "transferNum": 2,
+          "ticketPrice": 3217,
+          "segments": [
+            {
+              "airline": "KE",
+              "flightNo": "KE0738",
+              "isCodeShare": false,
+              "opAirline": "",
+              "opFlightNo": "",
+              "equipment": "32Q",
+              "mealType": "",
+              "departure": "KIX",
+              "departureDate": "2026-10-06",
+              "departureTime": "02:15",
+              "arrival": "ICN",
+              "arrivalDate": "2026-10-06",
+              "arrivalTime": "04:05",
+              "flightTime": "01h50m",
+              "airlineName": "大韩航空公司",
+              "departureName": "关西国际机场",
+              "arrivalName": "仁川国际机场"
+            },
+            {
+              "airline": "OZ",
+              "flightNo": "OZ0361",
+              "isCodeShare": false,
+              "opAirline": "",
+              "opFlightNo": "",
+              "equipment": "333",
+              "mealType": "",
+              "departure": "ICN",
+              "departureDate": "2026-10-06",
+              "departureTime": "09:00",
+              "arrival": "PVG",
+              "arrivalDate": "2026-10-06",
+              "arrivalTime": "10:05",
+              "flightTime": "02h05m",
+              "airlineName": "韩亚航空公司",
+              "departureName": "仁川国际机场",
+              "arrivalName": "浦东国际机场"
+            }
+          ]
+        },
+        "raw_flight_combo": "KE0738 | OZ0361",
+        "cabin_class": "economy",
+        "source_weight": 0.6,
+        "route_type": "international",
+        "price_source": "juhe",
+        "source_price_details": [
+          {
+            "source": "juhe",
+            "price": 3217.0
+          },
+          {
+            "source": "hasdata",
+            "price": 3316.0
+          }
+        ],
+        "flight_nos": [
+          "KE 738",
+          "OZ 361"
+        ],
+        "airlines": [
+          "大韩航空",
+          "韩亚"
+        ],
+        "airline_summary": "大韩航空 / 韩亚",
+        "route_summary": "KIX → ICN → PVG",
+        "total_hours": 8.8,
+        "duration_hours": 8.83,
+        "stopover_city": "ICN",
+        "stopovers": 1,
+        "layover_summary": "中转1次 经ICN",
+        "primary_source": "hasdata",
+        "booking_options": [
+          {
+            "platform": "Google Flights 预订",
+            "price": 3316,
+            "url": "https://www.google.com/travel/flights/booking?token=%3CTOKEN%3E",
+            "verified": true,
+            "source": "booking_token",
+            "direct_booking": true
+          },
+          {
+            "platform": "携程搜索",
+            "price": null,
+            "url": "https://flights.ctrip.com/online/list/oneway-KIX-PVG?depdate=2026-10-06&cabin=y&flightno=KE738",
+            "verified": false,
+            "source": "inferred_ota"
+          },
+          {
+            "platform": "飞猪搜索",
+            "price": null,
+            "url": "https://www.fliggy.com/flight/international-search?depCity=KIX&arrCity=PVG&depDate=2026-10-06&flightNo=KE738",
+            "verified": false,
+            "source": "inferred_ota"
+          }
+        ],
+        "has_baggage_info": false,
+        "search_origin": "KIX",
+        "search_destination": "PVG",
+        "fare_rules": {
+          "flight_combo": "KE738+OZ361",
+          "baggage": {
+            "carry_on_kg": null,
+            "checked_kg": null,
+            "checked_pieces": 0,
+            "extra_bag_price": null
+          },
+          "change": {
+            "allowed": null,
+            "fee": null,
+            "deadline_hours": null,
+            "conditions": ""
+          },
+          "refund": {
+            "allowed": null,
+            "fee": null,
+            "deadline_hours": null,
+            "conditions": ""
+          },
+          "cabin_class": "economy"
+        },
+        "exclude_reason": "红眼/凌晨航班，已排除",
+        "filter_reason_code": "red_eye",
+        "filter_reason_value": "departure=2026-10-06 02:15,arrival=2026-10-06 10:05",
+        "price_estimate": {},
+        "fare_verification": {},
+        "availability": {},
+        "transfer_risk": {}
+      },
+      "outbound_price": 1770.0,
+      "return_price": 3217.0,
+      "unit_roundtrip_price": 4987.0,
+      "total_price": 23689,
+      "roundtrip_price": 23689,
+      "passenger_pricing": {
+        "applies": true,
+        "scope": "roundtrip",
+        "passengers": {
+          "adult": 2,
+          "child": 1,
+          "elderly": 2,
+          "infant": 0
+        },
+        "passenger_label": "2成人+1儿童+2老人",
+        "factor": 4.75,
+        "route_type": "international",
+        "outbound": {
+          "unit_price": 1770.0,
+          "total": 8408,
+          "factor": 4.75,
+          "passengers": {
+            "adult": 2,
+            "child": 1,
+            "elderly": 2,
+            "infant": 0
+          },
+          "passenger_label": "2成人+1儿童+2老人",
+          "parts": [
+            {
+              "type": "adult",
+              "label": "成人",
+              "count": 2,
+              "ratio": 1.0,
+              "unit_price": 1770,
+              "total": 3540
+            },
+            {
+              "type": "elderly",
+              "label": "老人",
+              "count": 2,
+              "ratio": 1.0,
+              "unit_price": 1770,
+              "total": 3540
+            },
+            {
+              "type": "child",
+              "label": "儿童",
+              "count": 1,
+              "ratio": 0.75,
+              "unit_price": 1328,
+              "total": 1328
+            }
+          ],
+          "cabin": "economy",
+          "route_type": "international",
+          "note": "儿童票按国际航线常见约75折估算,婴儿票按约1折估算,实际以支付页为准"
+        },
+        "return": {
+          "unit_price": 3217.0,
+          "total": 15281,
+          "factor": 4.75,
+          "passengers": {
+            "adult": 2,
+            "child": 1,
+            "elderly": 2,
+            "infant": 0
+          },
+          "passenger_label": "2成人+1儿童+2老人",
+          "parts": [
+            {
+              "type": "adult",
+              "label": "成人",
+              "count": 2,
+              "ratio": 1.0,
+              "unit_price": 3217,
+              "total": 6434
+            },
+            {
+              "type": "elderly",
+              "label": "老人",
+              "count": 2,
+              "ratio": 1.0,
+              "unit_price": 3217,
+              "total": 6434
+            },
+            {
+              "type": "child",
+              "label": "儿童",
+              "count": 1,
+              "ratio": 0.75,
+              "unit_price": 2413,
+              "total": 2413
+            }
+          ],
+          "cabin": "economy",
+          "route_type": "international",
+          "note": "儿童票按国际航线常见约75折估算,婴儿票按约1折估算,实际以支付页为准"
+        },
+        "total_price": 23689,
+        "single_adult_price": 4987.0,
+        "note": "儿童票按国际航线常见约75折估算,婴儿票按约1折估算,实际以支付页为准",
+        "price_tiers": {
+          "unit_oneway": {
+            "outbound": 1770,
+            "return": 3217,
+            "scope": "single_person_oneway"
+          },
+          "unit_roundtrip": 4987,
+          "total_roundtrip_ref": 23689,
+          "total_estimated": 23689,
+          "per_person_estimated": 4738,
+          "passenger_count": 5,
+          "passengers": {
+            "adult": 2,
+            "child": 1,
+            "elderly": 2,
+            "infant": 0
+          },
+          "passenger_label": "2成人+1儿童+2老人",
+          "factor": 4.75,
+          "is_roundtrip": true,
+          "purchase_type": "roundtrip",
+          "route_type": "international",
+          "note": "儿童票按国际航线常见约75折估算,婴儿票按约1折估算,实际以支付页为准；多人价格按单人参考价估算，低价舱库存不足时多人下单可能重新定价，请以支付页选择实际乘机人数后的总价为准"
+        }
+      },
+      "price_tiers": {
+        "unit_oneway": {
+          "outbound": 1770,
+          "return": 3217,
+          "scope": "single_person_oneway"
+        },
+        "unit_roundtrip": 4987,
+        "total_roundtrip_ref": 23689,
+        "total_estimated": 23689,
+        "per_person_estimated": 4738,
+        "passenger_count": 5,
+        "passengers": {
+          "adult": 2,
+          "child": 1,
+          "elderly": 2,
+          "infant": 0
+        },
+        "passenger_label": "2成人+1儿童+2老人",
+        "factor": 4.75,
+        "is_roundtrip": true,
+        "purchase_type": "roundtrip",
+        "route_type": "international",
+        "note": "儿童票按国际航线常见约75折估算,婴儿票按约1折估算,实际以支付页为准；多人价格按单人参考价估算，低价舱库存不足时多人下单可能重新定价，请以支付页选择实际乘机人数后的总价为准"
+      },
+      "diff": 19294.0,
+      "reasons": [
+        "返程：红眼/凌晨航班，已排除"
+      ],
+      "reason": "返程：红眼/凌晨航班，已排除",
+      "filter_reasons": [
+        {
+          "direction": "去程",
+          "code": "max_total_duration",
+          "value": "total_duration_min=845"
+        },
+        {
+          "direction": "返程",
+          "code": "red_eye",
+          "value": "departure=2026-10-06 02:15,arrival=2026-10-06 10:05"
+        }
+      ],
+      "recommended_price": 42983.0,
+      "max_budget": 38000.0,
+      "recommended_over_budget": true,
+      "all_over_budget_reference": false,
+      "exclusion_basis": [
+        "必须含托运",
+        "最高可接受价¥38,000(全员,=单人¥8,000×4.75)"
+      ],
+      "comparison_points": [
+        "去程:此方案BR705+BR182 11:10到达",
+        "价格:此方案¥23,689,比推荐便宜¥19,294 ✓",
+        "返程时间:此方案02:15(需确认) vs 推荐09:30(可用) ✗"
+      ],
+      "route_type": "international",
+      "single_adult_price": 4987.0,
+      "price": 23689
+    },
+    {
+      "scope": "roundtrip",
+      "is_roundtrip": true,
+      "outbound": {
+        "flight_no": "OZ0368 | OZ0112",
+        "flight_combo": "OZ368+OZ112",
+        "airline": "OZ",
+        "airline_name": "韩亚航空公司",
+        "aircraft": "空客A330-300",
+        "aircraft_code": "333",
+        "departure_airport": "PVG",
+        "arrival_airport": "KIX",
+        "departure_name": "浦东国际机场",
+        "arrival_name": "关西国际机场",
+        "departure_date": "2026-10-01",
+        "arrival_date": "2026-10-01",
+        "departure_time": "2026-10-01 01:05",
+        "arrival_time": "2026-10-01 09:00",
+        "duration_str": "06h55m",
+        "duration_min": 415,
+        "total_duration_min": 415,
+        "stops": 1,
+        "transfer_num": 2,
+        "price": 2969.0,
+        "ticket_price": 2969.0,
+        "is_codeshare": false,
+        "data_source": "hasdata+juhe",
+        "source": "juhe",
+        "source_role": "cross_check",
+        "domestic_realtime_quote": true,
+        "collected_at": "2026-07-21T18:03:11",
+        "price_note": "票面价，实付以支付页为准",
+        "price_includes": "票面价，不含机建燃油拆分",
+        "segments": [
+          {
+            "flight_no": "OZ 368",
+            "airline": "韩亚",
+            "aircraft": "Airbus A321neo",
+            "dep_airport": "PVG",
+            "dep_city": "上海浦东国际机场",
+            "dep_time": "2026-10-01 1:05",
+            "arr_airport": "ICN",
+            "arr_city": "仁川国际机场",
+            "arr_time": "2026-10-01 4:05",
+            "duration_min": 120,
+            "cabin_class": "economy"
+          },
+          {
+            "flight_no": "OZ 112",
+            "airline": "韩亚",
+            "aircraft": "Airbus A330",
+            "dep_airport": "ICN",
+            "dep_city": "仁川国际机场",
+            "dep_time": "2026-10-01 6:55",
+            "arr_airport": "KIX",
+            "arr_city": "关西国际机场",
+            "arr_time": "2026-10-01 9:00",
+            "duration_min": 125,
+            "cabin_class": "economy"
+          }
+        ],
+        "layovers": [
+          {
+            "city": "仁川国际机场",
+            "airport": "ICN",
+            "wait_minutes": 170
+          }
+        ],
+        "raw": {
+          "airline": "OZ",
+          "airlineName": "韩亚航空公司",
+          "flightNo": "OZ0368 | OZ0112",
+          "isCodeShare": false,
+          "equipment": "333",
+          "departure": "PVG",
+          "departureName": "浦东国际机场",
+          "departureDate": "2026-10-01",
+          "departureTime": "01:05",
+          "arrivalDate": "2026-10-01",
+          "arrivalTime": "09:00",
+          "arrival": "KIX",
+          "arrivalName": "关西国际机场",
+          "duration": "06h55m",
+          "transferNum": 2,
+          "ticketPrice": 2969,
+          "segments": [
+            {
+              "airline": "OZ",
+              "flightNo": "OZ0368",
+              "isCodeShare": false,
+              "opAirline": "",
+              "opFlightNo": "",
+              "equipment": "32Q",
+              "mealType": "",
+              "departure": "PVG",
+              "departureDate": "2026-10-01",
+              "departureTime": "01:05",
+              "arrival": "ICN",
+              "arrivalDate": "2026-10-01",
+              "arrivalTime": "04:05",
+              "flightTime": "02h00m",
+              "airlineName": "韩亚航空公司",
+              "departureName": "浦东国际机场",
+              "arrivalName": "仁川国际机场"
+            },
+            {
+              "airline": "OZ",
+              "flightNo": "OZ0112",
+              "isCodeShare": false,
+              "opAirline": "",
+              "opFlightNo": "",
+              "equipment": "333",
+              "mealType": "",
+              "departure": "ICN",
+              "departureDate": "2026-10-01",
+              "departureTime": "06:55",
+              "arrival": "KIX",
+              "arrivalDate": "2026-10-01",
+              "arrivalTime": "09:00",
+              "flightTime": "02h05m",
+              "airlineName": "韩亚航空公司",
+              "departureName": "仁川国际机场",
+              "arrivalName": "关西国际机场"
+            }
+          ]
+        },
+        "raw_flight_combo": "OZ0368 | OZ0112",
+        "cabin_class": "economy",
+        "source_weight": 0.6,
+        "route_type": "international",
+        "price_source": "juhe",
+        "source_price_details": [
+          {
+            "source": "juhe",
+            "price": 2969.0
+          },
+          {
+            "source": "hasdata",
+            "price": 3068.0
+          }
+        ],
+        "flight_nos": [
+          "OZ 368",
+          "OZ 112"
+        ],
+        "airlines": [
+          "韩亚"
+        ],
+        "airline_summary": "韩亚",
+        "route_summary": "PVG → ICN → KIX",
+        "total_hours": 6.9,
+        "duration_hours": 6.92,
+        "stopover_city": "ICN",
+        "stopovers": 1,
+        "layover_summary": "中转1次 经ICN",
+        "primary_source": "hasdata",
+        "booking_options": [
+          {
+            "platform": "Google Flights 预订",
+            "price": 3068,
+            "url": "https://www.google.com/travel/flights/booking?token=%3CTOKEN%3E",
+            "verified": true,
+            "source": "booking_token",
+            "direct_booking": true
+          },
+          {
+            "platform": "携程搜索",
+            "price": null,
+            "url": "https://flights.ctrip.com/online/list/oneway-PVG-KIX?depdate=2026-10-01&cabin=y&flightno=OZ368",
+            "verified": false,
+            "source": "inferred_ota"
+          },
+          {
+            "platform": "飞猪搜索",
+            "price": null,
+            "url": "https://www.fliggy.com/flight/international-search?depCity=PVG&arrCity=KIX&depDate=2026-10-01&flightNo=OZ368",
+            "verified": false,
+            "source": "inferred_ota"
+          }
+        ],
+        "has_baggage_info": false,
+        "search_origin": "PVG",
+        "search_destination": "KIX",
+        "fare_rules": {
+          "flight_combo": "OZ368+OZ112",
+          "baggage": {
+            "carry_on_kg": null,
+            "checked_kg": null,
+            "checked_pieces": 0,
+            "extra_bag_price": null
+          },
+          "change": {
+            "allowed": null,
+            "fee": null,
+            "deadline_hours": null,
+            "conditions": ""
+          },
+          "refund": {
+            "allowed": null,
+            "fee": null,
+            "deadline_hours": null,
+            "conditions": ""
+          },
+          "cabin_class": "economy"
+        },
+        "previous_price": 2945.0,
+        "exclude_reason": "红眼/凌晨航班，已排除",
+        "filter_reason_code": "red_eye",
+        "filter_reason_value": "departure=2026-10-01 01:05,arrival=2026-10-01 09:00",
+        "price_estimate": {},
+        "fare_verification": {},
+        "availability": {},
+        "transfer_risk": {}
+      },
+      "return": {
+        "flight_no": "NX855 | NX0120",
+        "flight_combo": "NX855+NX120",
+        "airline": "NX",
+        "airline_name": "澳门航空公司",
+        "aircraft": "空客A321",
+        "aircraft_code": "321",
+        "departure_airport": "KIX",
+        "arrival_airport": "SHA",
+        "departure_name": "关西国际机场",
+        "arrival_name": "上海虹桥国际机场",
+        "departure_date": "2026-10-06",
+        "arrival_date": "2026-10-06",
+        "departure_time": "2026-10-06 13:55",
+        "arrival_time": "2026-10-06 21:40",
+        "duration_str": "08h45m",
+        "duration_min": 525,
+        "total_duration_min": 525,
+        "stops": 1,
+        "transfer_num": 2,
+        "price": 3167.0,
+        "ticket_price": 3167.0,
+        "is_codeshare": false,
+        "data_source": "juhe",
+        "source": "juhe",
+        "source_role": "cross_check",
+        "domestic_realtime_quote": true,
+        "collected_at": "2026-07-21T18:04:39",
+        "price_note": "票面价，实付以支付页为准",
+        "price_includes": "票面价，不含机建燃油拆分",
+        "segments": [
+          {
+            "flight_no": "NX855 | NX0120",
+            "airline": "澳门航空公司",
+            "dep_airport": "KIX",
+            "arr_airport": "SHA",
+            "dep_time": "2026-10-06 13:55",
+            "arr_time": "2026-10-06 21:40",
+            "aircraft": "空客A321"
+          }
+        ],
+        "layovers": [],
+        "raw": {
+          "airline": "NX",
+          "airlineName": "澳门航空公司",
+          "flightNo": "NX855 | NX0120",
+          "isCodeShare": false,
+          "equipment": "321",
+          "departure": "KIX",
+          "departureName": "关西国际机场",
+          "departureDate": "2026-10-06",
+          "departureTime": "13:55",
+          "arrivalDate": "2026-10-06",
+          "arrivalTime": "21:40",
+          "arrival": "SHA",
+          "arrivalName": "上海虹桥国际机场",
+          "duration": "08h45m",
+          "transferNum": 2,
+          "ticketPrice": 3167,
+          "segments": [
+            {
+              "airline": "NX",
+              "flightNo": "NX855",
+              "isCodeShare": false,
+              "opAirline": "",
+              "opFlightNo": "",
+              "equipment": "320",
+              "mealType": "",
+              "departure": "KIX",
+              "departureDate": "2026-10-06",
+              "departureTime": "13:55",
+              "arrival": "MFM",
+              "arrivalDate": "2026-10-06",
+              "arrivalTime": "16:55",
+              "flightTime": "04h00m",
+              "airlineName": "澳门航空公司",
+              "departureName": "关西国际机场",
+              "arrivalName": "澳门国际机场"
+            },
+            {
+              "airline": "NX",
+              "flightNo": "NX0120",
+              "isCodeShare": false,
+              "opAirline": "",
+              "opFlightNo": "",
+              "equipment": "321",
+              "mealType": "",
+              "departure": "MFM",
+              "departureDate": "2026-10-06",
+              "departureTime": "19:25",
+              "arrival": "SHA",
+              "arrivalDate": "2026-10-06",
+              "arrivalTime": "21:40",
+              "flightTime": "02h15m",
+              "airlineName": "澳门航空公司",
+              "departureName": "澳门国际机场",
+              "arrivalName": "上海虹桥国际机场"
+            }
+          ]
+        },
+        "raw_flight_combo": "NX855 | NX0120",
+        "cabin_class": "economy",
+        "source_weight": 0.6,
+        "route_type": "international",
+        "price_source": "juhe",
+        "source_price_details": [
+          {
+            "source": "juhe",
+            "price": 3167.0
+          }
+        ],
+        "primary_source": "juhe",
+        "has_baggage_info": false,
+        "search_origin": "KIX",
+        "search_destination": "PVG",
+        "total_hours": 8.8,
+        "stopovers": 1,
+        "flight_nos": [
+          "NX855 | NX0120"
+        ],
+        "airlines": [
+          "澳门航空公司"
+        ],
+        "airline_summary": "澳门航空公司",
+        "route_summary": "KIX → SHA",
+        "layover_summary": "中转1次",
+        "fare_rules": {
+          "flight_combo": "NX855+NX120",
+          "baggage": {
+            "carry_on_kg": null,
+            "checked_kg": null,
+            "checked_pieces": 0,
+            "extra_bag_price": null
+          },
+          "change": {
+            "allowed": null,
+            "fee": null,
+            "deadline_hours": null,
+            "conditions": ""
+          },
+          "refund": {
+            "allowed": null,
+            "fee": null,
+            "deadline_hours": null,
+            "conditions": ""
+          },
+          "cabin_class": "economy"
+        },
+        "exclude_reason": "超过合理中转最长可接受总行程时间",
+        "filter_reason_code": "max_total_duration",
+        "filter_reason_value": "total_duration_min=525",
+        "price_estimate": {},
+        "fare_verification": {},
+        "availability": {},
+        "transfer_risk": {}
+      },
+      "outbound_price": 2969.0,
+      "return_price": 3167.0,
+      "unit_roundtrip_price": 6136.0,
+      "total_price": 29146,
+      "roundtrip_price": 29146,
+      "passenger_pricing": {
+        "applies": true,
+        "scope": "roundtrip",
+        "passengers": {
+          "adult": 2,
+          "child": 1,
+          "elderly": 2,
+          "infant": 0
+        },
+        "passenger_label": "2成人+1儿童+2老人",
+        "factor": 4.75,
+        "route_type": "international",
+        "outbound": {
+          "unit_price": 2969.0,
+          "total": 14103,
+          "factor": 4.75,
+          "passengers": {
+            "adult": 2,
+            "child": 1,
+            "elderly": 2,
+            "infant": 0
+          },
+          "passenger_label": "2成人+1儿童+2老人",
+          "parts": [
+            {
+              "type": "adult",
+              "label": "成人",
+              "count": 2,
+              "ratio": 1.0,
+              "unit_price": 2969,
+              "total": 5938
+            },
+            {
+              "type": "elderly",
+              "label": "老人",
+              "count": 2,
+              "ratio": 1.0,
+              "unit_price": 2969,
+              "total": 5938
+            },
+            {
+              "type": "child",
+              "label": "儿童",
+              "count": 1,
+              "ratio": 0.75,
+              "unit_price": 2227,
+              "total": 2227
+            }
+          ],
+          "cabin": "economy",
+          "route_type": "international",
+          "note": "儿童票按国际航线常见约75折估算,婴儿票按约1折估算,实际以支付页为准"
+        },
+        "return": {
+          "unit_price": 3167.0,
+          "total": 15043,
+          "factor": 4.75,
+          "passengers": {
+            "adult": 2,
+            "child": 1,
+            "elderly": 2,
+            "infant": 0
+          },
+          "passenger_label": "2成人+1儿童+2老人",
+          "parts": [
+            {
+              "type": "adult",
+              "label": "成人",
+              "count": 2,
+              "ratio": 1.0,
+              "unit_price": 3167,
+              "total": 6334
+            },
+            {
+              "type": "elderly",
+              "label": "老人",
+              "count": 2,
+              "ratio": 1.0,
+              "unit_price": 3167,
+              "total": 6334
+            },
+            {
+              "type": "child",
+              "label": "儿童",
+              "count": 1,
+              "ratio": 0.75,
+              "unit_price": 2375,
+              "total": 2375
+            }
+          ],
+          "cabin": "economy",
+          "route_type": "international",
+          "note": "儿童票按国际航线常见约75折估算,婴儿票按约1折估算,实际以支付页为准"
+        },
+        "total_price": 29146,
+        "single_adult_price": 6136.0,
+        "note": "儿童票按国际航线常见约75折估算,婴儿票按约1折估算,实际以支付页为准",
+        "price_tiers": {
+          "unit_oneway": {
+            "outbound": 2969,
+            "return": 3167,
+            "scope": "single_person_oneway"
+          },
+          "unit_roundtrip": 6136,
+          "total_roundtrip_ref": 29146,
+          "total_estimated": 29146,
+          "per_person_estimated": 5829,
+          "passenger_count": 5,
+          "passengers": {
+            "adult": 2,
+            "child": 1,
+            "elderly": 2,
+            "infant": 0
+          },
+          "passenger_label": "2成人+1儿童+2老人",
+          "factor": 4.75,
+          "is_roundtrip": true,
+          "purchase_type": "roundtrip",
+          "route_type": "international",
+          "note": "儿童票按国际航线常见约75折估算,婴儿票按约1折估算,实际以支付页为准；多人价格按单人参考价估算，低价舱库存不足时多人下单可能重新定价，请以支付页选择实际乘机人数后的总价为准"
+        }
+      },
+      "price_tiers": {
+        "unit_oneway": {
+          "outbound": 2969,
+          "return": 3167,
+          "scope": "single_person_oneway"
+        },
+        "unit_roundtrip": 6136,
+        "total_roundtrip_ref": 29146,
+        "total_estimated": 29146,
+        "per_person_estimated": 5829,
+        "passenger_count": 5,
+        "passengers": {
+          "adult": 2,
+          "child": 1,
+          "elderly": 2,
+          "infant": 0
+        },
+        "passenger_label": "2成人+1儿童+2老人",
+        "factor": 4.75,
+        "is_roundtrip": true,
+        "purchase_type": "roundtrip",
+        "route_type": "international",
+        "note": "儿童票按国际航线常见约75折估算,婴儿票按约1折估算,实际以支付页为准；多人价格按单人参考价估算，低价舱库存不足时多人下单可能重新定价，请以支付页选择实际乘机人数后的总价为准"
+      },
+      "diff": 13837.0,
+      "reasons": [
+        "去程：红眼/凌晨航班，已排除"
+      ],
+      "reason": "去程：红眼/凌晨航班，已排除",
+      "filter_reasons": [
+        {
+          "direction": "去程",
+          "code": "red_eye",
+          "value": "departure=2026-10-01 01:05,arrival=2026-10-01 09:00"
+        },
+        {
+          "direction": "返程",
+          "code": "max_total_duration",
+          "value": "total_duration_min=525"
+        }
+      ],
+      "recommended_price": 42983.0,
+      "max_budget": 38000.0,
+      "recommended_over_budget": true,
+      "all_over_budget_reference": false,
+      "exclusion_basis": [
+        "必须含托运",
+        "最高可接受价¥38,000(全员,=单人¥8,000×4.75)"
+      ],
+      "comparison_points": [
+        "去程:此方案OZ368+OZ112 09:00到达",
+        "价格:此方案¥29,146,比推荐便宜¥13,837 ✓",
+        "返程时间:此方案13:55(需确认) vs 推荐09:30(可用) ✗"
+      ],
+      "route_type": "international",
+      "single_adult_price": 6136.0,
+      "price": 29146
+    }
+  ],
+  "buy_risk": [
+    "可能遇到支付页跳价",
+    "票规需确认（行李/退改）",
+    "不同渠道售后政策不同"
+  ],
+  "wait_risk": [
+    "可能错过当前低价",
+    "理想价再次出现不确定"
+  ],
+  "risk_summary": "当前价格或执行信息仍有不确定性，适合继续监控并等待更清晰信号。",
+  "limits": [
+    "显示价格仍需支付页最终确认",
+    "国际航线票规可能存在渠道差异",
+    "历史价格反映相似区间，不代表未来必然重复"
+  ],
+  "price_history": [
+    {
+      "date": "2026-07-10",
+      "price": 12159.0
+    },
+    {
+      "date": "2026-07-10",
+      "price": 12215.0
+    },
+    {
+      "date": "2026-07-10",
+      "price": 12215.0
+    },
+    {
+      "date": "2026-07-10",
+      "price": 12397.0
+    },
+    {
+      "date": "2026-07-10",
+      "price": 12392.0
+    },
+    {
+      "date": "2026-07-10",
+      "price": 9230.0
+    },
+    {
+      "date": "2026-07-12",
+      "price": 9588.0
+    },
+    {
+      "date": "2026-07-12",
+      "price": 10044.0
+    },
+    {
+      "date": "2026-07-12",
+      "price": 9071.0
+    },
+    {
+      "date": "2026-07-12",
+      "price": 9071.0
+    },
+    {
+      "date": "2026-07-12",
+      "price": 9617.0
+    },
+    {
+      "date": "2026-07-12",
+      "price": 9542.0
+    },
+    {
+      "date": "2026-07-21",
+      "price": 8931.0
+    },
+    {
+      "date": "2026-07-21",
+      "price": 9049.0
+    }
+  ],
+  "trend_summary": "近14次采集下降约¥3,110。",
+  "trend_fallback": "¥9,617 → ¥9,542 → ¥8,931 → ¥9,049",
+  "checklist": [
+    "支付页最终价是否≤¥8,000",
+    "是否含税费、燃油费、平台服务费",
+    "是否含托运行李；若不含，加购后是否仍≤¥8,000",
+    "退改签规则是否可接受",
+    "去程11:50起飞是否可接受",
+    "返程09:30起飞是否可接受",
+    "是往返组合还是两个单程分别购买",
+    "是否避免红眼和凌晨到达",
+    "中转时间是否充裕（建议≥2小时）"
+  ],
+  "sorting_logic": [
+    "不超过最高预算 ¥16,000",
+    "满足托运行李要求",
+    "尽量直飞/低中转风险",
+    "接近理想入手价 ¥12,000",
+    "购买渠道可靠"
+  ],
+  "diff_from_last": {
+    "last_price": 8931.0,
+    "diff": 0.0,
+    "scope": "per_person_roundtrip",
+    "last_snapshot": {
+      "id": 0,
+      "subscription_key": "上海-大阪|2026-10-01|2026-10-06",
+      "route": "上海-大阪",
+      "depart_date": "2026-10-01",
+      "return_date": "2026-10-06",
+      "pushed_at": "2026-07-21T16:27:59",
+      "price": 42422.0,
+      "confidence": "中高",
+      "channels": "[\"Google Flights 预订\", \"携程搜索\", \"飞猪搜索\"]",
+      "fare_status": "已确认含托运行李",
+      "push_type": "前后日期更便宜"
+    }
+  },
+  "freshness_minutes": 0,
+  "source_count": 2,
+  "frequency": "important_only",
+  "nearby_date_prices": [
+    {
+      "label": "2026-10-01",
+      "value": 2872.0,
+      "selected": true,
+      "scope": "oneway"
+    },
+    {
+      "label": "2026-09-30",
+      "value": 1745.0,
+      "selected": false,
+      "scope": "oneway"
+    },
+    {
+      "label": "2026-10-02",
+      "value": 1769.0,
+      "selected": false,
+      "scope": "oneway"
+    },
+    {
+      "label": "2026-09-28",
+      "value": 1813.0,
+      "selected": false,
+      "scope": "oneway"
+    },
+    {
+      "label": "2026-09-29",
+      "value": 1513.0,
+      "selected": false,
+      "scope": "oneway"
+    },
+    {
+      "label": "2026-10-03",
+      "value": 1389.0,
+      "selected": false,
+      "scope": "oneway"
+    },
+    {
+      "label": "2026-10-04",
+      "value": 1202.0,
+      "selected": false,
+      "scope": "oneway"
+    }
+  ],
+  "price_calendar": {
+    "route": "上海-大阪",
+    "rows": [
+      {
+        "date": "2026-09-28",
+        "weekday": "周一",
+        "min_price": 5020.0,
+        "airline": null,
+        "selected": false,
+        "lowest": false,
+        "scope": "roundtrip",
+        "label": "09-28 周一",
+        "value": 5020.0,
+        "outbound_min_price": 1813.0,
+        "return_min_price": 3207.0,
+        "return_date": "2026-10-06",
+        "breakdown": "去¥1,813+返¥3,207"
+      },
+      {
+        "date": "2026-09-29",
+        "weekday": "周二",
+        "min_price": 4720.0,
+        "airline": null,
+        "selected": false,
+        "lowest": false,
+        "scope": "roundtrip",
+        "label": "09-29 周二",
+        "value": 4720.0,
+        "outbound_min_price": 1513.0,
+        "return_min_price": 3207.0,
+        "return_date": "2026-10-06",
+        "breakdown": "去¥1,513+返¥3,207"
+      },
+      {
+        "date": "2026-09-30",
+        "weekday": "周三",
+        "min_price": 4952.0,
+        "airline": null,
+        "selected": false,
+        "lowest": false,
+        "scope": "roundtrip",
+        "label": "09-30 周三",
+        "value": 4952.0,
+        "outbound_min_price": 1745.0,
+        "return_min_price": 3207.0,
+        "return_date": "2026-10-06",
+        "breakdown": "去¥1,745+返¥3,207"
+      },
+      {
+        "date": "2026-10-01",
+        "weekday": "周四",
+        "min_price": 6079.0,
+        "airline": null,
+        "selected": true,
+        "lowest": false,
+        "scope": "roundtrip",
+        "label": "10-01 周四",
+        "value": 6079.0,
+        "outbound_min_price": 2872.0,
+        "return_min_price": 3207.0,
+        "return_date": "2026-10-06",
+        "breakdown": "去¥2,872+返¥3,207"
+      },
+      {
+        "date": "2026-10-02",
+        "weekday": "周五",
+        "min_price": 4976.0,
+        "airline": null,
+        "selected": false,
+        "lowest": false,
+        "scope": "roundtrip",
+        "label": "10-02 周五",
+        "value": 4976.0,
+        "outbound_min_price": 1769.0,
+        "return_min_price": 3207.0,
+        "return_date": "2026-10-06",
+        "breakdown": "去¥1,769+返¥3,207"
+      },
+      {
+        "date": "2026-10-03",
+        "weekday": "周六",
+        "min_price": 4596.0,
+        "airline": null,
+        "selected": false,
+        "lowest": false,
+        "scope": "roundtrip",
+        "label": "10-03 周六",
+        "value": 4596.0,
+        "outbound_min_price": 1389.0,
+        "return_min_price": 3207.0,
+        "return_date": "2026-10-06",
+        "breakdown": "去¥1,389+返¥3,207"
+      },
+      {
+        "date": "2026-10-04",
+        "weekday": "周日",
+        "min_price": 4409.0,
+        "airline": null,
+        "selected": false,
+        "lowest": true,
+        "scope": "roundtrip",
+        "label": "10-04 周日",
+        "value": 4409.0,
+        "outbound_min_price": 1202.0,
+        "return_min_price": 3207.0,
+        "return_date": "2026-10-06",
+        "breakdown": "去¥1,202+返¥3,207"
+      }
+    ],
+    "savings": [
+      {
+        "date": "2026-10-04",
+        "weekday": "周日",
+        "price": 4409.0,
+        "save": 1670,
+        "offset": 3,
+        "tip": "鎺ㄨ繜3天(2026-10-04 周日)出发，省¥1670/往返"
+      },
+      {
+        "date": "2026-10-03",
+        "weekday": "周六",
+        "price": 4596.0,
+        "save": 1483,
+        "offset": 2,
+        "tip": "鎺ㄨ繜2天(2026-10-03 周六)出发，省¥1483/往返"
+      },
+      {
+        "date": "2026-09-29",
+        "weekday": "周二",
+        "price": 4720.0,
+        "save": 1359,
+        "offset": -2,
+        "tip": "鎻愬墠2天(2026-09-29 周二)出发，省¥1359/往返"
+      }
+    ],
+    "weekday_pattern": {},
+    "scope": "roundtrip",
+    "return_date": "2026-10-06",
+    "return_min_price": 3207.0,
+    "note": "每行=该出发日单程最低 + 返程日(10-06)单程最低，为往返价格参考下限，实际同渠道拼接价可能略高。"
+  },
+  "airport_cost_comparison": [
+    {
+      "departure_airport": "SHA",
+      "arrival_airport": "KIX",
+      "ticket_price": 1770.0,
+      "effective_cost": 2848.0,
+      "note": "参考性综合估算，交通按打车估算，时间成本按¥50/小时估算。",
+      "flight_no": "BR0771 | BR0178",
+      "price_source": "juhe",
+      "data_source": "juhe",
+      "collected_at": "2026-07-21T18:03:11"
+    },
+    {
+      "departure_airport": "PVG",
+      "arrival_airport": "KIX",
+      "ticket_price": 1770.0,
+      "effective_cost": 2952.0,
+      "note": "参考性综合估算，交通按打车估算，时间成本按¥50/小时估算。",
+      "flight_no": "BR0721 | BR0178",
+      "price_source": "juhe",
+      "data_source": "juhe",
+      "collected_at": "2026-07-21T18:03:11"
+    },
+    {
+      "departure_airport": "PVG",
+      "arrival_airport": "ITM",
+      "ticket_price": 4838.0,
+      "effective_cost": 6236.0,
+      "note": "参考性综合估算，交通按打车估算，时间成本按¥50/小时估算。",
+      "flight_no": "NH0920 | NH0985",
+      "price_source": "juhe",
+      "data_source": "juhe",
+      "collected_at": "2026-07-21T18:03:11"
+    },
+    {
+      "departure_airport": "SHA",
+      "arrival_airport": "ITM",
+      "ticket_price": 5829.0,
+      "effective_cost": 6536.0,
+      "note": "参考性综合估算，交通按打车估算，时间成本按¥50/小时估算。",
+      "flight_no": "JL0082 | JL0137",
+      "price_source": "juhe",
+      "data_source": "juhe",
+      "collected_at": "2026-07-21T18:03:11"
+    }
+  ],
+  "cabin_policy_summary": {
+    "trip_nature": "",
+    "trip_natures": [],
+    "cabin_arrangement": "economy_all",
+    "cabin_policy": "economy_only",
+    "user_level": "staff",
+    "cabins": [
+      "economy"
+    ],
+    "business_seats": 0,
+    "economy_seats": 5,
+    "reimburse_per_person": null,
+    "economy_unit_price": 2872.0,
+    "business_unit_price": null,
+    "team_total": 14360,
+    "business_reimburse_note": "",
+    "economy_reimburse_note": "",
+    "team_cost_note": "5经济合计参考¥14,360"
+  },
+  "same_day_no_feasible_note": "",
+  "same_day_alternatives": [],
+  "plan_status_change": {
+    "status": "stable",
+    "flight_no": "FM821去+MU730回",
+    "previous_price": 8931.0,
+    "current_price": 8931.0,
+    "price_diff": 0.0,
+    "scope": "per_person_roundtrip",
+    "msg": "上次推荐:FM821去+MU730回,单人往返¥8,931。本次同组合:单人往返¥8,931(价格稳定)。（同单人往返口径对比）",
+    "outbound_flight": "FM821",
+    "return_flight": "MU730",
+    "outbound_price": 4805.0,
+    "return_price": 4126.0,
+    "price_scope": "per_person_roundtrip",
+    "previous_price_source": "price_tiers.unit_roundtrip",
+    "previous_passenger_signature": "2+1+2",
+    "current_passenger_signature": "",
+    "passenger_composition_note": ""
+  },
+  "plan_price_rows": [
+    {
+      "label": "方案A",
+      "value": 42983.0,
+      "scope": "roundtrip",
+      "description": "去返均直飞 · 购票方式:两个单程拼接 · 首选推荐 · 老人/儿童友好 · 直飞省心，适合家庭/老人同行"
+    }
+  ],
+  "channel_price_rows": [
+    {
+      "label": "去程 CA857 · Google",
+      "value": 7184.0,
+      "scope": "oneway",
+      "price_scope": "per_person_oneway",
+      "direction": "outbound",
+      "flight_combo": "CA857",
+      "source": "hasdata",
+      "provider": "Google",
+      "selected": false
+    },
+    {
+      "label": "去程 CA857 · OTA",
+      "value": 4923.0,
+      "scope": "oneway",
+      "price_scope": "per_person_oneway",
+      "direction": "outbound",
+      "flight_combo": "CA857",
+      "source": "juhe",
+      "provider": "OTA",
+      "selected": true
+    },
+    {
+      "label": "返程 MU730 · Google",
+      "value": 12038.0,
+      "scope": "oneway",
+      "price_scope": "per_person_oneway",
+      "direction": "return",
+      "flight_combo": "MU730",
+      "source": "hasdata",
+      "provider": "Google",
+      "selected": false
+    },
+    {
+      "label": "返程 MU730 · OTA",
+      "value": 4126.0,
+      "scope": "oneway",
+      "price_scope": "per_person_oneway",
+      "direction": "return",
+      "flight_combo": "MU730",
+      "source": "juhe",
+      "provider": "OTA",
+      "selected": true
+    }
+  ],
+  "detail_url": "https://example.invalid/detail/<SUBSCRIPTION_ID>",
+  "form_url": "https://example.invalid/form/<SUBSCRIPTION_ID>",
+  "feedback_url": "https://example.invalid/feedback/<SUBSCRIPTION_ID>",
+  "source_stats": {
+    "hasdata": {
+      "count": 10,
+      "cabin_counts": {
+        "economy": 10
+      },
+      "status": "成功"
+    },
+    "juhe": {
+      "count": 199,
+      "cabin_counts": {
+        "economy": 199
+      },
+      "status": "成功"
+    },
+    "duffel": {
+      "count": 83,
+      "cabin_counts": {
+        "economy": 83
+      },
+      "status": "成功"
+    },
+    "total_raw": 209,
+    "after_dedup": 179,
+    "after_dedup_by_cabin": {
+      "economy": 199
+    },
+    "enriched_count": 19,
+    "after_active_airport_filter": 179
+  },
+  "collected_at": "2026-07-21 18:03",
+  "snapshot": {
+    "route": "上海-大阪",
+    "subscription_id": "<SUBSCRIPTION_ID>",
+    "depart_date": "2026-10-01",
+    "return_date": "2026-10-06",
+    "channels": [
+      "CA 航司官网",
+      "Google Flights 预订",
+      "携程搜索",
+      "飞猪搜索"
+    ],
+    "fare_status": "已确认含托运行李"
+  }
+}
