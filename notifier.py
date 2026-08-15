@@ -8233,12 +8233,10 @@ def build_notification_payload(
         policy_compare_price = None
         verify_limit = None
         price_tiers = {}
-        price_signal = {}
         execution_advice = {}
         budget_gap = {}
         next_step_guidance = {}
         change = {}
-        trend_summary = ""
         price_policy = {
             "conclusion": "未找到完全符合条件的方案",
             "reason": no_primary_reason,
@@ -8440,7 +8438,7 @@ def build_notification_payload(
         "risk_summary": risk.get("summary") or "",
         "limits": _judgment_limit_items(route_info, analysis_result, price_insights, is_roundtrip, return_analysis),
         "price_history": _normalize_chart_history(history),
-        "trend_summary": trend_summary if all_items else "",
+        "trend_summary": trend_summary,
         "trend_fallback": fallback_line,
         "checklist": _purchase_checklist_items(route_info, analysis_result, primary_plan, verify_limit) if all_items else [],
         "sorting_logic": _sorting_logic_items(route_info, is_roundtrip),
@@ -8499,12 +8497,27 @@ def build_notification_payload(
     roundtrip_analysis = analysis_result.get("round_trip_analysis") or {}
     mixed_matching = roundtrip_analysis.get("mixed_cabin_matching") or {}
     if primary_plan.get("mixed_cabin") or mixed_matching:
+        cabin_allocation = (
+            primary_plan.get("cabin_allocation")
+            or constraints_for_cabin.get("cabin_allocation")
+            or {}
+        )
+        mixed_reference = _build_mixed_cabin_reference_price(
+            primary_plan=primary_plan,
+            mixed_matching=mixed_matching,
+            cabin_summary=cabin_policy_summary,
+            cabin_allocation=cabin_allocation,
+            passengers=passenger_pricing_breakdown,
+            route_type=payload_route_type,
+        )
+        reference_tree = mixed_reference.get("display_tree") or {}
         payload["mixed_cabin"] = {
-            "cabin_allocation": primary_plan.get("cabin_allocation") or {},
-            "cabin_label": primary_plan.get("cabin_label") or "",
+            "cabin_allocation": cabin_allocation,
+            "cabin_label": primary_plan.get("cabin_label") or reference_tree.get("cabin_label") or "",
             "matching": mixed_matching,
             "business_reference": mixed_matching.get("business_reference"),
             "business_visible_count": mixed_matching.get("business_visible_count", 0),
+            "reference_price": mixed_reference,
             "disclosure": mixed_matching.get("disclosure") or MIXED_CABIN_DISCLOSURE,
             "provenance": {
                 "business_source": "serpapi",
@@ -8961,6 +8974,28 @@ def _has_primary_plans(payload: dict) -> bool:
 
 def _no_primary_plan_state(payload: dict) -> bool:
     return not _has_primary_plans(payload)
+
+
+def _build_mixed_cabin_reference_price(
+    *,
+    primary_plan: dict | None,
+    mixed_matching: dict | None,
+    cabin_summary: dict | None,
+    cabin_allocation: dict | None,
+    passengers: dict | None,
+    route_type: str | None,
+) -> dict:
+    """对外保留 notifier 接口，实际金额逻辑集中在纯函数模块。"""
+    from mixed_cabin_reference import build_mixed_cabin_reference_price
+
+    return build_mixed_cabin_reference_price(
+        primary_plan=primary_plan,
+        mixed_matching=mixed_matching,
+        cabin_summary=cabin_summary,
+        cabin_allocation=cabin_allocation,
+        passengers=passengers,
+        route_type=route_type,
+    )
 
 
 def _mixed_cabin_unavailable_text(payload: dict) -> str:
@@ -10261,6 +10296,7 @@ def _cabin_policy_summary_body(payload: dict) -> str:
     business_seats = int(summary.get("business_seats") or 0)
     economy_seats = int(summary.get("economy_seats") or 0)
     team_count = business_seats + economy_seats
+    mixed_reference = (payload.get("mixed_cabin") or {}).get("reference_price") or {}
     rows = [
         ("出行性质", html.escape(nature_label or "未设置")),
         ("团队人数", html.escape(f"{team_count}人" if team_count else "未设置")),
@@ -10270,21 +10306,35 @@ def _cabin_policy_summary_body(payload: dict) -> str:
     ]
     if business_seats or economy_seats:
         rows.append(("团队席位", html.escape(f"商务舱{business_seats}人，经济舱{economy_seats}人")))
-    economy_price = summary.get("economy_unit_price")
-    business_price = summary.get("business_unit_price")
-    if business_price is not None:
-        business_total = float(business_price) * business_seats if business_seats else None
-        business_text = f"参考单人价 {_price_text(business_price)}"
-        if business_total is not None:
-            business_text += f" × {business_seats} = {_price_text(round(business_total))}"
-        rows.append(("商务舱", html.escape(business_text)))
-    if economy_price is not None:
-        economy_total = float(economy_price) * economy_seats if economy_seats else None
-        economy_text = f"参考单人价 {_price_text(economy_price)}"
-        if economy_total is not None:
-            economy_text += f" × {economy_seats} = {_price_text(round(economy_total))}"
-        rows.append(("经济舱", html.escape(economy_text)))
-    if summary.get("team_cost_note"):
+    if not mixed_reference:
+        economy_price = summary.get("economy_unit_price")
+        business_price = summary.get("business_unit_price")
+        if business_price is not None:
+            business_total = float(business_price) * business_seats if business_seats else None
+            business_text = f"参考单人价 {_price_text(business_price)}"
+            if business_total is not None:
+                business_text += f" × {business_seats} = {_price_text(round(business_total))}"
+            rows.append(("商务舱", html.escape(business_text)))
+        if economy_price is not None:
+            economy_total = float(economy_price) * economy_seats if economy_seats else None
+            economy_text = f"参考单人价 {_price_text(economy_price)}"
+            if economy_total is not None:
+                economy_text += f" × {economy_seats} = {_price_text(round(economy_total))}"
+            rows.append(("经济舱", html.escape(economy_text)))
+    if mixed_reference:
+        reference_label = str(mixed_reference.get("label") or "混舱报价参考")
+        reference_amount = _to_float(mixed_reference.get("amount"))
+        if reference_amount is not None:
+            rows.append((html.escape(reference_label), _price_text(reference_amount)))
+        else:
+            reason = str(mixed_reference.get("reason") or "混舱报价信息不足")
+            rows.append(
+                (
+                    html.escape(reference_label),
+                    html.escape(f"暂不可用(原因={reason})"),
+                )
+            )
+    elif summary.get("team_cost_note"):
         rows.append(("团队合计", html.escape(str(summary.get("team_cost_note")))))
     notes = [
         str(summary.get("business_reimburse_note") or "").strip(),
@@ -12733,6 +12783,13 @@ def _nearby_date_chart_title_and_note(rows: list[dict]) -> tuple[str, str]:
 def _email_excluded_compact_body(payload: dict) -> str:
     excluded = payload.get("excluded_plans") or []
     if not excluded:
+        if _no_primary_plan_state(payload):
+            from notification_sections import section_fallback
+
+            return (
+                "<div style='color:#888;font-size:12px;'>"
+                f"{html.escape(section_fallback('excluded_plans', '分析层未保留结构化排除候选'))}</div>"
+            )
         return "<div style='color:#888;font-size:12px;'>暂无被排除的更低价方案。</div>"
 
     is_roundtrip = bool(payload.get("is_roundtrip"))
@@ -12894,6 +12951,36 @@ def _email_excluded_compact_reason(item: dict, scope: str, is_roundtrip: bool, c
     return reason
 
 
+def _no_primary_history_text(payload: dict, *, kind: str) -> str:
+    constraint_change = payload.get("constraint_change") or {}
+    if constraint_change.get("changed"):
+        return str(
+            constraint_change.get("disclosure")
+            or "筛选条件已变更，旧条件样本不再计入，同条件样本重新积累"
+        ).strip()
+
+    signal = payload.get("price_signal") or {}
+    sample_n = int(signal.get("sample_n") or len(payload.get("price_history") or []))
+    from analyzer import MIN_SAMPLE_FOR_PRICE_SIGNAL
+
+    if sample_n < MIN_SAMPLE_FOR_PRICE_SIGNAL:
+        return f"同条件样本不足(当前n={sample_n}),继续积累中,暂不给出价格{kind}判断"
+    if kind == "走势":
+        text = str(payload.get("trend_summary") or "").strip()
+    else:
+        text = str(signal.get("summary") or signal.get("label") or "").strip()
+    if text:
+        return text
+    return f"同条件历史统计暂缺,暂不给出价格{kind}判断"
+
+
+def _email_no_primary_price_signal_body(payload: dict) -> str:
+    return (
+        "<div style='color:#666;font-size:12px;'>"
+        f"{html.escape(_no_primary_history_text(payload, kind='位置'))}</div>"
+    )
+
+
 def _email_trend_card_body(payload: dict) -> str:
     if _no_primary_plan_state(payload):
         status_text = _plan_status_change_text(payload)
@@ -12901,7 +12988,10 @@ def _email_trend_card_body(payload: dict) -> str:
         missing_markers = ("未获取到报价", "未获报价", "暂无报价", "无报价")
         if any(marker in status_text or marker in trend_text for marker in missing_markers):
             return "<div style='color:#666;font-size:12px;'>上次方案航班本次未获报价,趋势暂缺。</div>"
-        return "<div style='color:#666;font-size:12px;'>当前无符合方案，价格趋势仅作候选池参考。</div>"
+        return (
+            "<div style='color:#666;font-size:12px;'>"
+            f"{html.escape(_no_primary_history_text(payload, kind='走势'))}</div>"
+        )
 
     constraint_change = payload.get("constraint_change") or {}
     if constraint_change.get("changed"):
@@ -13588,6 +13678,50 @@ def _log_render_stats(render_stats: dict) -> None:
     )
 
 
+_NOTIFICATION_SECTION_TITLES = {
+    "action_panel": "行动面板",
+    "alternative_plans": "可选备选方案",
+    "excluded_plans": "为什么不推荐更便宜方案",
+    "price_trend": "价格走势",
+    "price_signal": "价格信号",
+    "data_source": "数据来源",
+    "data_freshness": "数据时点:未记录",
+    "quota_overview": "[配额总览]",
+    "provenance": "数据依据",
+    "mixed_cabin": "经济舱 / 商务舱并列参考",
+}
+
+
+def _no_match_mixed_cabin(payload: dict) -> bool:
+    summary = payload.get("cabin_policy_summary") or {}
+    mixed = payload.get("mixed_cabin") or {}
+    return bool(
+        summary.get("cabin_arrangement") == "mixed"
+        or mixed.get("cabin_allocation")
+    )
+
+
+def _ensure_no_match_notification_sections(cards: list[str], payload: dict) -> list[str]:
+    """按 canonical 清单补齐无方案通知，缺数据时也给出可见原因。"""
+    from notification_sections import missing_notification_sections, section_fallback
+
+    missing = missing_notification_sections(
+        "".join(cards),
+        "",
+        trigger_type="no_match",
+        mixed_cabin=_no_match_mixed_cabin(payload),
+    )
+    for section in missing:
+        title = _NOTIFICATION_SECTION_TITLES[section]
+        cards.append(
+            _email_card(
+                title,
+                html.escape(section_fallback(section, "本轮渲染未提供该小节结构化数据")),
+            )
+        )
+    return cards
+
+
 @_with_render_log_channel("邮件")
 def render_email(payload: dict) -> tuple[str, str]:
     """Render the full HTML email report from a normalized payload."""
@@ -13642,6 +13776,7 @@ def render_email(payload: dict) -> tuple[str, str]:
     ]
     if no_primary:
         cards.append(_email_card("候选池参考", _email_no_primary_candidate_reference_body(payload)))
+        cards.append(_email_card("价格信号", _email_no_primary_price_signal_body(payload)))
     else:
         cards.extend(
             [
@@ -13682,9 +13817,15 @@ def render_email(payload: dict) -> tuple[str, str]:
     if no_primary:
         insert_at = 2
         same_day_alternatives_body = _same_day_alternatives_body(payload)
-        if same_day_alternatives_body:
-            cards.insert(insert_at, _email_card("可选备选方案", same_day_alternatives_body))
-            insert_at += 1
+        if not same_day_alternatives_body:
+            from notification_sections import section_fallback
+
+            same_day_alternatives_body = (
+                "<div style='color:#888;font-size:12px;'>"
+                f"{html.escape(section_fallback('alternative_plans', '没有完整去返航班组合'))}</div>"
+            )
+        cards.insert(insert_at, _email_card("可选备选方案", same_day_alternatives_body))
+        insert_at += 1
         same_day_note = _same_day_note_for_no_primary(payload, _no_primary_reason(payload))
         if same_day_note:
             cards.insert(
@@ -13856,6 +13997,25 @@ def render_email(payload: dict) -> tuple[str, str]:
         cards.append(_email_card("价格变化与参考区间", "".join(change_lines)))
 
     cards.append(_email_card("数据来源", _email_source_body(payload)))
+    if no_primary:
+        freshness_text = _data_freshness_headline(payload) or (
+            f"采集时间:{_payload_freshness_text(payload)}"
+            if payload.get("collected_at")
+            else "本轮采集时点未记录"
+        )
+        cards.extend(
+            [
+                _email_card("数据时点", html.escape(freshness_text)),
+                _email_card("配额总览", html.escape(_quota_overview_text())),
+                _email_card(
+                    "数据依据",
+                    _detail_provenance_body(payload)
+                    or "<div style='color:#888;font-size:12px;'>本次未引用历史统计值。</div>",
+                ),
+            ]
+        )
+        cards = _ensure_no_match_notification_sections(cards, payload)
+
     cards.append(
         _email_card(
             "更多分析",
@@ -13933,9 +14093,17 @@ def render_detail_html(payload: dict) -> str:
         cards.insert(2, _email_card("候选池参考", _email_no_primary_candidate_reference_body(payload)))
         insert_at = 2
         same_day_alternatives_body = _same_day_alternatives_body(payload)
-        if same_day_alternatives_body:
-            cards.insert(insert_at, _email_card("可选备选方案", same_day_alternatives_body))
-            insert_at += 1
+        if not same_day_alternatives_body:
+            from notification_sections import section_fallback
+
+            same_day_alternatives_body = (
+                "<div style='color:#888;font-size:12px;'>"
+                f"{html.escape(section_fallback('alternative_plans', '没有完整去返航班组合'))}</div>"
+            )
+        cards.insert(insert_at, _email_card("可选备选方案", same_day_alternatives_body))
+        insert_at += 1
+        cards.insert(insert_at, _email_card("价格信号", _email_no_primary_price_signal_body(payload)))
+        insert_at += 1
         same_day_note = _same_day_note_for_no_primary(payload, _no_primary_reason(payload))
         if same_day_note:
             cards.insert(

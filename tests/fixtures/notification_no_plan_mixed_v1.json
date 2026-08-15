@@ -1,0 +1,170 @@
+{
+  "scenario": "no_match_mixed",
+  "payload": {
+    "push_type": "无符合方案·备选参考",
+    "route": "上海 → 大阪",
+    "route_type": "international",
+    "is_roundtrip": true,
+    "depart_date": "2026-10-01",
+    "return_date": "2026-10-06",
+    "recommended_plans": [],
+    "alternative_plans": [],
+    "same_day_alternatives": [],
+    "excluded_plans": [
+      {
+        "scope": "roundtrip",
+        "is_roundtrip": true,
+        "outbound": {
+          "flight_combo": "9C6565",
+          "price": 2800,
+          "segments": [
+            {
+              "flight_no": "9C6565",
+              "dep_airport": "PVG",
+              "arr_airport": "KIX",
+              "dep_time": "2026-10-01 08:30",
+              "arr_time": "2026-10-01 11:45",
+              "aircraft": "32S"
+            }
+          ]
+        },
+        "return": {
+          "flight_combo": "MU516",
+          "price": 3363,
+          "segments": [
+            {
+              "flight_no": "MU516",
+              "dep_airport": "KIX",
+              "arr_airport": "PVG",
+              "dep_time": "2026-10-06 14:20",
+              "arr_time": "2026-10-06 16:10",
+              "aircraft": "32N"
+            }
+          ]
+        },
+        "outbound_price": 2800,
+        "return_price": 3363,
+        "unit_roundtrip_price": 6163,
+        "total_price": 26000,
+        "roundtrip_price": 26000,
+        "reason": "去程：命中你设置的排除廉航条件",
+        "reasons": [
+          "去程：命中你设置的排除廉航条件"
+        ],
+        "filter_reasons": [
+          {
+            "direction": "去程",
+            "code": "lcc_excluded",
+            "value": "9C6565:9C(operating)"
+          }
+        ]
+      }
+    ],
+    "constraint_change": {
+      "changed": true,
+      "disclosure": "筛选条件已变更，旧条件样本(n=14)不再计入，同条件样本重新积累"
+    },
+    "price_signal": {
+      "label": "待积累",
+      "summary": "筛选条件已变更，旧条件样本(n=14)不再计入，同条件样本重新积累",
+      "sample_n": 0,
+      "percentile": null
+    },
+    "trend_summary": "筛选条件已变更，旧条件样本(n=14)不再计入，同条件样本重新积累",
+    "price_history": [],
+    "no_primary_reason": "商务舱报价未能与经济舱候选形成同航班完整往返组合",
+    "candidate_price_summary": {
+      "lowest": 26000,
+      "price_scope": "all_passengers_roundtrip",
+      "primary_cause": "constraint",
+      "reason": "筛选条件不符"
+    },
+    "ideal_price": 30000,
+    "max_price": 40000,
+    "budget_compare_scope": "all_passengers_roundtrip",
+    "target_compare_scope": "all_passengers_roundtrip",
+    "passenger_pricing": {
+      "passengers": {
+        "adult": 2,
+        "child": 1,
+        "elderly": 2,
+        "infant": 0
+      },
+      "route_type": "international"
+    },
+    "cabin_policy_summary": {
+      "trip_natures": [
+        "business"
+      ],
+      "cabin_arrangement": "mixed",
+      "cabin_policy": "business_allowed",
+      "cabins": [
+        "economy",
+        "business"
+      ],
+      "business_seats": 2,
+      "economy_seats": 3,
+      "economy_unit_price": 3363,
+      "business_unit_price": null,
+      "team_total": 10089,
+      "team_cost_note": "3经济合计参考¥10,089"
+    },
+    "mixed_cabin": {
+      "cabin_allocation": {
+        "business": {
+          "adult": 0,
+          "child": 0,
+          "elderly": 2,
+          "infant": 0
+        },
+        "economy": {
+          "adult": 2,
+          "child": 1,
+          "elderly": 0,
+          "infant": 0
+        }
+      },
+      "matching": {
+        "stats": {
+          "candidates": 1,
+          "full": 0,
+          "partial": 1
+        },
+        "business_visible_count": 27
+      },
+      "business_reference": {
+        "price": 5050,
+        "raw_price": 5050,
+        "direction": "返程",
+        "flight_combo": "MU730",
+        "source": "serpapi",
+        "note": "本轮商务舱单程最低(不限航班)，仅供参照，非方案价"
+      },
+      "reference_price": {
+        "kind": "synthetic_oneway",
+        "amount": 19348,
+        "scope": "all_passengers_oneway",
+        "label": "各舱最低单程拼算参考(不同航班,非可订组合)"
+      }
+    },
+    "source_stats": {
+      "route_type": "international",
+      "juhe": {
+        "count": 271,
+        "status": "成功"
+      },
+      "serpapi": {
+        "count": 27,
+        "status": "成功"
+      }
+    },
+    "collected_at": "2026-08-15 12:54",
+    "provenance": {
+      "statistics": {},
+      "referenced_stat_keys": []
+    },
+    "detail_url": "http://127.0.0.1/detail",
+    "form_url": "http://127.0.0.1/form",
+    "feedback_url": "http://127.0.0.1/feedback"
+  }
+}

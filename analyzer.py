@@ -10397,6 +10397,8 @@ def _roundtrip_excluded_flight_from_item(item: dict) -> dict:
             "price_estimate",
             "fare_verification",
             "availability",
+            "filter_reason_code",
+            "filter_reason_value",
             "transfer_risk",
         ):
             if item.get(key) not in (None, "", []):
@@ -10855,10 +10857,11 @@ def build_excluded_roundtrip_combos(
     passengers: dict | None = None,
     route_type: str | None = None,
     emit_diagnostics: bool = True,
+    include_without_reference: bool = False,
 ) -> list[dict]:
     """Build same-unit excluded round-trip combos for notification explanations."""
     recommended_total = _to_float(recommended_total)
-    if recommended_total is None:
+    if recommended_total is None and not include_without_reference:
         return []
 
     outbound_candidates = _roundtrip_candidate_flights(outbound_analysis or {}, "outbound")
@@ -10910,7 +10913,7 @@ def build_excluded_roundtrip_combos(
                     route_type,
                 )
                 comparison_total = _to_float(passenger_pricing.get("total_price")) or total
-            if comparison_total >= recommended_total:
+            if recommended_total is not None and comparison_total >= recommended_total:
                 continue
             budget_context = _roundtrip_budget_context(comparison_total, max_budget, recommended_total)
             reasons = _roundtrip_budget_safe_reasons_v2(
@@ -10942,7 +10945,11 @@ def build_excluded_roundtrip_combos(
                 "roundtrip_price": comparison_total,
                 "passenger_pricing": passenger_pricing,
                 "price_tiers": passenger_pricing.get("price_tiers") if passenger_pricing else {},
-                "diff": recommended_total - comparison_total,
+                "diff": (
+                    recommended_total - comparison_total
+                    if recommended_total is not None
+                    else None
+                ),
                 "reasons": reasons,
                 "reason": "；".join(reasons),
                 "filter_reasons": filter_reasons,
@@ -10965,13 +10972,13 @@ def build_excluded_roundtrip_combos(
 
             combos.append(combo_payload)
 
-    if emit_diagnostics:
+    if emit_diagnostics and recommended_total is not None:
         _log_excluded_price_diagnostics(recommended_total, max_budget, combos)
     recommended_budget_decision = evaluate_purchase_budget(
         recommended_total,
         max_budget=max_budget,
     )
-    if emit_diagnostics:
+    if emit_diagnostics and recommended_total is not None:
         safe_log(
             f"[排除诊断] 推荐方案是否超预算="
             f"{recommended_budget_decision['is_over_budget']}"
@@ -11482,9 +11489,24 @@ def analyze_round_trip(
             emit_diagnostics=emit_diagnostics,
         )
     else:
+        excluded_roundtrip_combos = build_excluded_roundtrip_combos(
+            outbound_analysis,
+            return_analysis,
+            None,
+            3,
+            max_budget=combo_max_budget,
+            constraints=combined_preferences,
+            recommended_combo=None,
+            passengers=pricing_passengers,
+            route_type=pricing_route_type,
+            emit_diagnostics=False,
+            include_without_reference=True,
+        )
         if emit_diagnostics:
-            safe_log("[排除诊断] 无推荐方案,不适用")
-        excluded_roundtrip_combos = []
+            safe_log(
+                "[排除诊断] 无推荐方案,"
+                f"保留完整往返排除组合={len(excluded_roundtrip_combos)}"
+            )
 
     mixed_history = {}
     if best_combo and best_combo.get("mixed_cabin"):

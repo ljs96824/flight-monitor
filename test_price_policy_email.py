@@ -201,7 +201,10 @@ def test_no_primary_payload_clears_purchase_only_price_fields():
     assert payload["transaction_price"] is None
     assert payload["verify_price"] is None
     assert payload["budget_compare_price"] is None
-    assert payload["price_signal"] == {}
+    assert payload["price_signal"]
+    assert payload["price_signal"]["label"] == "中"
+    assert payload["price_signal"]["summary"] == "搜索参考价仍高于理想入手价（你的设置）"
+    assert payload["price_signal"]["sample_n"] == 0
     assert payload["execution_advice"] == {}
     assert payload["purchase_budget_decision"]["status"] == "not_applicable"
 

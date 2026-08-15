@@ -1055,7 +1055,7 @@ class SameDayBusinessModeTest(unittest.TestCase):
         self.assertEqual(result["top_combinations"], [])
         self.assertEqual(result["closest_same_day_outbound_options"][0]["flight_no"], "MU5099")
         self.assertNotEqual(result["closest_same_day_outbound_options"][0]["flight_no"], "CA1510")
-        self.assertIn("[排除诊断] 无推荐方案,不适用", stdout.getvalue())
+        self.assertIn("[排除诊断] 无推荐方案,保留完整往返排除组合=0", stdout.getvalue())
         self.assertNotIn("推荐方案是否超预算", stdout.getvalue())
 
     def test_same_day_earliest_alternative_uses_raw_valid_pool_not_price_display_pool(self):
