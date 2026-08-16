@@ -1,75 +1,288 @@
 # Flight Monitor
 
-[![tests](https://github.com/ljs96824/flight-monitor/actions/workflows/tests.yml/badge.svg)](https://github.com/ljs96824/flight-monitor/actions/workflows/tests.yml)
+[![tests](../../actions/workflows/tests.yml/badge.svg)](../../actions/workflows/tests.yml)
 
-定时监控 `config.yaml` 中配置的航班价格，使用 SerpAPI Google Flights 获取数据，并通过 PushPlus 推送通知。
+> An evidence-first flight monitoring system with explicit price scopes, source provenance, and offline regression contracts.
 
-## 本地运行
+Flight Monitor 是一个本地优先的航班采集、约束过滤与通知系统。它输出的是可核验的参考数据，不代替航司、OTA、支付页或用户作购买决定。
 
-1. 安装依赖：
+> [!IMPORTANT]
+> 票价、行李、退改与舱位库存都可能在支付前变化。系统会标出人数、往返、含税与数据来源口径；无法取得数据时应显示缺口，而不是把采集失败解释成售罄、停飞或市场涨价。
 
-```bash
-pip install -r requirements.txt
-```
+## 1. 定位
 
-2. 配置 `.env`：
+本项目适合需要持续观察固定航线、日期与约束的人。它把以下工作串成一条可审计链路：
 
-```env
-SERPAPI_KEY=你的SerpAPI key
-SEARCHAPI_KEY=你的SearchAPI key
-PUSHPLUS_TOKEN=你的PushPlus token
-```
+- 采集单人单程参考价与航班结构；
+- 按直飞、中转、时间、行李、航司、廉航、乘客和预算约束过滤；
+- 对往返、多人和混舱场景组装明确口径的参考总价；
+- 通过邮件、PushPlus 或两者发送结构化结果；
+- 把观测、轮次证据、配额使用和统计依据留在本地。
 
-3. 手动运行：
+它不是比价网站、订票代理、自动交易器，也不保证覆盖所有航班或最低可售价格。
 
-```bash
-python main.py
-```
+## 2. 设计哲学
 
-查看本地状态：
+1. **诚实优先于“有结果”**：空结果、配额保护、缓存复用、源退化和样本不足都必须显式披露。
+2. **价格比较必须同口径**：单人不能与全员混比，单程不能与往返混比；儿童、婴儿等估算必须带说明。
+3. **时间比较必须带日期**：跨午夜和次日航班按完整时间比较，国际航段按机场时区锚定。
+4. **证据可追溯**：统计值携带样本数、窗口、来源与方法版本；历史条件变化后开启新的约束纪元。
+5. **只陈述客观权衡**：系统并列展示方案和事实，不使用复合主观评分替用户下结论。
+6. **失败不静默**：备选与主方案采用相同的去返、人数、预算和验证要求；缺腿或缺价时明确降级。
+7. **PII 与密钥不进仓库**：真实邮箱、token、API key、个人标识只放本机或部署环境的 `.env`，不得写入文档、夹具、日志或提交。
 
-```bash
-python check.py
-```
+## 3. 功能清单
 
-## GitHub Actions 部署
+以下均来自当前代码与已落地契约：
 
-1. 把 `flight_monitor` 项目推送到 GitHub 仓库。
+- 两张表单页面：快速创建与完整设置；严格地点解析，IATA 码来自静态机场表。
+- 单程、普通往返、当天往返与商务会议时间窗；去返均按完整日期时间判断。
+- 成人、儿童、老人、婴儿人数；单人/全员预算口径；国内与国际乘客费率分开。
+- 全员经济、全员商务及按乘客类型分配的混舱监控。混舱只接受同一航班经济舱与商务舱都可匹配的组合。
+- 直飞/中转、红眼、起降时间、行李、退改、航司、廉航和舱位约束。
+- 主方案、完整往返备选、排除原因、低价日历、方案追踪、渠道与数据时点披露。
+- 邮件、PushPlus、两者同时发送；失败时保留本地 payload 与轮次日志。
+- 本轮请求计划、请求级缓存、当日面板复用、源熔断、配额保护和调用统计。
+- 追加式 SQLite 观测库、固定篮子、提前购买曲线、统计依据信封、航班规律和实验性预测。
+- 预测只在累计走前回测技能门通过时展示，且描述市场最低参考价，不输出“购买/等待”指令。
 
-2. 在仓库中进入 `Settings` -> `Secrets and variables` -> `Actions` -> `New repository secret`，新增：
-
-```text
-SERPAPI_KEY
-SEARCHAPI_KEY
-PUSHPLUS_TOKEN
-```
-
-3. 确认 workflow 文件存在：
-
-```text
-.github/workflows/monitor.yml
-```
-
-4. GitHub Actions 会每天按北京时间运行三次：
+## 4. 架构
 
 ```text
-09:00
-15:00
-21:00
+                         +---------------------------+
+                         | GitHub                    |
+                         | source + offline CI       |
+                         | no production scheduler   |
+                         +-------------+-------------+
+                                      ^
+                                 pull | push
+                                      v
++-------------------------------------+--+       +---------------------------+
+| Local machine                          |<----->| PythonAnywhere (optional)  |
+| web form / collection / analysis       | sync  | web form / subscriptions  |
+| SQLite observations / logs / scheduler |       | payload detail hosting    |
++----------------------------------------+       +---------------------------+
 ```
 
-也可以在 GitHub 仓库的 `Actions` 页面手动点击 `Run workflow` 立即执行一次。
+采用这个三角而不是把所有工作塞进一个平台，原因是：
 
-## 注意
+- **本机**拥有持久 SQLite、任务计划、浏览器 smoke 环境和实际出站采集条件，是默认运行主体。
+- **PythonAnywhere**只作为可选表单、订阅与详情同步节点。其出站访问受账户套餐和白名单约束，不应未经验证就承担采集或 SMTP 发送。
+- **GitHub**保存代码并运行 Ubuntu/Windows 离线测试。CI workflow 不接收生产 secrets，也不承担定时采集；临时 runner 不适合作为长期观测库。
 
-GitHub Actions 的运行环境是临时的，本地生成的 `data/prices.db`、`data/last_signals.json`、`data/analysis_log.jsonl` 不会自动跨运行持久保存。当前部署方式适合定时采集和推送；如果需要长期历史分析，需要后续接入外部数据库或把数据作为 artifact/commit 回仓库。
+## 5. 数据源与配额经济学
 
-## 本地 UI 契约测试
+当前源策略的单一真值见 [source_profiles.py](source_profiles.py)，额度配置见 [config.yaml](config.yaml)。
 
-双收集器保持纯离线运行；真实浏览器交互在本机 Microsoft Edge 上单独验收：
+| 数据源 | 当前职责 | 本地额度口径 | 明确限制 |
+| --- | --- | --- | --- |
+| 聚合数据（Juhe） | 国内、国际及港澳台经济舱主列表源 | 买断额度 550 次，本地台账估算余量 | 返回空或错误时不能推断为售罄；最终价格以支付页为准 |
+| SerpAPI | 国际及港澳台商务舱列表源，仅在商务/混舱主日期请求 | 250 次/月，预留 30 次后触发配额保护 | 经济舱交叉核对默认关闭；展示价的税费构成未拆分 |
+| Duffel | 行李、退改等规则富化 | 本系统不设本地额度上限 | 只富化已存在候选，不作为当前推荐池定价来源；供应商自身限制仍适用 |
+| HasData | 已退役，仅保留历史代码与既有观测解释 | 2026-08-14 起不再计划新请求 | 退役原因是 403/订阅终止；历史 global_min 数据不删除、不改写 |
+
+调用成本通过“先计划、后执行”控制：同一轮中相同的源、机场对、日期、乘客和舱位键只实际请求一次；订阅轮可复用新鲜面板，固定篮子仍强制新鲜。`data/api_usage.json` 只是本地估算台账，供应商控制台才是最终额度依据。
+
+所有价格先锚定为单人单程 CNY 参考价，再由统一金额树组装往返与多人展示。多人低价舱库存不足、儿童/婴儿票规、税费、服务费、行李和混舱库存都可能使支付页金额不同。
+
+## 6. 快速开始
+
+### 6.1 环境
+
+- Python 3.13。
+- Windows 或 Linux；本地 UI smoke 额外需要 Microsoft Edge。
+- 在项目根目录执行：
+
+```bash
+python --version
+python -m pip install -r requirements.txt
+python -m pip install pytest
+```
+
+### 6.2 创建 `.env`
+
+下面的跨平台命令只在 `.env` 不存在时复制 [.env.example](.env.example)，不会覆盖已有文件：
+
+```bash
+python -c "from pathlib import Path; src=Path('.env.example'); dst=Path('.env'); dst.exists() or dst.write_bytes(src.read_bytes())"
+```
+
+随后在本地编辑 `.env`。不要把真实值粘贴到 README、Issue、测试或日志。
+
+**必需层**
+
+| 变量 | 解锁能力 |
+| --- | --- |
+| `JUHE_FLIGHT_KEY` | 当前经济舱主采集；没有它，首次监控通常无法形成经济舱候选池 |
+| `PUSHPLUS_TOKEN` 或 `SMTP_USER` + `SMTP_PASS` | 至少一种外部通知渠道；缺失时仍可检查本地 payload 和日志 |
+
+**可选层**
+
+| 变量 | 解锁能力 |
+| --- | --- |
+| `SERPAPI_KEY` / `SERPAPI_API_KEY` / `SERP_API_KEY` | 三者只填一个；国际及港澳台商务舱、混舱监控 |
+| `DUFFEL_TOKEN` | 已有候选的行李与退改规则富化 |
+| `SMTP_PROVIDER`、`SMTP_HOST`、`SMTP_PORT`、`SMTP_SSL` | 邮件服务商与连接参数覆盖 |
+| `PYTHONANYWHERE_TOKEN`、`PYTHONANYWHERE_USER` | 可选的订阅和详情 payload 同步 |
+| `FEEDBACK_NOTIFY_EMAIL` | 表单反馈通知收件地址 |
+
+其余可调阈值与诊断开关已按用途分组列在 [.env.example](.env.example)。SerpAPI 密钥别名的解析实现见 [serpapi_credentials.py](serpapi_credentials.py)。
+
+### 6.3 启动网页
+
+```bash
+python -u -X utf8 run_web.py
+```
+
+访问 `http://127.0.0.1:5000`。页脚的 `build ... · 启动 ... · :5000` 是版本信标；若页面行为与代码不一致，先核对该信标。用户的 `:5000` 实例受 [CONTRIBUTING.md](CONTRIBUTING.md) 的端口主权规则保护。
+
+首个订阅只需三步：
+
+1. 在“快速创建监控”填写出发地、目的地、日期/往返、乘客、预算和场景。
+2. 选择邮件、PushPlus 或两者；邮件渠道同时填写收件邮箱。完整设置页可调整时间、航司、行李、商务或混舱约束。
+3. 提交。保存成功后会触发一次后台采集；检查页面版本信标、通知渠道以及 `data/run_latest.log` 中对应轮次的结果。
+
+### 6.4 运行离线测试
+
+```bash
+python -X utf8 -m pytest -q
+python -X utf8 -m unittest discover
+```
+
+真实浏览器交互只在本机 Edge 验收，CI 明确跳过该项：
 
 ```bash
 python -X utf8 scripts/ui_smoke.py
 ```
 
-脚本使用 Edge DevTools Protocol，不需要 Selenium 或 msedgedriver。CI 中保留显式 `local-only` 跳过步骤，避免把未安装 Edge 的 runner 误报为已验证。
+### 6.5 手动采集与篮子定时
+
+以下两个命令会调用已配置的数据源并**消耗配额**：
+
+```bash
+python -u -X utf8 main.py
+python -u -X utf8 basket_collect.py
+```
+
+Windows Task Scheduler 示例（在项目根目录的 PowerShell 中执行；任务触发时会消耗配额，并会创建系统任务）：
+
+```powershell
+$project = (Get-Location).Path
+$taskName = "flight_basket"
+$action = "cmd /c cd /d `"$project`" && python -u -X utf8 basket_collect.py >> data\basket.log 2>&1"
+schtasks.exe /Query /TN $taskName 2>$null
+if ($LASTEXITCODE -ne 0) {
+    schtasks.exe /Create /TN $taskName /SC DAILY /ST 09:30 /TR $action
+}
+```
+
+Linux cron 示例（每天 09:30；执行时会消耗配额）：
+
+```cron
+30 9 * * * cd "$HOME/flight-monitor" && python3.13 -u -X utf8 basket_collect.py >> data/basket.log 2>&1
+```
+
+固定篮子使用机场级日期队列并强制新鲜采集。编辑 [basket_collect.py](basket_collect.py) 中的队列前，应先评估每日调用量。
+
+### 6.6 PythonAnywhere 可选部署
+
+PythonAnywhere 不是必需组件。若用它承载表单或详情页，在其 Bash console 中：
+
+```bash
+cd ~/flight-monitor
+git pull --ff-only
+python3.13 -m pip install --user -r requirements.txt
+```
+
+然后在 Web 面板点击 **Reload**。生产密钥放在该环境私有的 `.env`，不要放入 GitHub。部署前先核验聚合数据、SerpAPI、Duffel 和 SMTP 端点是否允许出站；若受套餐或白名单限制，让 PythonAnywhere 只承载表单/同步，本机继续负责采集和发送。
+
+## 7. 日常运行
+
+### 采集与证据
+
+- `main.py`：先做订阅前置校验和全轮请求计划，再采集、分析、生成 payload 并分发通知；会消耗配额。
+- `basket_collect.py`：独立固定篮子，只采集和落观测库，不分析、不推送；会消耗配额。
+- 最新进程日志写入 `data/run_latest.log`；每轮证据追加到 `data/logs/rounds/YYYYMMDD.log`。
+- API实际请求写入 `data/api_usage.json`，观测写入 `data/observations.sqlite3`，通知详情写入 `data/payloads/`。这些都是运行时文件，不进入 Git。
+
+### 只读体检
+
+下列 `--help` 命令不调用真实航班 API：
+
+```bash
+python -X utf8 scripts/list_expired_subs.py --help
+python -X utf8 scripts/list_unresolvable_subs.py --help
+python -X utf8 scripts/list_incomplete_notification_subs.py --help
+python -X utf8 scripts/tcurve_report.py --help
+python -X utf8 scripts/provenance_report.py --help
+python -X utf8 scripts/forecast_report.py --help
+```
+
+生成离线全链路快照：
+
+```bash
+python -X utf8 scripts/snapshot_run.py --output data/snapshot_check.json
+```
+
+该脚本使用固定夹具，不发起真实 API；`skipped_items` 非空时必须逐项解释，不能把残缺快照当作通过。
+
+## 8. 工程纪律
+
+- **双收集器**：提交前同时运行 `pytest` 与 `unittest discover`；GitHub Actions 在 Ubuntu、Windows 两个平台执行同一套离线测试，配置见 [.github/workflows/tests.yml](.github/workflows/tests.yml)。
+- **冻结邮件基线**：脱敏 payload 与期望哈希位于 [tests/fixtures/frozen_email/](tests/fixtures/frozen_email/)，变更纪律见 [docs/email-regression-baseline.md](docs/email-regression-baseline.md)。基线更替必须记录旧哈希、新哈希、原因、日期和批准人。
+- **快照模式**：业务逻辑变更前后运行 [scripts/snapshot_run.py](scripts/snapshot_run.py)，只接受预期字段差异。
+- **契约族**：价格口径、时间日期、表单规范化、渲染完整性、通知小节、副作用、源策略、约束指纹和文档准确性都有回归测试。
+- **版本信标**：网页页脚显示 Git短哈希、进程启动时间和端口，避免把旧进程当成新代码验收。
+- **轮档与台账**：轮档追加且脱敏；台账只记录实际 API 请求，缓存命中、面板复用和源级跳过不得冒充消耗。
+- **约束纪元**：约束指纹变化后，价格走势和历史位置从新桶积累；不得把筛选变化叙述成市场涨跌。
+- **离线默认**：测试、快照、报告和文档校验不得发起真实外部 API；审计脚本只有显式 `--execute` 才允许消耗配额。
+- **敏感信息**：`.env`、用户订阅、真实 payload、观测库和日志均不提交；测试夹具必须先脱敏。
+
+## 9. 目录导览
+
+| 路径 | 作用 |
+| --- | --- |
+| [run_web.py](run_web.py)、[web_form.py](web_form.py) | Web入口、表单、订阅管理与详情页 |
+| [main.py](main.py) | 订阅轮编排、前置校验、采集计划、分析和通知 |
+| [basket_collect.py](basket_collect.py) | 固定篮子采集入口 |
+| [source_profiles.py](source_profiles.py)、[sources/](sources/) | 路线/舱位源策略与各数据源适配器 |
+| [analyzer.py](analyzer.py)、[pricing.py](pricing.py)、[price_estimator.py](price_estimator.py) | 约束分析、价格口径和金额树 |
+| [notifier.py](notifier.py)、[email_notifier.py](email_notifier.py) | 统一 payload、邮件与PushPlus渲染/发送 |
+| [observations_store.py](observations_store.py)、[storage.py](storage.py) | 追加式观测库与历史/快照存储 |
+| [scripts/](scripts/) | 快照、体检、只读统计报告和本地 UI smoke |
+| [analytics/](analytics/) | 只读描述统计报告 |
+| [tests/fixtures/](tests/fixtures/) | 脱敏响应、表单规范化与冻结邮件夹具 |
+| [docs/](docs/) | 设计、计划、审计和回归纪律入口 |
+
+建议先读：
+
+- [商务舱源能力审计](docs/cabin-capability-audit-2026-08-13.md)
+- [SerpAPI能力审计](docs/serpapi-capability-audit-2026-08-14.md)
+- [邮件回归基线纪律](docs/email-regression-baseline.md)
+- [设计规格目录](docs/superpowers/specs/)
+- [实施计划目录](docs/superpowers/plans/)
+
+## 10. 限制与非目标
+
+- 系统不订票、不支付、不锁舱、不保证最低价，也不替用户决定购买时点。
+- 搜索价不是支付承诺。税费、服务费、行李、退改和多人库存应在支付页逐项核实。
+- 儿童、婴儿和混舱金额包含规则估算；国际儿童票与商务舱儿童票可能明显不同。
+- 混舱 v1 要求同一航班两舱都可见；缺少商务舱匹配时不跨航班拼凑，不生成可订组合价。
+- 提前购买曲线、历史位置和预测受样本量、来源覆盖和观测窗口限制；覆盖外不外推，技能门未过不进入推送。
+- 会议交通与冗余是可追溯估算，不是地图导航或准点承诺。
+- 本地 SQLite 与文件同步适合个人/小规模运行，不是多租户、高可用云服务。
+- 数据源可能空返回、限额、变更字段或退役；系统的责任是披露，不是补造数据。
+
+### License（待定）
+
+<!-- 待用户决定后：保留一个方案、删除另一个，并按选择补充 LICENSE 文件。 -->
+
+- 方案 A：暂不授予开源许可，保留所有权利，仅作为个人运营仓库。
+- 方案 B：采用 MIT License，允许复用、修改与分发，同时保留免责声明。
+
+### 开发方式（待定）
+
+<!-- 待用户决定后：把选定方式写入 CONTRIBUTING.md，并删除未选方案。 -->
+
+- 方案 A：个人维护；每项任务独立提交，本地与用户验收后再推送。
+- 方案 B：协作维护；Issue/PR 驱动，main 分支保护，CI通过后合并。
