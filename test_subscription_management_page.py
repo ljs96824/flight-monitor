@@ -112,6 +112,46 @@ class SubscriptionManagementPageTest(unittest.TestCase):
         self.assertEqual(items[1]["status"], "paused")
         self.assertEqual(items[1]["scenario"], "旅游 + 家庭/亲子")
 
+    def test_subscription_id_is_the_detail_and_last_decision_identity(self):
+        records = [
+            {
+                "subscription_id": "stable-uuid-only",
+                "status": "active",
+                "basic": {
+                    "origin": "上海",
+                    "destination": "大阪",
+                    "route_type": "international",
+                    "departure_date": "2026-10-01",
+                },
+            }
+        ]
+        web_form.SUBSCRIPTIONS_PATH.write_text(
+            json.dumps(records, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        (web_form.PAGE_PAYLOADS_DIR / "stable-uuid-only.json").write_text(
+            json.dumps(
+                {
+                    "created_at": "2026-08-17T10:00:00",
+                    "payload": {"push_type": "已生成", "current_price": 1234},
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        with patch.object(
+            web_form,
+            "url_for",
+            side_effect=lambda endpoint, **kwargs: f"/{endpoint}?{kwargs}",
+        ):
+            item = web_form.build_subscription_list_items(
+                web_form.load_subscriptions()
+            )[0]
+
+        self.assertIn("stable-uuid-only", item["detail_url"])
+        self.assertIn("已生成(¥1,234)", item["last_decision"])
+
     def test_toggle_and_delete_subscription(self):
         self._write_subscriptions()
 

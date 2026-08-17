@@ -45,6 +45,7 @@ from pricing import passenger_rate_sum
 
 from filename_utils import sanitize_filename
 from log_utils import safe_log
+from subscription_identity import ensure_subscription_id, subscription_id as stable_subscription_id
 from notification_config import (
     DEFAULT_NOTIFICATION_METHOD,
     normalize_notification_goals,
@@ -614,6 +615,12 @@ def save_subscription(subscription: dict, index: int | None = None) -> int:
     else:
         subscriptions.append(subscription)
         saved_index = len(subscriptions) - 1
+    subscription_id, migrated = ensure_subscription_id(subscription)
+    if migrated:
+        safe_log(
+            f"[身份迁移] 保存路径 index={saved_index} "
+            f"subscription_id={subscription_id}"
+        )
     SUBSCRIPTIONS_PATH.write_text(
         json.dumps(subscriptions, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -786,7 +793,7 @@ def _relative_time_label(value: str) -> str:
 
 
 def _subscription_last_decision(sub: dict, index: int) -> str:
-    subscription_id = str(sub.get("id") or index)
+    subscription_id = stable_subscription_id(sub) or str(index)
     record = _load_payload_result(subscription_id) or {}
     payload = record.get("payload") if isinstance(record.get("payload"), dict) else record
     if not isinstance(payload, dict) or not payload:
@@ -803,7 +810,7 @@ def build_subscription_list_items(subscriptions: list[dict]) -> list[dict]:
     for index, sub in enumerate(subscriptions):
         route_type = _sub_value(sub, "route_type", "domestic")
         round_trip = bool(sub.get("round_trip") or _sub_value(sub, "trip_type") == "round_trip")
-        subscription_id = str(sub.get("id") or index)
+        subscription_id = stable_subscription_id(sub) or str(index)
         items.append(
             {
                 "index": index,

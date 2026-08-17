@@ -10,6 +10,7 @@ from constraint_summary import format_constraint_summary
 from form_structure import subscription_to_form_values
 import main
 import web_form
+from tests.form_fixture_contract import without_storage_identity
 
 
 FIXTURE = Path(__file__).parent / "tests" / "fixtures" / "form_normalization_baseline_v1.json"
@@ -121,7 +122,9 @@ class FormUxPhase1Test(unittest.TestCase):
                             web_form.SUBSCRIPTIONS_PATH.read_text(encoding="utf-8")
                         )[-1]
                         self.assertEqual(
-                            main.normalize_subscription(saved),
+                            without_storage_identity(
+                                main.normalize_subscription(saved)
+                            ),
                             case["normalized_subscription"],
                             name,
                         )

@@ -11,6 +11,7 @@ from form_structure import (
 )
 import main
 import web_form
+from tests.form_fixture_contract import without_storage_identity
 
 
 FIXTURE = Path(__file__).parent / "tests" / "fixtures" / "form_normalization_baseline_v1.json"
@@ -139,7 +140,9 @@ class FormUxQuickFinishTest(unittest.TestCase):
                 saved = json.loads(
                     web_form.SUBSCRIPTIONS_PATH.read_text(encoding="utf-8")
                 )[0]
-                return main.normalize_subscription(saved)
+                return without_storage_identity(
+                    main.normalize_subscription(saved)
+                )
 
         try:
             quick_result = post_once("quick")
@@ -164,7 +167,9 @@ class FormUxQuickFinishTest(unittest.TestCase):
                             web_form.SUBSCRIPTIONS_PATH.read_text(encoding="utf-8")
                         )[-1]
                         self.assertEqual(
-                            main.normalize_subscription(saved),
+                            without_storage_identity(
+                                main.normalize_subscription(saved)
+                            ),
                             case["normalized_subscription"],
                             name,
                         )

@@ -9,6 +9,9 @@ from pathlib import Path
 import httpx
 from dotenv import load_dotenv
 
+from log_utils import safe_log
+from subscription_identity import ensure_subscription_id, subscription_id
+
 
 BASE_DIR = Path(__file__).parent
 DATA_DIR = BASE_DIR / "data"
@@ -44,33 +47,91 @@ def route_subscription_key(subscription: dict) -> str:
 
 
 def _subscription_key(subscription: dict) -> str:
-    if subscription.get("id"):
-        return f"id:{subscription['id']}"
+    stable_id = subscription_id(subscription)
+    if stable_id:
+        return f"id:{stable_id}"
     if subscription.get("created_at"):
         return f"created_at:{subscription['created_at']}"
     return route_subscription_key(subscription)
 
 
-def merge_subscriptions(local_subscriptions: list[dict], remote_subscriptions: list[dict]) -> tuple[list[dict], int]:
-    """按身份键同步远端订阅；同键更新，新键追加。"""
+def plan_remote_ingest(
+    local_subscriptions: list[dict],
+    remote_subscriptions: list[dict],
+) -> dict:
+    """规划 PA 只新增摄入；任何本地命中都不覆盖。"""
     merged = list(local_subscriptions)
-    existing = {}
+    identities = {}
+    routes = {}
     for index, subscription in enumerate(merged):
         if not isinstance(subscription, dict):
             continue
-        existing.setdefault(_subscription_key(subscription), index)
-    added = 0
-    for subscription in remote_subscriptions:
+        identities.setdefault(_subscription_key(subscription), index)
+        routes.setdefault(route_subscription_key(subscription), index)
+
+    decisions = []
+    for remote_index, subscription in enumerate(remote_subscriptions):
         if not isinstance(subscription, dict):
             continue
-        key = _subscription_key(subscription)
-        if key in existing:
-            merged[existing[key]] = subscription
+        identity_key = _subscription_key(subscription)
+        route_key = route_subscription_key(subscription)
+        if identity_key in identities:
+            decisions.append(
+                {
+                    "remote_index": remote_index,
+                    "action": "skip_identity",
+                    "identity_key": identity_key,
+                    "route_key": route_key,
+                    "local_index": identities[identity_key],
+                }
+            )
             continue
-        merged.append(subscription)
-        existing[key] = len(merged) - 1
-        added += 1
-    return merged, added
+        if route_key in routes:
+            decisions.append(
+                {
+                    "remote_index": remote_index,
+                    "action": "skip_route",
+                    "identity_key": identity_key,
+                    "route_key": route_key,
+                    "local_index": routes[route_key],
+                }
+            )
+            continue
+
+        incoming = dict(subscription)
+        ensure_subscription_id(incoming)
+        local_index = len(merged)
+        merged.append(incoming)
+        identities[_subscription_key(incoming)] = local_index
+        routes[route_key] = local_index
+        decisions.append(
+            {
+                "remote_index": remote_index,
+                "action": "append",
+                "identity_key": _subscription_key(incoming),
+                "route_key": route_key,
+                "local_index": local_index,
+            }
+        )
+
+    return {
+        "subscriptions": merged,
+        "added": sum(item["action"] == "append" for item in decisions),
+        "skipped_identity": sum(
+            item["action"] == "skip_identity" for item in decisions
+        ),
+        "skipped_route": sum(item["action"] == "skip_route" for item in decisions),
+        "decisions": decisions,
+    }
+
+
+def merge_subscriptions(
+    local_subscriptions: list[dict],
+    remote_subscriptions: list[dict],
+) -> tuple[list[dict], int]:
+    """兼容旧调用方，执行 PA 只新增摄入计划。"""
+    plan = plan_remote_ingest(local_subscriptions, remote_subscriptions)
+    return plan["subscriptions"], plan["added"]
 
 
 def download_remote_subscriptions() -> list[dict]:
@@ -105,15 +166,36 @@ def sync_subscriptions() -> dict:
         return {"synced": False, "added": 0, "total": len(_load_json_list(LOCAL_SUBSCRIPTIONS))}
 
     local_subscriptions = _load_json_list(LOCAL_SUBSCRIPTIONS)
-    merged, added = merge_subscriptions(local_subscriptions, remote_subscriptions)
+    plan = plan_remote_ingest(local_subscriptions, remote_subscriptions)
+    merged = plan["subscriptions"]
+    added = plan["added"]
 
-    DATA_DIR.mkdir(exist_ok=True)
-    LOCAL_SUBSCRIPTIONS.write_text(
-        json.dumps(merged, ensure_ascii=False, indent=2),
-        encoding="utf-8",
+    for decision in plan["decisions"]:
+        safe_log(
+            "[同步决策] "
+            f"PA[{decision['remote_index']}] action={decision['action']} "
+            f"identity={decision['identity_key']} route={decision['route_key']} "
+            f"local_index={decision['local_index']}"
+        )
+
+    if added:
+        DATA_DIR.mkdir(exist_ok=True)
+        LOCAL_SUBSCRIPTIONS.write_text(
+            json.dumps(merged, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    safe_log(
+        f"[sync] PA仅新增摄入：新增={added} "
+        f"身份命中跳过={plan['skipped_identity']} "
+        f"航线命中跳过={plan['skipped_route']} 本地共={len(merged)}"
     )
-    print(f"[sync] 已同步 PythonAnywhere 订阅：新增 {added} 条，本地共 {len(merged)} 条")
-    return {"synced": True, "added": added, "total": len(merged)}
+    return {
+        "synced": True,
+        "added": added,
+        "skipped_identity": plan["skipped_identity"],
+        "skipped_route": plan["skipped_route"],
+        "total": len(merged),
+    }
 
 
 def main() -> None:

@@ -8,6 +8,7 @@ from pathlib import Path
 import main
 import web_form
 from form_pages import FORM_PAGE_TEMPLATE
+from tests.form_fixture_contract import without_storage_identity
 from werkzeug.datastructures import MultiDict
 from unittest.mock import patch
 
@@ -280,7 +281,9 @@ class FormUx3TwoPagesTest(unittest.TestCase):
                         self.assertEqual(response.status_code, 302, name)
                         saved = json.loads(path.read_text(encoding="utf-8"))[0]
                         self.assertEqual(
-                            main.normalize_subscription(saved),
+                            without_storage_identity(
+                                main.normalize_subscription(saved)
+                            ),
                             expected,
                             name,
                         )
