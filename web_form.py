@@ -601,6 +601,14 @@ def save_subscription(subscription: dict, index: int | None = None) -> int:
     SUBSCRIPTIONS_PATH.parent.mkdir(exist_ok=True)
     subscriptions = load_subscriptions()
     if index is not None and 0 <= index < len(subscriptions):
+        existing = subscriptions[index]
+        if isinstance(existing, dict):
+            # 编辑只更新订阅内容，身份字段必须沿用原记录。
+            for identity_field in ("id", "subscription_id", "created_at"):
+                if identity_field in existing:
+                    subscription[identity_field] = existing[identity_field]
+                else:
+                    subscription.pop(identity_field, None)
         subscriptions[index] = subscription
         saved_index = index
     else:

@@ -31,11 +31,8 @@ def _load_json_list(path: Path) -> list[dict]:
     return data if isinstance(data, list) else []
 
 
-def _subscription_key(subscription: dict) -> str:
-    if subscription.get("id"):
-        return f"id:{subscription['id']}"
-    if subscription.get("created_at"):
-        return f"created_at:{subscription['created_at']}"
+def route_subscription_key(subscription: dict) -> str:
+    """返回无身份字段时沿用的航线级订阅键。"""
     parts = [
         subscription.get("origin", ""),
         subscription.get("destination", ""),
@@ -46,23 +43,32 @@ def _subscription_key(subscription: dict) -> str:
     return "route:" + "|".join(str(part).strip().upper() for part in parts)
 
 
+def _subscription_key(subscription: dict) -> str:
+    if subscription.get("id"):
+        return f"id:{subscription['id']}"
+    if subscription.get("created_at"):
+        return f"created_at:{subscription['created_at']}"
+    return route_subscription_key(subscription)
+
+
 def merge_subscriptions(local_subscriptions: list[dict], remote_subscriptions: list[dict]) -> tuple[list[dict], int]:
-    """Merge remote subscriptions into local subscriptions by id or created_at."""
+    """按身份键同步远端订阅；同键更新，新键追加。"""
     merged = list(local_subscriptions)
-    existing = {
-        _subscription_key(subscription)
-        for subscription in merged
-        if isinstance(subscription, dict)
-    }
+    existing = {}
+    for index, subscription in enumerate(merged):
+        if not isinstance(subscription, dict):
+            continue
+        existing.setdefault(_subscription_key(subscription), index)
     added = 0
     for subscription in remote_subscriptions:
         if not isinstance(subscription, dict):
             continue
         key = _subscription_key(subscription)
         if key in existing:
+            merged[existing[key]] = subscription
             continue
         merged.append(subscription)
-        existing.add(key)
+        existing[key] = len(merged) - 1
         added += 1
     return merged, added
 
