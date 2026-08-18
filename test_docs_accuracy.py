@@ -13,6 +13,7 @@ from serpapi_credentials import SERPAPI_KEY_ALIASES
 ROOT = Path(__file__).resolve().parent
 README = ROOT / "README.md"
 ENV_EXAMPLE = ROOT / ".env.example"
+LICENSE = ROOT / "LICENSE"
 
 EXPECTED_SECTIONS = (
     "定位",
@@ -151,8 +152,16 @@ class DocsAccuracyTest(unittest.TestCase):
             "[![tests](../../actions/workflows/tests.yml/badge.svg)]",
             self.readme,
         )
-        self.assertIn("License（待定）", self.readme)
-        self.assertIn("开发方式（待定）", self.readme)
+        self.assertIn("### License", self.readme)
+        self.assertIn("### 开发方式", self.readme)
+
+    def test_license_file_uses_mit(self):
+        self.assertTrue(LICENSE.is_file(), "缺少LICENSE文件")
+        self.assertIn("MIT License", LICENSE.read_text(encoding="utf-8"))
+
+    def test_readme_has_no_unresolved_placeholders(self):
+        self.assertNotIn("待定", self.readme)
+        self.assertNotIn("占位", self.readme)
 
     def test_all_linked_paths_and_python_script_references_exist(self):
         missing = []
