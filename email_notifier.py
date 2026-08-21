@@ -12,6 +12,8 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 
+from log_utils import safe_log
+
 try:
     from dotenv import load_dotenv
 except ImportError:  # pragma: no cover - runtime dependency is optional here
@@ -210,7 +212,7 @@ def send_email(to_email: str, subject: str, html_content: str, inline_images: di
             server.starttls()
         server.login(smtp_user, smtp_pass)
         server.sendmail(smtp_user, [to_email], msg.as_string())
-        print(f"[邮件] 发送成功 → {to_email}")
+        safe_log(f"[邮件] 发送成功 → {to_email}")
         return True
     except (socket.timeout, TimeoutError, ConnectionError):
         print("[邮件] 连接SMTP服务器超时。如使用Gmail，国内需代理访问")

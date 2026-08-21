@@ -38,6 +38,11 @@ except ModuleNotFoundError:
 import web_form
 
 
+ACTIVE_ID = "123e4567-e89b-12d3-a456-426614174010"
+PAUSED_ID = "123e4567-e89b-12d3-a456-426614174011"
+STABLE_ID = "123e4567-e89b-12d3-a456-426614174012"
+
+
 class SubscriptionManagementPageTest(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()
@@ -59,7 +64,7 @@ class SubscriptionManagementPageTest(unittest.TestCase):
     def _write_subscriptions(self):
         records = [
             {
-                "id": "sub-active",
+                "id": ACTIVE_ID,
                 "status": "active",
                 "round_trip": True,
                 "basic": {
@@ -72,7 +77,7 @@ class SubscriptionManagementPageTest(unittest.TestCase):
                 "soft_preferences": {"travel_scenarios": ["business"]},
             },
             {
-                "id": "sub-paused",
+                "id": PAUSED_ID,
                 "status": "paused",
                 "round_trip": False,
                 "basic": {
@@ -88,7 +93,7 @@ class SubscriptionManagementPageTest(unittest.TestCase):
             json.dumps(records, ensure_ascii=False),
             encoding="utf-8",
         )
-        (web_form.PAGE_PAYLOADS_DIR / "sub-active.json").write_text(
+        (web_form.PAGE_PAYLOADS_DIR / f"{ACTIVE_ID}.json").write_text(
             json.dumps(
                 {
                     "created_at": "2026-06-13T10:00:00",
@@ -115,7 +120,7 @@ class SubscriptionManagementPageTest(unittest.TestCase):
     def test_subscription_id_is_the_detail_and_last_decision_identity(self):
         records = [
             {
-                "subscription_id": "stable-uuid-only",
+                "subscription_id": STABLE_ID,
                 "status": "active",
                 "basic": {
                     "origin": "上海",
@@ -129,7 +134,7 @@ class SubscriptionManagementPageTest(unittest.TestCase):
             json.dumps(records, ensure_ascii=False),
             encoding="utf-8",
         )
-        (web_form.PAGE_PAYLOADS_DIR / "stable-uuid-only.json").write_text(
+        (web_form.PAGE_PAYLOADS_DIR / f"{STABLE_ID}.json").write_text(
             json.dumps(
                 {
                     "created_at": "2026-08-17T10:00:00",
@@ -149,7 +154,7 @@ class SubscriptionManagementPageTest(unittest.TestCase):
                 web_form.load_subscriptions()
             )[0]
 
-        self.assertIn("stable-uuid-only", item["detail_url"])
+        self.assertIn(STABLE_ID, item["detail_url"])
         self.assertIn("已生成(¥1,234)", item["last_decision"])
 
     def test_toggle_and_delete_subscription(self):
@@ -168,7 +173,7 @@ class SubscriptionManagementPageTest(unittest.TestCase):
         self.assertEqual(response, "/subscriptions")
         subscriptions = json.loads(web_form.SUBSCRIPTIONS_PATH.read_text(encoding="utf-8"))
         self.assertEqual(len(subscriptions), 1)
-        self.assertEqual(subscriptions[0]["id"], "sub-active")
+        self.assertEqual(subscriptions[0]["id"], ACTIVE_ID)
 
     def test_success_page_sets_next_step_expectations(self):
         self._write_subscriptions()
@@ -200,7 +205,7 @@ class SubscriptionManagementPageTest(unittest.TestCase):
 
         response = web_form.app.test_client().post(
             "/feedback",
-            data={"subscription_id": "sub-active", "feedback_type": "unavailable"},
+            data={"subscription_id": ACTIVE_ID, "feedback_type": "unavailable"},
         )
         body = response.get_data(as_text=True)
 
@@ -219,7 +224,7 @@ class SubscriptionManagementPageTest(unittest.TestCase):
             response = web_form.app.test_client().post(
                 "/feedback",
                 data={
-                    "subscription_id": "sub-active",
+                    "subscription_id": ACTIVE_ID,
                     "feedback_type": "unavailable",
                     "unavailable_reason": "sold_out",
                     "comment": "price changed",
@@ -230,17 +235,17 @@ class SubscriptionManagementPageTest(unittest.TestCase):
         records = json.loads(web_form.FEEDBACK_PATH.read_text(encoding="utf-8"))
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(records[-1]["subscription_id"], "sub-active")
+        self.assertEqual(records[-1]["subscription_id"], ACTIVE_ID)
         send_email.assert_called_once()
         args, _kwargs = send_email.call_args
         self.assertEqual(args[0], "author@example.com")
         self.assertIn("unavailable", args[1])
-        self.assertIn("sub-active", args[1])
+        self.assertIn(ACTIVE_ID, args[1])
         self.assertIn("price changed", args[2])
 
     def test_feedback_author_email_helper_uses_configured_recipient(self):
         record = {
-            "subscription_id": "sub-active",
+            "subscription_id": ACTIVE_ID,
             "feedback_type": "unavailable",
             "unavailable_reason": "sold_out",
             "comment": "price changed",
@@ -257,7 +262,7 @@ class SubscriptionManagementPageTest(unittest.TestCase):
         args, _kwargs = send_email.call_args
         self.assertEqual(args[0], "author@example.com")
         self.assertIn("unavailable", args[1])
-        self.assertIn("sub-active", args[1])
+        self.assertIn(ACTIVE_ID, args[1])
         self.assertIn("price changed", args[2])
 
 

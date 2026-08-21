@@ -65,7 +65,6 @@ def _serve(port: int, data_dir: Path) -> None:
     data_dir.mkdir(parents=True, exist_ok=True)
     web_form.SUBSCRIPTIONS_PATH = data_dir / "subscriptions.json"
     web_form.FEEDBACK_PATH = data_dir / "feedback.json"
-    web_form.PAGE_RESULTS_PATH = data_dir / "page_results.json"
     web_form.PAGE_PAYLOADS_DIR = data_dir / "payloads"
     web_form.start_background_collection = lambda _subscription: None
     web_form.load_calendar = lambda _route: []

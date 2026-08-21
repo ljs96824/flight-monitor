@@ -467,6 +467,7 @@ CONCEPTS = {
     "trip_rigidity": _concept("flight_preferences", "行程确定性", ("trip_rigidity",), ("trip_rigidity",)),
     "notification_primary": _concept("notifications", "提醒主目标", ("primary_goal",), ("notification_goals.primary",)),
     "notification_channel": _concept("notifications", "提醒渠道与邮箱", ("notification_method", "notification_email"), ("notification_goals.method", "notification_goals.email")),
+    "notification_privacy": _concept("notifications", "通知隐私等级", ("notification_privacy_level",), ("notification_goals.privacy_level",)),
     "notification_frequency": _concept("notifications", "提醒频率", ("notification_frequency", "notification_frequency_rule"), ("notification_goals.frequency", "advanced_rules.alerts.frequency")),
     "notification_threshold": _concept("notifications", "价格变化阈值", ("price_change_threshold",), ("notification_goals.price_change_threshold", "advanced_rules.alerts.price_change_threshold")),
     "notification_secondary": _concept("notifications", "提醒附加目标", ("secondary_goals",), ("notification_goals.secondary", "advanced_rules.alerts.types")),

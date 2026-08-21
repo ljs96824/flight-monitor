@@ -384,3 +384,145 @@ Phase 1 应增加以下契约测试：
 7. 公库测试拒绝真实邮箱及受控真实行程 fixture，统一使用匿名相对日期。
 
 本报告本身未复制邮箱、手机号、UUID、token、远端旧文件名或详情正文。
+
+
+## 9. Phase 1 实施与 PA 操作记录
+
+### 9.1 本地实施边界
+
+本轮实现以下边界，尚未执行 PA 删除：
+
+- `/detail` 只接受规范 UUID，且对应 `data/payloads/<uuid>.json` 必须存在；数字、航线式、缺参、未知 UUID 一律 404。
+- `page_results.json`、最近结果回退、旧列表猜测路径和 storage key 全量日志已移除。
+- `SHARED_DETAIL_TOKEN` 为可选二次校验，默认关闭；启用后令牌只进入通知发送副本中的详情链接，不写 payload、不写日志。
+- 三个航班源的外发参数继续禁止携带儿童、老人、婴儿人数或 `cabin_allocation`。
+- 新日志统一把邮箱替换为 `<EMAIL>`；历史文件只由 `scripts/scrub_pii.py --execute` 在先备份后手工清洗。
+- 通知隐私等级为 `full/redacted/minimal`，默认 `full` 且不新增旧订阅字段；降档必须由用户显式选择。
+- 保留窗为 payload 90 天、轮档 90 天、备份 180 天，0 表示永久；轮末只打印 dry-run 到期计数，自动删除未启用。
+
+PA 实际执行状态：**待用户部署、Reload 与匿名 curl 验证后回填**。在回填完成前，本报告及 Phase 1 修复不得 push。
+
+### 9.2 PA 部署、备份、清理与验证命令
+
+以下命令必须在 **修复代码已经同步到 PA 且 Web 页已 Reload** 后执行。删除工具默认 dry-run；执行态要求已有备份归档。
+
+先在 PA Bash 控制台设置站点和现役 UUID。不要把真实 UUID 或共享令牌复制进本报告：
+
+```bash
+cd ~/flight-monitor
+APP_BASE="https://<your-pythonanywhere-site>"
+ACTIVE_UUID="<current-active-uuid>"
+
+git status --short
+git rev-parse --short HEAD
+```
+
+在删除任何文件前，从远端库存中保存三个旧数字索引作为 404 验证样本，并验证新路由已经生效：
+
+```bash
+readarray -t OLD_IDS < <(
+  python - <<'PY'
+from pathlib import Path
+for path in sorted(
+    (Path("data/payloads")).glob("*.json"),
+    key=lambda item: int(item.stem) if item.stem.isdigit() else 10**12,
+):
+    if path.stem.isdigit():
+        print(path.stem)
+PY
+)
+
+if [ "${#OLD_IDS[@]}" -lt 3 ]; then
+  echo "旧数字索引不足3个，停止清理"
+  exit 1
+fi
+
+detail_status() {
+  if [ -n "${SHARED_DETAIL_TOKEN:-}" ]; then
+    curl -sS -o /dev/null -w '%{http_code}' --get \
+      --data-urlencode "sub=$1" \
+      --data-urlencode "token=$SHARED_DETAIL_TOKEN" \
+      "$APP_BASE/detail"
+  else
+    curl -sS -o /dev/null -w '%{http_code}' --get \
+      --data-urlencode "sub=$1" \
+      "$APP_BASE/detail"
+  fi
+}
+
+for id in "${OLD_IDS[@]:0:3}"; do
+  printf '旧数字 %s -> ' "$id"
+  detail_status "$id"
+  printf '\n'
+done
+printf '现役UUID -> '
+detail_status "$ACTIVE_UUID"
+printf '\n'
+```
+
+此时三个旧数字必须均为 404，现役 UUID 必须为 200。若不满足，停止，不备份、不删除，先检查 Reload 和页脚 build 信标。
+
+路由验证通过后生成时间戳备份并执行清理工具的 dry-run：
+
+```bash
+stamp=$(date +%Y%m%dT%H%M%S)
+backup_dir="$HOME/privacy-backups/flight-monitor-$stamp"
+mkdir -p "$backup_dir"
+tar -C data -czf "$backup_dir/payloads.tgz" payloads
+if [ -f data/page_results.json ]; then
+  cp -a data/page_results.json "$backup_dir/page_results.json"
+fi
+
+python -X utf8 scripts/cleanup_legacy_payloads.py
+ls -lh "$backup_dir/payloads.tgz"
+```
+
+人工核对 dry-run 清单后，只有下列显式命令会删除非 UUID payload 与 `page_results.json`：
+
+```bash
+python -X utf8 scripts/cleanup_legacy_payloads.py \
+  --execute \
+  --backup-archive "$backup_dir/payloads.tgz"
+
+python -X utf8 scripts/cleanup_legacy_payloads.py
+```
+
+最后重复匿名验证并打印清理后类别计数：
+
+```bash
+for id in "${OLD_IDS[@]:0:3}"; do
+  printf '旧数字 %s -> ' "$id"
+  detail_status "$id"
+  printf '\n'
+done
+printf '现役UUID -> '
+detail_status "$ACTIVE_UUID"
+printf '\n'
+
+python - <<'PY'
+from pathlib import Path
+from detail_access import canonical_detail_uuid
+
+files = sorted(Path("data/payloads").glob("*.json"))
+uuid_files = [p for p in files if canonical_detail_uuid(p.stem)]
+legacy_files = [p for p in files if p not in uuid_files]
+print(
+    f"清理后总数={len(files)} UUID={len(uuid_files)} "
+    f"非UUID={len(legacy_files)} page_results={int(Path('data/page_results.json').exists())}"
+)
+PY
+```
+
+### 9.3 远端执行结果回填
+
+| 项目 | 修复前 | 修复后 |
+|---|---:|---:|
+| payload 总数 | 118（Phase 0 只读库存） | 待回填 |
+| 数字索引 | 107（Phase 0 只读库存） | 待回填 |
+| 其他非 UUID | 10（Phase 0 只读库存） | 待回填 |
+| UUID | 1（Phase 0 只读库存） | 待回填 |
+| `page_results.json` | 1 | 待回填 |
+| 旧数字匿名 HTTP | 200 | 待回填（目标 404） |
+| 现役 UUID 匿名/带令牌 HTTP | 未记录正文 | 待回填（目标 200） |
+
+清理清单、备份归档路径、页脚 build 信标与 curl 原始状态码由用户 shell 输出作为唯一远端事实；本报告不复制真实 UUID、令牌或 payload 文件名。

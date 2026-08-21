@@ -8,7 +8,10 @@ from cabin_allocation import (
     business_types_from_allocation,
     cabin_allocation_detail_label,
 )
-from notification_config import DEFAULT_NOTIFICATION_METHOD
+from notification_config import (
+    DEFAULT_NOTIFICATION_METHOD,
+    DEFAULT_NOTIFICATION_PRIVACY_LEVEL,
+)
 from form_concepts import (
     CONCEPTS,
     LEGACY_RAW_TIME_WINDOW_FIELDS,
@@ -178,6 +181,7 @@ FORM_STATIONS = (
             "primary_goal",
             "notification_method",
             "notification_email",
+            "notification_privacy_level",
             "notification_frequency",
             "notification_frequency_rule",
             "price_change_threshold",
@@ -348,6 +352,7 @@ OPTIONAL_SECTION_DEFAULTS = {
         "primary_goal": "buy_timing",
         "notification_method": DEFAULT_NOTIFICATION_METHOD,
         "notification_email": "",
+        "notification_privacy_level": DEFAULT_NOTIFICATION_PRIVACY_LEVEL,
         "notification_frequency": "important_only",
         "notification_frequency_rule": "important_only",
         "price_change_threshold": "down_100",
@@ -1256,6 +1261,7 @@ def subscription_to_form_values(subscription: Mapping | None) -> dict:
             "secondary_goals": list(goals.get("secondary") or alerts.get("types") or []),
             "notification_method": goals.get("method") or DEFAULT_NOTIFICATION_METHOD,
             "notification_email": goals.get("email") or "",
+            "notification_privacy_level": goals.get("privacy_level") or DEFAULT_NOTIFICATION_PRIVACY_LEVEL,
             "notification_frequency": frequency,
             "notification_frequency_rule": frequency,
             "price_change_threshold": _first_defined(goals.get("price_change_threshold"), alerts.get("price_change_threshold"), default="down_100"),

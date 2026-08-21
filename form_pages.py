@@ -10,7 +10,10 @@ from form_concepts import (
     CONCEPTS,
 )
 from form_structure import FORM_STATIONS, summarize_stations
-from notification_config import DEFAULT_NOTIFICATION_METHOD
+from notification_config import (
+    DEFAULT_NOTIFICATION_METHOD,
+    DEFAULT_NOTIFICATION_PRIVACY_LEVEL,
+)
 
 
 SECTION_IDS = (
@@ -144,6 +147,7 @@ OPTIONS = {
     "cabin_business_types": (("adult", "成人"), ("child", "儿童"), ("elderly", "老人"), ("infant", "婴儿")),
     "primary_goal": (("price_drop_alert", "合适价格提醒"), ("buy_timing", "判断购买时机"), ("cheaper_date", "找更便宜日期"), ("best_overall", "找综合合适方案")),
     "notification_method": (("email", "邮件"), ("pushplus", "微信 PushPlus"), ("both", "两者")),
+    "notification_privacy_level": (("full", "完整"), ("redacted", "脱敏"), ("minimal", "最小")),
     "notification_frequency": (("important_only", "仅重要变化"), ("daily_digest", "每日摘要"), ("price_change", "每次价格变化")),
     "price_change_threshold": (("50", "变化50元"), ("100", "变化100元"), ("200", "变化200元"), ("500", "变化500元")),
     "secondary_goals": (("low_price_alert", "异常低价"), ("price_risk_alert", "涨价风险"), ("cheaper_date", "邻近日期更便宜"), ("better_same_day", "同日更优方案")),
@@ -349,6 +353,7 @@ LABELS = {
     "primary_goal": "提醒主目标",
     "notification_method": "提醒方式",
     "notification_email": "接收邮箱",
+    "notification_privacy_level": "通知隐私",
     "notification_frequency": "提醒频率",
     "price_change_threshold": "价格变化阈值",
     "secondary_goals": "附加提醒",
@@ -434,6 +439,7 @@ DEFAULTS = {
     "trip_rigidity": "confirmed",
     "primary_goal": "buy_timing",
     "notification_method": DEFAULT_NOTIFICATION_METHOD,
+    "notification_privacy_level": DEFAULT_NOTIFICATION_PRIVACY_LEVEL,
     "notification_frequency": "important_only",
     "notification_frequency_rule": "important_only",
     "price_change_threshold": "100",

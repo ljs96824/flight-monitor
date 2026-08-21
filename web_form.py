@@ -12,7 +12,7 @@ import html
 from pathlib import Path
 
 from dotenv import load_dotenv
-from flask import Flask, jsonify, redirect, render_template_string, request, url_for
+from flask import Flask, abort, jsonify, redirect, render_template_string, request, url_for
 
 from airports import (
     AIRPORTS,
@@ -43,11 +43,12 @@ from form_structure import (
 )
 from pricing import passenger_rate_sum
 
-from filename_utils import sanitize_filename
+from detail_access import canonical_detail_uuid, detail_token_authorized
 from log_utils import safe_log
 from subscription_identity import ensure_subscription_id, subscription_id as stable_subscription_id
 from notification_config import (
     DEFAULT_NOTIFICATION_METHOD,
+    DEFAULT_NOTIFICATION_PRIVACY_LEVEL,
     normalize_notification_goals,
 )
 from price_calendar import load_calendar
@@ -56,7 +57,6 @@ from price_calendar import load_calendar
 BASE_DIR = Path(__file__).parent
 SUBSCRIPTIONS_PATH = BASE_DIR / "data" / "subscriptions.json"
 FEEDBACK_PATH = BASE_DIR / "data" / "feedback.json"
-PAGE_RESULTS_PATH = BASE_DIR / "data" / "page_results.json"
 PAGE_PAYLOADS_DIR = BASE_DIR / "data" / "payloads"
 load_dotenv(BASE_DIR / ".env", encoding="utf-8")
 
@@ -680,47 +680,27 @@ def notify_feedback_author(record: dict) -> bool:
 
         ok = bool(send_email(author_email, subject, html_body, {}))
         if ok:
-            print(f"[反馈] 已发送到作者邮箱 {author_email}")
+            safe_log(f"[反馈] 已发送到作者邮箱 {author_email}")
         else:
-            print(f"[反馈] 邮件发送失败(已存本地): send_email返回False")
+            safe_log("[反馈] 邮件发送失败(已存本地): send_email返回False")
         return ok
     except Exception as exc:
-        print(f"[反馈] 邮件发送失败(已存本地): {exc}")
+        safe_log(f"[反馈] 邮件发送失败(已存本地): {exc}")
         return False
 
 
-def load_page_results() -> list[dict]:
-    if not PAGE_RESULTS_PATH.exists():
-        return []
-    try:
-        data = json.loads(PAGE_RESULTS_PATH.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return []
-    return data if isinstance(data, list) else []
-
-
-def _safe_payload_id(subscription_id: str) -> str:
-    return sanitize_filename(subscription_id)
-
-
 def _load_payload_result(subscription_id: str) -> dict | None:
-    if not subscription_id:
+    canonical_id = canonical_detail_uuid(subscription_id)
+    if canonical_id is None:
         return None
-    path = PAGE_PAYLOADS_DIR / f"{_safe_payload_id(subscription_id)}.json"
-    if not path.exists():
+    path = PAGE_PAYLOADS_DIR / f"{canonical_id}.json"
+    if not path.is_file():
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, OSError):
         return None
     return data if isinstance(data, dict) else None
-
-
-def _detail_storage_keys(results: list[dict]) -> list[str]:
-    keys = {str(item.get("subscription_id", "")) for item in results if item.get("subscription_id")}
-    if PAGE_PAYLOADS_DIR.exists():
-        keys.update(path.stem for path in PAGE_PAYLOADS_DIR.glob("*.json"))
-    return sorted(keys)
 
 
 ROUTE_TYPE_LABELS = {
@@ -810,7 +790,7 @@ def build_subscription_list_items(subscriptions: list[dict]) -> list[dict]:
     for index, sub in enumerate(subscriptions):
         route_type = _sub_value(sub, "route_type", "domestic")
         round_trip = bool(sub.get("round_trip") or _sub_value(sub, "trip_type") == "round_trip")
-        subscription_id = stable_subscription_id(sub) or str(index)
+        subscription_id = canonical_detail_uuid(stable_subscription_id(sub))
         items.append(
             {
                 "index": index,
@@ -822,7 +802,11 @@ def build_subscription_list_items(subscriptions: list[dict]) -> list[dict]:
                 "status": sub.get("status", "active"),
                 "last_decision": _subscription_last_decision(sub, index),
                 "scenario": _subscription_scenario_text(sub),
-                "detail_url": url_for("detail", sub=subscription_id),
+                "detail_url": (
+                    url_for("detail", sub=subscription_id)
+                    if subscription_id
+                    else ""
+                ),
             }
         )
     return items
@@ -1639,6 +1623,10 @@ def build_subscription(form) -> dict:
             "secondary": secondary_goals,
             "method": form.get("notification_method") or DEFAULT_NOTIFICATION_METHOD,
             "email": form.get("notification_email", "").strip(),
+            "privacy_level": (
+                form.get("notification_privacy_level")
+                or DEFAULT_NOTIFICATION_PRIVACY_LEVEL
+            ),
             "frequency": notification_frequency,
         }
     )
@@ -2374,19 +2362,14 @@ def feedback():
 
 @app.route("/detail")
 def detail():
-    subscription_id = request.args.get("sub", "")
-    results = load_page_results()
-    keys = _detail_storage_keys(results)
-    print(f"[详情读取] 查找订阅 {subscription_id},存储里现有的key: {keys}")
+    subscription_id = canonical_detail_uuid(request.args.get("sub", ""))
+    if subscription_id is None:
+        abort(404)
+    if not detail_token_authorized(request.args.get("token")):
+        abort(404)
     matched = _load_payload_result(subscription_id)
-    if subscription_id:
-        if not matched:
-            for item in reversed(results):
-                if str(item.get("subscription_id", "")) == str(subscription_id):
-                    matched = item
-                    break
-    elif results:
-        matched = results[-1]
+    if matched is None:
+        abort(404)
     return render_template_string(DETAIL_TEMPLATE, result=matched)
 
 

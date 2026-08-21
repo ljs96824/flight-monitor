@@ -11,6 +11,21 @@ LEGACY_NOTIFICATION_METHODS = ("page_only",)
 VALID_NOTIFICATION_METHODS = frozenset(
     FORM_NOTIFICATION_METHODS + LEGACY_NOTIFICATION_METHODS
 )
+DEFAULT_NOTIFICATION_PRIVACY_LEVEL = "full"
+VALID_NOTIFICATION_PRIVACY_LEVELS = frozenset({"full", "redacted", "minimal"})
+
+
+def resolve_notification_privacy_level(goals: Mapping | None) -> str:
+    """解析通知隐私等级；缺失或非法值一律保持兼容的 full。"""
+    raw = goals if isinstance(goals, Mapping) else {}
+    level = str(
+        raw.get("privacy_level")
+        or raw.get("notification_privacy_level")
+        or DEFAULT_NOTIFICATION_PRIVACY_LEVEL
+    ).strip().lower()
+    if level not in VALID_NOTIFICATION_PRIVACY_LEVELS:
+        return DEFAULT_NOTIFICATION_PRIVACY_LEVEL
+    return level
 
 
 def normalize_notification_goals(
@@ -27,6 +42,12 @@ def normalize_notification_goals(
     email = str(normalized.get("email") or "").strip()
     normalized["method"] = method
     normalized["email"] = email
+    privacy_level = resolve_notification_privacy_level(normalized)
+    normalized.pop("notification_privacy_level", None)
+    if privacy_level == DEFAULT_NOTIFICATION_PRIVACY_LEVEL:
+        normalized.pop("privacy_level", None)
+    else:
+        normalized["privacy_level"] = privacy_level
     if logger is not None:
         logger(f"[通知配置] method={method} email={'有' if email else '无'}")
     return normalized

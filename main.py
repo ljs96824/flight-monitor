@@ -41,10 +41,11 @@ from api_usage import load_usage, usage_snapshot
 from basket_sentinel import run_basket_sentinel
 from collection_plan import build_collection_plan, load_collection_settings
 from constraint_fingerprint import constraint_fingerprint
+from detail_access import canonical_detail_uuid, delivery_payload_with_detail_token
 from email_notifier import render_email, send_email
 from filename_utils import sanitize_filename
 from health_check import system_health_check
-from log_utils import end_round_log_archive, safe_log, start_round_log_archive
+from log_utils import end_round_log_archive, redact_text, safe_log, start_round_log_archive
 from notification_config import normalize_notification_goals
 from observations_store import clear_current_round, get_current_round, set_current_round
 from notifier import (
@@ -63,6 +64,7 @@ from request_cache import (
 )
 from plan_tracker import feedback_acknowledgement
 from provenance import build_route_provenance_context_from_info
+from retention import log_retention_dry_run
 from source_profiles import get_source_profile
 from sources.aggregator import (
     FlightAggregator,
@@ -215,7 +217,7 @@ def _notify_subscription_failure(sub: dict, *, source_errors=None, reason: str |
     notification_goals = normalize_notification_goals(sub.get("notification_goals"))
     method = notification_goals["method"]
     email = notification_goals["email"]
-    failure_reason = _format_source_failure_reason(source_errors, reason)
+    failure_reason = redact_text(_format_source_failure_reason(source_errors, reason))
     route_label = _subscription_route_label(sub)
     content = (
         f"本次采集失败: {route_label}<br>"
@@ -940,30 +942,37 @@ def _email_subject(html_content: str, route_info: dict) -> str:
     return subject[:120]
 
 
-def _save_result_for_page(subscription_id: str, html_content: str, payload: dict | None = None) -> None:
-    PAGE_PAYLOADS_DIR.mkdir(exist_ok=True)
-    payload_path = PAGE_PAYLOADS_DIR / f"{sanitize_filename(subscription_id)}.json"
+def _save_result_for_page(
+    subscription_id: str,
+    html_content: str,
+    payload: dict | None = None,
+) -> bool:
+    canonical_id = canonical_detail_uuid(subscription_id)
+    if canonical_id is None:
+        safe_log(f"[详情存储拒绝] 非UUID订阅标识={subscription_id!r}")
+        return False
+    PAGE_PAYLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    payload_path = PAGE_PAYLOADS_DIR / f"{canonical_id}.json"
     record = {
-        "subscription_id": str(subscription_id),
+        "subscription_id": canonical_id,
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "html": html_content,
         "payload": payload or {},
     }
-    payload_path.write_text(json.dumps(record, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-    print(f"[详情存储] 保存订阅 {subscription_id} 的payload到 {payload_path}")
-
-    path = DATA_DIR / "page_results.json"
-    try:
-        records = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
-    except json.JSONDecodeError:
-        records = []
-    records.append(record)
-    path.write_text(json.dumps(records[-100:], ensure_ascii=False, indent=2), encoding="utf-8")
+    payload_path.write_text(
+        json.dumps(record, ensure_ascii=False, indent=2, default=str),
+        encoding="utf-8",
+    )
+    safe_log(f"[详情存储] 保存订阅 {canonical_id} 的payload到 {payload_path}")
     try:
         _upload_payload_to_pythonanywhere(payload_path)
     except Exception as exc:
-        print(f"[详情同步失败] {type(exc).__name__}: {exc}")
-        logging.warning(f"详情payload已本地保存但同步PythonAnywhere失败: {exc}", exc_info=True)
+        safe_log(f"[详情同步失败] {type(exc).__name__}: {exc}")
+        logging.warning(
+            f"详情payload已本地保存但同步PythonAnywhere失败: {exc}",
+            exc_info=True,
+        )
+    return True
 
 
 def _upload_payload_to_pythonanywhere(payload_path: Path) -> bool:
@@ -1093,12 +1102,13 @@ def _deliver_notification(sub: dict, route: str, message_kwargs: dict) -> bool:
         feedback_ack = feedback_acknowledgement(subscription_id)
         if feedback_ack:
             payload["feedback_ack"] = feedback_ack
+        delivery_payload = delivery_payload_with_detail_token(payload)
         print("[推送] payload构建完成")
 
         print("[推送] 开始渲染邮件/详情HTML")
         if method in {"email", "both"}:
             print("[推送] 邮件方式已启用，开始生成折线图PNG/邮件HTML")
-        email_rendered = render_email(payload)
+        email_rendered = render_email(delivery_payload)
         if len(email_rendered) == 3:
             subject, full_html, inline_images = email_rendered
         else:
@@ -1106,12 +1116,12 @@ def _deliver_notification(sub: dict, route: str, message_kwargs: dict) -> bool:
             inline_images = {}
         print("[推送] 邮件/详情HTML渲染完成")
         detail_html = render_detail_html(payload)
-        _save_result_for_page(subscription_id, detail_html, payload)
+        page_saved = _save_result_for_page(subscription_id, detail_html, payload)
 
         if method == "page_only":
             print("[推送] 开始保存页面结果")
             print("[推送] 用户选择仅页面查看，已保存页面结果")
-            return True
+            return page_saved
 
         sent = False
         if method in {"email", "both"}:
@@ -1129,7 +1139,7 @@ def _deliver_notification(sub: dict, route: str, message_kwargs: dict) -> bool:
 
         if method in {"pushplus", "both"}:
             print("[推送] 开始渲染PushPlus短版")
-            push_content = render_pushplus(payload)
+            push_content = render_pushplus(delivery_payload)
             print("[推送] PushPlus短版渲染完成，开始发送")
             sent = send(
                 push_content,
@@ -1139,7 +1149,7 @@ def _deliver_notification(sub: dict, route: str, message_kwargs: dict) -> bool:
 
         if method not in {"email", "pushplus", "both", "page_only"}:
             print(f"[推送] 未识别的推送方式 {method!r}，按PushPlus兜底")
-            push_content = render_pushplus(payload)
+            push_content = render_pushplus(delivery_payload)
             sent = send(
                 push_content,
                 title=f"【{payload.get('push_type', '价格提醒')}】{payload.get('route', route)}",
@@ -2396,6 +2406,7 @@ def process_subscription(
             if managed_plan_active:
                 deactivate_collection_plan()
             clear_current_round()
+            log_retention_dry_run(BASE_DIR, config_path=CONFIG_PATH)
             if round_archive_started:
                 try:
                     end_round_log_archive(status=round_status)
@@ -2506,6 +2517,7 @@ def run(sync_remote: bool = True):
         if plan_active:
             deactivate_collection_plan()
         clear_current_round()
+        log_retention_dry_run(BASE_DIR, config_path=CONFIG_PATH)
         if round_archive_started:
             try:
                 end_round_log_archive(status=round_status)

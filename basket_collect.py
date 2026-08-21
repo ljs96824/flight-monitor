@@ -16,6 +16,7 @@ from observations_store import (
     count_observations_for_round,
     set_current_round,
 )
+from retention import log_retention_dry_run
 from request_cache import (
     activate_collection_plan,
     deactivate_collection_plan,
@@ -309,6 +310,7 @@ def run_basket(
         clear_current_round()
         round_status = "ok" if failed == 0 else "partial"
         safe_log(f"[篮子完成] 队列={queues} 成功={success} 失败={failed} 总写入={written}")
+        log_retention_dry_run(BASE_DIR, config_path=CONFIG_PATH)
         if round_archive_started:
             try:
                 end_round_log_archive(status=round_status)

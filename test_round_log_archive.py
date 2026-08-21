@@ -30,6 +30,14 @@ class RoundLogArchiveTest(unittest.TestCase):
                 "[source evidence] ",
                 {"url": "https://example.test?a=1&access_token=other-secret"},
             )
+            safe_log("[邮件失败] recipient=private@example.com")
+            append_round_evidence(
+                "[通知证据] ",
+                {
+                    "email": "owner@example.com",
+                    "reason": "SMTP rejected owner@example.com",
+                },
+            )
             end_round_log_archive(status="ok")
 
             content = path.read_text(encoding="utf-8")
@@ -39,6 +47,9 @@ class RoundLogArchiveTest(unittest.TestCase):
             self.assertIn('"api_key": "***"', content)
             self.assertNotIn("secret-value", content)
             self.assertNotIn("other-secret", content)
+            self.assertNotIn("private@example.com", content)
+            self.assertNotIn("owner@example.com", content)
+            self.assertIn("<EMAIL>", content)
             self.assertIn("status=ok", content)
 
     def test_round_archive_is_append_only_for_same_day(self):
@@ -67,3 +78,7 @@ class RoundLogArchiveTest(unittest.TestCase):
             self.assertIn("round_id=round-b", content)
             self.assertIn("first", content)
             self.assertIn("second", content)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -20,7 +20,7 @@ class _Utf8TeeStream:
         self.errors = getattr(console, "errors", "replace")
 
     def write(self, value) -> int:
-        text = str(value)
+        text = redact_text(value)
         with self._lock:
             if self._console is not None:
                 self._console.write(text)
@@ -113,26 +113,48 @@ _SECRET_KEYS = {
     "secret",
     "token",
 }
+_EMAIL_KEYS = {"email", "recipient", "recipient_email", "author_email"}
+EMAIL_PATTERN = re.compile(
+    r"(?i)(?<![A-Z0-9._%+-])"
+    r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}"
+    r"(?![A-Z0-9._%+-])"
+)
+_SECRET_ASSIGNMENT_PATTERN = re.compile(
+    r"(?i)(api[_-]?key|access[_-]?token|token|authorization|password|secret|key)=([^&\s]+)"
+)
 
 
-def _redact_round_evidence(value):
+def redact_text(value: object) -> str:
+    """脱敏可能进入控制台、运行日志或轮档的自由文本。"""
+    text = str(value)
+    text = _SECRET_ASSIGNMENT_PATTERN.sub(r"\1=***", text)
+    return EMAIL_PATTERN.sub("<EMAIL>", text)
+
+
+def redact_value(value):
+    """递归脱敏结构化证据中的密钥与邮箱。"""
     if isinstance(value, dict):
         redacted = {}
         for key, item in value.items():
             normalized = str(key).strip().lower().replace("-", "_")
-            redacted[key] = "***" if normalized in _SECRET_KEYS else _redact_round_evidence(item)
+            if normalized in _SECRET_KEYS:
+                redacted[key] = "***"
+            elif normalized in _EMAIL_KEYS:
+                redacted[key] = "<EMAIL>" if item else item
+            else:
+                redacted[key] = redact_value(item)
         return redacted
     if isinstance(value, list):
-        return [_redact_round_evidence(item) for item in value]
+        return [redact_value(item) for item in value]
     if isinstance(value, tuple):
-        return tuple(_redact_round_evidence(item) for item in value)
+        return tuple(redact_value(item) for item in value)
     if isinstance(value, str):
-        return re.sub(
-            r"(?i)(api[_-]?key|access[_-]?token|token|authorization|password|secret|key)=([^&\s]+)",
-            r"\1=***",
-            value,
-        )
+        return redact_text(value)
     return value
+
+
+def _redact_round_evidence(value):
+    return redact_value(value)
 
 
 def start_round_log_archive(
@@ -183,7 +205,7 @@ def append_round_evidence(prefix: str, payload) -> bool:
         default=str,
     )
     with state["lock"]:
-        state["file"].write(f"{prefix}{encoded}\\n")
+        state["file"].write(f"{redact_text(prefix)}{encoded}\\n")
         state["file"].flush()
     return True
 
@@ -216,12 +238,13 @@ atexit.register(end_round_log_archive)
 
 
 def safe_log(msg: object = "") -> None:
-    """Print diagnostics without allowing console encoding errors to abort a run."""
+    """脱敏诊断并避免控制台编码错误中止轮次。"""
+    text = redact_text(msg)
     try:
-        print(msg)
+        print(text)
     except UnicodeEncodeError:
         try:
-            degraded = str(msg).encode("ascii", "backslashreplace").decode("ascii")
+            degraded = text.encode("ascii", "backslashreplace").decode("ascii")
             print(degraded)
         except Exception:
             pass

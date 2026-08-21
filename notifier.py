@@ -30,6 +30,7 @@ from constraint_fingerprint import (
 )
 from constraint_summary import format_constraint_summary
 from domestic_fare_rules import get_aircraft_name
+from detail_access import canonical_detail_uuid
 from airlines import classify_itinerary, classify_segment
 from flight_combo_utils import normalize_combo
 from log_utils import safe_log
@@ -60,6 +61,10 @@ from analyzer import (
     waiting_risk_description,
 )
 from mixed_cabin import MIXED_CABIN_DISCLOSURE
+from notification_config import (
+    DEFAULT_NOTIFICATION_PRIVACY_LEVEL,
+    resolve_notification_privacy_level,
+)
 from price_estimator import (
     build_display_prices,
     build_passenger_price_breakdown,
@@ -8122,6 +8127,9 @@ def build_notification_payload(
             "daily_summary": "daily_digest",
             "every_change": "price_change",
         }.get(goals.get("frequency") or "important_only", goals.get("frequency") or "important_only")
+    privacy_level = resolve_notification_privacy_level(
+        goals if isinstance(goals, dict) else {}
+    )
     secondary_goals = goals.get("secondary") if isinstance(goals, dict) else []
     if not isinstance(secondary_goals, list):
         secondary_goals = []
@@ -8182,7 +8190,12 @@ def build_notification_payload(
             push_meta["reasons"] = _payload_dedupe_text([reason] + (push_meta.get("reasons") or []))[:4]
     form_url = _subscription_edit_url(route_info)
     feedback_url = _feedback_url(route_info)
-    detail_url = f"{_subscription_form_url(route_info).rstrip('/')}/detail?sub={quote(str(route_info.get('subscription_id') or route_key))}"
+    detail_id = canonical_detail_uuid(route_info.get("subscription_id"))
+    detail_url = (
+        f"{_subscription_form_url(route_info).rstrip('/')}/detail?sub={quote(detail_id)}"
+        if detail_id
+        else ""
+    )
     merged_constraints = {
         **(subscription.get("hard_constraints") or {}),
         **(subscription.get("constraints") or {}),
@@ -8506,6 +8519,8 @@ def build_notification_payload(
             "constraint_sample_n": int(price_signal.get("sample_n") or 0),
         },
     }
+    if privacy_level != DEFAULT_NOTIFICATION_PRIVACY_LEVEL:
+        payload["notification_privacy_level"] = privacy_level
     roundtrip_analysis = analysis_result.get("round_trip_analysis") or {}
     mixed_matching = roundtrip_analysis.get("mixed_cabin_matching") or {}
     if primary_plan.get("mixed_cabin") or mixed_matching:
@@ -9709,9 +9724,55 @@ def _pushplus_calendar_summary_lines(payload: dict) -> list[str]:
         lines.append(f"弹性日期:{dates} 今日未采(未发起补采)")
     return [html.escape(str(line)) for line in lines if str(line).strip()]
 
+
+def _privacy_price_band(payload: dict) -> str:
+    price = _to_float(payload.get("display_price") or payload.get("current_price"))
+    if price is None:
+        return "金额暂缺"
+    lower = int(price // 1000) * 1000
+    upper = lower + 999
+    return f"¥{lower:,.0f}-{upper:,.0f}"
+
+
+def _render_private_pushplus(payload: dict) -> str | None:
+    level = resolve_notification_privacy_level(payload)
+    if level == DEFAULT_NOTIFICATION_PRIVACY_LEVEL:
+        return None
+    route = html.escape(str(payload.get("route") or "航班监控"))
+    if level == "minimal":
+        return f"<b>航班监控有变动</b><br>{route}"
+    band = html.escape(_privacy_price_band(payload))
+    return (
+        f"<b>【航班监控·已脱敏】{route}</b><br>"
+        f"价格区间:{band}<br>"
+        "乘客构成与精确金额已隐藏，请在本地详情页查看完整信息"
+    )
+
+
+def _render_private_email(payload: dict) -> tuple[str, str] | None:
+    level = resolve_notification_privacy_level(payload)
+    if level == DEFAULT_NOTIFICATION_PRIVACY_LEVEL:
+        return None
+    route_text = str(payload.get("route") or "航班监控")
+    route = html.escape(route_text)
+    subject = f"【航班监控有变动】{route_text}"
+    if level == "minimal":
+        return subject, f"<b>航班监控有变动</b><br>{route}"
+    band = html.escape(_privacy_price_band(payload))
+    body = (
+        f"<b>【航班监控·已脱敏】{route}</b><br>"
+        f"价格区间:{band}<br>"
+        "乘客构成与精确金额已隐藏，请在本地详情页查看完整信息"
+    )
+    return subject, body
+
+
 def render_pushplus(payload: dict) -> str:
     """Render the strictly short PushPlus message from the unified payload."""
     payload = payload or {}
+    private_render = _render_private_pushplus(payload)
+    if private_render is not None:
+        return private_render
     feedback_ack = str(payload.get("feedback_ack") or "").strip()
     freshness_headline = _data_freshness_headline(payload)
     no_primary = _no_primary_plan_state(payload)
@@ -13736,6 +13797,9 @@ def _ensure_no_match_notification_sections(cards: list[str], payload: dict) -> l
 def render_email(payload: dict) -> tuple[str, str]:
     """Render the full HTML email report from a normalized payload."""
     payload = payload or {}
+    private_render = _render_private_email(payload)
+    if private_render is not None:
+        return private_render
     subject = _email_subject(payload)
     verify_text = f"支付页≤{_price_text(payload.get('verify_price'))}" if payload.get("verify_price") else "以支付页为准"
     price_reason = str(payload.get("price_policy_reason") or "请以预估实付价和支付页最终价为准")
