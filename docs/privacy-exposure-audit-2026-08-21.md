@@ -400,9 +400,29 @@ Phase 1 应增加以下契约测试：
 - 通知隐私等级为 `full/redacted/minimal`，默认 `full` 且不新增旧订阅字段；降档必须由用户显式选择。
 - 保留窗为 payload 90 天、轮档 90 天、备份 180 天，0 表示永久；轮末只打印 dry-run 到期计数，自动删除未启用。
 
-PA 实际执行状态：**待用户部署、Reload 与匿名 curl 验证后回填**。在回填完成前，本报告及 Phase 1 修复不得 push。
+PA 实际执行状态：**已完成部署、Reload、匿名 curl 验证与存量清理**。本节证据已回填，可以按用户授权发布审计与 Phase 1 修复。
 
 ### 9.2 PA 部署、备份、清理与验证命令
+
+#### 9.2.1 2026-08-21 实际执行证据
+
+以下结果来自用户 PA Bash 原始回执，报告不记录现役 UUID 原文：
+
+| 验证项 | 实际结果 |
+|---|---|
+| 清理执行 | `mode=execute`，删除非 UUID payload 117 个，`page_results` 删除数 0 |
+| 清理后库存 | 总数 1，UUID 1，非 UUID 0 |
+| 备份归档 | `/home/ljs96824/payloads_backup_20260821T084004.tar.gz`，2.2M |
+| 旧数字匿名访问 | `1`、`2`、`79` 均返回 HTTP 404 |
+| 现役 UUID 匿名访问 | HTTP 200 |
+
+实战暴露两项交付缺陷：裸 `--execute` 因缺少 `--backup-archive` 三次被
+`ValueError` 拦截，但错误被长清单淹没；dry-run 默认逐条打印 117 行。现已改为：
+
+- CLI 缺少或给出无效备份归档时，返回码 2，并单独打印正确用法示例；
+- 默认仅列前 10 条，再打印“另有 N 条”；只有 `--verbose` 才打印全部。
+
+#### 9.2.2 可重复执行序列
 
 以下命令必须在 **修复代码已经同步到 PA 且 Web 页已 Reload** 后执行。删除工具默认 dry-run；执行态要求已有备份归档。
 
@@ -477,7 +497,9 @@ python -X utf8 scripts/cleanup_legacy_payloads.py
 ls -lh "$backup_dir/payloads.tgz"
 ```
 
-人工核对 dry-run 清单后，只有下列显式命令会删除非 UUID payload 与 `page_results.json`：
+人工核对 dry-run 清单后，禁止运行不带备份参数的裸命令
+`python -X utf8 scripts/cleanup_legacy_payloads.py --execute`。唯一正确执行形式必须同时带
+`--backup-archive`：
 
 ```bash
 python -X utf8 scripts/cleanup_legacy_payloads.py \

@@ -14,6 +14,12 @@ if str(BASE_DIR) not in sys.path:
 from detail_access import canonical_detail_uuid
 
 
+EXECUTE_USAGE_EXAMPLE = (
+    "python -X utf8 scripts/cleanup_legacy_payloads.py --execute "
+    "--backup-archive /path/to/payloads_backup_YYYYMMDDTHHMMSS.tar.gz"
+)
+
+
 def inspect_payloads(root: str | Path) -> dict:
     root_path = Path(root).resolve()
     payload_dir = root_path / "data" / "payloads"
@@ -70,12 +76,25 @@ def main(argv=None) -> int:
         "--backup-archive",
         help="执行前已生成的 payloads 备份归档路径",
     )
-    args = parser.parse_args(argv)
-    result = cleanup_legacy_payloads(
-        args.root,
-        execute=args.execute,
-        backup_archive=args.backup_archive,
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="打印全部待清理文件；默认只显示前10条",
     )
+    args = parser.parse_args(argv)
+    try:
+        result = cleanup_legacy_payloads(
+            args.root,
+            execute=args.execute,
+            backup_archive=args.backup_archive,
+        )
+    except ValueError as exc:
+        print(f"[PA详情清理] 错误={exc}", file=sys.stderr)
+        print(
+            f"[PA详情清理] 正确用法示例: {EXECUTE_USAGE_EXAMPLE}",
+            file=sys.stderr,
+        )
+        return 2
     mode = "execute" if args.execute else "dry-run"
     print(
         f"[PA详情清理] mode={mode} 总数={len(result['all_files'])} "
@@ -83,8 +102,12 @@ def main(argv=None) -> int:
         f"待清理非UUID={len(result['legacy_files'])} "
         f"page_results={int(result['page_results_exists'])}"
     )
-    for path in result["legacy_files"]:
+    visible = result["legacy_files"] if args.verbose else result["legacy_files"][:10]
+    for path in visible:
         print(f"[PA详情清理] 待清理={path.name}")
+    remaining = len(result["legacy_files"]) - len(visible)
+    if remaining:
+        print(f"[PA详情清理] 另有{remaining}条(--verbose查看全部)")
     if args.execute:
         print(
             f"[PA详情清理] 已删除payload={result['deleted_payloads']} "

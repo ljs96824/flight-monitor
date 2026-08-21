@@ -1,8 +1,10 @@
+import io
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
-from scripts.cleanup_legacy_payloads import cleanup_legacy_payloads
+from scripts.cleanup_legacy_payloads import cleanup_legacy_payloads, main as cleanup_main
 
 
 VALID_ID = "123e4567-e89b-12d3-a456-426614174000"
@@ -52,6 +54,55 @@ class CleanupLegacyPayloadsTest(unittest.TestCase):
             self.assertEqual(result["deleted_payloads"], 2)
             self.assertEqual(result["deleted_page_results"], 1)
 
+    def test_cli_missing_backup_prints_correct_usage_without_traceback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._fixture(root)
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = cleanup_main(["--root", str(root), "--execute"])
+
+            output = stdout.getvalue() + stderr.getvalue()
+            self.assertEqual(code, 2)
+            self.assertIn("正确用法示例", output)
+            self.assertIn("--execute --backup-archive", output)
+            self.assertTrue((root / "data" / "payloads" / "107.json").exists())
+
+    def test_dry_run_lists_first_ten_then_reports_remaining_count(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._fixture(root)
+            payloads = root / "data" / "payloads"
+            for index in range(10):
+                (payloads / f"{200 + index}.json").write_text("{}", encoding="utf-8")
+            stdout = io.StringIO()
+
+            with redirect_stdout(stdout):
+                code = cleanup_main(["--root", str(root)])
+
+            output = stdout.getvalue()
+            self.assertEqual(code, 0)
+            self.assertEqual(output.count("待清理="), 10)
+            self.assertIn("另有2条(--verbose查看全部)", output)
+
+    def test_verbose_lists_every_legacy_payload(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._fixture(root)
+            payloads = root / "data" / "payloads"
+            for index in range(10):
+                (payloads / f"{200 + index}.json").write_text("{}", encoding="utf-8")
+            stdout = io.StringIO()
+
+            with redirect_stdout(stdout):
+                code = cleanup_main(["--root", str(root), "--verbose"])
+
+            output = stdout.getvalue()
+            self.assertEqual(code, 0)
+            self.assertEqual(output.count("待清理="), 12)
+            self.assertNotIn("另有", output)
 
 if __name__ == "__main__":
     unittest.main()
