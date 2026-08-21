@@ -17,7 +17,7 @@ class RetentionPolicyTest(unittest.TestCase):
 
         now = datetime(2026, 8, 21, 12, 0, 0)
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             old_payload = root / "data" / "payloads" / "old.json"
             new_payload = root / "data" / "payloads" / "new.json"
             old_round = root / "data" / "logs" / "rounds" / "old.log"
@@ -46,7 +46,7 @@ class RetentionPolicyTest(unittest.TestCase):
 
         now = datetime(2026, 8, 21, 12, 0, 0)
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             old_payload = root / "data" / "payloads" / "old.json"
             self._touch(old_payload, now - timedelta(days=91))
             policy = {"payloads": 90, "round_archives": 90, "backups": 180}
