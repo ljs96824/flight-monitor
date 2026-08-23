@@ -11,6 +11,7 @@ from airlines import (
     LCC_CARRIERS,
     classify_itinerary,
     classify_segment,
+    canonicalize_airline_lcc_policy,
     validate_lcc_carriers,
 )
 from analyzer import (
@@ -500,11 +501,84 @@ class LccRenderingTest(unittest.TestCase):
 
 
 class LccSubscriptionTest(unittest.TestCase):
+    def test_legacy_no_lcc_is_canonicalized_to_lcc_policy(self):
+        airline_policy, lcc_policy, migrated = canonicalize_airline_lcc_policy(
+            "no_lcc",
+            "any",
+        )
+
+        self.assertEqual(airline_policy, "any")
+        self.assertEqual(lcc_policy, "exclude_lcc")
+        self.assertTrue(migrated)
+
+        subscription = web_form.build_subscription(
+            _base_form(airline_policy="no_lcc", lcc_policy="any")
+        )
+        self.assertEqual(subscription["soft_preferences"]["airline_policy"], "any")
+        self.assertEqual(subscription["lcc_policy"], "exclude_lcc")
+        self.assertEqual(
+            subscription["hard_constraints"]["lcc_policy"],
+            "exclude_lcc",
+        )
+
+        quick_subscription = web_form.build_subscription(
+            _base_form(
+                monitor_mode="quick",
+                airline_policy="no_lcc",
+                lcc_policy="any",
+            )
+        )
+        self.assertEqual(quick_subscription["lcc_policy"], "exclude_lcc")
+        self.assertEqual(
+            quick_subscription["soft_preferences"]["airline_policy"],
+            "any",
+        )
+
+    def test_loaded_legacy_no_lcc_is_migrated_without_dual_policy(self):
+        subscriptions = [
+            {
+                "name": "旧廉航订阅",
+                "origin": "PVG",
+                "destination": "KIX",
+                "lcc_policy": "any",
+                "soft_preferences": {"airline_policy": "no_lcc"},
+                "hard_constraints": {"lcc_policy": "any"},
+                "advanced_rules": {
+                    "airlines": {
+                        "preference": "no_lcc",
+                        "lcc_policy": "any",
+                    }
+                },
+            }
+        ]
+
+        migrated, records = web_form.migrate_lcc_policies(subscriptions)
+
+        self.assertEqual(migrated[0]["lcc_policy"], "exclude_lcc")
+        self.assertEqual(migrated[0]["soft_preferences"]["airline_policy"], "any")
+        self.assertEqual(
+            migrated[0]["advanced_rules"]["airlines"]["preference"],
+            "any",
+        )
+        self.assertEqual(
+            migrated[0]["advanced_rules"]["airlines"]["lcc_policy"],
+            "exclude_lcc",
+        )
+        self.assertEqual(len(records), 1)
+    def test_explicit_lcc_policy_wins_over_legacy_no_lcc_alias(self):
+        airline_policy, lcc_policy, migrated = canonicalize_airline_lcc_policy(
+            "no_lcc",
+            "lcc_only",
+        )
+
+        self.assertEqual((airline_policy, lcc_policy), ("any", "lcc_only"))
+        self.assertTrue(migrated)
     def test_form_template_and_roundtrip_persist_policy(self):
         page = web_form.app.test_client().get("/settings").get_data(as_text=True)
         self.assertEqual(page.count('name="lcc_policy"'), 1)
         self.assertIn('value="exclude_lcc"', page)
         self.assertIn('value="lcc_only"', page)
+        self.assertNotIn('value="no_lcc"', page)
 
         subscription = web_form.build_subscription(
             _base_form(lcc_policy="exclude_lcc")
@@ -513,6 +587,19 @@ class LccSubscriptionTest(unittest.TestCase):
         self.assertEqual(
             subscription["hard_constraints"]["lcc_policy"],
             "exclude_lcc",
+        )
+
+        quick_subscription = web_form.build_subscription(
+            _base_form(
+                monitor_mode="quick",
+                airline_policy="no_lcc",
+                lcc_policy="any",
+            )
+        )
+        self.assertEqual(quick_subscription["lcc_policy"], "exclude_lcc")
+        self.assertEqual(
+            quick_subscription["soft_preferences"]["airline_policy"],
+            "any",
         )
 
         with tempfile.TemporaryDirectory() as tmp:

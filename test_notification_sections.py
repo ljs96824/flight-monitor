@@ -131,6 +131,198 @@ class NotificationSectionContractTest(unittest.TestCase):
 
 
 class NoMatchExcludedRoundtripTest(unittest.TestCase):
+    def test_existing_alternatives_are_enriched_with_specific_or_pairing_reason(self):
+        from notifier import _prepare_no_result_alternatives
+
+        mm80 = {"flight_no": "MM80", "flight_combo": "MM80", "price": 4905}
+        spring = {"flight_no": "9C6575", "flight_combo": "9C6575", "price": 3367}
+        existing = [
+            {"flight": mm80, "tradeoff": "不满足当前约束"},
+            {"flight": spring, "tradeoff": "不满足当前约束"},
+        ]
+        excluded = [
+            {
+                "flight": mm80,
+                "reason": "命中你设置的排除廉航条件",
+                "filter_reason_code": "lcc_excluded",
+            }
+        ]
+
+        prepared = _prepare_no_result_alternatives(
+            existing,
+            [mm80, spring],
+            excluded,
+            default_reason="返程采集失败，无法组成完整往返",
+            default_reason_code="return_collection_failed",
+        )
+
+        self.assertEqual(prepared[0]["unmet_reason"], "命中你设置的排除廉航条件")
+        self.assertEqual(prepared[0]["filter_reason_code"], "lcc_excluded")
+        self.assertEqual(prepared[1]["unmet_reason"], "返程采集失败，无法组成完整往返")
+        self.assertEqual(prepared[1]["filter_reason_code"], "return_collection_failed")
+    def test_no_result_candidate_pool_includes_both_directions(self):
+        from notifier import _no_result_candidate_flights
+
+        outbound = {"all_flights": [{"flight_no": "MU225", "price": 3000}]}
+        returned = {"all_flights": [{"flight_no": "MU516", "price": 2800}]}
+
+        outbound_only = _no_result_candidate_flights({}, outbound, returned, True)
+        candidates = _no_result_candidate_flights(
+            {}, outbound, returned, True, include_return=True
+        )
+
+        self.assertEqual(
+            [(item["flight_no"], item["direction"]) for item in outbound_only],
+            [("MU225", "outbound")],
+        )
+        self.assertEqual(
+            [(item["flight_no"], item["direction"]) for item in candidates],
+            [("MU225", "outbound"), ("MU516", "return")],
+        )
+    def test_no_combo_renders_deduplicated_single_leg_rejection_table(self):
+        from notifier import _build_single_leg_rejection_rows, _email_excluded_compact_body
+
+        candidates = [
+            _segment("9C6581", "PVG", "KIX", "2026-10-01 07:10", "2026-10-01 10:20", 2885),
+            _segment("MM080", "PVG", "KIX", "2026-10-01 06:15", "2026-10-01 09:35", 4905),
+        ]
+        excluded = [
+            {
+                "flight": _segment("BR705+BR182", "PVG", "KIX", "2026-10-01 08:00", "2026-10-01 16:00", 2500),
+                "price": 2500,
+                "direction": "outbound",
+                "reason": "需要中转，但你设置了必须直飞",
+                "filter_reason_code": "direct_only",
+                "filter_reason_value": "stops=1",
+            },
+            {
+                "flight": _segment("BR705+BR182", "PVG", "KIX", "2026-10-01 08:00", "2026-10-01 16:00", 2500),
+                "price": 2500,
+                "direction": "outbound",
+                "reason": "需要中转，但你设置了必须直飞",
+                "filter_reason_code": "direct_only",
+                "filter_reason_value": "stops=1",
+            },
+        ]
+        rows = _build_single_leg_rejection_rows(
+            candidates,
+            excluded,
+            default_reason="返程采集失败，无法组成完整往返",
+            default_reason_code="return_collection_failed",
+        )
+        payload = {
+            "is_roundtrip": True,
+            "no_primary_diagnosis": {"reason": "无完整往返组合"},
+            "excluded_plans": [],
+            "single_leg_rejections": rows,
+        }
+
+        rendered = _email_excluded_compact_body(payload)
+
+        self.assertEqual(len(rows), 3)
+        self.assertIn("逐航班拒因表", rendered)
+        self.assertIn("BR705+BR182", rendered)
+        self.assertIn("需要中转，但你设置了必须直飞", rendered)
+        self.assertIn("9C6581", rendered)
+        self.assertIn("返程采集失败，无法组成完整往返", rendered)
+        self.assertLess(rendered.index("BR705+BR182"), rendered.index("9C6581"))
+
+    def test_fallback_card_and_relaxation_preview_show_actual_reason(self):
+        from notifier import _no_primary_next_step_text, _same_day_alternative_card
+
+        alternative = {
+            "title": "备选A · 最接近条件",
+            "flight": _segment("MM080", "PVG", "KIX", "2026-10-01 06:15", "2026-10-01 09:35", 4905),
+            "price": 4905,
+            "unmet_reason": "返程采集失败，无法组成完整往返",
+            "tradeoff": "返程采集失败，无法组成完整往返",
+        }
+        payload = {
+            "depart_date": "2026-10-01",
+            "same_day_alternatives": [alternative],
+            "single_leg_rejections": [
+                {
+                    "flight": alternative["flight"],
+                    "reason": alternative["unmet_reason"],
+                    "filter_reason_code": "return_collection_failed",
+                    "direction": "outbound",
+                    "stops": 0,
+                }
+            ],
+        }
+
+        rendered = _same_day_alternative_card(alternative, payload)
+        guidance = _no_primary_next_step_text(payload)
+
+        self.assertIn("未达条件", rendered)
+        self.assertIn("返程采集失败，无法组成完整往返", rendered)
+        self.assertIn("恢复返程采集", guidance)
+        self.assertIn("1个直飞去程", guidance)
+    def test_20260823_archive_replay_keeps_candidate_reason_and_single_leg_table(self):
+        from analyzer import build_no_result_alternatives, build_no_result_diagnosis
+        from notifier import (
+            _build_single_leg_rejection_rows,
+            _candidate_price_summary_text,
+            _email_excluded_compact_body,
+            _no_primary_next_step_text,
+            _same_day_alternative_card,
+        )
+
+        fixture_path = (
+            BASE_DIR / "tests" / "fixtures" / "no_result_20260823_v1.json"
+        )
+        fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+        diagnosis = build_no_result_diagnosis(
+            fixture["candidates"],
+            fixture["excluded"],
+            stage_counts=fixture["stage_counts"],
+            fallback_reason=fixture["default_reason"],
+        )
+        alternatives = build_no_result_alternatives(
+            fixture["candidates"],
+            fixture["excluded"],
+            default_reason=fixture["default_reason"],
+            default_reason_code="return_collection_failed",
+        )
+        rows = _build_single_leg_rejection_rows(
+            fixture["candidates"],
+            fixture["excluded"],
+            default_reason=fixture["default_reason"],
+            default_reason_code="return_collection_failed",
+        )
+        payload = {
+            "is_roundtrip": True,
+            "depart_date": "2026-10-01",
+            "candidate_price_summary": diagnosis["price_summary"],
+            "no_primary_diagnosis": diagnosis["counts"],
+            "same_day_alternatives": alternatives,
+            "single_leg_rejections": rows,
+            "excluded_plans": [],
+        }
+
+        price_text = _candidate_price_summary_text(payload)
+        cards = "".join(
+            _same_day_alternative_card(item, payload) for item in alternatives
+        )
+        excluded_html = _email_excluded_compact_body(payload)
+        guidance = _no_primary_next_step_text(payload)
+
+        self.assertEqual(
+            fixture["round_id"],
+            "collection_20260823T210014035475",
+        )
+        self.assertIn("【完整往返】", diagnosis["reason"])
+        self.assertNotIn("直飞/基础筛选排除10个", diagnosis["reason"])
+        self.assertIn("¥2,885", price_text)
+        self.assertIn("返程采集失败", price_text)
+        self.assertNotIn("直飞要求不符", price_text)
+        self.assertEqual(cards.count("未达条件"), len(alternatives))
+        self.assertIn("MM80", cards)
+        self.assertIn("9C6575", cards)
+        self.assertIn("逐航班拒因表", excluded_html)
+        self.assertIn("BR705+BR182", excluded_html)
+        self.assertIn("返程采集失败", excluded_html)
+        self.assertIn("恢复返程采集", guidance)
     def test_no_recommendation_still_builds_complete_filtered_roundtrip_cards(self):
         from analyzer import build_excluded_roundtrip_combos
 

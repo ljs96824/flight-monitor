@@ -41,8 +41,10 @@ from price_calendar import (
     roundtrip_calendar_rows as _roundtrip_calendar_rows,
 )
 from domestic_fare_rules import get_aircraft_name
+from flight_combo_utils import normalize_combo
 from airlines import (
     LCC_POLICIES,
+    canonicalize_airline_lcc_policy,
     classify_itinerary,
     lcc_filter_value,
     resolve_lcc_policy,
@@ -3879,10 +3881,37 @@ def migrate_old_subscription(subscription: dict) -> dict:
     _set_if_missing(soft, "return_departure_time_windows", time_windows.get("return_departure"))
     _set_if_missing(soft, "return_arrival_time_windows", time_windows.get("return_arrival"))
 
-    airline_rules = advanced.get("airlines") or {}
+    airline_rules = dict(advanced.get("airlines") or {})
+    legacy_airline_policy = (
+        soft.get("airline_policy")
+        or hard.get("airline_policy")
+        or airline_rules.get("preference")
+        or sub.get("airline_policy")
+        or "any"
+    )
+    canonical_airline_policy, canonical_lcc_policy, legacy_lcc_migrated = (
+        canonicalize_airline_lcc_policy(
+            legacy_airline_policy,
+            resolve_lcc_policy(sub, "any"),
+        )
+    )
+    if legacy_lcc_migrated:
+        soft["airline_policy"] = canonical_airline_policy
+        if hard.get("airline_policy") == "no_lcc":
+            hard["airline_policy"] = canonical_airline_policy
+        if sub.get("airline_policy") == "no_lcc":
+            sub["airline_policy"] = canonical_airline_policy
+        airline_rules["preference"] = canonical_airline_policy
+        airline_rules["lcc_policy"] = canonical_lcc_policy
+        advanced["airlines"] = airline_rules
+        hard["lcc_policy"] = canonical_lcc_policy
+        constraints["lcc_policy"] = canonical_lcc_policy
+        safe_log(
+            "[口径迁移] airline_policy=no_lcc已归一为"
+            f"airline_policy={canonical_airline_policy}, lcc_policy={canonical_lcc_policy}"
+        )
     _set_if_missing(soft, "airline_policy", airline_rules.get("preference"))
     _set_if_missing(soft, "exclude_airlines", airline_rules.get("blocked"))
-
     alert_rules = advanced.get("alerts") or {}
     _set_if_missing(goals, "frequency", alert_rules.get("frequency"))
     _set_if_missing(goals, "secondary", alert_rules.get("types"))
@@ -3892,7 +3921,7 @@ def migrate_old_subscription(subscription: dict) -> dict:
     sub["hard_constraints"] = hard
     sub["soft_preferences"] = soft
     sub["notification_goals"] = goals
-    sub["lcc_policy"] = resolve_lcc_policy(sub, "any")
+    sub["lcc_policy"] = canonical_lcc_policy
     return sub
 
 
@@ -7814,11 +7843,49 @@ def diagnose_no_result(counts: dict, constraints: dict | None = None) -> str:
     return " → ".join(stages) + ("。" + suffix if suffix else "。")
 
 
+def _no_result_item_flight(item: dict) -> dict:
+    if not isinstance(item, dict):
+        return {}
+    flight = item.get("flight")
+    return flight if isinstance(flight, dict) else item
+
+
+def _no_result_flight_identity(item: dict) -> tuple:
+    flight = _no_result_item_flight(item)
+    combo = normalize_combo(flight.get("flight_combo") or flight.get("flight_no") or "")
+    return (
+        combo,
+        str(flight.get("departure_airport") or flight.get("origin") or "").strip().upper(),
+        str(flight.get("arrival_airport") or flight.get("destination") or "").strip().upper(),
+        str(flight.get("departure_time") or flight.get("dep_time") or "").strip(),
+        str(flight.get("arrival_time") or flight.get("arr_time") or "").strip(),
+    )
+
+
+def _no_result_exclusion_record(item: dict) -> dict:
+    flight = _no_result_item_flight(item)
+    return {
+        "reason": str(
+            item.get("reason")
+            or item.get("exclude_reason")
+            or flight.get("exclude_reason")
+            or "不满足当前约束"
+        ),
+        "filter_reason_code": str(
+            item.get("filter_reason_code") or flight.get("filter_reason_code") or ""
+        ),
+        "filter_reason_value": str(
+            item.get("filter_reason_value") or flight.get("filter_reason_value") or ""
+        ),
+    }
+
 def build_no_result_diagnosis(
     all_flights: list[dict] | None,
     excluded_flights: list[dict] | None = None,
     constraints: dict | None = None,
     stage_counts: dict | None = None,
+    *,
+    fallback_reason: str = "",
 ) -> dict:
     """Build no-result diagnostics from candidate and exclusion data."""
     flights = [flight for flight in all_flights or [] if isinstance(flight, dict)]
@@ -7827,13 +7894,26 @@ def build_no_result_diagnosis(
     print(f"[无方案理由诊断] 各阶段计数={stage_counts}")
     valid_price = [flight for flight in flights if _to_float(flight.get("price")) is not None]
 
-    reason_counts = {"direct": 0, "meeting": 0, "budget": 0, "other": 0}
-    for item in excluded:
-        reason = item.get("reason") or item.get("exclude_reason")
-        if not reason and isinstance(item.get("flight"), dict):
-            reason = item["flight"].get("exclude_reason")
-        reason_counts[_no_result_reason_bucket(str(reason or ""))] += 1
+    candidate_identities = {
+        _no_result_flight_identity(flight)
+        for flight in flights
+        if _no_result_flight_identity(flight)[0]
+    }
+    matching_excluded = [
+        item
+        for item in excluded
+        if _no_result_flight_identity(item) in candidate_identities
+    ]
+    eligible_excluded = matching_excluded if candidate_identities else excluded
+    reason_by_identity = {
+        _no_result_flight_identity(item): _no_result_exclusion_record(item)
+        for item in matching_excluded
+    }
 
+    reason_counts = {"direct": 0, "meeting": 0, "budget": 0, "other": 0}
+    for item in eligible_excluded:
+        reason = _no_result_exclusion_record(item)["reason"]
+        reason_counts[_no_result_reason_bucket(reason)] += 1
     stage_drops = _stage_drop_counts({**stage_counts, "valid_price_count": stage_counts.get("valid_price_count") or len(valid_price)})
     for key in ("direct", "meeting", "budget"):
         reason_counts[key] = max(int(reason_counts.get(key) or 0), int(stage_drops.get(key) or 0))
@@ -7889,8 +7969,16 @@ def build_no_result_diagnosis(
     print(f"[无方案诊断] 各航班价格样本: {sample}")
 
     budget_candidate_rows = _budget_excluded_candidate_rows(stage_counts, constraints)
-    prices = sorted(_to_float(flight.get("price")) for flight in valid_price)
-    prices = [price for price in prices if price is not None]
+    priced_candidates = sorted(
+        (
+            (_to_float(flight.get("price")), flight)
+            for flight in valid_price
+            if _to_float(flight.get("price")) is not None
+        ),
+        key=lambda row: row[0],
+    )
+    prices = [price for price, _flight in priced_candidates]
+    cheapest_candidate = priced_candidates[0][1] if priced_candidates else None
     summary = {
         "count": len(prices),
         "lowest": prices[0] if prices else None,
@@ -7915,16 +8003,19 @@ def build_no_result_diagnosis(
             "items": budget_candidate_rows,
         }
     elif prices:
-        reason_parts = []
-        if capped_reasons.get("meeting"):
-            reason_parts.append("\u65f6\u95f4\u7a97\u53e3\u4e0d\u7b26")
-        if capped_reasons.get("budget"):
-            reason_parts.append("\u8d85\u9884\u7b97")
-        if capped_reasons.get("direct"):
-            reason_parts.append("\u76f4\u98de\u8981\u6c42\u4e0d\u7b26")
-        summary["reason"] = " / ".join(reason_parts) or "\u4e0d\u6ee1\u8db3\u7ea6\u675f"
+        exact_record = reason_by_identity.get(
+            _no_result_flight_identity(cheapest_candidate or {})
+        )
+        if exact_record:
+            summary.update(exact_record)
+            summary["source"] = "candidate_rejection"
+        elif fallback_reason:
+            summary["reason"] = str(fallback_reason)
+            summary["source"] = "pairing_failure"
+        else:
+            summary["reason"] = "该候选的逐航班拒因未保留"
+            summary["source"] = "reason_unavailable"
         summary["price_scope"] = "per_person_oneway"
-
     strict_same_day_reason = None
     def _stage_int(value):
         try:
@@ -8005,7 +8096,27 @@ def build_no_result_diagnosis(
                 "ratio": round(blocked / max(combo_total, 1) * 100, 1),
                 "pool_scope": "完整往返组合池",
             }
-    counts["reason"] = strict_same_day_reason or diagnose_no_result(counts, constraints)
+    pairing_fallback_reason = None
+    if fallback_reason and not matching_excluded and not budget_candidate_rows:
+        pairing_count = len(prices) or valid_price_count or total_candidates
+        pairing_fallback_reason = (
+            f"本次无方案主因是【完整往返】:{fallback_reason};"
+            f"去程有{pairing_count}个候选,恢复返程后需重新配对。"
+        )
+        counts["primary_cause"] = "roundtrip_pairing"
+        counts["after_budget"] = 0
+        counts["max_bottleneck"] = {
+            "key": "roundtrip_pairing",
+            "label": "完整往返",
+            "count": pairing_count,
+            "ratio": 100.0 if pairing_count else 0.0,
+            "pool_scope": "去程候选池",
+        }
+    counts["reason"] = (
+        strict_same_day_reason
+        or pairing_fallback_reason
+        or diagnose_no_result(counts, constraints)
+    )
     safe_reason = str(counts["reason"])
     print(f"[无方案理由诊断] diagnose_no_result返回={safe_reason}")
     print(f"[无方案理由诊断] 实际展示的理由文案={safe_reason}")
@@ -8016,16 +8127,18 @@ def build_no_result_alternatives(
     candidate_flights: list[dict] | None,
     excluded_flights: list[dict] | None = None,
     limit: int = 3,
+    *,
+    default_reason: str = "",
+    default_reason_code: str = "",
 ) -> list[dict]:
     """Turn nearest valid-price candidates into fallback alternatives."""
-    reason_by_key = {}
+    reason_by_identity = {}
     for item in excluded_flights or []:
         if not isinstance(item, dict):
             continue
-        flight = item.get("flight") if isinstance(item.get("flight"), dict) else item
-        key = flight.get("flight_no") or flight.get("flight_combo")
-        if key:
-            reason_by_key[str(key)] = item.get("reason") or flight.get("exclude_reason") or "不满足当前约束"
+        identity = _no_result_flight_identity(item)
+        if identity[0]:
+            reason_by_identity[identity] = _no_result_exclusion_record(item)
     candidates = []
     for flight in candidate_flights or []:
         if not isinstance(flight, dict):
@@ -8033,27 +8146,34 @@ def build_no_result_alternatives(
         price = _to_float(flight.get("price"))
         if price is None or price <= 0:
             continue
-        key = str(flight.get("flight_no") or flight.get("flight_combo") or "")
+        record = reason_by_identity.get(_no_result_flight_identity(flight)) or {
+            "reason": str(default_reason or "不满足当前约束"),
+            "filter_reason_code": str(default_reason_code or ""),
+            "filter_reason_value": "",
+        }
         dep_min = _flight_departure_minutes(flight)
         arr_min = _flight_arrival_minutes(flight)
         time_key = arr_min if arr_min is not None else (dep_min if dep_min is not None else 99999)
-        candidates.append((time_key, price, flight, reason_by_key.get(key) or "不满足当前约束"))
+        candidates.append((time_key, price, flight, record))
     candidates.sort(key=lambda row: (row[0], row[1]))
     result = []
     labels = ["备选A", "备选B", "备选C"]
-    for index, (_, price, flight, reason) in enumerate(candidates[:limit]):
+    for index, (_, price, flight, record) in enumerate(candidates[:limit]):
+        reason = str(record.get("reason") or "不满足当前约束")
         result.append(
             {
                 "category": "closest_candidate",
                 "title": f"{labels[index]} · 最接近条件",
                 "flight": dict(flight),
                 "price": price,
-                "tradeoff": str(reason),
-                "feasibility": str(reason),
+                "unmet_reason": reason,
+                "filter_reason_code": record.get("filter_reason_code") or "",
+                "filter_reason_value": record.get("filter_reason_value") or "",
+                "tradeoff": reason,
+                "feasibility": reason,
             }
         )
     return result
-
 
 def determine_push_type(
     current_price,

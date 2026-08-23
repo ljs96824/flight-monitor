@@ -4318,6 +4318,9 @@ _FILTER_REASON_LABELS = {
     "min_connection_min": "中转时间低于安全下限",
     "red_eye": "红眼、过早起飞或凌晨到达不符合设置",
     "need_baggage": "托运行李要求未满足",
+    "return_collection_failed": "返程采集失败，无法组成完整往返",
+    "return_candidates_empty": "返程无可用候选，无法组成完整往返",
+    "roundtrip_pairing_failed": "去返程未能组成完整往返",
 }
 
 
@@ -7419,48 +7422,244 @@ def _no_result_candidate_flights(
     outbound_analysis: dict | None,
     return_analysis: dict | None,
     is_roundtrip: bool,
+    *,
+    include_return: bool = False,
 ) -> list[dict]:
-    sources: list = []
+    sources: list[tuple[dict, str]] = []
+
+    def _extend(analysis: dict | None, direction: str, keys=("all_flights", "recommendations")):
+        if not isinstance(analysis, dict):
+            return
+        for key in keys:
+            for item in analysis.get(key) or []:
+                if isinstance(item, dict):
+                    sources.append((item, direction))
+
     if is_roundtrip:
-        for analysis in (outbound_analysis, analysis_result):
-            if isinstance(analysis, dict):
-                sources.extend(analysis.get("all_flights") or [])
-                sources.extend(analysis.get("recommendations") or [])
+        _extend(outbound_analysis, "outbound")
+        if include_return:
+            _extend(return_analysis, "return")
+        _extend(analysis_result, "outbound")
         round_trip = (analysis_result or {}).get("round_trip_analysis") or {}
-        for key in ("closest_same_day_outbound_options", "outbound_top3", "return_top3"):
-            sources.extend(round_trip.get(key) or [])
+        _extend(round_trip, "outbound", ("closest_same_day_outbound_options", "outbound_top3"))
+        _extend(round_trip, "return", ("return_top3",))
     else:
-        sources.extend((analysis_result or {}).get("all_flights") or [])
-        sources.extend((analysis_result or {}).get("recommendations") or [])
-        sources.extend((analysis_result or {}).get("economy_recommendations") or [])
+        _extend(analysis_result, "outbound", ("all_flights", "recommendations", "economy_recommendations"))
+
     result = []
     seen = set()
-    for item in sources:
-        flight = item.get("flight") if isinstance(item, dict) and isinstance(item.get("flight"), dict) else item
+    for item, direction in sources:
+        flight = item.get("flight") if isinstance(item.get("flight"), dict) else item
         if not isinstance(flight, dict):
             continue
-        key = (
-            flight.get("flight_no") or flight.get("flight_combo"),
-            flight.get("departure_time") or flight.get("dep_time"),
-            flight.get("arrival_time") or flight.get("arr_time"),
-            flight.get("price"),
-        )
+        candidate = dict(flight)
+        candidate.setdefault("direction", direction)
+        key = _no_result_notification_identity(candidate)
         if key in seen:
             continue
         seen.add(key)
-        result.append(flight)
+        result.append(candidate)
     return result
 
 
-def _no_result_excluded_flights(analysis_result: dict, outbound_analysis: dict | None, return_analysis: dict | None) -> list[dict]:
+def _no_result_excluded_flights(
+    analysis_result: dict,
+    outbound_analysis: dict | None,
+    return_analysis: dict | None,
+) -> list[dict]:
     result = []
-    for analysis in (analysis_result, outbound_analysis, return_analysis):
-        if isinstance(analysis, dict):
-            result.extend(analysis.get("excluded_flights") or [])
+
+    def _extend(analysis: dict | None, direction: str):
+        if not isinstance(analysis, dict):
+            return
+        for item in analysis.get("excluded_flights") or []:
+            if not isinstance(item, dict):
+                continue
+            row = dict(item)
+            row.setdefault("direction", direction)
+            if isinstance(row.get("flight"), dict):
+                row["flight"] = dict(row["flight"])
+                row["flight"].setdefault("direction", direction)
+            result.append(row)
+
+    _extend(analysis_result, "outbound")
+    _extend(outbound_analysis, "outbound")
+    _extend(return_analysis, "return")
     round_trip = (analysis_result or {}).get("round_trip_analysis") or {}
-    result.extend(round_trip.get("excluded_flights") or [])
+    _extend(round_trip, "")
     return result
 
+
+def _no_result_notification_flight(item: dict) -> dict:
+    if not isinstance(item, dict):
+        return {}
+    flight = item.get("flight")
+    return flight if isinstance(flight, dict) else item
+
+
+def _no_result_notification_identity(item: dict) -> tuple:
+    flight = _no_result_notification_flight(item)
+    return (
+        normalize_combo(flight.get("flight_combo") or flight.get("flight_no") or ""),
+        str(flight.get("departure_airport") or flight.get("origin") or "").strip().upper(),
+        str(flight.get("arrival_airport") or flight.get("destination") or "").strip().upper(),
+        str(flight.get("departure_time") or flight.get("dep_time") or "").strip(),
+        str(flight.get("arrival_time") or flight.get("arr_time") or "").strip(),
+    )
+
+
+def _no_result_pairing_failure_reason(
+    analysis_result: dict,
+    return_analysis: dict | None,
+    is_roundtrip: bool,
+) -> tuple[str, str]:
+    if not is_roundtrip:
+        return "", ""
+    return_candidates = []
+    if isinstance(return_analysis, dict):
+        for key in ("all_flights", "recommendations", "economy_recommendations"):
+            return_candidates.extend(return_analysis.get(key) or [])
+    if return_candidates:
+        return "去返程未能组成完整往返", "roundtrip_pairing_failed"
+    source_errors = []
+    for container in (analysis_result, return_analysis):
+        if isinstance(container, dict):
+            source_errors.extend(container.get("source_errors") or [])
+    if source_errors:
+        return "返程采集失败，无法组成完整往返", "return_collection_failed"
+    return "返程无可用候选，无法组成完整往返", "return_candidates_empty"
+
+
+def _build_single_leg_rejection_rows(
+    candidates: list[dict] | None,
+    excluded: list[dict] | None,
+    *,
+    default_reason: str,
+    default_reason_code: str,
+    limit: int = 10,
+) -> list[dict]:
+    rows = []
+    represented = set()
+    seen = set()
+
+    for item in excluded or []:
+        if not isinstance(item, dict):
+            continue
+        flight = _no_result_notification_flight(item)
+        identity = _no_result_notification_identity(item)
+        direction = str(item.get("direction") or flight.get("direction") or "outbound")
+        reason = str(item.get("reason") or item.get("exclude_reason") or flight.get("exclude_reason") or "不满足当前约束")
+        code = str(item.get("filter_reason_code") or flight.get("filter_reason_code") or "")
+        value = str(item.get("filter_reason_value") or flight.get("filter_reason_value") or "")
+        dedupe_key = (identity, direction, code, reason)
+        if not identity[0] or dedupe_key in seen:
+            continue
+        row = dict(item)
+        row["flight"] = dict(flight)
+        row["price"] = _to_float(item.get("price") or flight.get("price"))
+        row["direction"] = direction
+        row["reason"] = reason
+        row["filter_reason_code"] = code
+        row["filter_reason_value"] = value
+        row["stops"] = flight.get("stops", item.get("stops", 0))
+        rows.append(row)
+        represented.add(identity)
+        seen.add(dedupe_key)
+
+    for flight in candidates or []:
+        if not isinstance(flight, dict):
+            continue
+        identity = _no_result_notification_identity(flight)
+        if not identity[0] or identity in represented:
+            continue
+        direction = str(flight.get("direction") or "outbound")
+        row = {
+            "flight": dict(flight),
+            "price": _to_float(flight.get("price")),
+            "direction": direction,
+            "reason": str(default_reason or "不满足当前约束"),
+            "filter_reason_code": str(default_reason_code or ""),
+            "filter_reason_value": "",
+            "stops": flight.get("stops", 0),
+        }
+        dedupe_key = (identity, direction, row["filter_reason_code"], row["reason"])
+        if dedupe_key in seen:
+            continue
+        rows.append(row)
+        represented.add(identity)
+        seen.add(dedupe_key)
+
+    return sorted(
+        rows,
+        key=lambda item: (
+            _to_float(item.get("price")) if _to_float(item.get("price")) is not None else float("inf"),
+            _no_result_notification_identity(item),
+        ),
+    )[: max(1, int(limit))]
+
+def _prepare_no_result_alternatives(
+    alternatives: list[dict] | None,
+    candidates: list[dict] | None,
+    excluded: list[dict] | None,
+    *,
+    default_reason: str,
+    default_reason_code: str,
+) -> list[dict]:
+    if not alternatives:
+        return build_no_result_alternatives(
+            candidates,
+            excluded,
+            3,
+            default_reason=default_reason,
+            default_reason_code=default_reason_code,
+        )
+
+    reason_by_identity = {}
+    for excluded_item in excluded or []:
+        if not isinstance(excluded_item, dict):
+            continue
+        identity = _no_result_notification_identity(excluded_item)
+        if not identity[0]:
+            continue
+        flight = _no_result_notification_flight(excluded_item)
+        reason_by_identity[identity] = {
+            "reason": str(
+                excluded_item.get("reason")
+                or excluded_item.get("exclude_reason")
+                or flight.get("exclude_reason")
+                or "该候选的逐航班拒因未保留"
+            ),
+            "filter_reason_code": str(
+                excluded_item.get("filter_reason_code")
+                or flight.get("filter_reason_code")
+                or ""
+            ),
+            "filter_reason_value": str(
+                excluded_item.get("filter_reason_value")
+                or flight.get("filter_reason_value")
+                or ""
+            ),
+        }
+
+    prepared = []
+    for original in alternatives:
+        if not isinstance(original, dict):
+            continue
+        item = dict(original)
+        exact = reason_by_identity.get(_no_result_notification_identity(item))
+        existing = str(item.get("unmet_reason") or "").strip()
+        if exact:
+            item["unmet_reason"] = exact["reason"]
+            item["filter_reason_code"] = exact["filter_reason_code"]
+            item["filter_reason_value"] = exact["filter_reason_value"]
+        elif not existing or existing == "不满足当前约束":
+            item["unmet_reason"] = str(
+                default_reason or "该候选的逐航班拒因未保留"
+            )
+            item["filter_reason_code"] = str(default_reason_code or "")
+            item["filter_reason_value"] = ""
+        prepared.append(item)
+    return prepared
 
 def _layered_channel_links(link_html: str) -> str:
     anchors = re.findall(r'<a\s+href="([^"]+)"[^>]*>(.*?)</a>', str(link_html or ""), flags=re.I)
@@ -8224,6 +8423,9 @@ def build_notification_payload(
     no_primary_diagnosis = {}
     candidate_price_summary = {}
     no_primary_reason = ""
+    no_primary_default_reason = ""
+    no_primary_default_reason_code = ""
+    single_leg_rejections = []
     if not all_items:
         no_primary_candidates = _no_result_candidate_flights(
             analysis_result,
@@ -8231,21 +8433,51 @@ def build_notification_payload(
             return_analysis,
             is_roundtrip,
         )
-        no_primary_excluded = _no_result_excluded_flights(analysis_result, outbound_analysis, return_analysis)
+        no_primary_excluded = _no_result_excluded_flights(
+            analysis_result,
+            outbound_analysis,
+            return_analysis,
+        )
+        no_primary_default_reason, no_primary_default_reason_code = (
+            _no_result_pairing_failure_reason(
+                analysis_result,
+                return_analysis,
+                is_roundtrip,
+            )
+        )
         no_primary_diagnosis = build_no_result_diagnosis(
             no_primary_candidates,
             no_primary_excluded,
             merged_constraints or route_info,
-            (analysis_result.get("filter_counts") or (analysis_result.get("round_trip_analysis") or {}).get("filter_counts") or {}),
+            (
+                analysis_result.get("filter_counts")
+                or (analysis_result.get("round_trip_analysis") or {}).get("filter_counts")
+                or {}
+            ),
+            fallback_reason=no_primary_default_reason,
         )
         candidate_price_summary = no_primary_diagnosis.get("price_summary") or {}
         no_primary_reason = no_primary_diagnosis.get("reason") or ""
-        if not same_day_alternatives:
-            same_day_alternatives = build_no_result_alternatives(
-                no_primary_candidates,
-                no_primary_excluded,
-                3,
-            )
+        same_day_alternatives = _prepare_no_result_alternatives(
+            same_day_alternatives,
+            no_primary_candidates,
+            no_primary_excluded,
+            default_reason=no_primary_default_reason,
+            default_reason_code=no_primary_default_reason_code,
+        )
+        single_leg_candidates = _no_result_candidate_flights(
+            analysis_result,
+            outbound_analysis,
+            return_analysis,
+            is_roundtrip,
+            include_return=True,
+        )
+        single_leg_rejections = _build_single_leg_rejection_rows(
+            single_leg_candidates,
+            no_primary_excluded,
+            default_reason=no_primary_default_reason,
+            default_reason_code=no_primary_default_reason_code,
+        )
     payload_push_type = (push_meta or {}).get("type") or "价格提醒"
     if not all_items:
         payload_push_type = "无符合方案·备选参考"
@@ -8288,6 +8520,9 @@ def build_notification_payload(
             payload_route_type,
             display_price,
         )
+    if not is_roundtrip or excluded_plans_payload:
+        # 单腿拒因表只补“无完整往返组合”的缺口；已有组合继续走原排除卡。
+        single_leg_rejections = []
     fallback_passenger_pricing = build_passenger_price_breakdown(
         0,
         passenger_pricing_breakdown,
@@ -8401,6 +8636,7 @@ def build_notification_payload(
         "no_primary_diagnosis": no_primary_diagnosis.get("counts") or {},
         "no_primary_reason": no_primary_reason,
         "candidate_price_summary": candidate_price_summary,
+        "single_leg_rejections": single_leg_rejections,
         "budget_gap": budget_gap,
         "purchase_budget_decision": purchase_budget_decision,
         "next_step_guidance": next_step_guidance,
@@ -9111,6 +9347,63 @@ def _no_primary_max_bottleneck_text(payload: dict) -> str:
 
 
 def _no_primary_next_step_text(payload: dict) -> str:
+    rows = [
+        row
+        for row in (payload.get("single_leg_rejections") or [])
+        if isinstance(row, dict)
+    ]
+    return_failure_rows = [
+        row
+        for row in rows
+        if row.get("filter_reason_code") in {
+            "return_collection_failed",
+            "return_candidates_empty",
+            "roundtrip_pairing_failed",
+        }
+    ]
+    if return_failure_rows:
+        direct_count = sum(
+            1
+            for row in return_failure_rows
+            if int((_no_result_notification_flight(row) or {}).get("stops") or row.get("stops") or 0) == 0
+        )
+        label = f"{direct_count}个直飞去程" if direct_count else f"{len(return_failure_rows)}个去程候选"
+        return (
+            f"下一步:① 恢复返程采集后可重新评估{label} | "
+            "② 换日期看低价日历 | ③ 继续等待完整往返报价"
+        )
+
+    lcc_rows = [row for row in rows if row.get("filter_reason_code") == "lcc_excluded"]
+    if lcc_rows:
+        direct_count = sum(
+            1
+            for row in lcc_rows
+            if int((_no_result_notification_flight(row) or {}).get("stops") or row.get("stops") or 0) == 0
+        )
+        count_text = direct_count or len(lcc_rows)
+        return (
+            f"下一步:① 放宽廉航限制即可解锁{count_text}个直飞备选 | "
+            "② 换日期看低价日历 | ③ 继续等待匹配航班"
+        )
+
+    refund_rows = [
+        row
+        for row in rows
+        if row.get("filter_reason_code") == "refund_required"
+        or "退改" in str(row.get("reason") or "")
+    ]
+    if refund_rows:
+        direct_count = sum(
+            1
+            for row in refund_rows
+            if int((_no_result_notification_flight(row) or {}).get("stops") or row.get("stops") or 0) == 0
+        )
+        count_text = direct_count or len(refund_rows)
+        return (
+            f"下一步:① 放宽退改即可解锁{count_text}个直飞备选 | "
+            "② 换日期看低价日历 | ③ 继续等待匹配航班"
+        )
+
     diagnosis = payload.get("no_primary_diagnosis") or {}
     reason_counts = diagnosis.get("reason_counts") or {}
     loosen = []
@@ -9126,7 +9419,6 @@ def _no_primary_next_step_text(payload: dict) -> str:
         + loosen_text
         + ") | ② 换日期看低价日历 | ③ 继续等待匹配航班"
     )
-
 
 def _candidate_summary_reason(summary: dict) -> str:
     raw = str(summary.get("reason") or "").strip()
@@ -9464,6 +9756,14 @@ def _same_day_roundtrip_alternative_card(item: dict, payload: dict) -> str:
                 f"<span style='color:#b91c1c;font-weight:600;'>\u8d85\u51fa\u9884\u7b97 {_price_text(overage)}({scope_label})</span>",
             )
         )
+    unmet_reason = str(
+        item.get("unmet_reason")
+        or item.get("feasibility")
+        or item.get("tradeoff")
+        or ""
+    ).strip()
+    if unmet_reason:
+        total_row_items.append(("未达条件", html.escape(unmet_reason)))
     total_row_items.append(("\u53ef\u884c\u6027", html.escape(_same_day_alternative_feasibility(item))))
     total_rows = _email_leg_table(total_row_items)
     return (
@@ -9502,6 +9802,12 @@ def _same_day_alternative_card(item: dict, payload: dict) -> str:
         or baggage_rules.get("note")
         or "以支付页为准"
     )
+    unmet_reason = str(
+        item.get("unmet_reason")
+        or item.get("feasibility")
+        or item.get("tradeoff")
+        or "不满足当前约束"
+    ).strip()
     rows = [
         ("日期", html.escape(_same_day_alternative_date_label(item, payload))),
         ("航班", _email_plan_flight_text(flight)),
@@ -9511,6 +9817,7 @@ def _same_day_alternative_card(item: dict, payload: dict) -> str:
         ("机型", html.escape(_email_plan_aircraft_text(flight))),
         ("票面价", f"{_price_text(price)}(单程)"),
         ("行李", html.escape(str(baggage))),
+        ("未达条件", html.escape(unmet_reason)),
         ("可行性", html.escape(_same_day_alternative_feasibility(item))),
     ]
     links = _same_day_alternative_links(item, payload, 6)
@@ -9556,6 +9863,14 @@ def _pushplus_same_day_roundtrip_alternative_lines(item: dict, payload: dict) ->
     if item.get("over_budget"):
         scope_label = str(item.get("budget_scope_label") or "\u9884\u7b97\u53e3\u5f84\u5f85\u786e\u8ba4")
         lines.append(f"\u9884\u7b97\u72b6\u6001:\u8d85\u51fa\u9884\u7b97{_price_text(item.get('budget_overage'))}({html.escape(scope_label)})")
+    unmet_reason = str(
+        item.get("unmet_reason")
+        or item.get("feasibility")
+        or item.get("tradeoff")
+        or ""
+    ).strip()
+    if unmet_reason:
+        lines.append(f"未达条件:{html.escape(unmet_reason)}")
     if outbound_links:
         lines.append(f"\u53bb\u7a0b\u9a8c\u8bc1:{outbound_links}")
     if return_links:
@@ -9594,10 +9909,38 @@ def _pushplus_same_day_alternative_lines(payload: dict) -> list[str]:
         time_airports += arr
         lines.append(f"时间:{time_airports}")
         lines.append(f"价格:{price}")
+        unmet_reason = str(
+            item.get("unmet_reason")
+            or item.get("feasibility")
+            or item.get("tradeoff")
+            or ""
+        ).strip()
+        if unmet_reason:
+            lines.append(f"未达条件:{html.escape(unmet_reason)}")
         if links:
             lines.append(f"验证购票:{links}")
     return lines
 
+
+def _pushplus_single_leg_rejection_lines(payload: dict) -> list[str]:
+    rows = [
+        row
+        for row in (payload.get("single_leg_rejections") or [])
+        if isinstance(row, dict)
+    ]
+    if not rows:
+        return []
+    lines = ["", "逐航班拒因:"]
+    for item in rows[:3]:
+        flight = _no_result_notification_flight(item)
+        combo = normalize_combo(flight.get("flight_combo") or flight.get("flight_no") or "") or "航班待确认"
+        direction = _single_leg_rejection_direction(item)
+        price = _to_float(item.get("price") or flight.get("price"))
+        price_text = _price_text(price) if price is not None else "价格待确认"
+        details = _excluded_reason_details(item)
+        reason = details[0] if details else str(item.get("reason") or "不满足当前约束")
+        lines.append(f"{direction} {combo} {price_text}(单人单程):{reason}")
+    return [html.escape(str(line)) for line in lines]
 
 def _same_day_alternatives_body(payload: dict) -> str:
     alternatives = payload.get("same_day_alternatives") or []
@@ -9813,6 +10156,7 @@ def render_pushplus(payload: dict) -> str:
         if time_filter_note:
             lines.append(html.escape(time_filter_note))
         lines.extend(_pushplus_same_day_alternative_lines(payload))
+        lines.extend(_pushplus_single_leg_rejection_lines(payload))
         detail_url = str(payload.get("detail_url") or "").strip()
         form_url = str(payload.get("form_url") or "").strip()
         if detail_url:
@@ -12853,9 +13197,52 @@ def _nearby_date_chart_title_and_note(rows: list[dict]) -> tuple[str, str]:
     return "前后日期最低价(单程参考价)", "注:为单程价,非往返总价"
 
 
+def _single_leg_rejection_direction(item: dict) -> str:
+    direction = str(item.get("direction") or item.get("scope") or "").strip().lower()
+    if direction in {"return", "inbound", "返程"}:
+        return "返程"
+    return "去程"
+
+
+def _email_single_leg_rejection_table(rows: list[dict]) -> str:
+    if not rows:
+        return ""
+    body_rows = []
+    for item in rows[:10]:
+        flight = _no_result_notification_flight(item)
+        combo = normalize_combo(flight.get("flight_combo") or flight.get("flight_no") or "") or "航班待确认"
+        direction = _single_leg_rejection_direction(item)
+        price = _to_float(item.get("price") or flight.get("price"))
+        price_text = _price_text(price) if price is not None else "价格待确认"
+        details = _excluded_reason_details(item)
+        reason = details[0] if details else str(item.get("reason") or "不满足当前约束")
+        body_rows.append(
+            "<tr>"
+            f"<td style='padding:6px;border-bottom:1px solid #eee;'>{html.escape(combo)}</td>"
+            f"<td style='padding:6px;border-bottom:1px solid #eee;'>{html.escape(direction)}</td>"
+            f"<td style='padding:6px;border-bottom:1px solid #eee;'>{html.escape(price_text)}(单人单程)</td>"
+            f"<td style='padding:6px;border-bottom:1px solid #eee;'>{html.escape(reason)}</td>"
+            "</tr>"
+        )
+    return (
+        "<div style='font-weight:600;margin-bottom:8px;color:#111;'>逐航班拒因表</div>"
+        "<table style='width:100%;font-size:13px;border-collapse:collapse;'>"
+        "<thead><tr>"
+        "<th style='text-align:left;padding:6px;'>航班</th>"
+        "<th style='text-align:left;padding:6px;'>方向</th>"
+        "<th style='text-align:left;padding:6px;'>价格</th>"
+        "<th style='text-align:left;padding:6px;'>拒因</th>"
+        "</tr></thead><tbody>"
+        + "".join(body_rows)
+        + "</tbody></table>"
+    )
+
 def _email_excluded_compact_body(payload: dict) -> str:
     excluded = payload.get("excluded_plans") or []
     if not excluded:
+        single_leg_rejections = payload.get("single_leg_rejections") or []
+        if single_leg_rejections:
+            return _email_single_leg_rejection_table(single_leg_rejections)
         if _no_primary_plan_state(payload):
             from notification_sections import section_fallback
 

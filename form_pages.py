@@ -139,7 +139,7 @@ OPTIONS = {
     "baggage": (("required", "必须含托运"), ("not_needed", "不需要托运"), ("unknown", "不确定")),
     "refund_flexibility": (("not_needed", "不重要"), ("preferred", "最好能改签"), ("required", "必须可退改"), ("unknown", "不确定")),
     "price_sensitivity": (("low", "稳定优先"), ("medium", "适度看价格"), ("high", "明显低价可妥协"), ("max", "价格优先")),
-    "airline_policy": (("any", "不限"), ("prefer_full_service", "偏好全服务"), ("no_lcc", "不接受廉航"), ("exclude_airlines", "排除指定航司")),
+    "airline_policy": (("any", "不限"), ("prefer_full_service", "偏好全服务"), ("exclude_airlines", "排除指定航司")),
     "blocked_airlines_common": (("9C", "春秋航空"), ("HO", "吉祥航空"), ("KN", "中国联航"), ("AQ", "九元航空")),
     "lcc_policy": (("any", "不限"), ("exclude_lcc", "排除廉航"), ("lcc_only", "仅看廉航")),
     "cabin_policy": (("economy_only", "仅经济舱"), ("premium_allowed", "可含高端经济舱"), ("business_allowed", "可含商务舱")),

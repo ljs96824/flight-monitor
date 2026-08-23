@@ -24,7 +24,7 @@ from airports import (
     resolve_location,
 )
 from analyzer import apply_default_rules, build_price_hint_from_calendar
-from airlines import LCC_POLICIES, resolve_lcc_policy
+from airlines import LCC_POLICIES, canonicalize_airline_lcc_policy, resolve_lcc_policy
 from build_info import PROCESS_BUILD_INFO
 from cabin_allocation import (
     cabin_allocation_detail_label,
@@ -549,23 +549,72 @@ def migrate_budget_scopes(subscriptions: list[dict]) -> tuple[list[dict], list[d
 
 
 def migrate_lcc_policies(subscriptions: list[dict]) -> tuple[list[dict], list[dict]]:
-    """为旧订阅补显式的廉航筛选口径，默认不限制。"""
+    """补齐廉航策略，并把旧no_lcc别名归一到lcc_policy。"""
     migrated = []
     for index, sub in enumerate(subscriptions):
         if not isinstance(sub, dict):
             continue
-        existing = resolve_lcc_policy(sub)
-        if existing:
-            sub["lcc_policy"] = str(existing).strip()
-            continue
-        sub["lcc_policy"] = "any"
-        migrated.append(
-            {
-                "index": index,
-                "id": sub.get("id") or sub.get("subscription_id") or "",
-                "route": _subscription_route_label(sub),
-            }
+
+        soft = sub.get("soft_preferences")
+        soft = soft if isinstance(soft, dict) else {}
+        hard = sub.get("hard_constraints")
+        hard = hard if isinstance(hard, dict) else {}
+        constraints = sub.get("constraints")
+        constraints = constraints if isinstance(constraints, dict) else {}
+        preferences = sub.get("preferences")
+        preferences = preferences if isinstance(preferences, dict) else {}
+        advanced = sub.get("advanced_rules")
+        advanced = advanced if isinstance(advanced, dict) else {}
+        airline_rules = advanced.get("airlines")
+        airline_rules = airline_rules if isinstance(airline_rules, dict) else {}
+
+        legacy_airline_policy = (
+            soft.get("airline_policy")
+            or hard.get("airline_policy")
+            or constraints.get("airline_policy")
+            or airline_rules.get("preference")
+            or sub.get("airline_policy")
+            or "any"
         )
+        existing_lcc_policy = resolve_lcc_policy(sub)
+        airline_policy, lcc_policy, legacy_alias_migrated = (
+            canonicalize_airline_lcc_policy(
+                legacy_airline_policy,
+                existing_lcc_policy or "any",
+            )
+        )
+        changed = not existing_lcc_policy or sub.get("lcc_policy") != lcc_policy
+        sub["lcc_policy"] = lcc_policy
+
+        if legacy_alias_migrated:
+            for container in (sub, soft, hard, constraints):
+                if container.get("airline_policy") == "no_lcc":
+                    container["airline_policy"] = airline_policy
+                    changed = True
+            if airline_rules.get("preference") == "no_lcc":
+                airline_rules["preference"] = airline_policy
+                changed = True
+
+            for container in (hard, constraints, preferences):
+                if "lcc_policy" in container:
+                    if container.get("lcc_policy") != lcc_policy:
+                        changed = True
+                    container["lcc_policy"] = lcc_policy
+            if airline_rules:
+                if airline_rules.get("lcc_policy") != lcc_policy:
+                    changed = True
+                airline_rules["lcc_policy"] = lcc_policy
+
+        if changed:
+            migrated.append(
+                {
+                    "index": index,
+                    "id": sub.get("id") or sub.get("subscription_id") or "",
+                    "route": _subscription_route_label(sub),
+                    "airline_policy": airline_policy,
+                    "lcc_policy": lcc_policy,
+                }
+            )
     return subscriptions, migrated
 
 
@@ -592,7 +641,7 @@ def load_subscriptions() -> list[dict]:
         )
     if lcc_migrated:
         safe_log(
-            f"[口径迁移] 已为{len(lcc_migrated)}条旧订阅补lcc_policy=any: "
+            f"[口径迁移] 已归一{len(lcc_migrated)}条旧订阅的廉航策略: "
             f"{lcc_migrated}"
         )
     return data
@@ -1386,6 +1435,15 @@ def build_subscription(form) -> dict:
     lcc_policy = str(form.get("lcc_policy") or "any").strip()
     if lcc_policy not in LCC_POLICIES:
         raise ValueError(f"lcc_policy取值无效: {lcc_policy}")
+    airline_policy, lcc_policy, legacy_lcc_migrated = canonicalize_airline_lcc_policy(
+        airline_policy,
+        lcc_policy,
+    )
+    if legacy_lcc_migrated:
+        safe_log(
+            "[口径迁移] airline_policy=no_lcc已归一为"
+            f"airline_policy={airline_policy}, lcc_policy={lcc_policy}"
+        )
     if monitor_mode != "precise":
         airline_policy = "any"
         blocked_airlines = []

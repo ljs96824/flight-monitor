@@ -37,56 +37,56 @@
     "calls": [
       {
         "count": 1,
-        "date": "2026-09-11",
+        "date": "2026-09-13",
         "dest": "PEK",
         "origin": "PVG",
         "source": "snapshot_fixture"
       },
       {
         "count": 1,
-        "date": "2026-09-11",
+        "date": "2026-09-13",
         "dest": "PKX",
         "origin": "PVG",
         "source": "snapshot_fixture"
       },
       {
         "count": 1,
-        "date": "2026-09-11",
+        "date": "2026-09-13",
         "dest": "PEK",
         "origin": "SHA",
         "source": "snapshot_fixture"
       },
       {
         "count": 2,
-        "date": "2026-09-11",
+        "date": "2026-09-13",
         "dest": "PKX",
         "origin": "SHA",
         "source": "snapshot_fixture"
       },
       {
         "count": 1,
-        "date": "2026-09-11",
+        "date": "2026-09-13",
         "dest": "PVG",
         "origin": "PEK",
         "source": "snapshot_fixture"
       },
       {
         "count": 1,
-        "date": "2026-09-11",
+        "date": "2026-09-13",
         "dest": "SHA",
         "origin": "PEK",
         "source": "snapshot_fixture"
       },
       {
         "count": 1,
-        "date": "2026-09-11",
+        "date": "2026-09-13",
         "dest": "PVG",
         "origin": "PKX",
         "source": "snapshot_fixture"
       },
       {
         "count": 2,
-        "date": "2026-09-11",
+        "date": "2026-09-13",
         "dest": "SHA",
         "origin": "PKX",
         "source": "snapshot_fixture"
@@ -97,7 +97,7 @@
     "source": "snapshot_fixture"
   },
   "intl_dual_source": {
-    "depart_date": "2026-10-05",
+    "depart_date": "2026-10-07",
     "disclosure_triggers": [
       {
         "combo": "MU730",
@@ -182,102 +182,102 @@
     "dual_source_agreement": {},
     "email_contains_tcurve": true,
     "email_contains_weekday_median": true,
-    "email_html_chars": 23261,
+    "email_html_chars": 26758,
     "email_subject": "【无符合方案】上海 → 北京｜提供1个备选",
     "provenance": {
       "available_degraded_cells": 0,
-      "computed_at": "2026-08-21 16:10",
+      "computed_at": "2026-08-23 22:11",
       "method_version": "provenance_v1",
       "referenced_stat_keys": [
-        "calendar.2026-09-08.min",
-        "calendar.2026-09-09.min",
         "calendar.2026-09-10.min",
         "calendar.2026-09-11.min",
         "calendar.2026-09-12.min",
+        "calendar.2026-09-13.min",
+        "calendar.2026-09-14.min",
         "tcurve.T14.median",
         "tcurve.T21.median",
         "tcurve.T28.median",
         "weekday.minimum"
       ],
       "statistics": {
-        "calendar.2026-09-08.min": {
-          "bucket": "航线=上海-北京·出发日=2026-09-11·返程日=2026-09-11·约束=7f37656c·日历日期=2026-09-08·口径=3人往返参考价",
-          "computed_at": "2026-08-21 16:10",
-          "degraded_excluded": 0,
-          "dual_source_agreement": {},
-          "method_version": "calendar_v1",
-          "sample_n": 0,
-          "sources": [],
-          "stat_key": "calendar.2026-09-08.min",
-          "value": 3585.0,
-          "window": [
-            "2026-09-07",
-            "2026-09-07"
-          ]
-        },
-        "calendar.2026-09-09.min": {
-          "bucket": "航线=上海-北京·出发日=2026-09-11·返程日=2026-09-11·约束=7f37656c·日历日期=2026-09-09·口径=3人往返参考价",
-          "computed_at": "2026-08-21 16:10",
-          "degraded_excluded": 0,
-          "dual_source_agreement": {},
-          "method_version": "calendar_v1",
-          "sample_n": 0,
-          "sources": [],
-          "stat_key": "calendar.2026-09-09.min",
-          "value": 3654.0,
-          "window": [
-            "2026-09-07",
-            "2026-09-07"
-          ]
-        },
         "calendar.2026-09-10.min": {
-          "bucket": "航线=上海-北京·出发日=2026-09-11·返程日=2026-09-11·约束=7f37656c·日历日期=2026-09-10·口径=3人往返参考价",
-          "computed_at": "2026-08-21 16:10",
+          "bucket": "航线=上海-北京·出发日=2026-09-13·返程日=2026-09-13·约束=7f37656c·日历日期=2026-09-10·口径=3人往返参考价",
+          "computed_at": "2026-08-23 22:11",
           "degraded_excluded": 0,
           "dual_source_agreement": {},
           "method_version": "calendar_v1",
           "sample_n": 0,
           "sources": [],
           "stat_key": "calendar.2026-09-10.min",
-          "value": 4224.0,
+          "value": 3585.0,
           "window": [
-            "2026-09-07",
-            "2026-09-07"
+            "2026-09-09",
+            "2026-09-09"
           ]
         },
         "calendar.2026-09-11.min": {
-          "bucket": "航线=上海-北京·出发日=2026-09-11·返程日=2026-09-11·约束=7f37656c·日历日期=2026-09-11·口径=3人往返参考价",
-          "computed_at": "2026-08-21 16:10",
+          "bucket": "航线=上海-北京·出发日=2026-09-13·返程日=2026-09-13·约束=7f37656c·日历日期=2026-09-11·口径=3人往返参考价",
+          "computed_at": "2026-08-23 22:11",
           "degraded_excluded": 0,
           "dual_source_agreement": {},
           "method_version": "calendar_v1",
           "sample_n": 0,
           "sources": [],
           "stat_key": "calendar.2026-09-11.min",
-          "value": 4437.0,
+          "value": 3654.0,
           "window": [
-            "2026-09-07",
-            "2026-09-07"
+            "2026-09-09",
+            "2026-09-09"
           ]
         },
         "calendar.2026-09-12.min": {
-          "bucket": "航线=上海-北京·出发日=2026-09-11·返程日=2026-09-11·约束=7f37656c·日历日期=2026-09-12·口径=3人往返参考价",
-          "computed_at": "2026-08-21 16:10",
+          "bucket": "航线=上海-北京·出发日=2026-09-13·返程日=2026-09-13·约束=7f37656c·日历日期=2026-09-12·口径=3人往返参考价",
+          "computed_at": "2026-08-23 22:11",
           "degraded_excluded": 0,
           "dual_source_agreement": {},
           "method_version": "calendar_v1",
           "sample_n": 0,
           "sources": [],
           "stat_key": "calendar.2026-09-12.min",
+          "value": 4224.0,
+          "window": [
+            "2026-09-09",
+            "2026-09-09"
+          ]
+        },
+        "calendar.2026-09-13.min": {
+          "bucket": "航线=上海-北京·出发日=2026-09-13·返程日=2026-09-13·约束=7f37656c·日历日期=2026-09-13·口径=3人往返参考价",
+          "computed_at": "2026-08-23 22:11",
+          "degraded_excluded": 0,
+          "dual_source_agreement": {},
+          "method_version": "calendar_v1",
+          "sample_n": 0,
+          "sources": [],
+          "stat_key": "calendar.2026-09-13.min",
+          "value": 4437.0,
+          "window": [
+            "2026-09-09",
+            "2026-09-09"
+          ]
+        },
+        "calendar.2026-09-14.min": {
+          "bucket": "航线=上海-北京·出发日=2026-09-13·返程日=2026-09-13·约束=7f37656c·日历日期=2026-09-14·口径=3人往返参考价",
+          "computed_at": "2026-08-23 22:11",
+          "degraded_excluded": 0,
+          "dual_source_agreement": {},
+          "method_version": "calendar_v1",
+          "sample_n": 0,
+          "sources": [],
+          "stat_key": "calendar.2026-09-14.min",
           "value": 3981.0,
           "window": [
-            "2026-09-07",
-            "2026-09-07"
+            "2026-09-09",
+            "2026-09-09"
           ]
         },
         "reftier.absolute_min": {
-          "bucket": "航线=上海-北京·出发日=2026-09-11·返程日=2026-09-11·约束=7f37656c",
-          "computed_at": "2026-08-21 16:10",
+          "bucket": "航线=上海-北京·出发日=2026-09-13·返程日=2026-09-13·约束=7f37656c",
+          "computed_at": "2026-08-23 22:11",
           "degraded_excluded": 0,
           "dual_source_agreement": {},
           "method_version": "reftier_v1",
@@ -286,13 +286,13 @@
           "stat_key": "reftier.absolute_min",
           "value": 2181.0,
           "window": [
-            "2026-08-21",
-            "2026-08-21"
+            "2026-08-23",
+            "2026-08-23"
           ]
         },
         "reftier.conditional_min": {
-          "bucket": "航线=上海-北京·出发日=2026-09-11·返程日=2026-09-11·约束=7f37656c·提前购买天数=4±7",
-          "computed_at": "2026-08-21 16:10",
+          "bucket": "航线=上海-北京·出发日=2026-09-13·返程日=2026-09-13·约束=7f37656c·提前购买天数=4±7",
+          "computed_at": "2026-08-23 22:11",
           "degraded_excluded": 0,
           "dual_source_agreement": {},
           "method_version": "reftier_v1",
@@ -301,13 +301,13 @@
           "stat_key": "reftier.conditional_min",
           "value": 2181.0,
           "window": [
-            "2026-08-21",
-            "2026-08-21"
+            "2026-08-23",
+            "2026-08-23"
           ]
         },
         "reftier.current": {
-          "bucket": "航线=上海-北京·出发日=2026-09-11·返程日=2026-09-11·约束=7f37656c",
-          "computed_at": "2026-08-21 16:10",
+          "bucket": "航线=上海-北京·出发日=2026-09-13·返程日=2026-09-13·约束=7f37656c",
+          "computed_at": "2026-08-23 22:11",
           "degraded_excluded": 0,
           "dual_source_agreement": {},
           "method_version": "reftier_v1",
@@ -316,13 +316,13 @@
           "stat_key": "reftier.current",
           "value": 2181.0,
           "window": [
-            "2026-08-21",
-            "2026-08-21"
+            "2026-08-23",
+            "2026-08-23"
           ]
         },
         "reftier.recent_min": {
-          "bucket": "航线=上海-北京·出发日=2026-09-11·返程日=2026-09-11·约束=7f37656c",
-          "computed_at": "2026-08-21 16:10",
+          "bucket": "航线=上海-北京·出发日=2026-09-13·返程日=2026-09-13·约束=7f37656c",
+          "computed_at": "2026-08-23 22:11",
           "degraded_excluded": 0,
           "dual_source_agreement": {},
           "method_version": "reftier_v1",
@@ -331,13 +331,13 @@
           "stat_key": "reftier.recent_min",
           "value": 2181.0,
           "window": [
-            "2026-08-21",
-            "2026-08-21"
+            "2026-08-23",
+            "2026-08-23"
           ]
         },
         "tcurve.T14.median": {
-          "bucket": "航线=上海-北京·出发日=2026-09-11·返程日=2026-09-11·约束=7f37656c·T=14天",
-          "computed_at": "2026-08-21 16:10",
+          "bucket": "航线=上海-北京·出发日=2026-09-13·返程日=2026-09-13·约束=7f37656c·T=14天",
+          "computed_at": "2026-08-23 22:11",
           "degraded_excluded": 1,
           "dual_source_agreement": {},
           "method_version": "tcurve_v1",
@@ -346,13 +346,13 @@
           "stat_key": "tcurve.T14.median",
           "value": 700,
           "window": [
-            "2026-08-21",
-            "2026-08-21"
+            "2026-08-23",
+            "2026-08-23"
           ]
         },
         "tcurve.T21.median": {
-          "bucket": "航线=上海-北京·出发日=2026-09-11·返程日=2026-09-11·约束=7f37656c·T=21天",
-          "computed_at": "2026-08-21 16:10",
+          "bucket": "航线=上海-北京·出发日=2026-09-13·返程日=2026-09-13·约束=7f37656c·T=21天",
+          "computed_at": "2026-08-23 22:11",
           "degraded_excluded": 1,
           "dual_source_agreement": {},
           "method_version": "tcurve_v1",
@@ -361,13 +361,13 @@
           "stat_key": "tcurve.T21.median",
           "value": 740,
           "window": [
-            "2026-08-21",
-            "2026-08-21"
+            "2026-08-23",
+            "2026-08-23"
           ]
         },
         "tcurve.T28.median": {
-          "bucket": "航线=上海-北京·出发日=2026-09-11·返程日=2026-09-11·约束=7f37656c·T=28天",
-          "computed_at": "2026-08-21 16:10",
+          "bucket": "航线=上海-北京·出发日=2026-09-13·返程日=2026-09-13·约束=7f37656c·T=28天",
+          "computed_at": "2026-08-23 22:11",
           "degraded_excluded": 1,
           "dual_source_agreement": {},
           "method_version": "tcurve_v1",
@@ -376,13 +376,13 @@
           "stat_key": "tcurve.T28.median",
           "value": 780,
           "window": [
-            "2026-08-21",
-            "2026-08-21"
+            "2026-08-23",
+            "2026-08-23"
           ]
         },
         "weekday.minimum": {
-          "bucket": "航线=上海-北京·出发日=2026-09-11·返程日=2026-09-11·约束=7f37656c·最低价日期=2026-08-31",
-          "computed_at": "2026-08-21 16:10",
+          "bucket": "航线=上海-北京·出发日=2026-09-13·返程日=2026-09-13·约束=7f37656c·最低价日期=2026-08-31",
+          "computed_at": "2026-08-23 22:11",
           "degraded_excluded": 0,
           "dual_source_agreement": {},
           "method_version": "weekday_v2",
@@ -395,13 +395,13 @@
             "weekday": "周一"
           },
           "window": [
-            "2026-09-07",
-            "2026-09-07"
+            "2026-09-09",
+            "2026-09-09"
           ]
         },
         "weekday.周一.median": {
-          "bucket": "航线=上海-北京·出发日=2026-09-11·返程日=2026-09-11·约束=7f37656c·星期=周一",
-          "computed_at": "2026-08-21 16:10",
+          "bucket": "航线=上海-北京·出发日=2026-09-13·返程日=2026-09-13·约束=7f37656c·星期=周一",
+          "computed_at": "2026-08-23 22:11",
           "degraded_excluded": 0,
           "dual_source_agreement": {},
           "method_version": "weekday_v2",
@@ -410,13 +410,13 @@
           "stat_key": "weekday.周一.median",
           "value": 500.0,
           "window": [
-            "2026-08-21",
-            "2026-08-21"
+            "2026-09-09",
+            "2026-09-09"
           ]
         },
         "weekday.周三.median": {
-          "bucket": "航线=上海-北京·出发日=2026-09-11·返程日=2026-09-11·约束=7f37656c·星期=周三",
-          "computed_at": "2026-08-21 16:10",
+          "bucket": "航线=上海-北京·出发日=2026-09-13·返程日=2026-09-13·约束=7f37656c·星期=周三",
+          "computed_at": "2026-08-23 22:11",
           "degraded_excluded": 0,
           "dual_source_agreement": {},
           "method_version": "weekday_v2",
@@ -425,13 +425,13 @@
           "stat_key": "weekday.周三.median",
           "value": 700.0,
           "window": [
-            "2026-09-07",
-            "2026-09-07"
+            "2026-08-23",
+            "2026-08-23"
           ]
         },
         "weekday.周二.median": {
-          "bucket": "航线=上海-北京·出发日=2026-09-11·返程日=2026-09-11·约束=7f37656c·星期=周二",
-          "computed_at": "2026-08-21 16:10",
+          "bucket": "航线=上海-北京·出发日=2026-09-13·返程日=2026-09-13·约束=7f37656c·星期=周二",
+          "computed_at": "2026-08-23 22:11",
           "degraded_excluded": 0,
           "dual_source_agreement": {},
           "method_version": "weekday_v2",
@@ -440,13 +440,13 @@
           "stat_key": "weekday.周二.median",
           "value": 600.0,
           "window": [
-            "2026-09-07",
-            "2026-09-07"
+            "2026-08-23",
+            "2026-08-23"
           ]
         },
         "weekday.周五.median": {
-          "bucket": "航线=上海-北京·出发日=2026-09-11·返程日=2026-09-11·约束=7f37656c·星期=周五",
-          "computed_at": "2026-08-21 16:10",
+          "bucket": "航线=上海-北京·出发日=2026-09-13·返程日=2026-09-13·约束=7f37656c·星期=周五",
+          "computed_at": "2026-08-23 22:11",
           "degraded_excluded": 0,
           "dual_source_agreement": {},
           "method_version": "weekday_v2",
@@ -455,13 +455,13 @@
           "stat_key": "weekday.周五.median",
           "value": 900.0,
           "window": [
-            "2026-09-07",
-            "2026-09-07"
+            "2026-09-09",
+            "2026-09-09"
           ]
         },
         "weekday.周六.median": {
-          "bucket": "航线=上海-北京·出发日=2026-09-11·返程日=2026-09-11·约束=7f37656c·星期=周六",
-          "computed_at": "2026-08-21 16:10",
+          "bucket": "航线=上海-北京·出发日=2026-09-13·返程日=2026-09-13·约束=7f37656c·星期=周六",
+          "computed_at": "2026-08-23 22:11",
           "degraded_excluded": 0,
           "dual_source_agreement": {},
           "method_version": "weekday_v2",
@@ -470,13 +470,13 @@
           "stat_key": "weekday.周六.median",
           "value": 1000.0,
           "window": [
-            "2026-09-07",
-            "2026-09-07"
+            "2026-09-09",
+            "2026-09-09"
           ]
         },
         "weekday.周四.median": {
-          "bucket": "航线=上海-北京·出发日=2026-09-11·返程日=2026-09-11·约束=7f37656c·星期=周四",
-          "computed_at": "2026-08-21 16:10",
+          "bucket": "航线=上海-北京·出发日=2026-09-13·返程日=2026-09-13·约束=7f37656c·星期=周四",
+          "computed_at": "2026-08-23 22:11",
           "degraded_excluded": 0,
           "dual_source_agreement": {},
           "method_version": "weekday_v2",
@@ -485,13 +485,13 @@
           "stat_key": "weekday.周四.median",
           "value": 800.0,
           "window": [
-            "2026-09-07",
-            "2026-09-07"
+            "2026-09-09",
+            "2026-09-09"
           ]
         },
         "weekday.周日.median": {
-          "bucket": "航线=上海-北京·出发日=2026-09-11·返程日=2026-09-11·约束=7f37656c·星期=周日",
-          "computed_at": "2026-08-21 16:10",
+          "bucket": "航线=上海-北京·出发日=2026-09-13·返程日=2026-09-13·约束=7f37656c·星期=周日",
+          "computed_at": "2026-08-23 22:11",
           "degraded_excluded": 0,
           "dual_source_agreement": {},
           "method_version": "weekday_v2",
@@ -500,13 +500,13 @@
           "stat_key": "weekday.周日.median",
           "value": 1100.0,
           "window": [
-            "2026-08-21",
-            "2026-08-21"
+            "2026-09-09",
+            "2026-09-09"
           ]
         }
       }
     },
-    "pushplus_chars": 1821,
+    "pushplus_chars": 2059,
     "versions": {
       "calendar": "calendar_v1",
       "dual_source_agreement": "agreement_v1",
@@ -545,106 +545,28 @@
     ],
     "note": "每行=该出发日单人单程最低+固定返程日单人单程最低，再按3名成人换算。",
     "passenger_factor": 3.0,
-    "return_date": "2026-09-11",
+    "return_date": "2026-09-13",
     "return_low_unit": 648,
     "route": "SHA-PKX + PKX-SHA",
     "rows": [
       {
         "airline": "MU",
         "breakdown": "去¥547+返¥648",
-        "date": "2026-09-08",
-        "label": "09-08 周二",
+        "date": "2026-09-10",
+        "label": "09-10 周四",
         "lowest": true,
         "min_price": 3585,
         "observation_window": [
-          "2026-09-07",
-          "2026-09-07"
+          "2026-09-09",
+          "2026-09-09"
         ],
-        "observed_at": "2026-09-07",
+        "observed_at": "2026-09-09",
         "outbound_min_price": 547.0,
         "passenger_factor": 3.0,
         "price_scope": "3人往返参考价",
         "provenance": {
-          "bucket": "航线=上海-北京·出发日=2026-09-11·返程日=2026-09-11·约束=7f37656c·日历日期=2026-09-08·口径=3人往返参考价",
-          "computed_at": "2026-08-21 16:10",
-          "degraded_excluded": 0,
-          "dual_source_agreement": {},
-          "method_version": "calendar_v1",
-          "sample_n": 0,
-          "sources": [],
-          "stat_key": "calendar.2026-09-08.min",
-          "window": [
-            "2026-09-07",
-            "2026-09-07"
-          ]
-        },
-        "return_date": "2026-09-11",
-        "return_min_price": 648.0,
-        "sample_n": 0,
-        "scope": "passenger_roundtrip",
-        "selected": false,
-        "sources": [],
-        "unit_roundtrip_price": 1195.0,
-        "value": 3585,
-        "weekday": "周二"
-      },
-      {
-        "airline": "MU",
-        "breakdown": "去¥570+返¥648",
-        "date": "2026-09-09",
-        "label": "09-09 周三",
-        "lowest": false,
-        "min_price": 3654,
-        "observation_window": [
-          "2026-09-07",
-          "2026-09-07"
-        ],
-        "observed_at": "2026-09-07",
-        "outbound_min_price": 570.0,
-        "passenger_factor": 3.0,
-        "price_scope": "3人往返参考价",
-        "provenance": {
-          "bucket": "航线=上海-北京·出发日=2026-09-11·返程日=2026-09-11·约束=7f37656c·日历日期=2026-09-09·口径=3人往返参考价",
-          "computed_at": "2026-08-21 16:10",
-          "degraded_excluded": 0,
-          "dual_source_agreement": {},
-          "method_version": "calendar_v1",
-          "sample_n": 0,
-          "sources": [],
-          "stat_key": "calendar.2026-09-09.min",
-          "window": [
-            "2026-09-07",
-            "2026-09-07"
-          ]
-        },
-        "return_date": "2026-09-11",
-        "return_min_price": 648.0,
-        "sample_n": 0,
-        "scope": "passenger_roundtrip",
-        "selected": false,
-        "sources": [],
-        "unit_roundtrip_price": 1218.0,
-        "value": 3654,
-        "weekday": "周三"
-      },
-      {
-        "airline": "CA",
-        "breakdown": "去¥760+返¥648",
-        "date": "2026-09-10",
-        "label": "09-10 周四",
-        "lowest": false,
-        "min_price": 4224,
-        "observation_window": [
-          "2026-09-07",
-          "2026-09-07"
-        ],
-        "observed_at": "2026-09-07",
-        "outbound_min_price": 760.0,
-        "passenger_factor": 3.0,
-        "price_scope": "3人往返参考价",
-        "provenance": {
-          "bucket": "航线=上海-北京·出发日=2026-09-11·返程日=2026-09-11·约束=7f37656c·日历日期=2026-09-10·口径=3人往返参考价",
-          "computed_at": "2026-08-21 16:10",
+          "bucket": "航线=上海-北京·出发日=2026-09-13·返程日=2026-09-13·约束=7f37656c·日历日期=2026-09-10·口径=3人往返参考价",
+          "computed_at": "2026-08-23 22:11",
           "degraded_excluded": 0,
           "dual_source_agreement": {},
           "method_version": "calendar_v1",
@@ -652,38 +574,38 @@
           "sources": [],
           "stat_key": "calendar.2026-09-10.min",
           "window": [
-            "2026-09-07",
-            "2026-09-07"
+            "2026-09-09",
+            "2026-09-09"
           ]
         },
-        "return_date": "2026-09-11",
+        "return_date": "2026-09-13",
         "return_min_price": 648.0,
         "sample_n": 0,
         "scope": "passenger_roundtrip",
         "selected": false,
         "sources": [],
-        "unit_roundtrip_price": 1408.0,
-        "value": 4224,
+        "unit_roundtrip_price": 1195.0,
+        "value": 3585,
         "weekday": "周四"
       },
       {
         "airline": "MU",
-        "breakdown": "去¥831+返¥648",
+        "breakdown": "去¥570+返¥648",
         "date": "2026-09-11",
         "label": "09-11 周五",
         "lowest": false,
-        "min_price": 4437,
+        "min_price": 3654,
         "observation_window": [
-          "2026-09-07",
-          "2026-09-07"
+          "2026-09-09",
+          "2026-09-09"
         ],
-        "observed_at": "2026-09-07",
-        "outbound_min_price": 831.0,
+        "observed_at": "2026-09-09",
+        "outbound_min_price": 570.0,
         "passenger_factor": 3.0,
         "price_scope": "3人往返参考价",
         "provenance": {
-          "bucket": "航线=上海-北京·出发日=2026-09-11·返程日=2026-09-11·约束=7f37656c·日历日期=2026-09-11·口径=3人往返参考价",
-          "computed_at": "2026-08-21 16:10",
+          "bucket": "航线=上海-北京·出发日=2026-09-13·返程日=2026-09-13·约束=7f37656c·日历日期=2026-09-11·口径=3人往返参考价",
+          "computed_at": "2026-08-23 22:11",
           "degraded_excluded": 0,
           "dual_source_agreement": {},
           "method_version": "calendar_v1",
@@ -691,38 +613,38 @@
           "sources": [],
           "stat_key": "calendar.2026-09-11.min",
           "window": [
-            "2026-09-07",
-            "2026-09-07"
+            "2026-09-09",
+            "2026-09-09"
           ]
         },
-        "return_date": "2026-09-11",
+        "return_date": "2026-09-13",
         "return_min_price": 648.0,
         "sample_n": 0,
         "scope": "passenger_roundtrip",
-        "selected": true,
+        "selected": false,
         "sources": [],
-        "unit_roundtrip_price": 1479.0,
-        "value": 4437,
+        "unit_roundtrip_price": 1218.0,
+        "value": 3654,
         "weekday": "周五"
       },
       {
-        "airline": "MU",
-        "breakdown": "去¥679+返¥648",
+        "airline": "CA",
+        "breakdown": "去¥760+返¥648",
         "date": "2026-09-12",
         "label": "09-12 周六",
         "lowest": false,
-        "min_price": 3981,
+        "min_price": 4224,
         "observation_window": [
-          "2026-09-07",
-          "2026-09-07"
+          "2026-09-09",
+          "2026-09-09"
         ],
-        "observed_at": "2026-09-07",
-        "outbound_min_price": 679.0,
+        "observed_at": "2026-09-09",
+        "outbound_min_price": 760.0,
         "passenger_factor": 3.0,
         "price_scope": "3人往返参考价",
         "provenance": {
-          "bucket": "航线=上海-北京·出发日=2026-09-11·返程日=2026-09-11·约束=7f37656c·日历日期=2026-09-12·口径=3人往返参考价",
-          "computed_at": "2026-08-21 16:10",
+          "bucket": "航线=上海-北京·出发日=2026-09-13·返程日=2026-09-13·约束=7f37656c·日历日期=2026-09-12·口径=3人往返参考价",
+          "computed_at": "2026-08-23 22:11",
           "degraded_excluded": 0,
           "dual_source_agreement": {},
           "method_version": "calendar_v1",
@@ -730,11 +652,89 @@
           "sources": [],
           "stat_key": "calendar.2026-09-12.min",
           "window": [
-            "2026-09-07",
-            "2026-09-07"
+            "2026-09-09",
+            "2026-09-09"
           ]
         },
-        "return_date": "2026-09-11",
+        "return_date": "2026-09-13",
+        "return_min_price": 648.0,
+        "sample_n": 0,
+        "scope": "passenger_roundtrip",
+        "selected": false,
+        "sources": [],
+        "unit_roundtrip_price": 1408.0,
+        "value": 4224,
+        "weekday": "周六"
+      },
+      {
+        "airline": "MU",
+        "breakdown": "去¥831+返¥648",
+        "date": "2026-09-13",
+        "label": "09-13 周日",
+        "lowest": false,
+        "min_price": 4437,
+        "observation_window": [
+          "2026-09-09",
+          "2026-09-09"
+        ],
+        "observed_at": "2026-09-09",
+        "outbound_min_price": 831.0,
+        "passenger_factor": 3.0,
+        "price_scope": "3人往返参考价",
+        "provenance": {
+          "bucket": "航线=上海-北京·出发日=2026-09-13·返程日=2026-09-13·约束=7f37656c·日历日期=2026-09-13·口径=3人往返参考价",
+          "computed_at": "2026-08-23 22:11",
+          "degraded_excluded": 0,
+          "dual_source_agreement": {},
+          "method_version": "calendar_v1",
+          "sample_n": 0,
+          "sources": [],
+          "stat_key": "calendar.2026-09-13.min",
+          "window": [
+            "2026-09-09",
+            "2026-09-09"
+          ]
+        },
+        "return_date": "2026-09-13",
+        "return_min_price": 648.0,
+        "sample_n": 0,
+        "scope": "passenger_roundtrip",
+        "selected": true,
+        "sources": [],
+        "unit_roundtrip_price": 1479.0,
+        "value": 4437,
+        "weekday": "周日"
+      },
+      {
+        "airline": "MU",
+        "breakdown": "去¥679+返¥648",
+        "date": "2026-09-14",
+        "label": "09-14 周一",
+        "lowest": false,
+        "min_price": 3981,
+        "observation_window": [
+          "2026-09-09",
+          "2026-09-09"
+        ],
+        "observed_at": "2026-09-09",
+        "outbound_min_price": 679.0,
+        "passenger_factor": 3.0,
+        "price_scope": "3人往返参考价",
+        "provenance": {
+          "bucket": "航线=上海-北京·出发日=2026-09-13·返程日=2026-09-13·约束=7f37656c·日历日期=2026-09-14·口径=3人往返参考价",
+          "computed_at": "2026-08-23 22:11",
+          "degraded_excluded": 0,
+          "dual_source_agreement": {},
+          "method_version": "calendar_v1",
+          "sample_n": 0,
+          "sources": [],
+          "stat_key": "calendar.2026-09-14.min",
+          "window": [
+            "2026-09-09",
+            "2026-09-09"
+          ]
+        },
+        "return_date": "2026-09-13",
         "return_min_price": 648.0,
         "sample_n": 0,
         "scope": "passenger_roundtrip",
@@ -742,37 +742,37 @@
         "sources": [],
         "unit_roundtrip_price": 1327.0,
         "value": 3981,
-        "weekday": "周六"
+        "weekday": "周一"
       }
     ],
     "savings": [
       {
-        "date": "2026-09-08",
+        "date": "2026-09-10",
         "offset": -3,
         "price": 3585.0,
         "save": 852,
-        "tip": "鎻愬墠3天(2026-09-08 周二)出发，省¥852/单程",
-        "weekday": "周二"
+        "tip": "鎻愬墠3天(2026-09-10 周四)出发，省¥852/单程",
+        "weekday": "周四"
       },
       {
-        "date": "2026-09-09",
+        "date": "2026-09-11",
         "offset": -2,
         "price": 3654.0,
         "save": 783,
-        "tip": "鎻愬墠2天(2026-09-09 周三)出发，省¥783/单程",
-        "weekday": "周三"
+        "tip": "鎻愬墠2天(2026-09-11 周五)出发，省¥783/单程",
+        "weekday": "周五"
       },
       {
-        "date": "2026-09-12",
+        "date": "2026-09-14",
         "offset": 1,
         "price": 3981.0,
         "save": 456,
-        "tip": "鎺ㄨ繜1天(2026-09-12 周六)出发，省¥456/单程",
-        "weekday": "周六"
+        "tip": "鎺ㄨ繜1天(2026-09-14 周一)出发，省¥456/单程",
+        "weekday": "周一"
       }
     ],
     "scope": "3人往返参考价",
-    "selected_date": "2026-09-11",
+    "selected_date": "2026-09-13",
     "selected_passenger_price": 4437.0,
     "selected_price_scope": "3人往返参考价",
     "selected_unit_price": 1479.0,
@@ -841,8 +841,8 @@
       "min_weekday": "周一",
       "provenance": {
         "weekday.minimum": {
-          "bucket": "航线=上海-北京·出发日=2026-09-11·返程日=2026-09-11·约束=7f37656c·最低价日期=2026-08-31",
-          "computed_at": "2026-08-21 16:10",
+          "bucket": "航线=上海-北京·出发日=2026-09-13·返程日=2026-09-13·约束=7f37656c·最低价日期=2026-08-31",
+          "computed_at": "2026-08-23 22:11",
           "degraded_excluded": 0,
           "dual_source_agreement": {},
           "method_version": "weekday_v2",
@@ -850,13 +850,13 @@
           "sources": [],
           "stat_key": "weekday.minimum",
           "window": [
-            "2026-09-07",
-            "2026-09-07"
+            "2026-09-09",
+            "2026-09-09"
           ]
         },
         "weekday.周一.median": {
-          "bucket": "航线=上海-北京·出发日=2026-09-11·返程日=2026-09-11·约束=7f37656c·星期=周一",
-          "computed_at": "2026-08-21 16:10",
+          "bucket": "航线=上海-北京·出发日=2026-09-13·返程日=2026-09-13·约束=7f37656c·星期=周一",
+          "computed_at": "2026-08-23 22:11",
           "degraded_excluded": 0,
           "dual_source_agreement": {},
           "method_version": "weekday_v2",
@@ -864,13 +864,13 @@
           "sources": [],
           "stat_key": "weekday.周一.median",
           "window": [
-            "2026-08-21",
-            "2026-08-21"
+            "2026-09-09",
+            "2026-09-09"
           ]
         },
         "weekday.周三.median": {
-          "bucket": "航线=上海-北京·出发日=2026-09-11·返程日=2026-09-11·约束=7f37656c·星期=周三",
-          "computed_at": "2026-08-21 16:10",
+          "bucket": "航线=上海-北京·出发日=2026-09-13·返程日=2026-09-13·约束=7f37656c·星期=周三",
+          "computed_at": "2026-08-23 22:11",
           "degraded_excluded": 0,
           "dual_source_agreement": {},
           "method_version": "weekday_v2",
@@ -878,13 +878,13 @@
           "sources": [],
           "stat_key": "weekday.周三.median",
           "window": [
-            "2026-09-07",
-            "2026-09-07"
+            "2026-08-23",
+            "2026-08-23"
           ]
         },
         "weekday.周二.median": {
-          "bucket": "航线=上海-北京·出发日=2026-09-11·返程日=2026-09-11·约束=7f37656c·星期=周二",
-          "computed_at": "2026-08-21 16:10",
+          "bucket": "航线=上海-北京·出发日=2026-09-13·返程日=2026-09-13·约束=7f37656c·星期=周二",
+          "computed_at": "2026-08-23 22:11",
           "degraded_excluded": 0,
           "dual_source_agreement": {},
           "method_version": "weekday_v2",
@@ -892,13 +892,13 @@
           "sources": [],
           "stat_key": "weekday.周二.median",
           "window": [
-            "2026-09-07",
-            "2026-09-07"
+            "2026-08-23",
+            "2026-08-23"
           ]
         },
         "weekday.周五.median": {
-          "bucket": "航线=上海-北京·出发日=2026-09-11·返程日=2026-09-11·约束=7f37656c·星期=周五",
-          "computed_at": "2026-08-21 16:10",
+          "bucket": "航线=上海-北京·出发日=2026-09-13·返程日=2026-09-13·约束=7f37656c·星期=周五",
+          "computed_at": "2026-08-23 22:11",
           "degraded_excluded": 0,
           "dual_source_agreement": {},
           "method_version": "weekday_v2",
@@ -906,13 +906,13 @@
           "sources": [],
           "stat_key": "weekday.周五.median",
           "window": [
-            "2026-09-07",
-            "2026-09-07"
+            "2026-09-09",
+            "2026-09-09"
           ]
         },
         "weekday.周六.median": {
-          "bucket": "航线=上海-北京·出发日=2026-09-11·返程日=2026-09-11·约束=7f37656c·星期=周六",
-          "computed_at": "2026-08-21 16:10",
+          "bucket": "航线=上海-北京·出发日=2026-09-13·返程日=2026-09-13·约束=7f37656c·星期=周六",
+          "computed_at": "2026-08-23 22:11",
           "degraded_excluded": 0,
           "dual_source_agreement": {},
           "method_version": "weekday_v2",
@@ -920,13 +920,13 @@
           "sources": [],
           "stat_key": "weekday.周六.median",
           "window": [
-            "2026-09-07",
-            "2026-09-07"
+            "2026-09-09",
+            "2026-09-09"
           ]
         },
         "weekday.周四.median": {
-          "bucket": "航线=上海-北京·出发日=2026-09-11·返程日=2026-09-11·约束=7f37656c·星期=周四",
-          "computed_at": "2026-08-21 16:10",
+          "bucket": "航线=上海-北京·出发日=2026-09-13·返程日=2026-09-13·约束=7f37656c·星期=周四",
+          "computed_at": "2026-08-23 22:11",
           "degraded_excluded": 0,
           "dual_source_agreement": {},
           "method_version": "weekday_v2",
@@ -934,13 +934,13 @@
           "sources": [],
           "stat_key": "weekday.周四.median",
           "window": [
-            "2026-09-07",
-            "2026-09-07"
+            "2026-09-09",
+            "2026-09-09"
           ]
         },
         "weekday.周日.median": {
-          "bucket": "航线=上海-北京·出发日=2026-09-11·返程日=2026-09-11·约束=7f37656c·星期=周日",
-          "computed_at": "2026-08-21 16:10",
+          "bucket": "航线=上海-北京·出发日=2026-09-13·返程日=2026-09-13·约束=7f37656c·星期=周日",
+          "computed_at": "2026-08-23 22:11",
           "degraded_excluded": 0,
           "dual_source_agreement": {},
           "method_version": "weekday_v2",
@@ -948,8 +948,8 @@
           "sources": [],
           "stat_key": "weekday.周日.median",
           "window": [
-            "2026-08-21",
-            "2026-08-21"
+            "2026-09-09",
+            "2026-09-09"
           ]
         }
       },
@@ -1065,7 +1065,7 @@
       "target_price_scope": "per_person"
     },
     "selected_date_price": {
-      "date": "2026-09-11",
+      "date": "2026-09-13",
       "is_passenger_scoped": true,
       "price": 4437.0,
       "price_scope": "3人往返参考价",
@@ -1102,67 +1102,67 @@
     "outbound_window_matches": [],
     "return_recommendation": {
       "departure_airport": "PKX",
-      "departure_datetime": "2026-09-11 21:00:00",
+      "departure_datetime": "2026-09-13 21:00:00",
       "flight_no": "MU5170",
       "price": 1720,
       "price_scope": "单人单程参考价",
       "selection_rule": "满足返程时间窗口后按单人单程价升序",
-      "window_depart_after": "2026-09-11 19:55"
+      "window_depart_after": "2026-09-13 19:55"
     },
     "return_window_debug": [
       {
         "departure_airport": "PEK",
-        "departure_datetime": "2026-09-11 21:30:00",
+        "departure_datetime": "2026-09-13 21:30:00",
         "flight_no": "CA1511",
         "index": 0,
         "passed": true,
         "raw_departure": "21:30",
         "return_depart_after": "20:39",
-        "return_depart_after_datetime": "2026-09-11 20:39:00",
+        "return_depart_after_datetime": "2026-09-13 20:39:00",
         "warning": ""
       },
       {
         "departure_airport": "PEK",
-        "departure_datetime": "2026-09-11 19:30:00",
+        "departure_datetime": "2026-09-13 19:30:00",
         "flight_no": "CA1507",
         "index": 1,
         "passed": false,
         "raw_departure": "19:30",
         "return_depart_after": "20:39",
-        "return_depart_after_datetime": "2026-09-11 20:39:00",
+        "return_depart_after_datetime": "2026-09-13 20:39:00",
         "warning": ""
       },
       {
         "departure_airport": "PKX",
-        "departure_datetime": "2026-09-11 20:30:00",
+        "departure_datetime": "2026-09-13 20:30:00",
         "flight_no": "CA1589",
         "index": 2,
         "passed": true,
         "raw_departure": "20:30",
         "return_depart_after": "19:55",
-        "return_depart_after_datetime": "2026-09-11 19:55:00",
+        "return_depart_after_datetime": "2026-09-13 19:55:00",
         "warning": ""
       },
       {
         "departure_airport": "PKX",
-        "departure_datetime": "2026-09-11 20:10:00",
+        "departure_datetime": "2026-09-13 20:10:00",
         "flight_no": "MU5128",
         "index": 3,
         "passed": true,
         "raw_departure": "20:10",
         "return_depart_after": "19:55",
-        "return_depart_after_datetime": "2026-09-11 19:55:00",
+        "return_depart_after_datetime": "2026-09-13 19:55:00",
         "warning": ""
       },
       {
         "departure_airport": "PKX",
-        "departure_datetime": "2026-09-11 21:00:00",
+        "departure_datetime": "2026-09-13 21:00:00",
         "flight_no": "MU5170",
         "index": 4,
         "passed": true,
         "raw_departure": "21:00",
         "return_depart_after": "19:55",
-        "return_depart_after_datetime": "2026-09-11 19:55:00",
+        "return_depart_after_datetime": "2026-09-13 19:55:00",
         "warning": ""
       }
     ],
@@ -1170,35 +1170,35 @@
     "return_window_matches": [
       {
         "departure_airport": "PKX",
-        "departure_datetime": "2026-09-11 21:00:00",
+        "departure_datetime": "2026-09-13 21:00:00",
         "flight_no": "MU5170",
         "price": 1720,
         "price_scope": "单人单程参考价",
-        "window_depart_after": "2026-09-11 19:55"
+        "window_depart_after": "2026-09-13 19:55"
       },
       {
         "departure_airport": "PKX",
-        "departure_datetime": "2026-09-11 20:30:00",
+        "departure_datetime": "2026-09-13 20:30:00",
         "flight_no": "CA1589",
         "price": 1820,
         "price_scope": "单人单程参考价",
-        "window_depart_after": "2026-09-11 19:55"
+        "window_depart_after": "2026-09-13 19:55"
       },
       {
         "departure_airport": "PEK",
-        "departure_datetime": "2026-09-11 21:30:00",
+        "departure_datetime": "2026-09-13 21:30:00",
         "flight_no": "CA1511",
         "price": 1880,
         "price_scope": "单人单程参考价",
-        "window_depart_after": "2026-09-11 20:39"
+        "window_depart_after": "2026-09-13 20:39"
       },
       {
         "departure_airport": "PKX",
-        "departure_datetime": "2026-09-11 20:10:00",
+        "departure_datetime": "2026-09-13 20:10:00",
         "flight_no": "MU5128",
         "price": 1921,
         "price_scope": "单人单程参考价",
-        "window_depart_after": "2026-09-11 19:55"
+        "window_depart_after": "2026-09-13 19:55"
       }
     ],
     "same_day_alternatives": [
@@ -1207,18 +1207,18 @@
         "budget_overage": 2553,
         "budget_scope_label": "全员往返 vs 每人上限1700×3=总上限5100",
         "category": "same_day_earliest",
-        "date": "2026-09-11",
+        "date": "2026-09-13",
         "flight": {
           "aircraft": "333",
           "airline": "东方航空",
           "arrival_airport": "PKX",
-          "arrival_date": "2026-09-11",
+          "arrival_date": "2026-09-13",
           "arrival_time": "09:15",
           "buyability": {
             "label": "需支付页确认"
           },
           "departure_airport": "SHA",
-          "departure_date": "2026-09-11",
+          "departure_date": "2026-09-13",
           "departure_time": "07:00",
           "destination_transport_min": 25,
           "fare_rules": {
@@ -1538,13 +1538,13 @@
           "aircraft": "333",
           "airline": "东方航空",
           "arrival_airport": "PKX",
-          "arrival_date": "2026-09-11",
+          "arrival_date": "2026-09-13",
           "arrival_time": "09:15",
           "buyability": {
             "label": "需支付页确认"
           },
           "departure_airport": "SHA",
-          "departure_date": "2026-09-11",
+          "departure_date": "2026-09-13",
           "departure_time": "07:00",
           "destination_transport_min": 25,
           "fare_rules": {
@@ -1978,13 +1978,13 @@
           "aircraft": "32A",
           "airline": "东方航空",
           "arrival_airport": "SHA",
-          "arrival_date": "2026-09-11",
+          "arrival_date": "2026-09-13",
           "arrival_time": "23:10",
           "buyability": {
             "label": "需支付页确认"
           },
           "departure_airport": "PKX",
-          "departure_date": "2026-09-11",
+          "departure_date": "2026-09-13",
           "departure_time": "21:00",
           "fare_rules": {
             "baggage": {
@@ -3148,7 +3148,7 @@
   "snapshot_version": 2,
   "subscription": {
     "basic": {
-      "depart_date": "2026-09-11",
+      "depart_date": "2026-09-13",
       "destination": "北京",
       "destination_airports_active": [
         "PEK",
@@ -3160,7 +3160,7 @@
         "SHA"
       ],
       "passenger_count": 3,
-      "return_date": "2026-09-11",
+      "return_date": "2026-09-13",
       "round_trip": true,
       "route_type": "domestic"
     },
@@ -3212,7 +3212,7 @@
       "transfer_policy": "direct_only",
       "transport_mode": "taxi"
     },
-    "id": "snapshot-standard-shanghai-beijing-20260911",
+    "id": "snapshot-standard-shanghai-beijing-20260913",
     "notification_goals": {
       "frequency": "important_only",
       "main_goal": "suitable_price"

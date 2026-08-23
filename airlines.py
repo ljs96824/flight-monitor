@@ -141,6 +141,19 @@ def resolve_lcc_policy(data: dict | None, default=None):
     return default
 
 
+def canonicalize_airline_lcc_policy(
+    airline_policy,
+    lcc_policy,
+) -> tuple[str, str, bool]:
+    """把旧airline_policy=no_lcc迁到规范的lcc_policy字段。"""
+    airline = str(airline_policy or "any").strip() or "any"
+    lcc = str(lcc_policy or "any").strip() or "any"
+    if airline != "no_lcc":
+        return airline, lcc, False
+    if lcc == "any":
+        lcc = "exclude_lcc"
+    return "any", lcc, True
+
 def _as_bool(value) -> bool:
     if isinstance(value, bool):
         return value

@@ -1,0 +1,28 @@
+{
+  "round_id": "collection_20260823T210014035475",
+  "is_roundtrip": true,
+  "default_reason": "返程采集失败，无法组成完整往返",
+  "candidates": [
+    {"flight_no": "9C6581", "flight_combo": "9C6581", "departure_airport": "PVG", "arrival_airport": "KIX", "departure_time": "2026-10-01 07:10", "arrival_time": "2026-10-01 10:20", "stops": 0, "price": 2885},
+    {"flight_no": "9C6575", "flight_combo": "9C6575", "departure_airport": "PVG", "arrival_airport": "KIX", "departure_time": "2026-10-01 08:05", "arrival_time": "2026-10-01 11:20", "stops": 0, "price": 3367},
+    {"flight_no": "MM080", "flight_combo": "MM80", "departure_airport": "PVG", "arrival_airport": "KIX", "departure_time": "2026-10-01 06:15", "arrival_time": "2026-10-01 09:35", "stops": 0, "price": 4905}
+  ],
+  "excluded": [
+    {
+      "flight": {"flight_no": "BR0705|BR0182", "flight_combo": "BR705+BR182", "departure_airport": "PVG", "arrival_airport": "KIX", "departure_time": "2026-10-01 08:00", "arrival_time": "2026-10-01 16:00", "stops": 1, "price": 2500},
+      "price": 2500,
+      "direction": "outbound",
+      "reason": "需要中转，但你设置了必须直飞",
+      "filter_reason_code": "direct_only",
+      "filter_reason_value": "stops=1"
+    }
+  ],
+  "stage_counts": {
+    "total_candidates": 10,
+    "valid_price_count": 10,
+    "after_basic_filter": 0,
+    "after_meeting_window": 0,
+    "after_budget": 0
+  },
+  "source_errors": [{"source": "juhe", "cabin_class": "economy", "error": "PermissionError: [WinError 5] 拒绝访问。: 'data'"}]
+}
