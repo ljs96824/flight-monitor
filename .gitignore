@@ -27,12 +27,13 @@ Thumbs.db
 data/observations.sqlite3
 analytics/out/
 data/*.sqlite3.bak
-before_*.json
-after_*.json
-before_*.json
-after_*.json
-*_diff.json
-*_email.html
-*_snapshot.json
-after_*.log
+# 一次性快照产物仅保留本地，不进入版本库
+/before*.json
+/after*.json
+/check*.json
+/snapshot*.json
+/*_diff.json
+/*_email.html
+/after_*.log
+/data/snapshots/
 live_run_console.txt

@@ -21,6 +21,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="strict")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_SNAPSHOT_OUTPUT = Path("data") / "snapshots" / "snapshot.json"
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -77,6 +78,20 @@ def resolve_snapshot_dates(
     if parsed_return < parsed_depart:
         raise ValueError("快照返程日期不能早于去程日期")
     return parsed_depart.isoformat(), parsed_return.isoformat()
+
+
+def resolve_snapshot_output_path(
+    output: str | Path | None,
+    *,
+    project_root: Path = PROJECT_ROOT,
+) -> Path:
+    """解析快照输出路径；默认写入本地忽略目录。"""
+    if output is None:
+        return project_root / DEFAULT_SNAPSHOT_OUTPUT
+    output_path = Path(output)
+    if output_path.is_absolute():
+        return output_path
+    return project_root / output_path
 
 
 DEPART_DATE, RETURN_DATE = resolve_snapshot_dates()
@@ -1288,14 +1303,16 @@ def print_key_fields(snapshot: dict) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Write deterministic full-chain flight-monitor snapshot.")
-    parser.add_argument("--output", default=str(PROJECT_ROOT / "before.json"), help="Snapshot JSON path. Defaults to project before.json.")
+    parser.add_argument(
+        "--output",
+        default=None,
+        help="Snapshot JSON path. Defaults to data/snapshots/snapshot.json.",
+    )
     parser.add_argument("--quiet", action="store_true", help="Do not print key fields.")
     args = parser.parse_args(argv)
 
     snapshot = build_snapshot()
-    output = Path(args.output)
-    if not output.is_absolute():
-        output = PROJECT_ROOT / output
+    output = resolve_snapshot_output_path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2, sort_keys=True, default=str), encoding="utf-8")
     if not args.quiet:
