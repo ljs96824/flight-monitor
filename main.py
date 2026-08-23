@@ -205,6 +205,36 @@ def _format_source_failure_reason(source_errors=None, reason: str | None = None)
     return "; ".join(parts)
 
 
+def _build_collection_leg_failure(
+    direction_code: str,
+    date_str: str,
+    origin_airports,
+    destination_airports,
+    source_errors,
+) -> dict:
+    direction = "返程" if direction_code == "return" else "去程"
+    errors = [dict(item) for item in (source_errors or []) if isinstance(item, dict)]
+    return {
+        "direction": direction,
+        "direction_code": direction_code,
+        "date": str(date_str or ""),
+        "origin_airports": list(origin_airports or []),
+        "destination_airports": list(destination_airports or []),
+        "source_errors": errors,
+        "reason": _format_source_failure_reason(errors),
+    }
+
+
+def _should_skip_low_price_alert(sub: dict, analysis: dict) -> bool:
+    """数据完整时才允许低价策略静默跳过；采集失败必须通知用户。"""
+    return bool(
+        (sub.get("hard_constraints", {}) or {}).get("budget_strategy")
+        == "low_price_alert"
+        and not analysis.get("low_price_alert_triggered", False)
+        and not analysis.get("collection_failures")
+    )
+
+
 def _log_subscription_failure(sub: dict, *, source_errors=None, reason: str | None = None) -> None:
     message = _format_source_failure_reason(source_errors, reason)
     safe_log(
@@ -1971,6 +2001,7 @@ def process_subscription(
             analysis["price_calendar"] = price_calendar_result
         analysis["source_stats"] = data.get("source_stats", {})
         analysis["source_errors"] = data.get("source_errors", [])
+        analysis["collection_failures"] = []
         analysis["collection_freshness"] = data.get("collection_freshness", [])
         analysis["constraint_fingerprint"] = constraint_fp
         analysis["constraint_price_history"] = lowest_price_history
@@ -2017,9 +2048,10 @@ def process_subscription(
                 route_type=route_type,
                 passengers=request_passengers,
             )
+            return_source_errors = _source_error_items(agg, return_data)
             _merge_source_errors(
                 analysis["source_errors"],
-                _source_error_items(agg, return_data),
+                return_source_errors,
             )
             return_collected_at = (return_data or {}).get("collected_at") or datetime.now().isoformat(timespec="seconds")
             normalized_return_flights = [
@@ -2046,6 +2078,19 @@ def process_subscription(
             )
             print(f"[往返] 返程采集结果={len(return_flights)}个航班")
             print(f"[DEBUG] 返程采集完成: {len(return_flights)}个航班")
+            if not return_flights and return_source_errors:
+                collection_failure = _build_collection_leg_failure(
+                    "return",
+                    return_date,
+                    active_dests,
+                    active_origins,
+                    return_source_errors,
+                )
+                analysis["collection_failures"].append(collection_failure)
+                safe_log(
+                    f"[采集腿失败] 方向=返程 日期={return_date} "
+                    f"原因={collection_failure['reason']} 结论=数据不完整"
+                )
             if return_flights:
                 save_raw_response(return_route, return_date, return_data)
                 return_preferences = {
@@ -2289,11 +2334,7 @@ def process_subscription(
         with ANALYSIS_LOG.open("a", encoding="utf-8") as file:
             file.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
 
-        if (
-            (sub.get("hard_constraints", {}) or {}).get("budget_strategy")
-            == "low_price_alert"
-            and not analysis.get("low_price_alert_triggered", False)
-        ):
+        if _should_skip_low_price_alert(sub, analysis):
             print("[推送] 当前价格未进入低价区间，按订阅策略跳过推送")
             return True
 
@@ -2363,6 +2404,7 @@ def process_subscription(
                 "lowest_price_history": lowest_price_history,
                 "source_stats": data.get("source_stats", {}),
                 "source_errors": analysis.get("source_errors", []),
+                "collection_failures": analysis.get("collection_failures", []),
                 "collected_at": run_collected_at,
                 "data_freshness": {"legs": data_freshness_legs},
                 "constraint_fingerprint": constraint_fp,

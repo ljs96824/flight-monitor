@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -20,7 +21,9 @@ from sources.base import FlightSource
 from subscription_preflight import shanghai_today
 
 
+BASE_DIR = Path(__file__).resolve().parents[1]
 CACHE_TTL_MINUTES = 15
+CACHE_WRITE_RETRY_DELAY_SECONDS = 0.2
 QUOTA_CODES = {
     code.strip()
     for code in os.getenv("JUHE_QUOTA_CODES", "112,10012").split(",")
@@ -103,7 +106,24 @@ def _as_flight_items(raw: dict) -> list[dict]:
 
 
 def _cache_dir() -> Path:
-    return Path("data") / "cache"
+    return BASE_DIR / "data" / "cache"
+
+
+def _write_cache_once(path: Path, payload: dict) -> None:
+    """在目标目录内原子替换缓存，避免并发读到半写文件。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(f".{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
+    try:
+        with temp_path.open("w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+    finally:
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _format_departure_date(date_str: str) -> str:
@@ -425,11 +445,29 @@ class JuheSource(FlightSource):
             return None
         return raw
 
-    def _write_cache(self, origin: str, dest: str, date_str: str, cabin_class: str, raw):
+    def _write_cache(self, origin: str, dest: str, date_str: str, cabin_class: str, raw) -> bool:
         path = self._cache_path(origin, dest, date_str, cabin_class)
-        path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "fetched_at": datetime.now().isoformat(timespec="seconds"),
             "raw": raw,
         }
-        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        for attempt in range(2):
+            try:
+                _write_cache_once(path, payload)
+                return True
+            except OSError as exc:
+                if attempt == 0:
+                    safe_log(
+                        f"[缓存写入重试] 源=juhe 文件={path.name} "
+                        f"原因={type(exc).__name__}:{exc.strerror or exc} "
+                        f"退避={CACHE_WRITE_RETRY_DELAY_SECONDS}s"
+                    )
+                    time.sleep(CACHE_WRITE_RETRY_DELAY_SECONDS)
+                    continue
+                safe_log(
+                    f"[缓存写入失败] 源=juhe 文件={path.name} "
+                    f"原因={type(exc).__name__}:{exc.strerror or exc} "
+                    "已保留本轮采集结果,不因缓存失败丢弃航班"
+                )
+                return False
+        return False

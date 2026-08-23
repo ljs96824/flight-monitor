@@ -51,6 +51,7 @@ class PlannedRequest:
 @dataclass(frozen=True)
 class PlanExecutionReport:
     actual_requests: int
+    retries: int
     cache_hits: int
     panel_reused: int
     source_skips: int
@@ -389,6 +390,7 @@ class CollectionPlan:
         after = get_request_cache_stats()
         report = PlanExecutionReport(
             actual_requests=int(after.get("actual", 0)) - int(before.get("actual", 0)),
+            retries=int(after.get("retries", 0)) - int(before.get("retries", 0)),
             cache_hits=int(after.get("hits", 0)) - int(before.get("hits", 0)),
             panel_reused=int(after.get("panel_reused", 0))
             - int(before.get("panel_reused", 0)),
@@ -397,6 +399,7 @@ class CollectionPlan:
         )
         accounted = (
             report.actual_requests
+            - report.retries
             + report.cache_hits
             + report.panel_reused
             + report.source_skips
@@ -404,7 +407,8 @@ class CollectionPlan:
         )
         safe_log(
             f"[采集执行] 计划唯一={self.unique_count} 实际请求={report.actual_requests} "
-            f"缓存命中={report.cache_hits} 面板复用={report.panel_reused} "
+            f"重试={report.retries} 缓存命中={report.cache_hits} "
+            f"面板复用={report.panel_reused} "
             f"源级跳过={report.source_skips} "
             f"条件跳过={report.conditional_skipped} "
             f"计划恒等式={accounted == self.unique_count}"

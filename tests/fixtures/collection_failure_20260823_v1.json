@@ -1,0 +1,39 @@
+{
+  "round_id": "collection_20260823T210014035475",
+  "source_error": {
+    "source": "juhe",
+    "cabin_class": "economy",
+    "error": "PermissionError(errno=5,path=<relative>/data):拒绝访问。",
+    "error_type": "PermissionError",
+    "errno": 5,
+    "path": "<relative>/data",
+    "retry_count": 1
+  },
+  "collection_failure": {
+    "direction": "返程",
+    "direction_code": "return",
+    "date": "2026-10-06",
+    "origin_airports": ["KIX", "ITM"],
+    "destination_airports": ["PVG", "SHA"],
+    "source_errors": [
+      {
+        "source": "juhe",
+        "cabin_class": "economy",
+        "error": "PermissionError(errno=5,path=<relative>/data):拒绝访问。",
+        "error_type": "PermissionError",
+        "errno": 5,
+        "path": "<relative>/data",
+        "retry_count": 1
+      }
+    ],
+    "reason": "juhe:PermissionError(errno=5,path=<relative>/data):拒绝访问。"
+  },
+  "source_stats": {
+    "juhe": {
+      "count": 319,
+      "status": "成功",
+      "role": "primary",
+      "route_type": "international"
+    }
+  }
+}

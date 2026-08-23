@@ -27,6 +27,16 @@ NO_MATCH_SECTIONS = tuple(
     for section in STANDARD_SECTIONS
 )
 
+DATA_INCOMPLETE_SECTIONS = (
+    "action_panel",
+    "price_trend",
+    "price_signal",
+    "data_source",
+    "data_freshness",
+    "quota_overview",
+    "provenance",
+)
+
 SECTION_EVIDENCE = {
     "action_panel": ("行动面板",),
     "primary_plan": ("首选推荐", "首选方案"),
@@ -64,9 +74,17 @@ def _is_no_match(trigger_type: str | None) -> bool:
     } or "无符合方案" in value
 
 
+def _is_data_incomplete(trigger_type: str | None) -> bool:
+    value = str(trigger_type or "").strip().lower()
+    return value in {"data_incomplete", "数据不完整"} or "数据不完整" in value
+
+
 def canonical_sections(trigger_type: str | None, *, mixed_cabin: bool = False) -> tuple[str, ...]:
     """返回指定触发类型的 canonical 小节，顺序即通知结构顺序。"""
-    sections = list(NO_MATCH_SECTIONS if _is_no_match(trigger_type) else STANDARD_SECTIONS)
+    if _is_data_incomplete(trigger_type):
+        sections = list(DATA_INCOMPLETE_SECTIONS)
+    else:
+        sections = list(NO_MATCH_SECTIONS if _is_no_match(trigger_type) else STANDARD_SECTIONS)
     if mixed_cabin:
         sections.insert(2, "mixed_cabin")
     return tuple(sections)

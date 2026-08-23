@@ -825,13 +825,20 @@ class FlightAggregator:
                         cabin_counts[cabin_class] = 0
                         raw_by_source[f"{source_name}:{cabin_class}"] = result.get("raw")
                         error = _redact_api_key(_source_result_error(result))
-                        source_errors.append(
-                            {
-                                "source": source_name,
-                                "cabin_class": cabin_class,
-                                "error": error,
-                            }
-                        )
+                        source_error = {
+                            "source": source_name,
+                            "cabin_class": cabin_class,
+                            "error": error,
+                        }
+                        for metadata_key in (
+                            "error_type",
+                            "errno",
+                            "path",
+                            "retry_count",
+                        ):
+                            if result.get(metadata_key) is not None:
+                                source_error[metadata_key] = result.get(metadata_key)
+                        source_errors.append(source_error)
                         safe_log(f"[{source_name}] {cabin_class} 失败：{error}")
                         continue
 

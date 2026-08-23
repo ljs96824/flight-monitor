@@ -7044,6 +7044,60 @@ def _source_degradation_detail(
     return "本轮未返回有效方案(原因未知)"
 
 
+def _build_collection_failure_context(
+    collection_failures: list[dict] | None,
+    *,
+    previous_sources: set[str],
+    current_sources: set[str] | None,
+) -> dict:
+    failures = [
+        dict(item)
+        for item in (collection_failures or [])
+        if isinstance(item, dict)
+    ]
+    if not failures:
+        return {"active": False}
+    statements = []
+    missing_sources = set()
+    for failure in failures:
+        direction = str(failure.get("direction") or "航段").strip()
+        errors = [
+            item
+            for item in (failure.get("source_errors") or [])
+            if isinstance(item, dict)
+        ]
+        for error in errors:
+            source_name = str(error.get("source") or "").strip().lower()
+            if source_name:
+                missing_sources.add(source_name)
+        detail = str(failure.get("reason") or "").strip()
+        if not detail:
+            detail = "; ".join(
+                f"{item.get('source') or 'source'}:{item.get('error') or '返回失败'}"
+                for item in errors
+            )
+        detail = detail or "采集源返回失败"
+        statements.append(
+            f"本轮{direction}采集失败(原因={detail}),结论不代表市场无票"
+        )
+    return {
+        "active": True,
+        "data_incomplete": True,
+        "push_type": "数据不完整",
+        "reason": "；".join(statements),
+        "reason_detail": "；".join(
+            str(item.get("reason") or "").strip() for item in failures
+            if str(item.get("reason") or "").strip()
+        ),
+        "collection_failures": failures,
+        "previous_sources": sorted(previous_sources),
+        "current_sources": sorted(current_sources or set()),
+        "missing_sources": sorted(missing_sources),
+        "first_occurrence": True,
+        "disclosure_level": "full",
+    }
+
+
 def _build_source_degradation_context(
     *,
     source_stats: dict | None,
@@ -7051,10 +7105,18 @@ def _build_source_degradation_context(
     source_errors: list[dict] | None,
     current_sources: set[str] | None = None,
     retired_sources: set[str] | None = None,
+    collection_failures: list[dict] | None = None,
 ) -> dict:
     """Build result-side source degradation evidence without changing prices."""
     source_stats = source_stats if isinstance(source_stats, dict) else {}
     previous_sources = _parse_snapshot_sources(last_snapshot)
+    failure_context = _build_collection_failure_context(
+        collection_failures,
+        previous_sources=previous_sources,
+        current_sources=current_sources,
+    )
+    if failure_context.get("active"):
+        return failure_context
     positive_sources = {
         str(name).strip().lower()
         for name, entry in source_stats.items()
@@ -7230,7 +7292,10 @@ def _apply_constraint_change_to_push_meta(
     ]
     if disclosure:
         reasons.insert(0, disclosure)
-    result["type"] = "筛选条件已变更"
+    data_incomplete = bool(
+        (result.get("source_degradation") or {}).get("data_incomplete")
+    )
+    result["type"] = "数据不完整" if data_incomplete else "筛选条件已变更"
     result["price_change"] = None
     result["percentile"] = None
     result["historical_30_price"] = None
@@ -7288,7 +7353,7 @@ def _apply_source_degradation_to_push_meta(
         ]
         if reason:
             reasons.insert(0, reason)
-        result["type"] = "数据源受限"
+        result["type"] = context.get("push_type") or "数据源受限"
         result["price_change"] = None
         result["source_degradation"] = context
         result["reasons"] = _payload_dedupe_text(reasons)[:4]
@@ -7344,6 +7409,8 @@ def _email_subject(payload: dict) -> str:
     push_type = payload.get("push_type") or "价格提醒"
     route = payload.get("route") or "航班监控"
     alternatives = payload.get("same_day_alternatives") or []
+    if _data_incomplete_state(payload):
+        return f"【数据不完整】{route}"
     if _no_primary_plan_state(payload):
         return f"【无符合方案】{route}｜提供{len(alternatives[:3])}个备选"
     gap = _budget_gap(payload)
@@ -7896,6 +7963,11 @@ def build_notification_payload(
         or route_info.get("source_errors")
         or []
     )
+    collection_failures = (
+        analysis_result.get("collection_failures")
+        or route_info.get("collection_failures")
+        or []
+    )
     payload_route_type = (
         ((subscription.get("basic") or {}).get("route_type"))
         or subscription.get("route_type")
@@ -7935,6 +8007,7 @@ def build_notification_payload(
         last_snapshot=last_snapshot,
         source_errors=source_errors,
         retired_sources=set(source_retirement_context.get("sources") or []),
+        collection_failures=collection_failures,
     )
     current_constraint_fingerprint = str(
         route_info.get("constraint_fingerprint")
@@ -8298,7 +8371,7 @@ def build_notification_payload(
     if (
         plan_status_change
         and plan_status_change.get("status") == "sold_out"
-        and push_meta.get("type") != "数据源受限"
+        and push_meta.get("type") not in {"数据源受限", "数据不完整"}
         and not constraint_change.get("changed")
     ):
         push_meta["type"] = "涨价风险"
@@ -8426,7 +8499,15 @@ def build_notification_payload(
     no_primary_default_reason = ""
     no_primary_default_reason_code = ""
     single_leg_rejections = []
-    if not all_items:
+    data_incomplete = bool(source_degradation_context.get("data_incomplete"))
+    if not all_items and data_incomplete:
+        no_primary_reason = (
+            f"{source_degradation_context.get('reason') or '本轮采集失败'}。"
+            "数据不完整,本轮结论不可用。"
+        )
+        no_primary_diagnosis = {"counts": {}, "data_incomplete": True}
+        same_day_alternatives = []
+    elif not all_items:
         no_primary_candidates = _no_result_candidate_flights(
             analysis_result,
             outbound_analysis,
@@ -8480,10 +8561,14 @@ def build_notification_payload(
         )
     payload_push_type = (push_meta or {}).get("type") or "价格提醒"
     if not all_items:
-        payload_push_type = "无符合方案·备选参考"
-        push_meta["reasons"] = [
-            "本次为'无符合方案'提醒,告知你当前约束下暂无匹配航班"
-        ]
+        if data_incomplete:
+            payload_push_type = "数据不完整"
+            push_meta["reasons"] = [no_primary_reason]
+        else:
+            payload_push_type = "无符合方案·备选参考"
+            push_meta["reasons"] = [
+                "本次为'无符合方案'提醒,告知你当前约束下暂无匹配航班"
+            ]
         display_price = None
         transaction_price = None
         budget_compare_price = None
@@ -8494,8 +8579,20 @@ def build_notification_payload(
         budget_gap = {}
         next_step_guidance = {}
         change = {}
+        if data_incomplete:
+            price_signal = {
+                **(price_signal or {}),
+                "label": "不可判断",
+                "summary": "数据不完整,本轮不作价格位置判断",
+                "percentile": None,
+            }
+            trend_summary = "数据不完整,本轮不作价格走势判断"
         price_policy = {
-            "conclusion": "未找到完全符合条件的方案",
+            "conclusion": (
+                "数据不完整,本轮结论不可用"
+                if data_incomplete
+                else "未找到完全符合条件的方案"
+            ),
             "reason": no_primary_reason,
         }
         purchase_budget_decision = {
@@ -8506,13 +8603,19 @@ def build_notification_payload(
             "is_over_budget": False,
             "price_scope": budget_compare_scope,
             "budget_scope": budget_compare_scope,
-            "reason": "无推荐方案,不适用",
+            "reason": (
+                "数据不完整,本轮结论不可用"
+                if data_incomplete
+                else "无推荐方案,不适用"
+            ),
         }
     excluded_plans_payload = (
         ((analysis_result.get("round_trip_analysis") or {}).get("excluded_roundtrip_combos") or [])
         if is_roundtrip
         else (analysis_result.get("excluded_flights") or [])
     )
+    if data_incomplete:
+        excluded_plans_payload = []
     if is_roundtrip:
         excluded_plans_payload = _apply_passenger_pricing_to_excluded(
             list(excluded_plans_payload),
@@ -8739,6 +8842,7 @@ def build_notification_payload(
         "feedback_url": feedback_url,
         "source_stats": source_stats or {},
         "source_errors": source_errors,
+        "collection_failures": collection_failures,
         "source_degradation": (push_meta or {}).get("source_degradation") or {},
         "source_retirement": source_retirement_context,
         "data_freshness": route_info.get("data_freshness") or {},
@@ -9237,6 +9341,39 @@ def _has_primary_plans(payload: dict) -> bool:
 
 def _no_primary_plan_state(payload: dict) -> bool:
     return not _has_primary_plans(payload)
+
+
+def _data_incomplete_state(payload: dict) -> bool:
+    degradation = payload.get("source_degradation") or {}
+    return bool(
+        payload.get("push_type") == "数据不完整"
+        or degradation.get("data_incomplete")
+        or payload.get("collection_failures")
+    )
+
+
+def _data_incomplete_reason(payload: dict) -> str:
+    degradation = payload.get("source_degradation") or {}
+    reason = str(
+        degradation.get("reason")
+        or payload.get("no_primary_reason")
+        or ""
+    ).strip()
+    return reason or "本轮采集失败,原因未完整记录"
+
+
+def _private_data_incomplete_reason(payload: dict) -> str:
+    """隐私通知仅披露失败方向，不携带 errno、路径或源响应细节。"""
+    directions = []
+    for item in payload.get("collection_failures") or []:
+        if not isinstance(item, dict):
+            continue
+        direction = str(item.get("direction") or "").strip()
+        if direction and direction not in directions:
+            directions.append(direction)
+    label = "、".join(directions)
+    prefix = f"本轮{label}采集失败" if label else "本轮采集失败"
+    return f"{prefix}，技术细节已隐藏"
 
 
 def _build_mixed_cabin_reference_price(
@@ -10114,10 +10251,40 @@ def render_pushplus(payload: dict) -> str:
     """Render the strictly short PushPlus message from the unified payload."""
     payload = payload or {}
     private_render = _render_private_pushplus(payload)
-    if private_render is not None:
+    if private_render is not None and not _data_incomplete_state(payload):
         return private_render
     feedback_ack = str(payload.get("feedback_ack") or "").strip()
     freshness_headline = _data_freshness_headline(payload)
+    if _data_incomplete_state(payload):
+        route = html.escape(str(payload.get("route") or "航班监控"))
+        privacy_level = resolve_notification_privacy_level(payload)
+        reason_text = (
+            _data_incomplete_reason(payload)
+            if privacy_level == DEFAULT_NOTIFICATION_PRIVACY_LEVEL
+            else _private_data_incomplete_reason(payload)
+        )
+        reason = html.escape(reason_text)
+        lines = [
+            f"<b>【数据不完整】{route}</b>",
+            html.escape(freshness_headline) if freshness_headline else "",
+            "",
+            "当前判断:数据不完整,本轮结论不可用",
+            f"原因:{reason}",
+            "本轮不作航班可行性、市场无票或价格位置判断",
+        ]
+        detail_url = str(payload.get("detail_url") or "")
+        form_url = str(payload.get("form_url") or "")
+        if privacy_level == DEFAULT_NOTIFICATION_PRIVACY_LEVEL and detail_url:
+            lines.append(
+                f'详情:<a href="{html.escape(detail_url)}" target="_blank">'
+                f"{html.escape(detail_url)}</a>"
+            )
+        if privacy_level == DEFAULT_NOTIFICATION_PRIVACY_LEVEL and form_url:
+            lines.append(
+                f'修改偏好:<a href="{html.escape(form_url)}" target="_blank">'
+                f"{html.escape(form_url)}</a>"
+            )
+        return "<br>".join(line for line in lines if line)
     no_primary = _no_primary_plan_state(payload)
     alternatives = payload.get("same_day_alternatives") or []
     if no_primary:
@@ -11625,6 +11792,22 @@ def _email_action_panel_body(
     price_reason: str,
     interactive_channels: bool = False,
 ) -> str:
+    if _data_incomplete_state(payload):
+        reason = _data_incomplete_reason(payload)
+        blocks = [
+            "<div style='font-weight:600;color:#b91c1c;'>当前判断:数据不完整,本轮结论不可用</div>",
+            f"<div><strong>原因:</strong>{html.escape(reason)}</div>",
+            "<div style='margin-top:8px;color:#666;font-size:12px;'>"
+            "本轮不作航班可行性、市场无票或价格位置判断；订阅已保留，下轮自动重试。"
+            "</div>",
+            _email_action_links(
+                payload,
+                None,
+                interactive_channels=interactive_channels,
+                include_channel_picker=False,
+            ),
+        ]
+        return "".join(block for block in blocks if block)
     if _no_primary_plan_state(payload):
         alternatives = payload.get("same_day_alternatives") or []
         reason = _no_primary_reason(payload)
@@ -13433,6 +13616,11 @@ def _no_primary_history_text(payload: dict, *, kind: str) -> str:
 
 
 def _email_no_primary_price_signal_body(payload: dict) -> str:
+    if _data_incomplete_state(payload):
+        return (
+            "<div style='color:#666;font-size:12px;'>"
+            "数据不完整,本轮不作价格位置判断。</div>"
+        )
     return (
         "<div style='color:#666;font-size:12px;'>"
         f"{html.escape(_no_primary_history_text(payload, kind='位置'))}</div>"
@@ -13440,6 +13628,11 @@ def _email_no_primary_price_signal_body(payload: dict) -> str:
 
 
 def _email_trend_card_body(payload: dict) -> str:
+    if _data_incomplete_state(payload):
+        return (
+            "<div style='color:#666;font-size:12px;'>"
+            "数据不完整,本轮不作价格走势判断。</div>"
+        )
     if _no_primary_plan_state(payload):
         status_text = _plan_status_change_text(payload)
         trend_text = str(payload.get("trend_summary") or "").strip()
@@ -14160,13 +14353,14 @@ def _no_match_mixed_cabin(payload: dict) -> bool:
 
 
 def _ensure_no_match_notification_sections(cards: list[str], payload: dict) -> list[str]:
-    """按 canonical 清单补齐无方案通知，缺数据时也给出可见原因。"""
+    """按 canonical 清单补齐无方案或数据不完整通知。"""
     from notification_sections import missing_notification_sections, section_fallback
 
+    trigger_type = "data_incomplete" if _data_incomplete_state(payload) else "no_match"
     missing = missing_notification_sections(
         "".join(cards),
         "",
-        trigger_type="no_match",
+        trigger_type=trigger_type,
         mixed_cabin=_no_match_mixed_cabin(payload),
     )
     for section in missing:
@@ -14180,14 +14374,76 @@ def _ensure_no_match_notification_sections(cards: list[str], payload: dict) -> l
     return cards
 
 
+def _render_data_incomplete_report(
+    payload: dict,
+    subject: str,
+    *,
+    interactive_channels: bool = False,
+) -> str:
+    freshness_text = _data_freshness_headline(payload) or (
+        f"采集时间:{_payload_freshness_text(payload)}"
+        if payload.get("collected_at")
+        else "本轮采集时点未记录"
+    )
+    heading = (
+        "<h2 style='font-size:18px;color:#111;margin:0 0 12px;'>"
+        f"{html.escape(subject)}</h2>"
+    )
+    cards = [
+        heading,
+        _email_card(
+            "行动面板",
+            _email_action_panel_body(
+                payload,
+                {},
+                "以支付页为准",
+                _data_incomplete_reason(payload),
+                interactive_channels=interactive_channels,
+            ),
+        ),
+        _email_card("价格走势", _email_trend_card_body(payload)),
+        _email_card("价格信号", _email_no_primary_price_signal_body(payload)),
+        _email_card("数据来源", _email_source_body(payload)),
+        _email_card("数据时点", html.escape(f"数据时点:{freshness_text}")),
+        _email_card("配额总览", html.escape(_quota_overview_text())),
+        _email_card(
+            "数据依据",
+            _detail_provenance_body(payload)
+            or "<div style='color:#888;font-size:12px;'>本次未引用历史统计值。</div>",
+        ),
+        _email_card(
+            "操作链接",
+            _email_action_links(
+                payload,
+                None,
+                interactive_channels=interactive_channels,
+                include_channel_picker=False,
+            ),
+        ),
+    ]
+    return "".join(_ensure_no_match_notification_sections(cards, payload))
+
+
 @_with_render_log_channel("邮件")
 def render_email(payload: dict) -> tuple[str, str]:
     """Render the full HTML email report from a normalized payload."""
     payload = payload or {}
     private_render = _render_private_email(payload)
+    subject = _email_subject(payload)
+    if _data_incomplete_state(payload):
+        if private_render is not None:
+            route = html.escape(str(payload.get("route") or "航班监控"))
+            reason = html.escape(_private_data_incomplete_reason(payload))
+            body = (
+                f"<b>【数据不完整】{route}</b><br>"
+                "当前判断:数据不完整,本轮结论不可用<br>"
+                f"原因:{reason}<br>"
+                "乘客构成、精确金额与技术细节已隐藏"
+            )
+            return subject, body
+        return subject, _render_data_incomplete_report(payload, subject)
     if private_render is not None:
         return private_render
-    subject = _email_subject(payload)
     verify_text = f"支付页≤{_price_text(payload.get('verify_price'))}" if payload.get("verify_price") else "以支付页为准"
     price_reason = str(payload.get("price_policy_reason") or "请以预估实付价和支付页最终价为准")
     baggage_line = ""
@@ -14501,6 +14757,12 @@ def render_detail_html(payload: dict) -> str:
     """Render the web detail page HTML with core modules visible and details folded."""
     payload = payload or {}
     subject = _email_subject(payload)
+    if _data_incomplete_state(payload):
+        return _render_data_incomplete_report(
+            payload,
+            subject,
+            interactive_channels=True,
+        )
     verify_text = f"支付页≤{_price_text(payload.get('verify_price'))}" if payload.get("verify_price") else "以支付页为准"
     price_reason = str(payload.get("price_policy_reason") or "请以预估实付价和支付页最终价为准")
     primary_plan = _plan_for_render((payload.get("recommended_plans") or [{}])[0] or {}, payload)

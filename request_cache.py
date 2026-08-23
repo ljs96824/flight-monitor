@@ -21,8 +21,10 @@ from log_utils import append_round_evidence, safe_log
 import observations_store
 
 
-DEFAULT_CACHE_DIR = Path(__file__).parent / "data" / "cache"
+PROJECT_ROOT = Path(__file__).resolve().parent
+DEFAULT_CACHE_DIR = PROJECT_ROOT / "data" / "cache"
 DEFAULT_TTL_SECONDS = 15 * 60
+SOURCE_FETCH_IO_RETRY_DELAY_SECONDS = 0.25
 LISTING_OBSERVATION_SOURCES = frozenset({"juhe", "hasdata", "serpapi"})
 
 _request_cache: dict[tuple, dict] = {}
@@ -41,12 +43,45 @@ def _redact_error_text(value) -> str:
     return _SECRET_VALUE_PATTERN.sub(r"\1=***", str(value or ""))
 
 
+def _redact_exception_path(value) -> str | None:
+    if not value:
+        return None
+    raw_path = Path(str(value))
+    if not raw_path.is_absolute():
+        normalized = str(raw_path).replace("\\", "/").lstrip("./")
+        return f"<relative>/{normalized or 'unknown'}"
+    try:
+        relative = raw_path.resolve(strict=False).relative_to(PROJECT_ROOT)
+    except (OSError, ValueError):
+        return f"<local>/{raw_path.name or 'unknown'}"
+    return f"<project>/{str(relative).replace(chr(92), '/')}"
+
+
+def _source_exception_metadata(exc: Exception) -> dict:
+    error_code = getattr(exc, "winerror", None) or getattr(exc, "errno", None)
+    path_label = _redact_exception_path(getattr(exc, "filename", None))
+    detail = getattr(exc, "strerror", None) or str(exc) or type(exc).__name__
+    parts = []
+    if error_code is not None:
+        parts.append(f"errno={error_code}")
+    if path_label:
+        parts.append(f"path={path_label}")
+    suffix = f"({','.join(parts)})" if parts else ""
+    return {
+        "error": _redact_error_text(f"{type(exc).__name__}{suffix}:{detail}"),
+        "error_type": type(exc).__name__,
+        "errno": error_code,
+        "path": path_label,
+    }
+
+
 def _empty_stats() -> dict:
     return {
         "total": 0,
         "hits": 0,
         "panel_reused": 0,
         "actual": 0,
+        "retries": 0,
         "skipped": 0,
         "planned_actual": 0,
         "outside_actual": 0,
@@ -133,13 +168,22 @@ def _source_stats_bucket(stats: dict, source_name: str) -> dict:
         {
             "requested": 0,
             "actual": 0,
+            "retries": 0,
             "hits": 0,
             "panel_reused": 0,
             "skipped": 0,
             "calls": 0,
         },
     )
-    for key in ("requested", "actual", "hits", "panel_reused", "skipped", "calls"):
+    for key in (
+        "requested",
+        "actual",
+        "retries",
+        "hits",
+        "panel_reused",
+        "skipped",
+        "calls",
+    ):
         bucket.setdefault(key, 0)
     return bucket
 
@@ -172,6 +216,13 @@ def _record_actual(source_name: str, plan_scope: str | None = None) -> None:
         source_stats = _source_stats_bucket(stats, source_name)
         source_stats["actual"] += 1
         source_stats["requested"] += 1
+
+
+def _record_retry_actual(source_name: str, plan_scope: str | None = None) -> None:
+    _record_actual(source_name, plan_scope)
+    for stats in (_stats, _process_stats):
+        stats["retries"] += 1
+        _source_stats_bucket(stats, source_name)["retries"] += 1
 
 
 def _record_skip(source_name: str) -> None:
@@ -866,23 +917,49 @@ def cached_fetch(
         f"[\u91c7\u96c6\u89e6\u53d1] route_type={route_type} \u822a\u7ebf={key[1]}->{key[2]} "
         f"\u65e5\u671f={key[3]} \u6e90={source_name} \u7b2c{trigger_count}\u6b21"
     )
+    retry_count = 0
     try:
-        result = source.fetch(origin, dest, date_str, cabin_class)
+        try:
+            result = source.fetch(origin, dest, date_str, cabin_class)
+        except OSError as first_error:
+            retry_count = 1
+            first_metadata = _source_exception_metadata(first_error)
+            safe_log(
+                f"[采集重试] 源={source_name} 航线={key[1]}->{key[2]} "
+                f"日期={key[3]} 次数=1/1 原因={first_metadata['error']} "
+                f"退避={SOURCE_FETCH_IO_RETRY_DELAY_SECONDS}s"
+            )
+            time.sleep(SOURCE_FETCH_IO_RETRY_DELAY_SECONDS)
+            _record_retry_actual(source_name, plan_scope)
+            retry_trigger_count = _fetch_trigger_counts.get(trigger_key, 0) + 1
+            _fetch_trigger_counts[trigger_key] = retry_trigger_count
+            safe_log(
+                f"[API调用] 源={source_name} 航线={key[1]}->{key[2]} 日期={key[3]} "
+                f"乘客={key[4]} 时间={time.time()} 重试=1"
+            )
+            safe_log(
+                f"[采集触发] route_type={route_type} 航线={key[1]}->{key[2]} "
+                f"日期={key[3]} 源={source_name} 第{retry_trigger_count}次"
+            )
+            result = source.fetch(origin, dest, date_str, cabin_class)
     except Exception as exc:
         result = {
             "flights": [],
             "source": source_name,
             "raw": {},
             "source_status": "failed",
-            "error": _redact_error_text(f"{type(exc).__name__}: {exc}"),
+            "retry_count": retry_count,
+            **_source_exception_metadata(exc),
         }
         _archive_listing_result(source_name, key, result)
         _store_round_only_result(key, result, "round_failed")
         safe_log(
             f"[采集失败入池] 源={source_name} 航线={key[1]}->{key[2]} "
-            f"日期={key[3]} 原因={result['error']}"
+            f"日期={key[3]} 重试={retry_count} 原因={result['error']}"
         )
         return (copy.deepcopy(result), "fresh") if include_cache_status else copy.deepcopy(result)
+    if retry_count and isinstance(result, dict):
+        result.setdefault("retry_count", retry_count)
     quota_reason = _quota_failure_reason(result)
     if quota_reason:
         _source_circuit_breakers[source_name] = quota_reason
@@ -1017,7 +1094,8 @@ def print_request_cache_stats() -> None:
         int(_stats.get("planned_actual", 0)) + int(_stats.get("outside_actual", 0))
     ) if _active_collection_plan_keys is not None else True
     unique_actual_ok = (
-        int(_stats.get("actual", 0)) == len(_actual_request_keys_this_round)
+        int(_stats.get("actual", 0))
+        == len(_actual_request_keys_this_round) + int(_stats.get("retries", 0))
         if _active_collection_plan_keys is not None
         else True
     )
@@ -1030,6 +1108,7 @@ def print_request_cache_stats() -> None:
         f"面板复用={_stats.get('panel_reused', 0)}, "
         f"源级跳过={_stats.get('skipped', 0)}, "
         f"实际API请求={_stats.get('actual', 0)}, "
+        f"重试={_stats.get('retries', 0)}, "
         f"计划唯一={_active_collection_plan_unique}, "
         f"计划内实际={_stats.get('planned_actual', 0)}, "
         f"计划外补充={_stats.get('outside_actual', 0)}, "
@@ -1043,6 +1122,7 @@ def print_request_cache_stats() -> None:
         f"面板复用={_process_stats.get('panel_reused', 0)}, "
         f"源级跳过={_process_stats.get('skipped', 0)}, "
         f"实际API请求={_process_stats.get('actual', 0)}, "
+        f"重试={_process_stats.get('retries', 0)}, "
         f"各源: {_process_stats.get('by_source', {})}"
     )
     _flush_api_usage_ledger()
