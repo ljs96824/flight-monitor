@@ -101,7 +101,7 @@ class ReadonlySnapshotGroupConsistencyTest(unittest.TestCase):
         self.assertEqual(manifest["capture"]["attempts"], 2)
         self.assertEqual(
             manifest["capture"]["consistency"],
-            "stable_group_data_version",
+            "file_level_stable_inputs",
         )
 
 

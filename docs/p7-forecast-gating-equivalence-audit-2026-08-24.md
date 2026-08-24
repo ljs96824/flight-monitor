@@ -1,7 +1,9 @@
-# P7-A/B 预测与 T 曲线门控等价性审计
+# P7-A/B 预测门控安全等价审计
 
 日期：2026-08-24
 范围：邮件、PushPlus、网页详情、推荐判定四条消费路径；不修改推送业务判断、采集、金额或排序。
+
+本文所称“等价”均指预测门控安全等价 (forecast gating safety equivalence)：四条路径的展示行为并不相同，但都不会消费未过门预测。
 
 ## 1. 第 0 步：整体可靠性是否为最短板
 
@@ -52,4 +54,4 @@ value = min(item["value"] for item in components.values())
 
 ## 6. 审计结论
 
-当前四条用户消费路径均不消费未过门预测。报告与通知预测构建器已统一消费 `evaluate_forecast_eligibility()`，且通知侧使用真实 shape、技能门、源覆盖、regime 与 lineage 证据。预测 payload 的现有未接通状态保持不变。
+当前四条用户消费路径满足预测门控安全等价 (forecast gating safety equivalence)：均不消费未过门预测，但不声称四条路径行为相同。报告与通知预测构建器已统一消费 `evaluate_forecast_eligibility()`，且通知侧使用真实 shape、技能门、源覆盖、regime 与 lineage 证据。预测 payload 的现有未接通状态保持不变。

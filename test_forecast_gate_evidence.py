@@ -77,7 +77,7 @@ class ForecastGateEvidenceTest(unittest.TestCase):
 
         self.assertFalse(result["eligible"])
         self.assertIn(
-            "insufficient_shape",
+            "shape_sample_insufficient",
             result["eligibility"]["reason_codes"],
         )
 

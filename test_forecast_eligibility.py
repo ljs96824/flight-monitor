@@ -45,7 +45,10 @@ class ForecastEligibilityTest(unittest.TestCase):
         evaluate = forecast.evaluate_forecast_eligibility
         cases = (
             ("eligible", {}),
-            ("insufficient_shape", {"shape_points": [{"n": 4, "sufficient": False}]}),
+            (
+                "shape_sample_insufficient",
+                {"shape_points": [{"n": 4, "sufficient": False}]},
+            ),
             ("skill_gate_failed", {"backtest_gate": {"passed": False, "case_n": 8}}),
             ("source_degraded", {"source_coverage": False}),
             ("regime_insufficient", {"regime_sample_n": 4, "regime": "holiday"}),
@@ -56,9 +59,109 @@ class ForecastEligibilityTest(unittest.TestCase):
             with self.subTest(expected=expected):
                 result = evaluate(**{**_eligible_kwargs(), **mutation})
                 self.assertEqual(result["status"], expected)
+                self.assertEqual(result["eligible"], expected == "eligible")
+                self.assertEqual(
+                    result["primary_reason"],
+                    None if expected == "eligible" else expected,
+                )
                 self.assertIn("bottleneck", result)
                 self.assertIsInstance(result["reason_codes"], list)
                 self.assertTrue(result["human_text"])
+
+    def test_six_state_priority_keeps_every_secondary_reason(self):
+        cases = (
+            (
+                "lineage_incomplete",
+                {
+                    "lineage_complete": False,
+                    "backtest_gate": {"passed": False, "case_n": 2},
+                    "regime_sample_n": 2,
+                    "shape_points": [{"n": 2, "sufficient": False}],
+                    "source_coverage": False,
+                },
+                {
+                    "lineage_incomplete",
+                    "skill_gate_failed",
+                    "regime_insufficient",
+                    "shape_sample_insufficient",
+                    "source_degraded",
+                },
+            ),
+            (
+                "skill_gate_failed",
+                {
+                    "backtest_gate": {"passed": False, "case_n": 2},
+                    "regime_sample_n": 2,
+                    "shape_points": [{"n": 2, "sufficient": False}],
+                    "source_coverage": False,
+                },
+                {
+                    "skill_gate_failed",
+                    "regime_insufficient",
+                    "shape_sample_insufficient",
+                    "source_degraded",
+                },
+            ),
+            (
+                "regime_insufficient",
+                {
+                    "regime_sample_n": 2,
+                    "shape_points": [{"n": 2, "sufficient": False}],
+                    "source_coverage": False,
+                },
+                {
+                    "regime_insufficient",
+                    "shape_sample_insufficient",
+                    "source_degraded",
+                },
+            ),
+            (
+                "shape_sample_insufficient",
+                {
+                    "shape_points": [{"n": 2, "sufficient": False}],
+                    "source_coverage": False,
+                },
+                {"shape_sample_insufficient", "source_degraded"},
+            ),
+            (
+                "source_degraded",
+                {"source_coverage": False},
+                {"source_degraded"},
+            ),
+            ("eligible", {}, set()),
+        )
+
+        self.assertEqual(
+            forecast.FORECAST_ELIGIBILITY_PRIORITY,
+            (
+                "lineage_incomplete",
+                "skill_gate_failed",
+                "regime_insufficient",
+                "shape_sample_insufficient",
+                "source_degraded",
+                "eligible",
+            ),
+        )
+        for expected, mutation, expected_reasons in cases:
+            with self.subTest(expected=expected):
+                result = forecast.evaluate_forecast_eligibility(
+                    **{**_eligible_kwargs(), **mutation}
+                )
+                self.assertEqual(result["status"], expected)
+                self.assertEqual(set(result["reason_codes"]), expected_reasons)
+                self.assertEqual(result["eligible"], expected == "eligible")
+
+    def test_level_failure_maps_to_shape_state_without_hiding_detail(self):
+        result = forecast.evaluate_forecast_eligibility(
+            **{
+                **_eligible_kwargs(),
+                "level": {"reliable": False, "n": 2},
+            }
+        )
+
+        self.assertEqual(result["status"], "shape_sample_insufficient")
+        self.assertEqual(result["primary_reason"], "shape_sample_insufficient")
+        self.assertIn("level_unreliable", result["reason_codes"])
 
     def test_high_components_never_compensate_a_low_component(self):
         result = forecast.evaluate_forecast_eligibility(

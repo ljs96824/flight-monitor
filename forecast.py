@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import statistics
@@ -41,6 +42,14 @@ SKILL_GATE_IMPROVEMENT = _positive_float_env("SKILL_GATE_IMPROVEMENT", 0.10)
 # 与 T 曲线共用同一个证据门，避免诊断层出现两套“够样本”定义。
 MIN_SHAPE_N = MIN_SAMPLE_FOR_TCURVE
 REGIME_ORDER = ("normal", "weekend", "holiday_eve", "holiday", "holiday_return")
+FORECAST_ELIGIBILITY_PRIORITY = (
+    "lineage_incomplete",
+    "skill_gate_failed",
+    "regime_insufficient",
+    "shape_sample_insufficient",
+    "source_degraded",
+    "eligible",
+)
 
 
 def _usable(cells, cutoff_day=None):
@@ -330,7 +339,13 @@ def evaluate_forecast_eligibility(
     skill_failure_text=None,
     shape_failure_text=None,
 ):
-    """把最短板证据门翻译成唯一、机器可读的预测资格裁决。"""
+    """把最短板证据门翻译成唯一、机器可读的预测资格裁决。
+
+    状态优先级固定为：lineage_incomplete > skill_gate_failed >
+    regime_insufficient > shape_sample_insufficient > source_degraded >
+    eligible。最高优先级失败作为 primary_reason，其余失败完整保留在
+    reason_codes；高分项不得补偿任何低分硬门。
+    """
     reliability = assess_overall_reliability(
         level=level,
         shape_points=shape_points,
@@ -341,61 +356,94 @@ def evaluate_forecast_eligibility(
     )
     components = reliability["components"]
     reason_codes = []
-    if not components["level_reliability"]["passed"]:
-        reason_codes.append("level_unreliable")
-    if not components["shape_reliability"]["passed"]:
-        reason_codes.append("insufficient_shape")
-    if not components["backtest_skill"]["passed"]:
-        reason_codes.append("skill_gate_failed")
-    if not components["source_coverage"]["passed"]:
-        reason_codes.append("source_degraded")
-    if not components["regime_match"]["passed"]:
-        reason_codes.append("regime_insufficient")
     if not lineage_complete:
         reason_codes.append("lineage_incomplete")
+    if not components["backtest_skill"]["passed"]:
+        reason_codes.append("skill_gate_failed")
+    if not components["regime_match"]["passed"]:
+        reason_codes.append("regime_insufficient")
+    if not components["shape_reliability"]["passed"]:
+        reason_codes.append("shape_sample_insufficient")
+    if not components["level_reliability"]["passed"]:
+        reason_codes.append("level_unreliable")
+    if not components["source_coverage"]["passed"]:
+        reason_codes.append("source_degraded")
 
-    # 顺序保持现有通知语义：技能门优先，其次数据形状，再看源、日型与 lineage。
-    if "skill_gate_failed" in reason_codes:
-        status = "skill_gate_failed"
+    failed_statuses = {
+        "lineage_incomplete": "lineage_incomplete" in reason_codes,
+        "skill_gate_failed": "skill_gate_failed" in reason_codes,
+        "regime_insufficient": "regime_insufficient" in reason_codes,
+        "shape_sample_insufficient": (
+            "shape_sample_insufficient" in reason_codes
+            or "level_unreliable" in reason_codes
+        ),
+        "source_degraded": "source_degraded" in reason_codes,
+    }
+    status = next(
+        item
+        for item in FORECAST_ELIGIBILITY_PRIORITY
+        if item == "eligible" or failed_statuses[item]
+    )
+
+    if status == "lineage_incomplete":
+        bottleneck = "lineage"
+        human_text = "round_id lineage不完整，暂不提供预测"
+    elif status == "skill_gate_failed":
         bottleneck = "backtest_skill"
         human_text = skill_failure_text or (
             f"技能门未过(n={int((backtest_gate or {}).get('case_n') or 0)})"
         )
-    elif "level_unreliable" in reason_codes:
-        status = "insufficient_shape"
-        bottleneck = "level_reliability"
-        human_text = f"level不可靠(n={int((level or {}).get('n') or 0)})"
-    elif "insufficient_shape" in reason_codes:
-        status = "insufficient_shape"
-        bottleneck = "shape_reliability"
-        human_text = shape_failure_text or components["shape_reliability"]["detail"]
-    elif "source_degraded" in reason_codes:
-        status = "source_degraded"
-        bottleneck = "source_coverage"
-        human_text = "源覆盖不完整，暂不提供预测"
-    elif "regime_insufficient" in reason_codes:
-        status = "regime_insufficient"
+    elif status == "regime_insufficient":
         bottleneck = "regime_match"
         human_text = (
             f"同类日型样本不足(regime={regime or 'unknown'},"
             f"n={int(regime_sample_n or 0)})"
         )
-    elif "lineage_incomplete" in reason_codes:
-        status = "lineage_incomplete"
-        bottleneck = "lineage"
-        human_text = "round_id lineage不完整，暂不提供预测"
+    elif status == "shape_sample_insufficient":
+        if "level_unreliable" in reason_codes:
+            bottleneck = "level_reliability"
+            human_text = f"level不可靠(n={int((level or {}).get('n') or 0)})"
+        else:
+            bottleneck = "shape_reliability"
+            human_text = (
+                shape_failure_text or components["shape_reliability"]["detail"]
+            )
+    elif status == "source_degraded":
+        bottleneck = "source_coverage"
+        human_text = "源覆盖不完整，暂不提供预测"
     else:
-        status = "eligible"
         bottleneck = None
         human_text = "预测资格已满足"
 
     return {
         "status": status,
+        "eligible": status == "eligible",
+        "primary_reason": None if status == "eligible" else status,
         "bottleneck": bottleneck,
         "reason_codes": reason_codes,
         "human_text": human_text,
         "overall_reliability": reliability,
     }
+
+
+def _fold_training_signature(cells):
+    """为单个历史折生成只覆盖真实训练输入的稳定指纹。"""
+    rows = sorted(
+        (
+            str(item["depart_date"]),
+            str(item["observed_day"]),
+            int(item["days_to_departure"]),
+            float(item["min_price"]),
+            bool(item.get("degraded")),
+        )
+        for item in cells
+    )
+    serialized = json.dumps(
+        rows,
+        ensure_ascii=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(serialized).hexdigest()
 
 
 def assert_no_walk_forward_leakage(case):
@@ -458,7 +506,21 @@ def walk_forward_backtest(
             t_prices = [float(item["min_price"]) for item in fit if int(item["days_to_departure"]) == int(target["days_to_departure"])]
             if predicted.get("status") != "ok" or not history or not t_prices:
                 continue
-            case = {"cutoff_day": cutoff_text, "target_day": target_day, "fit_observed_days": sorted({str(item["observed_day"]) for item in fit}), "actual": float(target["min_price"]), "model": float(predicted["median"]), "naive": float(history[-1]["min_price"]), "tcurve": statistics.median(t_prices)}
+            case = {
+                "depart_date": depart,
+                "target_day": target_day,
+                "target_t": int(target["days_to_departure"]),
+                "cutoff_day": cutoff_text,
+                "fit_n": len(fit),
+                "fit_training_signature": _fold_training_signature(fit),
+                "fit_observed_days": sorted(
+                    {str(item["observed_day"]) for item in fit}
+                ),
+                "actual": float(target["min_price"]),
+                "model": float(predicted["median"]),
+                "naive": float(history[-1]["min_price"]),
+                "tcurve": statistics.median(t_prices),
+            }
             assert_no_walk_forward_leakage(case)
             cases.append(case)
         model = _metrics(cases, "model")

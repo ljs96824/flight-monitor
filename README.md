@@ -196,6 +196,8 @@ python3.13 -m pip install --user -r requirements.txt
 
 然后在 Web 面板点击 **Reload**。生产密钥放在该环境私有的 `.env`，不要放入 GitHub。部署前先核验聚合数据、SerpAPI、Duffel 和 SMTP 端点是否允许出站；若受套餐或白名单限制，让 PythonAnywhere 只承载表单/同步，本机继续负责采集和发送。
 
+`Reload判据=Web进程是否import改动模块,非是否改web_form.py`。当前 Web 链路由 `run_web.py` 导入 `web_form.py`；后台处理首次运行时再由 `web_form.py` 延迟导入 `main.py`，而 `main.py` 导入 `forecast.py`，因此修改 `forecast.py` 后已加载该链路的 Web 进程需要 Reload。`patterns.py` 当前只由离线 `scripts/forecast_report.py` 使用，单独修改它不会进入 Web 进程。
+
 ## 7. 日常运行
 
 ### 采集与证据

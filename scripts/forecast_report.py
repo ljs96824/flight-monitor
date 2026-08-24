@@ -111,7 +111,7 @@ def _unmet_items(decision, *, regime):
         if code == "level_unreliable":
             detail = components["level_reliability"]["detail"]
             items.append(detail.replace("level(", "level不可靠("))
-        elif code == "insufficient_shape":
+        elif code == "shape_sample_insufficient":
             items.append(f"shape不足({components['shape_reliability']['detail']})")
         elif code == "skill_gate_failed":
             items.append("技能门未过")

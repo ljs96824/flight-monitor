@@ -211,7 +211,7 @@ def create_readonly_snapshot(
             "capture": {
                 "attempts": capture_attempts,
                 "sqlite_data_versions": stable_data_versions,
-                "consistency": "stable_group_data_version",
+                "consistency": "file_level_stable_inputs",
             },
             **metadata,
         }
