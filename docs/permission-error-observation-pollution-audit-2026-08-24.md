@@ -86,3 +86,12 @@
 ## 7. 只读保证
 
 脚本仅以 SQLite `mode=ro` + `PRAGMA query_only=ON` 读取两库；不导入采集器，不调用任何外部 API，不修改观测、价格或订阅数据。
+
+## 8. 待办登记：价格历史 `round_id` lineage
+
+- 状态：待办，本轮不实现。
+- 目标：为 `prices.db` 的纪元/价格历史写入补充 `round_id`，使未来能够精确回答‘某轮是否污染某序列’，不再依赖时间链候选。
+- 预计范围：`flight_details`、`roundtrip_price_history`、`push_snapshots` 的 schema、全部写入点、读取与信封 lineage；历史记录不得按时间猜测回填。
+- 常规触发：下次修改价格历史 schema 时顺带实施。
+- 提前触发：若再发生一次因缺少 `round_id` 而无法精确归因的事故，立即提前实施。
+- 推送前触发：在任何基于轮次/约束纪元的预测或自动建议进入用户推送之前，必须先实现 `round_id` lineage。

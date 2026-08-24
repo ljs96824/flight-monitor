@@ -307,5 +307,60 @@ class TCurveTest(unittest.TestCase):
         self.assertIn("已剔除1个源覆盖不完整日格", rendered_html)
 
 
+    def test_report_lists_missing_and_degraded_quality_cells(self):
+        from scripts.tcurve_report import generate_report
+
+        curve = {
+            "origin_city": "上海",
+            "dest_city": "大阪",
+            "price_caliber": "单人单程CNY含税",
+            "method_version": "tcurve_v1",
+            "airport_pair": None,
+            "daily_cell_count": 1,
+            "included_depart_dates": ["2026-10-01"],
+            "degraded_count": 1,
+            "degraded_excluded_count": 1,
+            "coverage": {"t_min": 49, "t_max": 49},
+            "points": [{"t": 49, "n": 1, "median": None, "p25": None, "p75": None, "sufficient": False, "status": "样本不足(n=1)"}],
+            "lowest_median_t_ranges": [],
+            "min_sample": 5,
+            "daily_cells": [
+                {
+                    "origin_city": "上海",
+                    "dest_city": "大阪",
+                    "depart_date": "2026-10-01",
+                    "observed_day": "2026-08-13",
+                    "days_to_departure": 49,
+                    "degraded": True,
+                    "source_coverage": ["juhe"],
+                    "expected_sources": ["hasdata", "juhe"],
+                }
+            ],
+        }
+        quality_cells = [
+            {
+                "origin_city": "大阪",
+                "dest_city": "上海",
+                "depart_date": "2026-10-06",
+                "observed_day": "2026-08-17",
+                "t": 50,
+                "all_day_row_count": 0,
+                "degraded": None,
+            }
+        ]
+        with patch("scripts.tcurve_report.build_tcurve", return_value=curve):
+            report = generate_report(
+                db_path="unused",
+                route="上海-大阪",
+                quality_cells=quality_cells,
+            )
+
+        self.assertIn("缺失格清单", report)
+        self.assertIn("T=50", report)
+        self.assertIn("degraded格清单", report)
+        self.assertIn("T=49", report)
+        self.assertIn("缺失不参与趋势判断", report)
+        self.assertIn("global_min市场最低参考价·与用户筛选无关", report)
+
 if __name__ == "__main__":
     unittest.main()

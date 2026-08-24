@@ -16,7 +16,7 @@ class PatternsTest(unittest.TestCase):
                 rows.append({"observed_at": day + "T09:00:00", "depart_date": "2026-10-01", "flight_combo": "JL891", "price_cny": 90, "airline": "JL", "stops": 0})
         result = build_patterns(rows, min_n=1)
         labels = {item["combo"]: item["label"] for item in result["combo_occurrence"]}
-        self.assertEqual(labels["MU225"], "常驻(100%·n=10)")
+        self.assertEqual(labels["MU225"], "在10次有效观测中均出现(100%)")
         self.assertEqual(labels["JL891"], "偶发(20%·n=2)")
 
     def test_weekday_deduplicates_depart_dates_and_supply_has_basis(self):

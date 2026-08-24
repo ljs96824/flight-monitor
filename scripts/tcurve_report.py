@@ -15,6 +15,48 @@ if str(PROJECT_ROOT) not in sys.path:
 from tcurve import DEFAULT_DB_PATH, MIN_SAMPLE_FOR_TCURVE, build_tcurve
 
 
+def _load_default_quality_cells(db_path):
+    """仅对真实面板叠加现有 PermissionError 审计，不改面板数据。"""
+    try:
+        if Path(db_path).resolve() != Path(DEFAULT_DB_PATH).resolve():
+            return []
+        from scripts.audit_permission_pollution import (
+            AFFECTED_ROUND_IDS,
+            DEFAULT_LOGS_DIR,
+            DEFAULT_PRICES_DB,
+            build_audit,
+        )
+
+        audit = build_audit(
+            observations_db=db_path,
+            prices_db=DEFAULT_PRICES_DB,
+            logs_dir=DEFAULT_LOGS_DIR,
+            round_ids=AFFECTED_ROUND_IDS,
+        )
+        return list(audit.get("affected_cells") or [])
+    except (OSError, RuntimeError, ValueError, sqlite3.Error):
+        return []
+
+
+def _quality_key(item):
+    return (
+        str(item.get("origin_city") or ""),
+        str(item.get("dest_city") or ""),
+        str(item.get("depart_date") or ""),
+        str(item.get("observed_day") or ""),
+        int(item.get("t", item.get("days_to_departure", 0)) or 0),
+    )
+
+
+def _quality_line(item):
+    origin, destination, depart, observed, t_value = _quality_key(item)
+    return (
+        f"{observed} {origin}→{destination} depart={depart} T={t_value} "
+        f"覆盖={','.join(item.get('source_coverage') or []) or '-'} "
+        f"期望={','.join(item.get('expected_sources') or []) or '-'}"
+    )
+
+
 def _price(value) -> str:
     if value is None:
         return "-"
@@ -28,6 +70,7 @@ def generate_report(
     airport_pair=None,
     include_degraded: bool = False,
     min_sample: int = MIN_SAMPLE_FOR_TCURVE,
+    quality_cells=None,
 ) -> str:
     curve = build_tcurve(
         db_path,
@@ -37,10 +80,32 @@ def generate_report(
         min_sample=min_sample,
     )
     route_text = f"{curve['origin_city']}→{curve['dest_city']}"
+    if quality_cells is None:
+        quality_cells = _load_default_quality_cells(db_path)
+    route_city_set = {curve["origin_city"], curve["dest_city"]}
+    relevant_quality = [
+        item
+        for item in quality_cells or []
+        if {str(item.get("origin_city") or ""), str(item.get("dest_city") or "")}
+        == route_city_set
+    ]
+    missing_cells = [
+        item for item in relevant_quality if int(item.get("all_day_row_count") or 0) == 0
+    ]
+    degraded_cells = [
+        item for item in curve.get("daily_cells") or [] if item.get("degraded")
+    ]
+    degraded_cells.extend(
+        item for item in relevant_quality if item.get("degraded") is True
+    )
+    degraded_by_key = {_quality_key(item): item for item in degraded_cells}
     lines = [
         f"提前购买曲线: {route_text}",
         f"口径: {curve['price_caliber']}",
-        f"方法: {curve['method_version']}；每个日格采用跨源最低价(global_min)",
+        (
+            f"方法: {curve['method_version']}；每个日格采用跨源最低价"
+            "(global_min市场最低参考价·与用户筛选无关)"
+        ),
     ]
     if curve.get("airport_pair"):
         lines.append(f"机场对细分: {curve['airport_pair']}")
@@ -61,6 +126,23 @@ def generate_report(
                 )
             ),
             f"覆盖范围: T={coverage.get('t_min')} 至 T={coverage.get('t_max')} 天；禁止外推范围外数据。",
+            "",
+            "缺失格清单:",
+            *(
+                [f"- {_quality_line(item)}" for item in sorted(missing_cells, key=_quality_key)]
+                if missing_cells
+                else ["- 无"]
+            ),
+            "缺失不参与趋势判断。",
+            "degraded格清单:",
+            *(
+                [
+                    f"- {_quality_line(item)}"
+                    for item in sorted(degraded_by_key.values(), key=_quality_key)
+                ]
+                if degraded_by_key
+                else ["- 无"]
+            ),
             "",
             "T(天) | n | 中位数 | IQR(P25-P75) | 状态",
         ]

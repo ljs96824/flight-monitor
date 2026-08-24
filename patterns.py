@@ -42,6 +42,8 @@ def _carrier(row):
 
 
 def _appearance_label(rate, n):
+    if abs(float(rate) - 1.0) < 1e-12:
+        return f"在{n}次有效观测中均出现(100%)"
     category = "常驻" if rate >= REGULAR_RATE else "偶发" if rate <= OCCASIONAL_RATE else "常见"
     return f"{category}({rate * 100:.0f}%·n={n})"
 
