@@ -8,6 +8,8 @@ import statistics
 from datetime import date, timedelta
 from pathlib import Path
 
+from airports import AIRPORTS
+from holidays import holiday_labels_for_route
 from method_registry import method_version
 from provenance import build_envelope
 from tcurve import DEFAULT_DB_PATH, MIN_SAMPLE_FOR_TCURVE, _clean_number, load_tcurve_daily_cells, percentile_linear, route_cities_from_info
@@ -92,6 +94,75 @@ def classify_regime(target_date, holiday_labels):
     if target.weekday() >= 5:
         return "weekend"
     return "normal"
+
+
+def route_airport_codes_from_info(route_info):
+    """从通知路由信息提取已知 IATA；机场真值只读 AIRPORTS。"""
+    route_info = route_info or {}
+
+    def pick(active_key, value_key):
+        active = route_info.get(active_key)
+        candidates = list(active) if isinstance(active, (list, tuple)) else []
+        candidates.append(route_info.get(value_key))
+        for candidate in candidates:
+            code = str(candidate or "").strip().upper()
+            if code in AIRPORTS:
+                return code
+        return None
+
+    origin = pick("origin_airports_active", "origin")
+    destination = pick("destination_airports_active", "destination")
+    return (origin, destination) if origin and destination else None
+
+
+def build_regime_map(depart_dates, route_codes=None):
+    """为每个出发日生成唯一日型；缺机场码时仅按星期事实分类。"""
+    result = {}
+    for depart in depart_dates:
+        labels = (
+            holiday_labels_for_route(
+                *route_codes,
+                date.fromisoformat(str(depart)),
+            )
+            if route_codes
+            else []
+        )
+        result[str(depart)] = classify_regime(depart, labels)
+    return result
+
+
+def source_coverage_for_departure(cells, depart_date, as_of_day):
+    relevant = [
+        item
+        for item in cells or []
+        if str(item.get("depart_date")) == str(depart_date)
+        and str(item.get("observed_day")) <= str(as_of_day)
+    ]
+    return bool(relevant) and all(not item.get("degraded") for item in relevant)
+
+
+def regime_departure_n(cells, regime_by_depart_date, regime, as_of_day):
+    return len(
+        {
+            str(item["depart_date"])
+            for item in cells or []
+            if not item.get("degraded")
+            and str(item.get("observed_day")) <= str(as_of_day)
+            and regime_by_depart_date.get(str(item["depart_date"])) == regime
+        }
+    )
+
+
+def lineage_complete_for_cells(cells, *, as_of_day=None):
+    used = [
+        item
+        for item in cells or []
+        if not as_of_day or str(item.get("observed_day")) <= str(as_of_day)
+    ]
+    return bool(used) and all(
+        item.get("lineage_complete") is True and item.get("round_ids")
+        for item in used
+    )
 
 
 def build_shape(cells, *, cutoff_day=None, min_shape_n=MIN_SHAPE_N):
@@ -246,6 +317,87 @@ def assess_overall_reliability(
     }
 
 
+def evaluate_forecast_eligibility(
+    *,
+    level,
+    shape_points,
+    backtest_gate,
+    source_coverage,
+    regime_sample_n,
+    lineage_complete=True,
+    regime=None,
+    min_regime_n=MIN_SHAPE_N,
+    skill_failure_text=None,
+    shape_failure_text=None,
+):
+    """把最短板证据门翻译成唯一、机器可读的预测资格裁决。"""
+    reliability = assess_overall_reliability(
+        level=level,
+        shape_points=shape_points,
+        backtest_gate=backtest_gate,
+        source_coverage=source_coverage,
+        regime_sample_n=regime_sample_n,
+        min_regime_n=min_regime_n,
+    )
+    components = reliability["components"]
+    reason_codes = []
+    if not components["level_reliability"]["passed"]:
+        reason_codes.append("level_unreliable")
+    if not components["shape_reliability"]["passed"]:
+        reason_codes.append("insufficient_shape")
+    if not components["backtest_skill"]["passed"]:
+        reason_codes.append("skill_gate_failed")
+    if not components["source_coverage"]["passed"]:
+        reason_codes.append("source_degraded")
+    if not components["regime_match"]["passed"]:
+        reason_codes.append("regime_insufficient")
+    if not lineage_complete:
+        reason_codes.append("lineage_incomplete")
+
+    # 顺序保持现有通知语义：技能门优先，其次数据形状，再看源、日型与 lineage。
+    if "skill_gate_failed" in reason_codes:
+        status = "skill_gate_failed"
+        bottleneck = "backtest_skill"
+        human_text = skill_failure_text or (
+            f"技能门未过(n={int((backtest_gate or {}).get('case_n') or 0)})"
+        )
+    elif "level_unreliable" in reason_codes:
+        status = "insufficient_shape"
+        bottleneck = "level_reliability"
+        human_text = f"level不可靠(n={int((level or {}).get('n') or 0)})"
+    elif "insufficient_shape" in reason_codes:
+        status = "insufficient_shape"
+        bottleneck = "shape_reliability"
+        human_text = shape_failure_text or components["shape_reliability"]["detail"]
+    elif "source_degraded" in reason_codes:
+        status = "source_degraded"
+        bottleneck = "source_coverage"
+        human_text = "源覆盖不完整，暂不提供预测"
+    elif "regime_insufficient" in reason_codes:
+        status = "regime_insufficient"
+        bottleneck = "regime_match"
+        human_text = (
+            f"同类日型样本不足(regime={regime or 'unknown'},"
+            f"n={int(regime_sample_n or 0)})"
+        )
+    elif "lineage_incomplete" in reason_codes:
+        status = "lineage_incomplete"
+        bottleneck = "lineage"
+        human_text = "round_id lineage不完整，暂不提供预测"
+    else:
+        status = "eligible"
+        bottleneck = None
+        human_text = "预测资格已满足"
+
+    return {
+        "status": status,
+        "bottleneck": bottleneck,
+        "reason_codes": reason_codes,
+        "human_text": human_text,
+        "overall_reliability": reliability,
+    }
+
+
 def assert_no_walk_forward_leakage(case):
     cutoff = str(case["cutoff_day"])
     assert str(case["target_day"]) > cutoff
@@ -327,42 +479,116 @@ def write_backtest_report(report, path):
 
 
 def build_notification_forecast(route_info, *, db_path=DEFAULT_DB_PATH, as_of_day=None):
-    """构建三重闸门结果；调用方仅在 eligible 时写入 payload。"""
+    """通过统一资格裁决构建预测；调用方仅在 eligible 时写入 payload。"""
     origin_city, dest_city = route_cities_from_info(route_info)
     route = f"{origin_city}-{dest_city}"
     all_cells = load_tcurve_daily_cells(db_path, route=route)
-    cells = [item for item in all_cells if not item.get("degraded")]
-    if not cells:
+    non_degraded = [item for item in all_cells if not item.get("degraded")]
+    if not non_degraded:
         return {"eligible": False, "reason": "无可用非退化日格"}
-    as_of = str(as_of_day or max(item["observed_day"] for item in cells))
+    as_of = str(as_of_day or max(item["observed_day"] for item in non_degraded))
+    cells = [
+        item for item in non_degraded if str(item.get("observed_day")) <= as_of
+    ]
+    if not cells:
+        return {"eligible": False, "reason": "观测截止日前无可用非退化日格"}
     depart_date = str(route_info.get("depart_date") or "")
     if not depart_date:
         return {"eligible": False, "reason": "缺少出发日期"}
-    # 本任务只统一诊断报告门控；用户推送技能门保持既有行为与契约。
-    shape = build_shape(cells, cutoff_day=as_of, min_shape_n=1)
+    depart_dates = sorted(
+        {str(item["depart_date"]) for item in cells} | {depart_date}
+    )
+    route_codes = route_airport_codes_from_info(route_info)
+    regime_by_depart_date = build_regime_map(depart_dates, route_codes)
+    target_regime = regime_by_depart_date[depart_date]
+    shapes = build_shapes_by_regime(
+        cells,
+        regime_by_depart_date,
+        cutoff_day=as_of,
+        min_shape_n=MIN_SHAPE_N,
+    )
+    shape = shapes.get(target_regime) or {}
     level = estimate_level(cells, shape, depart_date=depart_date, cutoff_day=as_of)
     current_t = (date.fromisoformat(depart_date) - date.fromisoformat(as_of)).days
     current_prediction = predict_price(level, shape, target_t=current_t)
-    backtest = walk_forward_backtest(cells, min_shape_n=1)
+    backtest = walk_forward_backtest(
+        cells,
+        regime_by_depart_date=regime_by_depart_date,
+        min_shape_n=MIN_SHAPE_N,
+    )
     gate = backtest["horizons"].get("3", {}).get("skill_gate") or {"passed": False}
-    if not gate.get("passed"):
-        return {"eligible": False, "reason": f"技能门未过(MAPE={backtest['horizons']['3']['model']['mape']}% vs 基线={backtest['horizons']['3']['naive']['mape']}%)", "backtest": backtest}
-    if not level.get("reliable"):
-        return {"eligible": False, "reason": f"level不可靠(n={level.get('n', 0)})", "backtest": backtest}
-    if current_prediction.get("status") != "ok":
-        return {"eligible": False, "reason": f"当前T={current_t}不在shape覆盖内", "backtest": backtest}
-    predictions = []
+    horizon = backtest["horizons"].get("3") or {}
+    targets = []
+    future_shape_points = []
     for offset in range(1, 8):
         target_day = date.fromisoformat(as_of) + timedelta(days=offset)
         target_t = (date.fromisoformat(depart_date) - target_day).days
+        targets.append((target_day, target_t))
+        future_shape_points.append(
+            shape.get(target_t) or {"n": 0, "sufficient": False}
+        )
+    referenced_shape_points = [
+        shape.get(current_t) or {"n": 0, "sufficient": False},
+        *future_shape_points,
+    ]
+    source_coverage = source_coverage_for_departure(
+        all_cells,
+        depart_date,
+        as_of,
+    )
+    regime_sample_n = regime_departure_n(
+        cells,
+        regime_by_depart_date,
+        target_regime,
+        as_of,
+    )
+    lineage_complete = lineage_complete_for_cells(cells, as_of_day=as_of)
+    decision = evaluate_forecast_eligibility(
+        level=level,
+        shape_points=referenced_shape_points,
+        backtest_gate=gate,
+        source_coverage=source_coverage,
+        regime_sample_n=regime_sample_n,
+        lineage_complete=lineage_complete,
+        regime=target_regime,
+        skill_failure_text=(
+            f"技能门未过(MAPE={(horizon.get('model') or {}).get('mape')}% "
+            f"vs 基线={(horizon.get('naive') or {}).get('mape')}%)"
+        ),
+        shape_failure_text=f"当前T={current_t}或未来7天shape样本不足",
+    )
+    if decision["status"] != "eligible":
+        return {
+            "eligible": False,
+            "reason": decision["human_text"],
+            "eligibility": decision,
+            "backtest": backtest,
+        }
+    predictions = []
+    for target_day, target_t in targets:
         item = predict_price(level, shape, target_t=target_t)
         if item.get("status") == "ok":
             predictions.append({"target_day": target_day.isoformat(), **item})
     if not predictions:
-        return {"eligible": False, "reason": "未来7天无精确shape T", "backtest": backtest}
+        no_future = evaluate_forecast_eligibility(
+            level=level,
+            shape_points=[],
+            backtest_gate=gate,
+            source_coverage=source_coverage,
+            regime_sample_n=regime_sample_n,
+            lineage_complete=lineage_complete,
+            regime=target_regime,
+            shape_failure_text="未来7天无精确shape T",
+        )
+        return {
+            "eligible": False,
+            "reason": no_future["human_text"],
+            "eligibility": no_future,
+            "backtest": backtest,
+        }
     used = [item for item in cells if str(item["observed_day"]) <= as_of]
     window = [min(item["observed_day"] for item in used), max(item["observed_day"] for item in used)]
     sources = sorted({source for item in used for source in item.get("min_sources") or []})
     envelope = build_envelope("forecast.market_min", sample_n=len(used), window=window, sources=sources, degraded_excluded=sum(1 for item in all_cells if item.get("degraded")), bucket="市场最低参考价·单人单程·与用户筛选无关")
     envelope["backtest"] = {"horizon": 3, **backtest["horizons"]["3"]}
-    return {"eligible": True, "reason": "ok", "method_version": METHOD_VERSION, "price_caliber": "市场最低参考价·单人单程CNY·与用户筛选无关", "as_of_day": as_of, "depart_date": depart_date, "current_t": current_t, "current_market_reference": current_prediction, "level": level, "predictions": predictions, "backtest": backtest["horizons"]["3"], "provenance": envelope}
+    return {"eligible": True, "reason": "ok", "eligibility": decision, "method_version": METHOD_VERSION, "price_caliber": "市场最低参考价·单人单程CNY·与用户筛选无关", "as_of_day": as_of, "depart_date": depart_date, "current_t": current_t, "current_market_reference": current_prediction, "level": level, "predictions": predictions, "backtest": backtest["horizons"]["3"], "provenance": envelope}

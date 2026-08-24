@@ -12,18 +12,23 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from forecast import (
+    MIN_SHAPE_N,
     REGIME_ORDER,
-    assess_overall_reliability,
+    build_regime_map,
     build_shapes_by_regime,
-    classify_regime,
+    evaluate_forecast_eligibility,
     estimate_level,
+    lineage_complete_for_cells,
     predict_price,
+    regime_departure_n,
+    source_coverage_for_departure,
     walk_forward_backtest,
     write_backtest_report,
 )
 from holidays import holiday_labels_for_route
 from patterns import build_route_patterns
 from provenance import load_route_observations
+from readonly_snapshot import resolve_observations_db
 from tcurve import DEFAULT_DB_PATH, load_tcurve_daily_cells
 
 
@@ -41,18 +46,6 @@ def _route_codes(rows):
         if origin and destination:
             return origin, destination
     return None
-
-
-def _regime_map(depart_dates, route_codes):
-    result = {}
-    for depart in depart_dates:
-        labels = (
-            holiday_labels_for_route(*route_codes, date.fromisoformat(depart))
-            if route_codes
-            else []
-        )
-        result[depart] = classify_regime(depart, labels)
-    return result
 
 
 def _shape_row(t_value, point, *, diagnostic):
@@ -74,26 +67,29 @@ def _shape_row(t_value, point, *, diagnostic):
     )
 
 
-def _source_coverage(cells, depart_date, as_of):
-    relevant = [
-        item
-        for item in cells
-        if str(item.get("depart_date")) == str(depart_date)
-        and str(item.get("observed_day")) <= str(as_of)
-    ]
-    return bool(relevant) and all(not item.get("degraded") for item in relevant)
-
-
-def _regime_departure_n(cells, regime_by_depart_date, regime, as_of):
-    return len(
-        {
-            str(item["depart_date"])
-            for item in cells
-            if not item.get("degraded")
-            and str(item.get("observed_day")) <= str(as_of)
-            and regime_by_depart_date.get(str(item["depart_date"])) == regime
-        }
-    )
+def _diagnostic_cross_regime_candidates(
+    shapes,
+    *,
+    target_regime,
+    target_t_values,
+):
+    """只展示其他日型原始候选；返回文本，绝不返回可用于预测的 shape。"""
+    lines = []
+    for regime in REGIME_ORDER:
+        if regime == target_regime:
+            continue
+        shape = (shapes or {}).get(regime) or {}
+        for t_value in target_t_values:
+            point = shape.get(int(t_value))
+            if not point:
+                continue
+            raw = point.get("raw") or point
+            lines.append(
+                f"跨regime候选 regime={regime} T={int(t_value)} "
+                f"n={int(point.get('n') or 0)} 中位={_fmt(raw.get('median'))};"
+                "原始值,不可用于判断"
+            )
+    return lines
 
 
 def _future_shape_points(shape, *, depart_date, as_of):
@@ -107,20 +103,26 @@ def _future_shape_points(shape, *, depart_date, as_of):
     return targets, points
 
 
-def _unmet_items(reliability, *, regime):
+def _unmet_items(decision, *, regime):
+    reliability = decision["overall_reliability"]
     components = reliability["components"]
     items = []
-    if not components["level_reliability"]["passed"]:
-        items.append(components["level_reliability"]["detail"].replace("level(", "level不可靠("))
-    if not components["shape_reliability"]["passed"]:
-        items.append(f"shape不足({components['shape_reliability']['detail']})")
-    if not components["backtest_skill"]["passed"]:
-        items.append("技能门未过")
-    if not components["source_coverage"]["passed"]:
-        items.append("源覆盖不完整")
-    if not components["regime_match"]["passed"]:
-        regime_n = components["regime_match"]["detail"].split("=")[-1].rstrip(")")
-        items.append(f"同类日型样本不足(regime={regime},n={regime_n})")
+    for code in decision["reason_codes"]:
+        if code == "level_unreliable":
+            detail = components["level_reliability"]["detail"]
+            items.append(detail.replace("level(", "level不可靠("))
+        elif code == "insufficient_shape":
+            items.append(f"shape不足({components['shape_reliability']['detail']})")
+        elif code == "skill_gate_failed":
+            items.append("技能门未过")
+        elif code == "source_degraded":
+            items.append("源覆盖不完整")
+        elif code == "regime_insufficient":
+            detail = components["regime_match"]["detail"]
+            regime_n = detail.split("=")[-1].rstrip(")")
+            items.append(f"同类日型样本不足(regime={regime},n={regime_n})")
+        elif code == "lineage_incomplete":
+            items.append("round_id lineage不完整")
     return items
 
 
@@ -133,7 +135,26 @@ def generate_report(
     write_backtest=None,
     diagnostic=False,
 ):
-    cells = load_tcurve_daily_cells(db_path, route=route, airport_pair=airport_pair)
+    db_path = resolve_observations_db(db_path)
+    all_cells = load_tcurve_daily_cells(
+        db_path,
+        route=route,
+        airport_pair=airport_pair,
+    )
+    if not all_cells:
+        text = "\n".join(
+            [
+                f"# 价格预测报告: {route}",
+                "",
+                "本报告为内部诊断输出;技能门=未过;预测未进入用户推送",
+                "",
+                "无可用非退化观测数据。",
+                "退化日剔除=0",
+            ]
+        )
+        return text, {"route": route, "status": "无数据", "degraded_excluded": 0}
+    as_of = str(as_of_day or max(item["observed_day"] for item in all_cells))
+    cells = [item for item in all_cells if str(item.get("observed_day")) <= as_of]
     included = [item for item in cells if not item.get("degraded")]
     degraded = len(cells) - len(included)
     if not included:
@@ -153,11 +174,10 @@ def generate_report(
             "degraded_excluded": degraded,
         }
 
-    as_of = str(as_of_day or max(item["observed_day"] for item in included))
     depart_dates = sorted({str(item["depart_date"]) for item in included})
     rows = load_route_observations(db_path, route=route, airport_pair=airport_pair)
     route_codes = _route_codes(rows)
-    regime_by_depart_date = _regime_map(depart_dates, route_codes)
+    regime_by_depart_date = build_regime_map(depart_dates, route_codes)
     shapes = build_shapes_by_regime(
         included,
         regime_by_depart_date,
@@ -174,10 +194,10 @@ def generate_report(
         db_path,
         route=route,
         airport_pair=airport_pair,
+        as_of_day=as_of,
     )
 
     forecasts = {}
-    any_prediction_entered = False
     for depart in depart_dates:
         regime = regime_by_depart_date[depart]
         shape = shapes.get(regime) or {}
@@ -192,43 +212,54 @@ def generate_report(
             depart_date=depart,
             as_of=as_of,
         )
-        reliability = assess_overall_reliability(
+        decision = evaluate_forecast_eligibility(
             level=level,
             shape_points=shape_points,
             backtest_gate=gate,
-            source_coverage=_source_coverage(cells, depart, as_of),
-            regime_sample_n=_regime_departure_n(
+            source_coverage=source_coverage_for_departure(cells, depart, as_of),
+            regime_sample_n=regime_departure_n(
                 included,
                 regime_by_depart_date,
                 regime,
                 as_of,
             ),
+            lineage_complete=lineage_complete_for_cells(included, as_of_day=as_of),
+            regime=regime,
         )
+        reliability = decision["overall_reliability"]
         labels = (
             holiday_labels_for_route(*route_codes, date.fromisoformat(depart))
             if route_codes
             else []
         )
         predictions = []
-        if reliability["passed"]:
+        if decision["status"] == "eligible":
             for target_day, target_t in targets:
                 prediction = predict_price(level, shape, target_t=target_t)
                 if prediction.get("status") == "ok":
                     predictions.append(
                         {"target_day": target_day.isoformat(), **prediction}
                     )
-            any_prediction_entered = bool(predictions) or any_prediction_entered
         forecasts[depart] = {
             "regime": regime,
             "level": level,
             "holiday_labels": labels,
             "predictions": predictions,
             "overall_reliability": reliability,
-            "unmet_items": _unmet_items(reliability, regime=regime),
+            "eligibility": decision,
+            "unmet_items": _unmet_items(decision, regime=regime),
+            "target_t_values": [target_t for _target_day, target_t in targets],
         }
 
-    skill_text = "已过" if gate.get("passed") else "未过"
-    push_text = "已进入" if any_prediction_entered else "未进入"
+    first_decision = next(
+        item["eligibility"] for item in forecasts.values() if item.get("eligibility")
+    )
+    skill_text = (
+        "未过"
+        if "skill_gate_failed" in first_decision["reason_codes"]
+        else "已过"
+    )
+    push_text = "未进入"
     lines = [
         f"# 价格预测报告: {route}",
         "",
@@ -277,11 +308,18 @@ def generate_report(
             f"  overall_reliability={reliability['value']} 分量={component_text} "
             f"瓶颈={bottleneck}"
         )
-        if not reliability["passed"]:
+        if item["eligibility"]["status"] != "eligible":
             lines.append(
                 "  暂不提供预测;未达项="
                 + ";".join(item["unmet_items"])
             )
+            if diagnostic:
+                for candidate in _diagnostic_cross_regime_candidates(
+                    shapes,
+                    target_regime=item["regime"],
+                    target_t_values=item["target_t_values"],
+                ):
+                    lines.append("  " + candidate)
             continue
         for prediction in item["predictions"]:
             lines.append(

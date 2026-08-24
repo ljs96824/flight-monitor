@@ -119,5 +119,15 @@ def build_patterns(rows, *, min_n=MIN_PATTERN_N):
     return {"method_version": METHOD_VERSION, "observed_day_n": denominator, "combo_occurrence": occurrence, "carrier_price_position": carrier_positions, "weekday_stability": weekday, "supply_mix": supply, "departure_period": {"status": "字段不可得", "reason": "面板未存起飞时刻(obs_store v1),待schema扩展后自动点亮"}}
 
 
-def build_route_patterns(db_path, *, route, airport_pair=None, min_n=MIN_PATTERN_N):
-    return build_patterns(load_route_observations(db_path, route=route, airport_pair=airport_pair), min_n=min_n)
+def build_route_patterns(
+    db_path,
+    *,
+    route,
+    airport_pair=None,
+    min_n=MIN_PATTERN_N,
+    as_of_day=None,
+):
+    rows = load_route_observations(db_path, route=route, airport_pair=airport_pair)
+    if as_of_day is not None:
+        rows = [row for row in rows if _observed_day(row) <= str(as_of_day)]
+    return build_patterns(rows, min_n=min_n)

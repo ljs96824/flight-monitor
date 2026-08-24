@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sqlite3
 import sys
 from pathlib import Path
@@ -12,13 +13,36 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from readonly_snapshot import resolve_observations_db, resolve_snapshot_member
 from tcurve import DEFAULT_DB_PATH, MIN_SAMPLE_FOR_TCURVE, build_tcurve
 
 
 def _load_default_quality_cells(db_path):
     """仅对真实面板叠加现有 PermissionError 审计，不改面板数据。"""
+    supplied = Path(db_path)
+    if supplied.is_dir():
+        required = [
+            supplied / "observations.sqlite3",
+            supplied / "prices.db",
+            supplied / "api_usage.json",
+            supplied / "snapshot_manifest.json",
+        ]
+        missing = [str(path) for path in required if not path.is_file()]
+        if missing:
+            raise FileNotFoundError("只读快照缺少文件: " + ", ".join(missing))
+        manifest_path = resolve_snapshot_member(
+            supplied,
+            "snapshot_manifest.json",
+        )
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        quality_cells = manifest.get("permission_quality_cells")
+        if not isinstance(quality_cells, list):
+            raise ValueError("只读快照未冻结permission_quality_cells")
+        return quality_cells
+
     try:
-        if Path(db_path).resolve() != Path(DEFAULT_DB_PATH).resolve():
+        observations_db = resolve_observations_db(supplied)
+        if observations_db.resolve() != Path(DEFAULT_DB_PATH).resolve():
             return []
         from scripts.audit_permission_pollution import (
             AFFECTED_ROUND_IDS,
@@ -28,7 +52,7 @@ def _load_default_quality_cells(db_path):
         )
 
         audit = build_audit(
-            observations_db=db_path,
+            observations_db=observations_db,
             prices_db=DEFAULT_PRICES_DB,
             logs_dir=DEFAULT_LOGS_DIR,
             round_ids=AFFECTED_ROUND_IDS,
@@ -72,6 +96,8 @@ def generate_report(
     min_sample: int = MIN_SAMPLE_FOR_TCURVE,
     quality_cells=None,
 ) -> str:
+    supplied_db_path = db_path
+    db_path = resolve_observations_db(db_path)
     curve = build_tcurve(
         db_path,
         route=route,
@@ -81,7 +107,7 @@ def generate_report(
     )
     route_text = f"{curve['origin_city']}→{curve['dest_city']}"
     if quality_cells is None:
-        quality_cells = _load_default_quality_cells(db_path)
+        quality_cells = _load_default_quality_cells(supplied_db_path)
     route_city_set = {curve["origin_city"], curve["dest_city"]}
     relevant_quality = [
         item
@@ -178,7 +204,7 @@ def main(argv=None) -> int:
     parser.add_argument("--pair", help="可选机场对细分，如 PVG-KIX")
     parser.add_argument("--include-degraded", action="store_true", help="包含源覆盖不完整日格")
     parser.add_argument("--min-n", type=int, default=MIN_SAMPLE_FOR_TCURVE, help="T格最小样本数")
-    parser.add_argument("--db", default=str(DEFAULT_DB_PATH), help="观测库路径")
+    parser.add_argument("--db", default=str(DEFAULT_DB_PATH), help="观测库路径或只读快照目录")
     args = parser.parse_args(argv)
     try:
         report = generate_report(

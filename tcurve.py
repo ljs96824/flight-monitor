@@ -129,7 +129,7 @@ def _load_route_rows(
     timeout: float,
 ) -> list[dict]:
     columns = (
-        "observed_at, route_type, origin_airport, dest_airport, "
+        "observed_at, round_id, route_type, origin_airport, dest_airport, "
         "depart_date, days_to_departure, cabin_class, source, price_cny"
     )
     with readonly_connection(db_path, timeout=timeout) as connection:
@@ -139,6 +139,7 @@ def _load_route_rows(
         }
         required = {
             "observed_at",
+            "round_id",
             "route_type",
             "origin_airport",
             "dest_airport",
@@ -201,6 +202,8 @@ def fold_tcurve_daily_cells(rows: list[dict]) -> list[dict]:
                 "sources": set(),
                 "route_types": set(),
                 "stored_t_values": set(),
+                "round_ids": set(),
+                "lineage_missing": False,
             },
         )
         cell["prices"].append(price)
@@ -212,6 +215,11 @@ def fold_tcurve_daily_cells(rows: list[dict]) -> list[dict]:
             row.get("route_type") or "international"
         ).strip().lower()
         cell["route_types"].add(route_type)
+        round_id = str(row.get("round_id") or "").strip()
+        if round_id:
+            cell["round_ids"].add(round_id)
+        else:
+            cell["lineage_missing"] = True
         try:
             cell["stored_t_values"].add(int(row.get("days_to_departure")))
         except (TypeError, ValueError):
@@ -246,6 +254,8 @@ def fold_tcurve_daily_cells(rows: list[dict]) -> list[dict]:
                 "source_coverage": sorted(coverage),
                 "expected_sources": sorted(expected),
                 "route_types": sorted(values["route_types"]),
+                "round_ids": sorted(values["round_ids"]),
+                "lineage_complete": not values["lineage_missing"],
                 "degraded": bool(expected and not expected.issubset(coverage)),
             }
         )
