@@ -48,54 +48,6 @@ def render_email(payload: dict):
 
 
 def build_trend_png(price_history, ideal_price=None, max_price=None, current_price=None):
-    """Build a PNG trend chart for email CID embedding."""
-    rows = [
-        item for item in (price_history or [])
-        if isinstance(item, dict) and item.get("price") and item.get("price") > 0
-    ][-14:]
-    prices = [row["price"] for row in rows]
-    if len(rows) < 3 or len(set(round(float(price), 2) for price in prices)) < 2:
-        return None
-    try:
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-    except ImportError:
-        print("[邮件] matplotlib 未安装，跳过趋势图 PNG")
-        return None
-
-    dates = [str(row.get("date") or "") for row in rows]
-    ideal = float(ideal_price) if ideal_price else None
-    current = float(current_price) if current_price else prices[-1]
-
-    plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "Arial Unicode MS", "DejaVu Sans"]
-    plt.rcParams["axes.unicode_minus"] = False
-    fig, ax = plt.subplots(figsize=(5, 2.2), dpi=100)
-    ax.plot(dates, prices, color="#3b82f6", marker="o", linewidth=2)
-    if ideal:
-        ax.axhline(ideal, color="#16a34a", linestyle="--", linewidth=1.2, label="理想价")
-    current_color = "#16a34a" if ideal and current <= ideal else "#3b82f6"
-    ax.scatter([dates[-1]], [prices[-1]], color=current_color, zorder=5, s=60)
-    ax.set_title("近期价格走势", fontsize=11)
-    if ideal:
-        ax.legend(fontsize=8)
-    ax.grid(axis="y", color="#e5e7eb", linewidth=0.8)
-    ax.tick_params(axis="x", labelrotation=0, labelsize=8)
-    ax.tick_params(axis="y", labelsize=8)
-    if len(dates) > 6:
-        for index, label in enumerate(ax.get_xticklabels()):
-            if index not in {0, len(dates) - 1, len(dates) // 2}:
-                label.set_visible(False)
-    plt.tight_layout()
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png")
-    plt.close(fig)
-    buf.seek(0)
-    return buf.read()
-
-
-def build_trend_png(price_history, ideal_price=None, max_price=None, current_price=None):
     """Build a PNG trend chart for email CID embedding, with explicit date labels."""
     rows = [
         item for item in (price_history or [])
