@@ -461,7 +461,7 @@ class SubscriptionLoadingTest(unittest.TestCase):
              patch.object(main, "render_email", return_value=("subject", "<html></html>", {})), \
              patch.object(main, "render_detail_html", return_value="<html></html>"), \
              patch.object(main, "_save_result_for_page"), \
-             patch.object(main, "render_pushplus", return_value="<b>push</b>"), \
+             patch.object(main, "render_pushplus_sections", return_value=object()), \
              patch.object(main, "send", return_value=True), \
              patch.object(main, "persist_notification_payload", side_effect=OSError("bad filename")):
             ok = main._deliver_notification(

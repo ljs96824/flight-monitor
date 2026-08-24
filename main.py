@@ -52,7 +52,7 @@ from notifier import (
     build_notification_payload,
     persist_notification_payload,
     render_detail_html,
-    render_pushplus,
+    render_pushplus_sections,
     send,
 )
 from price_calendar import load_calendar, update_calendar
@@ -1169,7 +1169,7 @@ def _deliver_notification(sub: dict, route: str, message_kwargs: dict) -> bool:
 
         if method in {"pushplus", "both"}:
             print("[推送] 开始渲染PushPlus短版")
-            push_content = render_pushplus(delivery_payload)
+            push_content = render_pushplus_sections(delivery_payload)
             print("[推送] PushPlus短版渲染完成，开始发送")
             sent = send(
                 push_content,
@@ -1179,7 +1179,7 @@ def _deliver_notification(sub: dict, route: str, message_kwargs: dict) -> bool:
 
         if method not in {"email", "pushplus", "both", "page_only"}:
             print(f"[推送] 未识别的推送方式 {method!r}，按PushPlus兜底")
-            push_content = render_pushplus(delivery_payload)
+            push_content = render_pushplus_sections(delivery_payload)
             sent = send(
                 push_content,
                 title=f"【{payload.get('push_type', '价格提醒')}】{payload.get('route', route)}",

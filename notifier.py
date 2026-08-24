@@ -93,6 +93,15 @@ from storage import (
     save_push_snapshot,
 )
 from plan_tracker import save_pushed_plans, track_plan_status
+from pushplus_sections import (
+    PUSHPLUS_COMPACT_CHARS,
+    PushRender,
+    PushSection,
+    detail_link_html,
+    prepare_push_render,
+    render_push_render,
+    valid_detail_url,
+)
 
 
 _RENDER_LOG_CHANNEL: ContextVar[str] = ContextVar(
@@ -123,9 +132,6 @@ def _with_render_log_channel(channel: str):
 BUY_SIGNALS = {"strong_buy", "buy", "buy_now"}
 BASE_DIR = Path(__file__).parent
 NOTIFICATIONS_LOG = BASE_DIR / "data" / "notifications_log.txt"
-PUSHPLUS_MAX_CHARS = 30000
-PUSHPLUS_COMPACT_CHARS = 25000
-COMPACT_NOTICE = '完整方案详情因篇幅限制已精简，如需查看全部方案请回复“详情”'
 
 TRANSIT_VISA_RISK_AIRPORTS = {
     "JFK": ("美国", "美国转机通常需要核实签证/入境许可要求"),
@@ -171,112 +177,29 @@ def should_notify(analysis: dict, prev_signal: str | None) -> tuple[bool, str | 
     return False, None
 
 
-def _compact_booking_line(line: str) -> str:
-    if "<a" not in line:
-        return line
-    parts = line.split(" | ")
-    kept = [
-        part
-        for part in parts
-        if "携程" in part or "飞猪" in part or "去哪儿" in part
-    ]
-    return " | ".join(kept) if kept else line
+def _generic_long_pushplus_warning() -> str:
+    return (
+        "<b>通知内容过长</b><br>"
+        "本次通用告警未直接展开,完整原文已写入本地通知日志。"
+    )
 
 
-def _append_compact_notice(content: str) -> str:
-    if COMPACT_NOTICE in content:
-        return content
-    return f"{content}<br><br>{COMPACT_NOTICE}"
+def _prepare_pushplus_content(content: str | PushRender) -> str:
+    if isinstance(content, PushRender):
+        prepared = prepare_push_render(content)
+        print(
+            f"[推送] 结构化消息: mode={prepared.mode} "
+            f"长度={len(prepared.content)} 小节={list(prepared.kept_section_ids)}"
+        )
+        return prepared.content
 
-
-def _hard_limit_pushplus_message(content: str, limit: int = PUSHPLUS_MAX_CHARS) -> str:
-    notice = f"<br><br>{COMPACT_NOTICE}"
-    if len(content) <= limit:
-        return content
-    keep = max(0, limit - len(notice) - 20)
-    return content[:keep] + notice
-
-
-def _compact_pushplus_message(content: str, level: int = 1) -> str:
-    """Shrink generated HTML when PushPlus rejects overly long messages."""
-    lines = str(content or "").split("<br>")
-    compacted = []
-    checklist_count = None
-    skip_price_explanation = False
-
-    for raw_line in lines:
-        line = raw_line
-        stripped = re.sub(r"<[^>]+>", "", line).strip()
-
-        if skip_price_explanation:
-            if not stripped or "━" in stripped:
-                skip_price_explanation = False
-            else:
-                continue
-
-        if level >= 1:
-            if "<a " in line:
-                line = _compact_booking_line(line)
-            if re.match(r"^(No\.[4-9]|[4-9]\.)", stripped):
-                continue
-            if "璐拱鍓嶈纭" in stripped:
-                checklist_count = 0
-                compacted.append(line)
-                continue
-            if checklist_count is not None and stripped.startswith("□"):
-                checklist_count += 1
-                if checklist_count > 5:
-                    continue
-            elif checklist_count is not None and not stripped.startswith("□"):
-                checklist_count = None
-
-            verbose_price_words = [
-                "历史最低",
-                "鍘嗗彶骞冲潎",
-                "历史最高",
-                "数据量",
-                "浠锋牸涓婃定姒傜巼",
-                "浠锋牸涓嬮檷姒傜巼",
-                "平均涨",
-                "平均降",
-                "近60天",
-                "数据点",
-            ]
-            if any(word in stripped for word in verbose_price_words):
-                continue
-
-        if level >= 2:
-            if "鍏充簬浠锋牸璇存槑" in stripped:
-                skip_price_explanation = True
-                continue
-            if "执行评估" in stripped or "绁ㄨ鏍￠獙" in stripped:
-                continue
-            if stripped.startswith(("├", "└")) and "综合等级" not in stripped:
-                continue
-            if any(word in stripped for word in ("绁ㄨ鍖归厤", "可购买性", "执行风险")):
-                continue
-
-        compacted.append(line)
-
-    return _append_compact_notice("<br>".join(compacted))
-
-
-def _prepare_pushplus_content(content: str) -> str:
-    print(f"[推送] 消息长度: {len(content)} 字符")
-    if len(content) <= PUSHPLUS_COMPACT_CHARS:
-        return content
-
-    compacted = _compact_pushplus_message(content, level=1)
-    print(f"[推送] 消息较长，已精简: {len(compacted)} 字符")
-    if len(compacted) <= PUSHPLUS_MAX_CHARS:
-        return compacted
-
-    compacted = _compact_pushplus_message(compacted, level=2)
-    print(f"[推送] 二次精简后长度: {len(compacted)} 字符")
-    if len(compacted) > PUSHPLUS_MAX_CHARS:
-        compacted = _hard_limit_pushplus_message(compacted)
-        print(f"[推送] 硬截断后长度: {len(compacted)} 字符")
-    return compacted
+    raw_content = str(content or "")
+    print(f"[推送] 消息长度: {len(raw_content)} 字符")
+    if len(raw_content) <= PUSHPLUS_COMPACT_CHARS:
+        return raw_content
+    warning = _generic_long_pushplus_warning()
+    print(f"[推送] 通用消息异常过长,改发安全告警模板: {len(warning)} 字符")
+    return warning
 
 def _post_pushplus(pushplus_token: str, title: str, content: str):
     resp = httpx.post(
@@ -1310,29 +1233,38 @@ def _notification_title_from_content(content: str, fallback: str) -> str:
     return fallback
 
 
-def send(content: str, title: str = "航班监控通知") -> bool:
-    """发送推送通知，优先 PushPlus。"""
+def send(content: str | PushRender, title: str = "航班监控通知") -> bool:
+    """发送推送通知；航班消息按小节降级，通用告警保持字符串语义。"""
+    structured = isinstance(content, PushRender)
+    original_content = render_push_render(content) if structured else str(content or "")
     pushplus_token = os.environ.get("PUSHPLUS_TOKEN", "")
     if not pushplus_token:
-        _log_notification(content)
+        _log_notification(original_content)
         print("[推送] 未配置 PUSHPLUS_TOKEN，已写入本地通知日志")
         return False
+
+    if not structured and len(original_content) > PUSHPLUS_COMPACT_CHARS:
+        _log_notification(original_content)
     msg = _prepare_pushplus_content(content)
-    title = _notification_title_from_content(msg, title)
+    resolved_title = (
+        content.title
+        if structured and content.title
+        else _notification_title_from_content(msg, title)
+    )
     print(f"[推送] 消息长度: {len(msg)} 字符")
-    result = _post_pushplus(pushplus_token, title, msg)
+    result = _post_pushplus(pushplus_token, resolved_title, msg)
     if result and result.get("code") == 200:
         print("PushPlus推送成功")
         return True
     print(f"PushPlus返回异常: {result}")
-    if result is None:
-        compact_msg = _compact_pushplus_message(msg, level=2)
-        if compact_msg != msg:
-            result = _post_pushplus(pushplus_token, title, compact_msg)
+    if result is None and structured:
+        minimal = prepare_push_render(content, compact_chars=0, max_chars=0).content
+        if minimal != msg:
+            result = _post_pushplus(pushplus_token, resolved_title, minimal)
             if result and result.get("code") == 200:
-                print("PushPlus精简后推送成功")
+                print("PushPlus最小安全模板推送成功")
                 return True
-    _log_notification(content)
+    _log_notification(original_content)
     return False
 
 
@@ -10247,14 +10179,54 @@ def _render_private_email(payload: dict) -> tuple[str, str] | None:
     return subject, body
 
 
-def render_pushplus(payload: dict) -> str:
-    """Render the strictly short PushPlus message from the unified payload."""
+def _push_section(
+    section_id: str,
+    priority: int,
+    lines,
+    *,
+    mandatory: bool = False,
+) -> PushSection:
+    if isinstance(lines, str):
+        section_html = lines
+    else:
+        section_html = "<br>".join(str(line) for line in lines)
+    return PushSection(section_id, priority, section_html, mandatory)
+
+
+def _pushplus_title(payload: dict, fallback: str = "价格提醒") -> str:
+    push_type = str(payload.get("push_type") or fallback)
+    route = str(payload.get("route") or "航班监控")
+    return f"【{push_type}】{route}"
+
+
+def _pushplus_detail_section(payload: dict) -> tuple[PushSection, str | None]:
+    detail_url = valid_detail_url(payload.get("detail_url"))
+    return (
+        _push_section(
+            "detail_link",
+            0,
+            detail_link_html(detail_url),
+            mandatory=True,
+        ),
+        detail_url,
+    )
+
+
+def render_pushplus_sections(payload: dict) -> PushRender:
+    """从统一 payload 直接构造 PushPlus 小节，不解析已渲染 HTML。"""
     payload = payload or {}
     private_render = _render_private_pushplus(payload)
     if private_render is not None and not _data_incomplete_state(payload):
-        return private_render
+        return PushRender(
+            _pushplus_title(payload, "航班监控有变动"),
+            (_push_section("privacy", 0, private_render, mandatory=True),),
+            None,
+        )
+
     feedback_ack = str(payload.get("feedback_ack") or "").strip()
     freshness_headline = _data_freshness_headline(payload)
+    detail_section, detail_url = _pushplus_detail_section(payload)
+
     if _data_incomplete_state(payload):
         route = html.escape(str(payload.get("route") or "航班监控"))
         privacy_level = resolve_notification_privacy_level(payload)
@@ -10263,34 +10235,81 @@ def render_pushplus(payload: dict) -> str:
             if privacy_level == DEFAULT_NOTIFICATION_PRIVACY_LEVEL
             else _private_data_incomplete_reason(payload)
         )
-        reason = html.escape(reason_text)
-        lines = [
-            f"<b>【数据不完整】{route}</b>",
-            html.escape(freshness_headline) if freshness_headline else "",
-            "",
-            "当前判断:数据不完整,本轮结论不可用",
-            f"原因:{reason}",
-            "本轮不作航班可行性、市场无票或价格位置判断",
+        sections = [
+            _push_section(
+                "header",
+                0,
+                f"<b>【数据不完整】{route}</b>",
+                mandatory=True,
+            ),
+            _push_section(
+                "current_judgment",
+                0,
+                [
+                    html.escape(freshness_headline) if freshness_headline else "",
+                    "当前判断:数据不完整,本轮结论不可用",
+                    f"原因:{html.escape(reason_text)}",
+                    "本轮不作航班可行性、市场无票或价格位置判断",
+                ],
+                mandatory=True,
+            ),
+            _push_section(
+                "current_price",
+                0,
+                "当前价:本轮数据不完整,不作价格判断",
+                mandatory=True,
+            ),
+            _push_section(
+                "purchase_condition",
+                0,
+                "购买条件:本轮数据不完整,不提供购买判断",
+                mandatory=True,
+            ),
+            _push_section(
+                "primary_plan",
+                0,
+                "首选方案:本轮数据不完整,不提供方案",
+                mandatory=True,
+            ),
         ]
-        detail_url = str(payload.get("detail_url") or "")
-        form_url = str(payload.get("form_url") or "")
-        if privacy_level == DEFAULT_NOTIFICATION_PRIVACY_LEVEL and detail_url:
-            lines.append(
-                f'详情:<a href="{html.escape(detail_url)}" target="_blank">'
-                f"{html.escape(detail_url)}</a>"
-            )
-        if privacy_level == DEFAULT_NOTIFICATION_PRIVACY_LEVEL and form_url:
-            lines.append(
-                f'修改偏好:<a href="{html.escape(form_url)}" target="_blank">'
-                f"{html.escape(form_url)}</a>"
-            )
-        return "<br>".join(line for line in lines if line)
-    no_primary = _no_primary_plan_state(payload)
+        if privacy_level == DEFAULT_NOTIFICATION_PRIVACY_LEVEL:
+            sections.append(detail_section)
+            form_url = valid_detail_url(payload.get("form_url"))
+            if form_url:
+                escaped = html.escape(form_url, quote=True)
+                sections.append(
+                    _push_section(
+                        "settings_link",
+                        3,
+                        f'修改偏好:<a href="{escaped}" target="_blank">{escaped}</a>',
+                    )
+                )
+        sections.extend(
+            [
+                _push_section(
+                    "data_freshness",
+                    0,
+                    _pushplus_freshness_line(payload),
+                    mandatory=True,
+                ),
+                _push_section(
+                    "disclaimer",
+                    0,
+                    "提示:本轮数据不完整,结论不代表市场无票；最终状态以下单页为准",
+                    mandatory=True,
+                ),
+            ]
+        )
+        return PushRender(
+            f"【数据不完整】{str(payload.get('route') or '航班监控')}",
+            tuple(sections),
+            detail_url,
+        )
+
     alternatives = payload.get("same_day_alternatives") or []
-    if no_primary:
+    if _no_primary_plan_state(payload):
         route = html.escape(str(payload.get("route") or "航班监控"))
         reason_text = _no_primary_reason(payload)
-        reason = html.escape(reason_text)
         mixed_notice = _mixed_cabin_unavailable_text(payload)
         max_line = _no_primary_max_bottleneck_text(payload)
         alt_labels = _alternative_labels(alternatives)
@@ -10300,50 +10319,108 @@ def render_pushplus(payload: dict) -> str:
         else:
             alt_text = "暂无可展示备选"
         price_hint = _candidate_price_summary_text(payload)
-        lines = [
-            f"<b>【无符合方案】{route} 提供{len(alternatives[:3])}个备选</b>",
-            html.escape(freshness_headline) if freshness_headline else "",
-            "",
+        judgment_lines = [
             "当前判断:❌ 未找到完全符合条件的方案",
-            f"主因:{reason}",
+            f"主因:{html.escape(reason_text)}",
             f"分舱报价:{html.escape(mixed_notice)}" if mixed_notice else "",
-            f"价格:{html.escape(price_hint)}" if price_hint else "",
             html.escape(max_line) if max_line else "",
+        ]
+        if feedback_ack:
+            judgment_lines.insert(0, html.escape(feedback_ack))
+        same_day_note = _same_day_note_for_no_primary(payload, reason_text)
+        risk_lines = []
+        if same_day_note:
+            risk_lines.append("当天往返提示:" + html.escape(same_day_note))
+        time_filter_note = str(payload.get("time_filter_note") or "").strip()
+        if time_filter_note:
+            risk_lines.append(html.escape(time_filter_note))
+        alternative_lines = [
             f"可用备选:{alt_text}",
             f"【可选备选】{alt_text}",
             f"【放宽预演】{html.escape(_no_primary_next_step_text(payload))}",
+            *_pushplus_same_day_alternative_lines(payload),
         ]
-        lines = [line for line in lines if line != ""]
-        if feedback_ack:
-            lines.insert(2, html.escape(feedback_ack))
-        same_day_note = _same_day_note_for_no_primary(payload, reason_text)
-        if same_day_note:
-            lines.append("当天往返提示:" + html.escape(same_day_note))
-        time_filter_note = str(payload.get("time_filter_note") or "").strip()
-        if time_filter_note:
-            lines.append(html.escape(time_filter_note))
-        lines.extend(_pushplus_same_day_alternative_lines(payload))
-        lines.extend(_pushplus_single_leg_rejection_lines(payload))
-        detail_url = str(payload.get("detail_url") or "").strip()
-        form_url = str(payload.get("form_url") or "").strip()
-        if detail_url:
-            lines.extend(["", f'查看网页版完整分析(如未显示请稍后刷新):<a href="{html.escape(detail_url)}" target="_blank">{html.escape(detail_url)}</a>'])
+        sections = [
+            _push_section(
+                "header",
+                0,
+                f"<b>【无符合方案】{route} 提供{len(alternatives[:3])}个备选</b>",
+                mandatory=True,
+            ),
+            _push_section(
+                "current_judgment",
+                0,
+                judgment_lines,
+                mandatory=True,
+            ),
+            _push_section(
+                "current_price",
+                0,
+                f"价格:{html.escape(price_hint)}" if price_hint else "价格:暂无可订组合价",
+                mandatory=True,
+            ),
+            _push_section(
+                "purchase_condition",
+                0,
+                "购买条件:当前没有完全符合条件的可订方案",
+                mandatory=True,
+            ),
+            _push_section(
+                "primary_plan",
+                0,
+                "首选方案:暂无完全符合方案",
+                mandatory=True,
+            ),
+            _push_section("main_risk", 1, risk_lines),
+            _push_section("alternative_summary", 2, alternative_lines),
+            _push_section(
+                "excluded_plans",
+                3,
+                _pushplus_single_leg_rejection_lines(payload),
+            ),
+            detail_section,
+            _push_section(
+                "data_freshness",
+                0,
+                [
+                    html.escape(freshness_headline) if freshness_headline else "",
+                    _pushplus_freshness_line(payload),
+                ],
+                mandatory=True,
+            ),
+            _push_section(
+                "disclaimer",
+                0,
+                "提示:备选方案为取舍参考,最终价、库存、行李和票规以下单页为准",
+                mandatory=True,
+            ),
+        ]
+        form_url = valid_detail_url(payload.get("form_url"))
         if form_url:
-            lines.append(f'修改偏好:<a href="{html.escape(form_url)}" target="_blank">{html.escape(form_url)}</a>')
-        lines.append("")
-        lines.append("提示:备选方案为取舍参考,最终价、库存、行李和票规以下单页为准")
-        return "<br>".join(lines)
+            escaped = html.escape(form_url, quote=True)
+            sections.insert(
+                -2,
+                _push_section(
+                    "settings_link",
+                    3,
+                    f'修改偏好:<a href="{escaped}" target="_blank">{escaped}</a>',
+                ),
+            )
+        return PushRender(
+            f"【无符合方案】{str(payload.get('route') or '航班监控')}",
+            tuple(sections),
+            detail_url,
+        )
 
-    push_type = html.escape(str(payload.get("push_type") or "价格提醒"))
-    route = html.escape(str(payload.get("route") or "航班监控"))
-    display_text = _payload_price(payload.get("display_price") or payload.get("current_price"))
-    transaction_text = _payload_price(payload.get("transaction_price"))
-    verify_text = _payload_price(payload.get("verify_price"))
+    raw_push_type = str(payload.get("push_type") or "价格提醒")
+    raw_route = str(payload.get("route") or "航班监控")
+    push_type = html.escape(raw_push_type)
+    route = html.escape(raw_route)
     recommendation = html.escape(str(payload.get("recommendation") or "可以观察"))
-    buy_condition = html.escape(str(payload.get("buy_condition") or "以支付页最终价和票规为准"))
+    buy_condition = html.escape(
+        str(payload.get("buy_condition") or "以支付页最终价和票规为准")
+    )
     primary_plan = (payload.get("recommended_plans") or [{}])[0] or {}
-    max_price = _to_float(payload.get("max_price"))
-    display_price = _to_float(payload.get("display_price") or payload.get("current_price"))
     gap_line = _budget_gap_line(payload)
 
     reasons = [str(item) for item in (payload.get("trigger_reason") or []) if item]
@@ -10361,54 +10438,92 @@ def render_pushplus(payload: dict) -> str:
     reason_text = "，".join(dict.fromkeys(reasons[:2])) or "当前价格触发监控条件"
     reason_line = _budget_reason_line(payload, reason_text)
     trigger_evidence = _cheaper_date_trigger_evidence(payload)
-    lines = [
-        f"<b>【{push_type}】{route}</b>",
-        html.escape(freshness_headline) if freshness_headline else "",
-        "",
-        f"当前判断:{recommendation}",
-        reason_line,
-        f"首选候选:{html.escape(str(primary_plan.get('label') or '方案A'))}, {_price_text(primary_plan.get('price') or payload.get('display_price'))}",
-    ]
-    if trigger_evidence:
-        lines.append(f"触发依据:{html.escape(trigger_evidence)}")
-    if gap_line:
-        lines.append(html.escape(gap_line))
-    lines.extend(
-        [
-            f"触发原因:{html.escape(reason_text)}",
-            f"购买条件:{buy_condition}",
-            "",
-            *_pushplus_next_step_lines(payload),
-            "",
-            "方案简卡:",
-            *_pushplus_plan_brief_lines(payload),
-        ]
-    )
+
+    reminder_lines = []
     if feedback_ack:
-        lines[2:2] = [html.escape(feedback_ack), ""]
+        reminder_lines.append(html.escape(feedback_ack))
+    if trigger_evidence:
+        reminder_lines.append(f"触发依据:{html.escape(trigger_evidence)}")
+    if gap_line:
+        reminder_lines.append(html.escape(gap_line))
+    reminder_lines.append(f"触发原因:{html.escape(reason_text)}")
+
+    primary_lines = ["方案简卡:", *_pushplus_plan_brief_lines(payload)]
+    risk_lines = []
     same_day_note = _same_day_note_for_no_primary(payload, reason_text)
     if same_day_note:
-        lines.append("当天往返提示:" + html.escape(same_day_note))
-        lines.extend(_pushplus_same_day_alternative_lines(payload))
+        risk_lines.append("当天往返提示:" + html.escape(same_day_note))
+        risk_lines.extend(_pushplus_same_day_alternative_lines(payload))
     if payload.get("time_filter_note"):
-        lines.extend(["", html.escape(str(payload.get("time_filter_note")))])
+        risk_lines.append(html.escape(str(payload.get("time_filter_note"))))
+
     calendar_lines = _pushplus_calendar_summary_lines(payload)
-    if calendar_lines:
-        lines.extend(["", *calendar_lines])
     source_channel_lines = _pushplus_source_channel_price_lines(payload)
-    if source_channel_lines:
-        lines.extend(["", *source_channel_lines])
-    lines.extend(
-        [
-            "",
-            *_pushplus_channel_section(payload, primary_plan),
-            "",
-            _pushplus_freshness_line(payload),
-            "更多完整分析见网页详情。",
+    channel_payload = dict(payload)
+    channel_payload["detail_url"] = detail_url
+    channel_lines = _pushplus_channel_section(channel_payload, primary_plan)
+    sections = [
+        _push_section(
+            "header",
+            0,
+            f"<b>【{push_type}】{route}</b>",
+            mandatory=True,
+        ),
+        _push_section(
+            "current_judgment",
+            0,
+            [
+                html.escape(freshness_headline) if freshness_headline else "",
+                "",
+                f"当前判断:{recommendation}",
+            ],
+            mandatory=True,
+        ),
+        _push_section("current_price", 0, reason_line, mandatory=True),
+        _push_section(
+            "primary_plan_head",
+            0,
+            f"首选候选:{html.escape(str(primary_plan.get('label') or '方案A'))}, "
+            f"{_price_text(primary_plan.get('price') or payload.get('display_price'))}",
+            mandatory=True,
+        ),
+        _push_section("reminder_reason", 1, reminder_lines),
+        _push_section(
+            "purchase_condition",
+            0,
+            f"购买条件:{buy_condition}",
+            mandatory=True,
+        ),
+        _push_section("next_steps", 1, ["", *_pushplus_next_step_lines(payload), ""]),
+        _push_section("primary_plan", 0, primary_lines, mandatory=True),
+        _push_section("main_risk", 1, risk_lines),
+        _push_section("calendar", 3, ["", *calendar_lines] if calendar_lines else []),
+        _push_section("source_price_details", 3, ["", *source_channel_lines] if source_channel_lines else []),
+        _push_section("technical_links", 3, ["", *channel_lines] if channel_lines else []),
+        _push_section(
+            "data_freshness",
+            0,
+            ["", _pushplus_freshness_line(payload)],
+            mandatory=True,
+        ),
+        detail_section,
+        _push_section(
+            "disclaimer",
+            0,
             "提示:最终价、库存、行李、退改签和机型以下单页为准；价格以各平台支付页为准",
-        ]
+            mandatory=True,
+        ),
+    ]
+    return PushRender(
+        f"【{raw_push_type}】{raw_route}",
+        tuple(sections),
+        detail_url,
     )
-    return "<br>".join(lines)
+
+
+def render_pushplus(payload: dict) -> str:
+    """从 payload 直构小节并按完整小节拼接 PushPlus 正文。"""
+    return render_push_render(render_pushplus_sections(payload))
 
 
 def _plan_route_type(plan: dict) -> str:

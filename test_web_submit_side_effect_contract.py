@@ -79,7 +79,7 @@ class WebSubmitSideEffectContractTest(unittest.TestCase):
                     patch.object(main, "render_detail_html", return_value="<p>详情</p>"),
                     patch.object(main, "_save_result_for_page"),
                     patch.object(main, "persist_notification_payload"),
-                    patch.object(main, "render_pushplus", return_value="PushPlus正文"),
+                    patch.object(main, "render_pushplus_sections", return_value=object()),
                     patch.object(main, "send_email", return_value=True) as send_email,
                     patch.object(main, "send", return_value=True) as send_pushplus,
                 ):
