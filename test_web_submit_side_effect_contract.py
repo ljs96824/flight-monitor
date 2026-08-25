@@ -1,15 +1,18 @@
+import queue
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, call, patch
+from unittest.mock import ANY, Mock, call, patch
 
 import main
 import web_form
+from web_test_utils import enable_csrf
 
 
 class WebSubmitSideEffectContractTest(unittest.TestCase):
     def setUp(self):
         web_form.app.config.update(TESTING=True)
         self.client = web_form.app.test_client()
+        enable_csrf(self.client)
 
     def test_successful_submit_saves_before_starting_background_collection(self):
         subscription = {
@@ -36,7 +39,10 @@ class WebSubmitSideEffectContractTest(unittest.TestCase):
             patch.object(
                 web_form,
                 "start_background_collection",
-                side_effect=lambda item: lifecycle.start(item),
+                side_effect=lambda item: (
+                    lifecycle.start(item),
+                    {"status": "started", "entrypoint": "web"},
+                )[1],
             ) as start_background_collection,
         ):
             response = self.client.post(
@@ -45,7 +51,9 @@ class WebSubmitSideEffectContractTest(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 302)
-        self.assertTrue(response.headers["Location"].endswith("/success?index=72"))
+        self.assertTrue(
+            response.headers["Location"].endswith("/success?index=72")
+        )
         save_subscription.assert_called_once_with(subscription, 72)
         start_background_collection.assert_called_once_with(background_subscription)
         self.assertEqual(
@@ -96,16 +104,22 @@ class WebSubmitSideEffectContractTest(unittest.TestCase):
     def test_background_thread_targets_single_subscription_runner(self):
         subscription = {"_index": 72}
         thread = Mock()
+
+        def report_started():
+            startup_queue = thread_class.call_args.kwargs["args"][1]
+            startup_queue.put({"status": "started", "entrypoint": "web"})
+
+        thread.start.side_effect = report_started
         with patch.object(web_form.threading, "Thread", return_value=thread) as thread_class:
-            web_form.start_background_collection(subscription)
+            result = web_form.start_background_collection(subscription)
 
-        thread_class.assert_called_once_with(
-            target=web_form.run_single_subscription,
-            args=(subscription,),
-            daemon=True,
-        )
+        kwargs = thread_class.call_args.kwargs
+        self.assertIs(kwargs["target"], web_form.run_single_subscription)
+        self.assertEqual(kwargs["args"][0], subscription)
+        self.assertIsInstance(kwargs["args"][1], queue.Queue)
+        self.assertTrue(kwargs["daemon"])
         thread.start.assert_called_once_with()
-
+        self.assertEqual(result["status"], "started")
     def test_single_subscription_runner_normalizes_and_enables_web_failure_notification(self):
         subscription = {"_index": 72}
         normalized = {
@@ -116,12 +130,17 @@ class WebSubmitSideEffectContractTest(unittest.TestCase):
         with (
             patch.object(main, "_normalize_subscription", return_value=normalized) as normalize,
             patch.object(main, "process_subscription", return_value=True) as process,
+            patch.object(web_form, "record_last_attempt"),
         ):
             web_form.run_single_subscription(subscription)
 
         normalize.assert_called_once_with(subscription)
-        process.assert_called_once_with(normalized, ensure_db=True, web_trigger=True)
-
+        process.assert_called_once_with(
+            normalized,
+            ensure_db=True,
+            web_trigger=True,
+            startup_callback=ANY,
+        )
 
     def test_contribution_rules_reserve_port_5000_for_user_process(self):
         path = Path(__file__).parent / "CONTRIBUTING.md"

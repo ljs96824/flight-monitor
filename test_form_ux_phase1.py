@@ -10,6 +10,7 @@ from constraint_summary import format_constraint_summary
 from form_structure import subscription_to_form_values
 import main
 import web_form
+from web_test_utils import enable_csrf
 from tests.form_fixture_contract import without_storage_identity
 
 
@@ -28,6 +29,7 @@ class FormUxPhase1Test(unittest.TestCase):
     def setUp(self):
         web_form.app.config.update(TESTING=True)
         self.client = web_form.app.test_client()
+        enable_csrf(self.client)
 
     def test_quick_and_full_pages_expose_the_two_page_contract(self):
         quick = self.client.get("/").get_data(as_text=True)

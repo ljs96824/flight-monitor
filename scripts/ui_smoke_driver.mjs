@@ -237,12 +237,14 @@ const quickContract = await evaluate(`(() => {
     allRequiredVisible: required.every(visible),
     visibleControlCount: controls.length + multiGroups.length,
     visibleControlNames: [...controls.map(control => control.name), ...multiGroups.map(group => group.dataset.multiCheckboxGroup)],
+    csrfToken: Boolean(form.querySelector('input[name="csrf_token"][type="hidden"]')?.value),
   };
 })()`);
-if (quickContract.page !== "quick" || !quickContract.form || !quickContract.allRequiredVisible || quickContract.visibleControlCount > 12) {
+if (quickContract.page !== "quick" || !quickContract.form || !quickContract.allRequiredVisible || quickContract.visibleControlCount > 12 || !quickContract.csrfToken) {
   throw new Error(`快速页契约失败: ${JSON.stringify(quickContract)}`);
 }
 console.log(`[UI smoke] 页1必填=${quickContract.requiredCount} 可见可交互=True 可见控件=${quickContract.visibleControlCount}`);
+console.log("[UI smoke] 页1 CSRF隐藏字段=PASS");
 
 await evaluate(`document.querySelector('[data-mode-link="full"]').click(); true`);
 await waitFor("location.pathname === '/settings'", "页1进入完整设置");
@@ -324,9 +326,10 @@ const fullContract = await evaluate(`(() => {
     businessInitiallyHidden: document.getElementById('group-business-travel')?.hidden || false,
     duplicates,
     buildMarker: document.querySelector('[data-build-marker="true"]')?.textContent.trim() || '',
+    csrfToken: Boolean(document.querySelector('form[data-page-mode="full"] input[name="csrf_token"][type="hidden"]')?.value),
   };
 })()`);
-if (fullContract.page !== "full" || !fullContract.sectionsVisible || fullContract.anchorCount !== 6 || fullContract.groupCount !== 2 || fullContract.groupAnchorCount !== 2 || !fullContract.groupsClosed || !fullContract.businessInitiallyHidden || fullContract.duplicates.length || !fullContract.buildMarker) {
+if (fullContract.page !== "full" || !fullContract.sectionsVisible || fullContract.anchorCount !== 6 || fullContract.groupCount !== 2 || fullContract.groupAnchorCount !== 2 || !fullContract.groupsClosed || !fullContract.businessInitiallyHidden || fullContract.duplicates.length || !fullContract.buildMarker || !fullContract.csrfToken) {
   throw new Error(`完整页契约失败: ${JSON.stringify(fullContract)}`);
 }
 for (const id of ["section-where","section-when","section-who","section-budget","section-flight-preferences","section-notifications"]) {
@@ -335,6 +338,7 @@ for (const id of ["section-where","section-when","section-who","section-budget",
 }
 console.log(`[UI smoke] 页2六节=${fullContract.sectionCount} 全可见=True 目录锚点=${fullContract.anchorCount} 次级组锚点=${fullContract.groupAnchorCount} 重复name=0`);
 console.log(`[UI smoke] 版本信标=${fullContract.buildMarker}`);
+console.log("[UI smoke] 页2 CSRF隐藏字段=PASS");
 
 async function businessGroupVisible() {
   return evaluate(`(() => {
@@ -640,6 +644,37 @@ if (hiddenPersisted.policy !== 'direct_only' || !hiddenPersisted.hidden || !hidd
   throw new Error(`中转隐藏提交默认回填失败: ${JSON.stringify(hiddenPersisted)}`);
 }
 console.log("[UI smoke] 中转隐藏提交默认=PASS 直飞态不提交细节；服务端回填extra_6/false/false");
+
+await navigate("/subscriptions");
+const deleteProbe = await evaluate(`(() => ({
+  beforeCount: document.querySelectorAll('.card').length,
+  deleteHref: document.querySelector('a.danger')?.getAttribute('href') || '',
+}))()`);
+if (deleteProbe.beforeCount < 1 || !/^\/subscription\/[0-9a-f-]{36}\/delete$/i.test(deleteProbe.deleteHref)) {
+  throw new Error(`删除入口契约失败: ${JSON.stringify(deleteProbe)}`);
+}
+await navigate(deleteProbe.deleteHref);
+const deleteConfirmation = await evaluate(`(() => ({
+  title: document.body.textContent.includes('确认删除这条监控'),
+  csrfToken: Boolean(document.querySelector('form input[name="csrf_token"][type="hidden"]')?.value),
+  explicitConfirmation: document.querySelector('input[name="confirm_delete"]')?.value === 'yes',
+}))()`);
+if (!deleteConfirmation.title || !deleteConfirmation.csrfToken || !deleteConfirmation.explicitConfirmation) {
+  throw new Error(`删除确认页契约失败: ${JSON.stringify(deleteConfirmation)}`);
+}
+await navigate("/subscriptions");
+const afterGetCount = await evaluate("document.querySelectorAll('.card').length");
+if (afterGetCount !== deleteProbe.beforeCount) {
+  throw new Error(`删除GET产生副作用: before=${deleteProbe.beforeCount} after=${afterGetCount}`);
+}
+await navigate(deleteProbe.deleteHref);
+await clickSelector('form button[type="submit"]');
+await waitFor("location.pathname === '/subscriptions'", "删除POST完成");
+const afterPostCount = await evaluate("document.querySelectorAll('.card').length");
+if (afterPostCount !== deleteProbe.beforeCount - 1) {
+  throw new Error(`删除POST计数错误: before=${deleteProbe.beforeCount} after=${afterPostCount}`);
+}
+console.log("[UI smoke] 服务端删除确认=PASS GET零写入；POST含CSRF+confirm_delete=yes后删除");
 
 await sleep(350);
 if (browserErrors.length) throw new Error(`浏览器错误: ${browserErrors.join(' | ')}`);

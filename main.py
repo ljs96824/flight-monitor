@@ -89,6 +89,7 @@ from storage import (
     save_flight_details,
 )
 from sync_subscriptions import sync_subscriptions
+from subscription_attempts import record_subscription_attempt
 from subscription_preflight import (
     evaluate_subscription_preflight,
     shanghai_today as _shanghai_today,
@@ -1745,6 +1746,19 @@ def _notification_provenance_context(route_info: dict) -> dict:
         return {}
 
 
+def _report_collection_startup(startup_callback, payload: dict) -> None:
+    """Best-effort startup signal; diagnostics must not break collection."""
+    if startup_callback is None:
+        return
+    try:
+        startup_callback(dict(payload))
+    except Exception as exc:
+        safe_log(
+            f"[采集启动握手] 回报失败 status={payload.get('status')} "
+            f"原因={type(exc).__name__}:{exc}"
+        )
+
+
 def process_subscription(
     sub: dict,
     ensure_db: bool = True,
@@ -1752,9 +1766,18 @@ def process_subscription(
     web_trigger: bool = False,
     manage_collection_round: bool = True,
     collection_round_id: str | None = None,
+    startup_callback=None,
 ) -> bool | dict:
     """Hold the process-wide collection gate around a top-level subscription."""
     if not manage_collection_round:
+        _report_collection_startup(
+            startup_callback,
+            {
+                "status": "started",
+                "holder_round_id": collection_round_id,
+                "entrypoint": "single_subscription",
+            },
+        )
         return _process_subscription_locked(
             sub,
             ensure_db=ensure_db,
@@ -1774,12 +1797,44 @@ def process_subscription(
             "[\u8ba2\u9605\u524d\u7f6e\u6821\u9a8c] "
             "\u672c\u8f6e\u68c0\u67e5=1 \u8df3\u8fc7=1"
         )
+        _report_collection_startup(
+            startup_callback,
+            {
+                "status": "startup_error",
+                "holder_round_id": None,
+                "entrypoint": "single_subscription",
+            },
+        )
         return True
 
     round_id = collection_round_id or _make_round_id(sub)
-    singleflight = acquire_collection_singleflight(round_id)
+    try:
+        singleflight = acquire_collection_singleflight(round_id)
+    except Exception:
+        _report_collection_startup(
+            startup_callback,
+            {
+                "status": "startup_error",
+                "holder_round_id": None,
+                "entrypoint": "single_subscription",
+            },
+        )
+        raise
     if not singleflight.acquired:
-        return collection_busy_status(singleflight, entrypoint="single_subscription")
+        busy_status = collection_busy_status(
+            singleflight,
+            entrypoint="single_subscription",
+        )
+        _report_collection_startup(startup_callback, busy_status)
+        return busy_status
+    _report_collection_startup(
+        startup_callback,
+        {
+            "status": "started",
+            "holder_round_id": round_id,
+            "entrypoint": "single_subscription",
+        },
+    )
     try:
         return _process_subscription_locked(
             sub,
@@ -2519,6 +2574,69 @@ def run(sync_remote: bool = True):
         singleflight.release()
 
 
+def _process_scheduled_subscription(
+    sub: dict,
+    *,
+    preflight: dict,
+    round_id: str,
+):
+    """处理批量轮中的一条订阅，并覆盖此前 Web busy 状态。"""
+
+    startup_state = {"status": None, "holder_round_id": round_id}
+
+    def persist_attempt(*, status: str, holder_round_id, at=None) -> bool:
+        try:
+            return record_subscription_attempt(
+                sub,
+                status=status,
+                holder_round_id=holder_round_id,
+                entrypoint="batch",
+                at=at,
+                path=SUBSCRIPTIONS_PATH,
+                logger=safe_log,
+            )
+        except Exception as exc:
+            safe_log(
+                f"[采集启动握手] 状态落盘失败 status={status} "
+                f"原因={type(exc).__name__}:{exc}"
+            )
+            return False
+
+    def report_startup(payload):
+        source = payload if isinstance(payload, dict) else {}
+        startup_state["status"] = str(source.get("status") or "startup_error")
+        startup_state["holder_round_id"] = source.get("holder_round_id") or round_id
+        persist_attempt(
+            status=startup_state["status"],
+            holder_round_id=startup_state["holder_round_id"],
+            at=source.get("at"),
+        )
+
+    try:
+        result = process_subscription(
+            sub,
+            ensure_db=False,
+            preflight_result=preflight,
+            manage_collection_round=False,
+            collection_round_id=round_id,
+            startup_callback=report_startup,
+        )
+    except Exception:
+        if startup_state["status"] == "started":
+            persist_attempt(
+                status="failed",
+                holder_round_id=startup_state["holder_round_id"],
+            )
+        raise
+
+    if startup_state["status"] == "started":
+        persist_attempt(
+            status="success" if result is True else "failed",
+            holder_round_id=startup_state["holder_round_id"],
+        )
+    return result
+
+
 def _run_locked(*, sync_remote: bool, round_id: str):
     if sync_remote:
         try:
@@ -2601,12 +2719,10 @@ def _run_locked(*, sync_remote: bool, round_id: str):
 
         for sub, preflight in ready:
             try:
-                process_subscription(
+                _process_scheduled_subscription(
                     sub,
-                    ensure_db=False,
-                    preflight_result=preflight,
-                    manage_collection_round=False,
-                    collection_round_id=round_id,
+                    preflight=preflight,
+                    round_id=round_id,
                 )
             except Exception as exc:
                 _log_subscription_failure(sub, reason=f"{type(exc).__name__}: {exc}")

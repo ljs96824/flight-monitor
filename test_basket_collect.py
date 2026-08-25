@@ -155,6 +155,7 @@ class BasketCollectTest(unittest.TestCase):
                         usage_path=Path(tmp) / "api_usage.json",
                         source_builder=fake_source_builder,
                         aggregator_factory=FakeAggregator,
+                        singleflight_lock_path=Path(tmp) / "collection.lock",
                     )
 
         self.assertEqual(summary, {"round_id": "basket_20260710T093000", "queues": 6, "success": 4, "failed": 2, "written": 123})
@@ -187,6 +188,7 @@ class BasketCollectTest(unittest.TestCase):
                         usage_path=root / "api_usage.json",
                         source_builder=fresh_source_builder,
                         aggregator_factory=FlightAggregator,
+                        singleflight_lock_path=root / "collection.lock",
                     )
 
             with closing(sqlite3.connect(db_path)) as conn, conn:

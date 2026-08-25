@@ -4,15 +4,16 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import re
 import threading
 import traceback
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import html
 from pathlib import Path
 
 from dotenv import load_dotenv
-from flask import Flask, abort, jsonify, redirect, render_template_string, request, url_for
+from flask import Flask, abort, jsonify, redirect, render_template_string, request, session, url_for
 from atomic_json_store import read_json, update_json
 
 from airports import (
@@ -47,12 +48,14 @@ from pricing import passenger_rate_sum
 from detail_access import canonical_detail_uuid, detail_token_authorized
 from log_utils import safe_log
 from subscription_identity import ensure_subscription_id, subscription_id as stable_subscription_id
+from subscription_attempts import attempt_time as _attempt_time, record_subscription_attempt
 from notification_config import (
     DEFAULT_NOTIFICATION_METHOD,
     DEFAULT_NOTIFICATION_PRIVACY_LEVEL,
     normalize_notification_goals,
 )
 from price_calendar import load_calendar
+from web_security import configure_session_security, install_csrf_protection
 
 
 BASE_DIR = Path(__file__).parent
@@ -62,6 +65,22 @@ PAGE_PAYLOADS_DIR = BASE_DIR / "data" / "payloads"
 load_dotenv(BASE_DIR / ".env", encoding="utf-8")
 
 app = Flask(__name__)
+configure_session_security(app, logger=safe_log)
+install_csrf_protection(app, logger=safe_log)
+app.config.setdefault(
+    "COLLECTION_STARTUP_TIMEOUT_SECONDS",
+    float(os.environ.get("COLLECTION_STARTUP_TIMEOUT_SECONDS") or 3.0),
+)
+
+STARTUP_HANDSHAKE_SESSION_KEY = "_collection_startup_handshakes"
+ALLOWED_STARTUP_STATUSES = {
+    "started",
+    "busy",
+    "startup_error",
+    "confirming",
+    "success",
+    "failed",
+}
 
 CITY_LABELS = {
     "PVG": "上海PVG",
@@ -282,6 +301,7 @@ SUCCESS_TEMPLATE = """
 <body>
   <div class="card">
     <h1>✅ 监控已创建: {{ summary.route }}</h1>
+    {% if startup_status == "started" %}
     <p><b>接下来系统会:</b></p>
     <ol>
       <li>立即进行第一次采集和购买判断(约30秒-1分钟)</li>
@@ -290,6 +310,11 @@ SUCCESS_TEMPLATE = """
       <li>可随时在「我的监控」暂停或修改</li>
     </ol>
     <p>💡 第一次判断稍后到达,你可以关掉此页,留意邮箱/微信推送。</p>
+    {% else %}
+    <p data-startup-status="{{ startup_status }}"><b>{{ startup_message }}</b></p>
+    <p data-confirmed-notification="true">结果提醒渠道：{{ summary.notification_text or "你的邮箱 / PushPlus微信" }}</p>
+    <p>订阅已保留；你可以关掉此页，系统会按后续轮次继续处理。</p>
+    {% endif %}
     <p><a href="{{ url_for('subscription_list') }}">查看我的所有监控</a> <a class="secondary-link" href="{{ url_for('index') }}">再创建一个</a></p>
     <p><b>{{ summary.route }}</b></p>
     {% if summary.scenario_text %}<p data-confirmed-scenarios="true"><b>出行场景：</b>{{ summary.scenario_text }}</p>{% endif %}
@@ -325,7 +350,7 @@ SUCCESS_TEMPLATE = """
       {% endfor %}
     </ul>
 
-    <p><b>订阅已保存。系统正在采集第一批数据，预计1-2分钟内收到首次推送。</b></p>
+    {% if startup_status == "started" %}<p><b>{{ startup_message }}</b></p>{% endif %}
   </div>
   <a href="{{ url_for('index') }}">继续添加订阅</a>
   <a class="secondary-link" href="{{ url_for('subscription_list') }}">查看我的所有监控 →</a>
@@ -335,21 +360,25 @@ SUCCESS_TEMPLATE = """
     <p>这些不影响监控运行，只让推荐排序更贴合你的需求。</p>
     <div class="quick-actions">
       <form method="post" action="{{ url_for('quick_update_subscription', index=index) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="field" value="time_preference">
         <input type="hidden" name="value" value="no_redeye">
         <button type="submit">不接受红眼</button>
       </form>
       <form method="post" action="{{ url_for('quick_update_subscription', index=index) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="field" value="airline_policy">
         <input type="hidden" name="value" value="prefer_full_service">
         <button type="submit">偏好全服务航司</button>
       </form>
       <form method="post" action="{{ url_for('quick_update_subscription', index=index) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="field" value="accept_self_transfer">
         <input type="hidden" name="value" value="false">
         <button type="submit">不接受非联程</button>
       </form>
       <form method="post" action="{{ url_for('quick_update_subscription', index=index) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="field" value="refund_flexibility">
         <input type="hidden" name="value" value="preferred">
         <button type="submit">最好可改签</button>
@@ -422,14 +451,49 @@ LIST_TEMPLATE = """
       <a class="button-link" href="{{ item.detail_url }}">查看详情</a>
       <a class="button-link" href="{{ url_for('index', edit=item.index) }}">编辑</a>
       <form method="post" action="{{ url_for('toggle_subscription', index=item.index) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit">{{ "暂停" if item.status == "active" else "恢复" }}</button>
       </form>
-      <form method="post" action="{{ url_for('delete_subscription', index=item.index) }}" onsubmit="return confirm('确认删除这条监控?');">
-        <button class="danger" type="submit">删除</button>
-      </form>
+      {% if item.delete_url %}<a class="button-link danger" href="{{ item.delete_url }}">删除</a>{% endif %}
     </div>
   </div>
   {% endfor %}
+</body>
+</html>
+"""
+
+
+DELETE_CONFIRM_TEMPLATE = """
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>确认删除监控</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 620px; margin: 32px auto; padding: 0 16px; line-height: 1.7; color: #222; }
+    .card { border: 1px solid #fecaca; border-radius: 8px; padding: 18px; background: #fff7f7; }
+    .actions { display: flex; gap: 10px; align-items: center; }
+    button, a { padding: 9px 14px; border-radius: 8px; text-decoration: none; }
+    button { border: 1px solid #b91c1c; background: #b91c1c; color: #fff; cursor: pointer; }
+    a { border: 1px solid #c8d6f0; color: #1a73e8; }
+    .error { color: #b91c1c; font-weight: 700; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>确认删除这条监控？</h1>
+    <p>{{ route }}</p>
+    {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+    <div class="actions">
+      <form method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="confirm_delete" value="yes">
+        <button type="submit">确认删除</button>
+      </form>
+      <a href="{{ url_for('subscription_list') }}">取消</a>
+    </div>
+  </div>
 </body>
 </html>
 """
@@ -459,6 +523,7 @@ FEEDBACK_TEMPLATE = """
       <a href="{{ url_for('subscription_list') }}">返回我的监控</a>
     {% else %}
       <form method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="subscription_id" value="{{ subscription_id }}">
         <p>订阅：{{ subscription_id or "未指定" }}</p>
         <label><input type="radio" name="feedback_type" value="useful" required> 有用</label>
@@ -868,6 +933,7 @@ def build_subscription_list_items(subscriptions: list[dict]) -> list[dict]:
         items.append(
             {
                 "index": index,
+                "subscription_id": subscription_id or "",
                 "route": _subscription_route_text(sub),
                 "route_type": route_type,
                 "route_type_label": ROUTE_TYPE_LABELS.get(route_type, route_type),
@@ -878,6 +944,11 @@ def build_subscription_list_items(subscriptions: list[dict]) -> list[dict]:
                 "scenario": _subscription_scenario_text(sub),
                 "detail_url": (
                     url_for("detail", sub=subscription_id)
+                    if subscription_id
+                    else ""
+                ),
+                "delete_url": (
+                    url_for("delete_subscription", subscription_id=subscription_id)
                     if subscription_id
                     else ""
                 ),
@@ -979,9 +1050,162 @@ def update_subscription_preference(index: int, field: str, value: str) -> bool:
     return result["updated"]
 
 
-def run_single_subscription(subscription: dict) -> None:
+def record_last_attempt(
+    subscription: dict | str,
+    *,
+    status: str,
+    holder_round_id=None,
+    entrypoint: str = "web",
+    at: str | None = None,
+) -> bool:
+    """按稳定订阅身份原子记录一次启动/执行状态。"""
+
+    return record_subscription_attempt(
+        subscription,
+        status=status,
+        holder_round_id=holder_round_id,
+        entrypoint=entrypoint,
+        at=at,
+        path=SUBSCRIPTIONS_PATH,
+        logger=safe_log,
+    )
+
+
+def _record_last_attempt_safely(
+    subscription: dict | str,
+    *,
+    status: str,
+    holder_round_id=None,
+    entrypoint: str = "web",
+    at: str | None = None,
+) -> bool:
+    try:
+        return record_last_attempt(
+            subscription,
+            status=status,
+            holder_round_id=holder_round_id,
+            entrypoint=entrypoint,
+            at=at,
+        )
+    except Exception as exc:
+        safe_log(
+            f"[采集启动握手] 状态落盘失败 status={status} "
+            f"原因={type(exc).__name__}:{exc}"
+        )
+        return False
+
+
+def _startup_result(payload: dict | None, *, default_status: str) -> dict:
+    source = payload if isinstance(payload, dict) else {}
+    result = {
+        "status": str(source.get("status") or default_status),
+        "at": _attempt_time(source.get("at")),
+        "holder_round_id": source.get("holder_round_id"),
+        "entrypoint": "web",
+    }
+    if "persisted" in source:
+        result["persisted"] = bool(source["persisted"])
+    return result
+
+
+def _attempt_timestamp(value) -> float:
+    try:
+        parsed = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return float("-inf")
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
+
+
+def _remember_startup_handshake(subscription: dict, result: dict) -> None:
+    subscription_id = stable_subscription_id(subscription)
+    if not subscription_id:
+        return
+    normalized = _startup_result(result, default_status="confirming")
+    if normalized["status"] not in ALLOWED_STARTUP_STATUSES:
+        return
+    handshakes = session.get(STARTUP_HANDSHAKE_SESSION_KEY)
+    if not isinstance(handshakes, dict):
+        handshakes = {}
+    session[STARTUP_HANDSHAKE_SESSION_KEY] = {
+        **handshakes,
+        subscription_id: normalized,
+    }
+
+
+def _take_startup_handshake(subscription: dict) -> dict:
+    subscription_id = stable_subscription_id(subscription)
+    handshakes = session.get(STARTUP_HANDSHAKE_SESSION_KEY)
+    if not subscription_id or not isinstance(handshakes, dict):
+        return {}
+    remaining = dict(handshakes)
+    result = remaining.pop(subscription_id, {})
+    if remaining:
+        session[STARTUP_HANDSHAKE_SESSION_KEY] = remaining
+    else:
+        session.pop(STARTUP_HANDSHAKE_SESSION_KEY, None)
+    return result if isinstance(result, dict) else {}
+
+
+def _select_startup_attempt(stored_attempt: dict, session_attempt: dict) -> dict:
+    stored = (
+        stored_attempt
+        if isinstance(stored_attempt, dict)
+        and str(stored_attempt.get("status") or "") in ALLOWED_STARTUP_STATUSES
+        else {}
+    )
+    current = (
+        session_attempt
+        if isinstance(session_attempt, dict)
+        and str(session_attempt.get("status") or "") in ALLOWED_STARTUP_STATUSES
+        else {}
+    )
+    if not stored:
+        return current
+    if not current:
+        return stored
+    if _attempt_timestamp(current.get("at")) > _attempt_timestamp(stored.get("at")):
+        return current
+    return stored
+
+
+def startup_status_message(status: str) -> str:
+    messages = {
+        "started": "订阅已保存。系统正在采集第一批数据，预计1-2分钟内收到首次推送。",
+        "busy": "已有采集轮正在执行，本次不重复启动，系统将在下一轮处理该订阅。",
+        "startup_error": "订阅已保存，但首次采集未能启动，系统将在下一轮重试。",
+        "confirming": "订阅已保存，首次采集状态正在确认。",
+        "failed": "订阅已保存，首次采集已启动但本轮未完成，系统将在下一轮重试。",
+        "success": "订阅已保存，首次采集已完成。",
+    }
+    return messages.get(str(status or "started"), messages["started"])
+
+
+def run_single_subscription(subscription: dict, startup_queue=None) -> None:
     """Run one subscription collection in a background thread."""
     print("[后台] 线程已启动")
+    startup_status = None
+    startup_holder_round_id = None
+
+    def report_startup(payload):
+        nonlocal startup_holder_round_id, startup_status
+        result = _startup_result(payload, default_status="startup_error")
+        startup_status = result["status"]
+        startup_holder_round_id = result["holder_round_id"]
+        if startup_queue is not None:
+            try:
+                startup_queue.put_nowait({**result, "persisted": False})
+            except queue.Full:
+                pass
+        result["persisted"] = _record_last_attempt_safely(
+            subscription,
+            status=result["status"],
+            holder_round_id=result["holder_round_id"],
+            entrypoint=result["entrypoint"],
+            at=result["at"],
+        )
+
     try:
         print("[后台] 开始导入 main 处理函数")
         from main import _normalize_subscription, process_subscription
@@ -997,27 +1221,99 @@ def run_single_subscription(subscription: dict) -> None:
         )
 
         print("[后台] 开始采集、分析并推送")
-        ok = process_subscription(normalized_subscription, ensure_db=True, web_trigger=True)
+        ok = process_subscription(
+            normalized_subscription,
+            ensure_db=True,
+            web_trigger=True,
+            startup_callback=report_startup,
+        )
+        if startup_status is None:
+            report_startup(
+                {
+                    "status": "startup_error",
+                    "holder_round_id": None,
+                    "entrypoint": "single_subscription",
+                }
+            )
+        if startup_status == "started":
+            _record_last_attempt_safely(
+                subscription,
+                status="success" if ok is True else "failed",
+                holder_round_id=startup_holder_round_id,
+                entrypoint="web",
+            )
         print(f"[后台] 采集分析推送结束: ok={ok}")
     except Exception as exc:
+        if startup_status is None:
+            report_startup(
+                {
+                    "status": "startup_error",
+                    "holder_round_id": None,
+                    "entrypoint": "single_subscription",
+                }
+            )
+        elif startup_status == "started":
+            _record_last_attempt_safely(
+                subscription,
+                status="failed",
+                holder_round_id=startup_holder_round_id,
+                entrypoint="web",
+            )
         print(f"[后台] 执行失败: {exc}")
         traceback.print_exc()
 
 
-def start_background_collection(subscription: dict) -> None:
-    """Start collection without blocking the form response."""
+def start_background_collection(
+    subscription: dict,
+    *,
+    timeout_seconds: float | None = None,
+) -> dict:
+    """启动后台采集，并有界等待 single-flight 启动结果。"""
+
+    startup_results = queue.Queue(maxsize=1)
+    timeout = (
+        float(timeout_seconds)
+        if timeout_seconds is not None
+        else float(app.config["COLLECTION_STARTUP_TIMEOUT_SECONDS"])
+    )
     try:
         print("[后台] 准备启动采集线程")
         thread = threading.Thread(
             target=run_single_subscription,
-            args=(subscription,),
+            args=(subscription, startup_results),
             daemon=True,
         )
         thread.start()
         print(f"[后台] 采集线程已启动: {thread.name}")
     except Exception as exc:
+        result = _startup_result(None, default_status="startup_error")
+        result["persisted"] = _record_last_attempt_safely(
+            subscription,
+            status=result["status"],
+            holder_round_id=result["holder_round_id"],
+            entrypoint=result["entrypoint"],
+            at=result["at"],
+        )
         print(f"[后台] 启动线程失败: {exc}")
         traceback.print_exc()
+        return result
+
+    try:
+        return startup_results.get(timeout=max(0.0, timeout))
+    except queue.Empty:
+        result = _startup_result(None, default_status="confirming")
+        result["persisted"] = _record_last_attempt_safely(
+            subscription,
+            status=result["status"],
+            holder_round_id=result["holder_round_id"],
+            entrypoint=result["entrypoint"],
+            at=result["at"],
+        )
+        safe_log(
+            f"[采集启动握手] 等待超时 subscription_id="
+            f"{stable_subscription_id(subscription)} timeout={timeout}s"
+        )
+        return result
 
 
 def normalize_destination(value: str) -> str:
@@ -2346,8 +2642,13 @@ def subscribe():
         print(f"[表单] 订阅保存完成: index={index}")
 
         print("[表单] 开始触发后台采集")
-        start_background_collection({**subscription, "_index": index})
-        print("[表单] 后台采集触发完成")
+        background_subscription = {**subscription, "_index": index}
+        startup_result = _startup_result(
+            start_background_collection(background_subscription),
+            default_status="confirming",
+        )
+        print(f"[表单] 后台采集触发完成: status={startup_result['status']}")
+        _remember_startup_handshake(background_subscription, startup_result)
 
         return redirect(url_for("success", index=index))
     except ValueError as exc:
@@ -2392,15 +2693,51 @@ def toggle_subscription(index: int):
     return redirect(url_for("subscription_list"))
 
 
-@app.post("/subscriptions/<int:index>/delete")
-def delete_subscription(index: int):
+@app.route("/subscription/<subscription_id>/delete", methods=["GET", "POST"])
+def delete_subscription(subscription_id: str):
+    canonical_id = canonical_detail_uuid(subscription_id)
+    if canonical_id is None:
+        abort(404)
+    subscriptions = load_subscriptions()
+    matched = next(
+        (
+            item
+            for item in subscriptions
+            if stable_subscription_id(item) == canonical_id
+        ),
+        None,
+    )
+    if matched is None:
+        abort(404)
+    route = _subscription_route_text(matched)
+    if request.method == "GET":
+        return render_template_string(
+            DELETE_CONFIRM_TEMPLATE,
+            route=route,
+            error="",
+        )
+    if request.form.get("confirm_delete") != "yes":
+        return render_template_string(
+            DELETE_CONFIRM_TEMPLATE,
+            route=route,
+            error="必须明确确认后才能删除这条监控。",
+        ), 400
+
+    result = {"deleted": False}
+
     def mutate(payload):
-        subscriptions = _migrated_subscription_list(payload, allow_missing=True)
-        if 0 <= index < len(subscriptions):
-            subscriptions.pop(index)
-        return subscriptions
+        current = _migrated_subscription_list(payload, allow_missing=True)
+        retained = []
+        for item in current:
+            if not result["deleted"] and stable_subscription_id(item) == canonical_id:
+                result["deleted"] = True
+                continue
+            retained.append(item)
+        return retained
 
     update_json(SUBSCRIPTIONS_PATH, mutate)
+    if not result["deleted"]:
+        abort(404)
     return redirect(url_for("subscription_list"))
 
 
@@ -2421,11 +2758,17 @@ def success():
     except ValueError:
         index = len(subscriptions) - 1
     subscription = subscriptions[index] if subscriptions else {}
+    stored_attempt = subscription.get("last_attempt") or {}
+    session_attempt = _take_startup_handshake(subscription)
+    selected_attempt = _select_startup_attempt(stored_attempt, session_attempt)
+    display_status = str(selected_attempt.get("status") or "started")
     return render_template_string(
         SUCCESS_TEMPLATE,
         summary=build_success_summary(subscription) if subscription else {},
         first_push_time=first_push_text(),
         index=index if subscriptions else None,
+        startup_status=display_status,
+        startup_message=startup_status_message(display_status),
     )
 
 

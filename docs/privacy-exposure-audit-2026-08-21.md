@@ -116,7 +116,7 @@ target_price_pp_oneway, target_price_scope, versions
 
 ### 3.4 表单 POST 与 PA 订阅存储
 
-`POST /subscribe` 当前构建完整订阅、写入 `data/subscriptions.json`，随后触发后台采集。若页面部署在 PA，以下字段会由浏览器直接发送到 PA。当前路由未见登录鉴权或 CSRF token。代码位置：`web_form.py:2252-2277`。
+`POST /subscribe` 在本次审计时构建完整订阅、写入 `data/subscriptions.json`，随后触发后台采集；若页面部署在 PA，以下字段会由浏览器直接发送到 PA。审计时该路由未见登录鉴权或 CSRF token。2026-08-25 已补全带 TTL 的全局 CSRF 拦截、服务端删除确认与会话 cookie 边界；CSRF 仍不等于身份认证，现行边界见 `docs/web-write-security.md`。
 
 快速页实际 20 字段：
 

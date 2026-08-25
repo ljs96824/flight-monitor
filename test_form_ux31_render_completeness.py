@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import main
 import web_form
+from web_test_utils import enable_csrf
 import form_pages
 from form_concepts import CONCEPTS
 from scripts.capture_form_normalization_baseline import SCENARIOS
@@ -68,6 +69,7 @@ class FormUx31RenderCompletenessTest(unittest.TestCase):
     def setUp(self):
         web_form.app.config.update(TESTING=True)
         self.client = web_form.app.test_client()
+        enable_csrf(self.client)
 
     def _page(self, path):
         response = self.client.get(path)

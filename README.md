@@ -123,6 +123,7 @@ python -c "from pathlib import Path; src=Path('.env.example'); dst=Path('.env');
 | 变量 | 解锁能力 |
 | --- | --- |
 | `JUHE_FLIGHT_KEY` | 当前经济舱主采集；没有它，首次监控通常无法形成经济舱候选池 |
+| `FLASK_SECRET_KEY` | PA Web部署必须配置固定高熵值；本地缺失时仅以进程临时密钥兜底并高可见告警 |
 | `PUSHPLUS_TOKEN` 或 `SMTP_USER` + `SMTP_PASS` | 至少一种外部通知渠道；缺失时仍可检查本地 payload 和日志 |
 
 **可选层**
@@ -135,6 +136,8 @@ python -c "from pathlib import Path; src=Path('.env.example'); dst=Path('.env');
 | `PYTHONANYWHERE_TOKEN`、`PYTHONANYWHERE_USER` | 可选的订阅和详情 payload 同步 |
 | `FEEDBACK_NOTIFY_EMAIL` | 表单反馈通知收件地址 |
 | `COLLECTION_LOCK_PATH` | 同机多进程采集单飞锁；建议配置为主运行目录中的绝对路径 |
+| `SESSION_COOKIE_SECURE` | 本地HTTP默认`0`；PA HTTPS部署必须置`1` |
+| `CSRF_TOKEN_TTL_SECONDS`、`COLLECTION_STARTUP_TIMEOUT_SECONDS` | 写操作token有效期与首次采集启动状态等待上限 |
 
 其余可调阈值与诊断开关已按用途分组列在 [.env.example](.env.example)。SerpAPI 密钥别名的解析实现见 [serpapi_credentials.py](serpapi_credentials.py)。
 
@@ -204,7 +207,7 @@ git pull --ff-only
 python3.13 -m pip install --user -r requirements.txt
 ```
 
-然后在 Web 面板点击 **Reload**。生产密钥放在该环境私有的 `.env`，不要放入 GitHub。部署前先核验聚合数据、SerpAPI、Duffel 和 SMTP 端点是否允许出站；若受套餐或白名单限制，让 PythonAnywhere 只承载表单/同步，本机继续负责采集和发送。
+然后在 Web 面板点击 **Reload**。Reload 前必须在 PA 私有 `.env` 配置固定 `FLASK_SECRET_KEY` 与 `SESSION_COOKIE_SECURE=1`；缺少固定密钥的临时兜底不算生产验收通过，多 worker 会因会话密钥不同产生随机 403。生产密钥不要放入 GitHub。部署前先核验聚合数据、SerpAPI、Duffel 和 SMTP 端点是否允许出站；若受套餐或白名单限制，让 PythonAnywhere 只承载表单/同步，本机继续负责采集和发送。完整边界见 [Web写操作安全](docs/web-write-security.md)。
 
 `Reload判据=Web进程是否import改动模块,非是否改web_form.py`。当前 Web 链路由 `run_web.py` 导入 `web_form.py`；后台处理首次运行时再由 `web_form.py` 延迟导入 `main.py`，而 `main.py` 导入 `forecast.py`，因此修改 `forecast.py` 后已加载该链路的 Web 进程需要 Reload。`patterns.py` 当前只由离线 `scripts/forecast_report.py` 使用，单独修改它不会进入 Web 进程。
 

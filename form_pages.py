@@ -1007,6 +1007,7 @@ FORM_PAGE_TEMPLATE = r"""
   {% if page.mode == 'quick' %}
   <main class="quick-shell">
     <form id="subscription-form" method="post" action="{{ url_for('subscribe') }}" data-page-mode="quick" novalidate>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="form_page" value="quick">
       <input type="hidden" name="monitor_mode" value="quick">
       <input type="hidden" name="derive_companion_constraints" value="true">
@@ -1043,6 +1044,7 @@ FORM_PAGE_TEMPLATE = r"""
       {% endfor %}
     </nav>
     <form id="subscription-form" method="post" action="{{ url_for('subscribe') }}" data-page-mode="full" novalidate>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="form_page" value="full">
       <input type="hidden" name="derive_companion_constraints" value="true">
       <input type="hidden" name="companion_constraints_seed" value="{{ page.companion_constraints_seed }}">

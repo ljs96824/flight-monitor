@@ -9,6 +9,7 @@ from uuid import UUID
 
 import sync_subscriptions as sync_module
 import web_form
+from web_test_utils import enable_csrf
 
 
 def _subscription(*, created_at: str, budget: int = 8000, subscription_id: str = "sub-1") -> dict:
@@ -38,6 +39,8 @@ def _subscription(*, created_at: str, budget: int = 8000, subscription_id: str =
 class SubscriptionCloneIdempotencyTest(unittest.TestCase):
     def setUp(self):
         web_form.app.config.update(TESTING=True)
+        self.client = web_form.app.test_client()
+        enable_csrf(self.client)
 
     def test_edit_post_keeps_count_and_original_identity(self):
         original = _subscription(created_at="2026-05-27T06:33:38", budget=8000)
@@ -52,7 +55,7 @@ class SubscriptionCloneIdempotencyTest(unittest.TestCase):
                 patch.object(web_form, "build_subscription", return_value=rebuilt),
                 patch.object(web_form, "start_background_collection"),
             ):
-                response = web_form.app.test_client().post(
+                response = self.client.post(
                     "/subscribe",
                     data={"subscription_index": "0", "form_page": "full"},
                 )

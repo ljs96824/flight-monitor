@@ -66,7 +66,7 @@ def _serve(port: int, data_dir: Path) -> None:
     web_form.SUBSCRIPTIONS_PATH = data_dir / "subscriptions.json"
     web_form.FEEDBACK_PATH = data_dir / "feedback.json"
     web_form.PAGE_PAYLOADS_DIR = data_dir / "payloads"
-    web_form.start_background_collection = lambda _subscription: None
+    web_form.start_background_collection = lambda _subscription: {"status": "started", "entrypoint": "ui_smoke"}
     web_form.load_calendar = lambda _route: []
     web_form.app.run(
         host="127.0.0.1",

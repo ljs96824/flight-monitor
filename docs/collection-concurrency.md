@@ -37,6 +37,8 @@ collection single-flight -> api_usage lock -> subscription/feedback JSON lock
 
 - 禁止反向获取，尤其禁止持有订阅或反馈 JSON 锁后等待采集单飞锁。
 - Web 保存订阅必须先完成 JSON 原子写入并释放 JSON 锁，再启动后台采集。
+- Web 请求线程启动后台线程后只做有界握手等待；后台线程先争用 collection single-flight，再回报 `started`、`busy` 或 `startup_error`。等待超时单独记为 `confirming`，不得伪装成已启动。
+- 四态结果按订阅 UUID 原子写入 `last_attempt`；`busy` 不计入成功或失败，后续正常启动或完成会覆盖旧状态。
 - `api_usage`、订阅和反馈等下层文件锁临界区内禁止外部 API 调用和长时间分析。
 - collection single-flight 是采集轮的外层准入锁，设计上覆盖整个采集轮；期间不得长期持有任何下层文件锁。
 

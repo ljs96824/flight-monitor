@@ -11,6 +11,7 @@ from form_structure import (
 )
 import main
 import web_form
+from web_test_utils import enable_csrf
 from tests.form_fixture_contract import without_storage_identity
 
 
@@ -21,6 +22,7 @@ class FormUxQuickFinishTest(unittest.TestCase):
     def setUp(self):
         web_form.app.config.update(TESTING=True)
         self.client = web_form.app.test_client()
+        enable_csrf(self.client)
 
     def test_four_core_stations_and_two_full_settings_stations_remain_declared(self):
         self.assertEqual(REQUIRED_STATION_COUNT, 4)

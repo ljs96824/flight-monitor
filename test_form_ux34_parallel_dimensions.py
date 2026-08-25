@@ -11,6 +11,7 @@ from werkzeug.datastructures import MultiDict
 
 import analyzer
 import web_form
+from web_test_utils import enable_csrf
 from form_pages import OPTIONS, VISIBILITY_CONTRACTS, build_form_page_context
 
 
@@ -89,12 +90,14 @@ class FormUx34ParallelDimensionsTest(unittest.TestCase):
                 ("companion_constraints", "no_redeye"),
             ]
         )
+        client = web_form.app.test_client()
+        enable_csrf(client)
         original = web_form.SUBSCRIPTIONS_PATH
         with tempfile.TemporaryDirectory() as tmpdir:
             web_form.SUBSCRIPTIONS_PATH = Path(tmpdir) / "subscriptions.json"
             try:
                 with patch.object(web_form, "start_background_collection"):
-                    response = web_form.app.test_client().post(
+                    response = client.post(
                         "/subscribe",
                         data=form,
                         follow_redirects=True,
@@ -105,7 +108,7 @@ class FormUx34ParallelDimensionsTest(unittest.TestCase):
                 self.assertIn('data-confirmed-companion-constraints="true"', confirmation)
                 self.assertIn("需要尽量直飞 + 不接受红眼/凌晨到达", confirmation)
 
-                edit_html = web_form.app.test_client().get("/settings?edit=0").get_data(as_text=True)
+                edit_html = client.get("/settings?edit=0").get_data(as_text=True)
                 for value in ("tourism", "family"):
                     self.assertRegex(
                         edit_html,

@@ -20,6 +20,7 @@ logging.basicConfig = lambda *a, **k: None
 import airports
 import main
 import web_form
+from web_test_utils import enable_csrf
 
 
 ROOT = Path(__file__).resolve().parent
@@ -101,6 +102,7 @@ class WebLocationValidationTest(unittest.TestCase):
             patch("web_form.save_subscription") as save_subscription,
             patch("web_form.start_background_collection") as start_collection,
         ):
+            enable_csrf(client)
             response = client.post("/subscribe", data=_minimal_form("北"))
 
         self.assertEqual(response.status_code, 400)

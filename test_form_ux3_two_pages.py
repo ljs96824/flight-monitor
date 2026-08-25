@@ -7,6 +7,7 @@ from pathlib import Path
 
 import main
 import web_form
+from web_test_utils import enable_csrf
 from form_pages import FORM_PAGE_TEMPLATE
 from tests.form_fixture_contract import without_storage_identity
 from werkzeug.datastructures import MultiDict
@@ -95,6 +96,7 @@ class FormUx3TwoPagesTest(unittest.TestCase):
     def setUp(self):
         web_form.app.config.update(TESTING=True)
         self.client = web_form.app.test_client()
+        enable_csrf(self.client)
 
     def _page(self, path):
         response = self.client.get(path)

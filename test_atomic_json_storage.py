@@ -241,6 +241,7 @@ class JsonLockOrderingTest(unittest.TestCase):
     def test_web_save_releases_json_lock_before_background_collection(self):
         import web_form
         from local_file_lock import file_lock
+        from web_test_utils import enable_csrf
 
         subscription = _subscription("saved-sub", 3000)
         lock_observations = []
@@ -252,6 +253,8 @@ class JsonLockOrderingTest(unittest.TestCase):
                 with file_lock(path, timeout=0):
                     lock_observations.append("released")
 
+            client = web_form.app.test_client()
+            enable_csrf(client)
             with (
                 patch.object(web_form, "SUBSCRIPTIONS_PATH", path),
                 patch.object(web_form, "build_subscription", return_value=subscription),
@@ -261,7 +264,7 @@ class JsonLockOrderingTest(unittest.TestCase):
                     side_effect=start_after_save,
                 ),
             ):
-                response = web_form.app.test_client().post(
+                response = client.post(
                     "/subscribe",
                     data={"form_page": "full"},
                 )

@@ -202,6 +202,7 @@ class FormUxConceptRenderingTest(unittest.TestCase):
     def test_every_rendered_business_field_is_owned_by_the_concept_registry(self):
         allowed_page_fields = {
             "form_page",
+            "csrf_token",
             "derive_companion_constraints",
             "companion_constraints_seed",
             "companion_constraints_seed_present",

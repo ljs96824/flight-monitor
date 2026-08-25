@@ -36,6 +36,7 @@ except ModuleNotFoundError:
     )
 
 import web_form
+from web_test_utils import enable_csrf
 
 
 ACTIVE_ID = "123e4567-e89b-12d3-a456-426614174010"
@@ -54,6 +55,9 @@ class SubscriptionManagementPageTest(unittest.TestCase):
         web_form.PAGE_PAYLOADS_DIR = self.tmp_path / "payloads"
         web_form.FEEDBACK_PATH = self.tmp_path / "feedback.json"
         web_form.PAGE_PAYLOADS_DIR.mkdir(parents=True, exist_ok=True)
+        web_form.app.config.update(TESTING=True)
+        self.client = web_form.app.test_client()
+        enable_csrf(self.client)
 
     def tearDown(self):
         web_form.SUBSCRIPTIONS_PATH = self.old_subscriptions_path
@@ -160,28 +164,40 @@ class SubscriptionManagementPageTest(unittest.TestCase):
     def test_toggle_and_delete_subscription(self):
         self._write_subscriptions()
 
-        with patch.object(web_form, "url_for", return_value="/subscriptions"), \
-             patch.object(web_form, "redirect", side_effect=lambda value: value):
-            response = web_form.toggle_subscription(0)
-        self.assertEqual(response, "/subscriptions")
+        response = self.client.post("/subscriptions/0/toggle")
+        self.assertEqual(response.status_code, 302)
         subscriptions = json.loads(web_form.SUBSCRIPTIONS_PATH.read_text(encoding="utf-8"))
         self.assertEqual(subscriptions[0]["status"], "paused")
 
-        with patch.object(web_form, "url_for", return_value="/subscriptions"), \
-             patch.object(web_form, "redirect", side_effect=lambda value: value):
-            response = web_form.delete_subscription(1)
-        self.assertEqual(response, "/subscriptions")
+        confirm = self.client.get(f"/subscription/{PAUSED_ID}/delete")
+        self.assertEqual(confirm.status_code, 200)
+        self.assertIn("确认删除这条监控", confirm.get_data(as_text=True))
+        subscriptions = json.loads(web_form.SUBSCRIPTIONS_PATH.read_text(encoding="utf-8"))
+        self.assertEqual(len(subscriptions), 2)
+
+        missing_confirmation = self.client.post(
+            f"/subscription/{PAUSED_ID}/delete",
+            data={},
+        )
+        self.assertEqual(missing_confirmation.status_code, 400)
+        subscriptions = json.loads(web_form.SUBSCRIPTIONS_PATH.read_text(encoding="utf-8"))
+        self.assertEqual(len(subscriptions), 2)
+
+        response = self.client.post(
+            f"/subscription/{PAUSED_ID}/delete",
+            data={"confirm_delete": "yes"},
+        )
+        self.assertEqual(response.status_code, 302)
         subscriptions = json.loads(web_form.SUBSCRIPTIONS_PATH.read_text(encoding="utf-8"))
         self.assertEqual(len(subscriptions), 1)
         self.assertEqual(subscriptions[0]["id"], ACTIVE_ID)
-
     def test_success_page_sets_next_step_expectations(self):
         self._write_subscriptions()
         client = getattr(web_form.app, "test_client", None)
         if client is None:
             self.skipTest("Flask test client is unavailable")
 
-        response = web_form.app.test_client().get("/success?index=0")
+        response = self.client.get("/success?index=0")
         body = response.get_data(as_text=True)
 
         self.assertEqual(response.status_code, 200)
@@ -203,7 +219,7 @@ class SubscriptionManagementPageTest(unittest.TestCase):
         if client is None:
             self.skipTest("Flask test client is unavailable")
 
-        response = web_form.app.test_client().post(
+        response = self.client.post(
             "/feedback",
             data={"subscription_id": ACTIVE_ID, "feedback_type": "unavailable"},
         )
@@ -221,7 +237,7 @@ class SubscriptionManagementPageTest(unittest.TestCase):
         with patch.dict("os.environ", {"FEEDBACK_NOTIFY_EMAIL": "author@example.com"}), patch(
             "email_notifier.send_email", return_value=True
         ) as send_email:
-            response = web_form.app.test_client().post(
+            response = self.client.post(
                 "/feedback",
                 data={
                     "subscription_id": ACTIVE_ID,
