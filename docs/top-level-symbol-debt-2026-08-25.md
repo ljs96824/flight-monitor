@@ -57,6 +57,23 @@
 3. 外部引用只有 `analyzer.py` 的静态别名导入和测试调用；未发现 `getattr`、`__all__`、patch、注册器、装饰器或默认参数表达式持有第一版对象。
 4. 删除前特征测试锁定无效当前价、过去日期、目标日期、阈值边界、节省额倒序、`limit`、完整字段和值类型、`/单程` 文案、输入不变以及异常类型；删除后同组测试输出完全一致。
 
+### 3. `notifier.format_flight_detail`
+
+- 状态：`removed_as_shadowed`。
+- 基线：`50951d4`；第一版最初引入提交：`df5c383`，后由 `8b8e502` 和 `61b9109` 扩展；第二版引入提交：`61b9109`。
+- 清理提交：本提交 `refactor: remove shadowed flight detail formatter`；精确 SHA 由提交后闸门报告记录。
+- 生效版本位置：清理后 `notifier.py::format_flight_detail` 唯一定义，委托 `_payload_plan_leg`。
+- 特征测试：`FormatFlightDetailCharacterizationTest` 的 6 项逐字输出矩阵。
+- 删除前后输出：完全相同；生效版继续返回三参数纯文本摘要，不恢复第一版富 HTML 详情。
+- 剩余顶层重复符号：5。
+
+完整考古结论：
+
+1. 第一版签名为 `(flight, date_str=None, label=None, route_info=None, analysis_result=None) -> str`，第二版为 `(flight, date_str=None, prefix="") -> str`，均无装饰器。第一版生成带 `<br>` 的富详情，包含状态、建议、路线、日期、时区、经停、时长、机型、估价、渠道、价差、新鲜度和风险；第二版只委托 `_payload_plan_leg`，输出固定顺序的纯文本时刻/经停/价格摘要。第二版会规范化 `None`，忽略 `date_str`，不展示行李与退改；五参数调用按当前行为抛 `TypeError`。两版均无排序、日志和入参原地修改。
+2. 第一版之后只有函数定义和常量赋值，没有模块级调用或对象捕获；所有调用都在函数体内，运行时从模块全局读取最终绑定。`notifier.py` 的本地导入链未发现反向导入 `notifier`，不存在循环导入在模块执行完成前暴露第一版。
+3. 全仓未发现 `from notifier import format_flight_detail`、属性/getattr、`__all__`、patch、注册器、装饰器或默认参数表达式持有旧对象。模块内共有 6 个调用点：4 个三参数路径消费当前版本，2 个五参数旧路径按当前签名会抛 `TypeError`；本次只锁定现状，不修复这些路径。
+4. 删除前矩阵锁定国内/国际直飞、一次中转、多航段、缺时刻与机型、空 segments、仅 combo、`None`、特殊字符的纯文本与后续 HTML 转义边界、票规/行李缺失、返回类型、字段顺序、日期参数现状、入参不变及五参数异常类型；删除后必须逐字一致。
+
 ## 图表基线
 
 生效版本是第二版 `build_trend_png`：`6×2.8`、全日期旋转标签、当前价标注、`bbox_inches="tight"`。删除前记录：

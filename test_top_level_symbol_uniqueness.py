@@ -22,7 +22,6 @@ KNOWN_TOP_LEVEL_DUPLICATES: set[tuple[str, str]] = {
     ("analyzer.py", "verify_fare_rules"),
     ("analyzer.py", "calc_confidence"),
     ("analyzer.py", "determine_push_type"),
-    ("notifier.py", "format_flight_detail"),
 }
 
 
