@@ -73,8 +73,13 @@ def _readonly_connection(db_path: str | Path) -> sqlite3.Connection:
     if not path.is_file():
         raise FileNotFoundError(f"观测库不存在: {path}")
     connection = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)
-    connection.row_factory = sqlite3.Row
-    return connection
+    try:
+        connection.execute("PRAGMA query_only=ON")
+        connection.row_factory = sqlite3.Row
+        return connection
+    except Exception:
+        connection.close()
+        raise
 
 
 def load_observations(db_path: str | Path = DEFAULT_DB_PATH) -> list[dict]:

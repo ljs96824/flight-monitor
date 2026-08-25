@@ -74,8 +74,9 @@ def _backup_sqlite(source: Path, destination: Path) -> None:
         uri=True,
         timeout=3,
     )
-    destination_connection = sqlite3.connect(destination)
+    destination_connection = None
     try:
+        destination_connection = sqlite3.connect(destination)
         source_connection.execute("PRAGMA query_only=ON")
         source_connection.backup(
             destination_connection,
@@ -92,7 +93,8 @@ def _backup_sqlite(source: Path, destination: Path) -> None:
                 f"SQLite快照完整性检查失败: {source.name}={integrity}"
             )
     finally:
-        destination_connection.close()
+        if destination_connection is not None:
+            destination_connection.close()
         source_connection.close()
 
 
@@ -116,9 +118,9 @@ def _open_sqlite_watchers(sources: dict[str, Path]) -> dict[str, sqlite3.Connect
                 uri=True,
                 timeout=3,
             )
+            watchers[name] = connection
             connection.execute("PRAGMA query_only=ON")
             connection.execute("SELECT name FROM sqlite_master LIMIT 1").fetchone()
-            watchers[name] = connection
         return watchers
     except Exception:
         for connection in watchers.values():

@@ -4,7 +4,7 @@ import sqlite3
 import tempfile
 import threading
 import unittest
-from contextlib import redirect_stdout
+from contextlib import closing, redirect_stdout
 from datetime import datetime, timedelta, timezone
 from io import StringIO
 from pathlib import Path
@@ -94,7 +94,7 @@ class ObservationRoundContextTest(unittest.TestCase):
 
             self.assertFalse(errors)
             self.assertTrue(all(not thread.is_alive() for thread in threads))
-            with sqlite3.connect(db_path) as connection:
+            with closing(sqlite3.connect(db_path)) as connection:
                 rows = connection.execute(
                     "SELECT flight_combo, round_id FROM observations ORDER BY flight_combo"
                 ).fetchall()

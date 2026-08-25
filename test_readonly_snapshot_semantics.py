@@ -103,6 +103,10 @@ class ReadonlySnapshotSemanticsTest(unittest.TestCase):
             source_connection.execute.call_args_list[0].args,
             ("PRAGMA query_only=ON",),
         )
+        self.assertNotIn(
+            ("PRAGMA query_only=ON",),
+            [entry.args for entry in destination_connection.execute.call_args_list],
+        )
         source_connection.backup.assert_called_once()
 
 

@@ -107,6 +107,7 @@ def load_fresh_observation_snapshot(
     except sqlite3.Error:
         return None
     try:
+        connection.execute("PRAGMA query_only=ON")
         key = (
             str(source or "").lower(),
             str(origin_airport or "").upper(),
