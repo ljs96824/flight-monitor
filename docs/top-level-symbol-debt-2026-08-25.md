@@ -108,6 +108,23 @@
 3. 全仓外部只消费航班 payload 内已经生成的 `transfer_risk` 字段；未发现 `from analyzer import transfer_risk`、`analyzer.transfer_risk`、`getattr`、`__all__`、patch、模块级注册器、装饰器或默认参数表达式保存第一版对象。模块内直接调用仅在 `analyze_all_flights` 后段；`calc_execution_grade` 直接调用当前 helper，不经过旧定义。
 4. 删除前矩阵锁定直飞、合理中转、短/长中转及 90/120/480 分钟边界、跨航司非联程、显式自行中转、换机场、过夜、信息缺失、多次中转、过境机场、老幼场景、完整字段顺序与类型、分数、`factors` 原因顺序、入参不变及异常类型；显式字段当前被忽略的行为也被锁定，删除后必须逐字一致。
 
+### 6. `analyzer.verify_fare_rules`
+
+- 状态：`removed_as_shadowed`。
+- 基线：`b2f9cbf`；第一版引入提交：`7c63d43`；生效版引入提交：`048e502`，国际线推断措辞后由 `784d8bb` 修订。
+- 清理提交：本提交 `refactor: remove shadowed fare rule verifier`；精确 SHA 由提交后闸门报告记录。
+- 生效版本位置：清理后 `analyzer.py::verify_fare_rules` 唯一定义。
+- 特征测试：`VerifyFareRulesCharacterizationTest` 的 8 项返回与票规写回矩阵。
+- 删除前后输出：完全相同；返回字段、顺序、文案、证据字段与国内票规写回行为均保持原样。
+- 剩余顶层重复符号：2。
+
+完整考古结论：
+
+1. 两版签名均为 `(flight, hard_constraints)`，无默认参数、装饰器或返回注解，返回键均为 `level/label/matches/issues`。第一版只消费已有票规；生效版先把假值航班归一为空字典，并为国内航班调用 `_ensure_domestic_fare_rules`，用航司/舱位标准规则覆盖写回 `flight["fare_rules"]`。生效版额外识别 `baggage.included`、退改等级与 `required` 偏好，使用票规标签/备注，区分国内与国际的系统推断出处；行李、退改、基础舱和跨航司分支顺序固定。两版都不排序、不记录日志，也不修改约束；生效版国际输入不变，国内输入会原地写回票规，`None` 返回完全匹配，真值非映射输入按现状抛 `AttributeError`。
+2. 两定义之间只有 10 个函数定义，没有模块级调用、赋值、注册或旧对象捕获；生产调用在后续 `analyze_all_flights` 函数体内，运行时读取最终绑定。`domestic_fare_rules.py` 不反向导入 `analyzer.py`，也未发现其他循环导入在模块执行完成前读取第一版。
+3. 外部静态导入只在 `test_domestic_fare_rules.py` 和 `test_email_polish.py`，均发生于模块完整加载后；未发现 `analyzer.verify_fare_rules`、`getattr`、`__all__`、patch、注册器、装饰器或默认参数表达式保存第一版对象。通知层只消费 `fare_verification` payload，不持有函数引用。
+4. 删除前矩阵锁定完整票规、明确/缺失行李、明确/缺失退改、来源冲突、仅系统推断、支付页待确认、廉航、多人混舱、基础舱、跨航司、空值与异常；同时锁定返回键类型与顺序、重复标签/原因现状、国际不变、国内原地覆盖，以及 `source/source_note/baggage.level/refund.level/change.allowed` 证据字段，删除后必须逐字一致。
+
 ## 图表基线
 
 生效版本是第二版 `build_trend_png`：`6×2.8`、全日期旋转标签、当前价标注、`bbox_inches="tight"`。删除前记录：
