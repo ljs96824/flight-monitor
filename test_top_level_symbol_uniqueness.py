@@ -16,9 +16,7 @@ ROOT = Path(__file__).resolve().parent
 EXPLICIT_ALLOWLIST: tuple[tuple[str, str, str], ...] = ()
 
 # 基线扫描后确认的历史债务；它们记录在 docs 中，不属于白名单。
-KNOWN_TOP_LEVEL_DUPLICATES: set[tuple[str, str]] = {
-    ("analyzer.py", "determine_push_type"),
-}
+KNOWN_TOP_LEVEL_DUPLICATES: set[tuple[str, str]] = set()
 
 
 class TopLevelSymbolScannerTest(unittest.TestCase):

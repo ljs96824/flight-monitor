@@ -143,6 +143,24 @@
 3. 外部生产引用只有 `notifier.py` 的静态导入；模块内有两个运行期调用。未发现 `analyzer.calc_confidence`、`getattr`、`__all__`、patch、注册器、装饰器或默认参数表达式保存旧对象。通知层优先消费分析 payload 的 `confidence_breakdown`，缺失时才调用最终绑定。
 4. 删除前矩阵锁定价格新鲜度 30/31/120/121 分钟边界、历史样本 4/5/13/14 边界、数据源 1/2/3 边界及三层回退、票规完整/部分/缺失、可购买性三态、国内聚合主源、国内仅 Google、国际多源、采集失败与退化字段当前不产生独立分项或 `reason_codes` 的事实、总体“高/中高/中”阈值、完整字段类型与顺序、细节原因、入参不变及异常类型。
 
+### 8. `analyzer.determine_push_type`
+
+- 状态：`removed_as_shadowed`。
+- 基线：`0a2b4a4`；第一版引入提交：`8503b92`；生效版引入提交：`8c77a24`，同日冲突、预算口径理由、文案与历史样本门控后由 `87d6bc36`、`784d8bb`、`dd379ef2`、`952a01da` 修订。
+- 清理提交：本提交 `refactor: remove shadowed push type decision`；精确 SHA 由提交后闸门报告记录。
+- 生效版本位置：清理后 `analyzer.py::determine_push_type` 唯一定义。
+- 生效函数删除前源码 SHA-256：`3961f1d0b6fb124496e1731cdac8d75409f85ba5a43bd119b8d6f466190beb68`。
+- 特征测试：`DeterminePushTypeCharacterizationTest` 的 8 项完整返回、优先级与异常矩阵。
+- 删除前后输出：完全相同；返回类型、字段顺序、九类触发、理由顺序、价格角色、样本门控、异常类型及空候选池的既有理由均保持原样。
+- 剩余顶层重复符号：0。
+
+完整考古结论：
+
+1. 两版签名均为 `(current_price, target_price=None, max_budget=None, price_history=None, days_to_dept=None, last_push_price=None, analysis_result=None) -> dict`，无装饰器，返回键顺序均为 `type/reasons/price_change/percentile/historical_30_price`，均不原地修改输入。第一版只用 `current_price`，分支优先级为价格失效、历史低位、目标价、邻近日、同日更优、涨价风险；生效版从 `decision_prices` 区分展示、预算比较、交易与验证价格，分支优先级固定为时间冲突、价格缺失、主价格过期、异常低价、值得验证、进入低价区间、前后日期更便宜、同日更优、价格下降、涨价风险，默认仍为同日更优。`max_budget` 在两版中都只解析、不参与独立返回分支；超预算、继续等待、采集失败与价格持平目前也不是独立 `type`，本次如实锁定而不修正。
+2. AST 证实第一版之后到生效版之间只有函数定义，没有模块级调用、赋值、注册或旧对象捕获；生产调用均在后续函数体内，运行时读取最终全局绑定。`notifier.py` 在 `analyzer.py` 完整执行后静态导入，`analyzer.py` 不反向导入 notifier，不存在循环导入提前读取第一版。
+3. 全仓外部引用只有 `notifier.py` 的静态导入和模块加载完成后的生产调用；未发现 `analyzer.determine_push_type` 属性缓存、`getattr`、`__all__`、patch、模块级注册器、装饰器或默认参数表达式保存第一版对象。
+4. 删除前矩阵锁定四类价格角色、历史价格展平与 n=5 门槛、九类实际返回、全部 `elif` 优先级、邻近日与同日组合、上涨/下降/持平、时间冲突、价格缺失与过期、超预算和数据不完整当前的默认行为、完整字段类型与顺序、最多四条理由、入参不变及异常类型。生效版 `_matched_constraint_reasons` 在空候选池仍追加“符合你设置的直飞条件”的既有行为也被精确锁定，本批不借清死代码改变业务。
+
 ## 图表基线
 
 生效版本是第二版 `build_trend_png`：`6×2.8`、全日期旋转标签、当前价标注、`bbox_inches="tight"`。删除前记录：
