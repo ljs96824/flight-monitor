@@ -13,6 +13,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from flask import Flask, abort, jsonify, redirect, render_template_string, request, url_for
+from atomic_json_store import read_json, update_json
 
 from airports import (
     AIRPORTS,
@@ -617,92 +618,116 @@ def migrate_lcc_policies(subscriptions: list[dict]) -> tuple[list[dict], list[di
             )
     return subscriptions, migrated
 
+def migrate_subscription_defaults(subscriptions: list[dict]) -> tuple[list[dict], dict]:
+    """在内存中补齐当前读取路径支持的订阅默认字段。"""
+
+    subscriptions, budget_migrated = migrate_budget_scopes(subscriptions)
+    subscriptions, lcc_migrated = migrate_lcc_policies(subscriptions)
+    return subscriptions, {
+        "budget_scopes": budget_migrated,
+        "lcc_policies": lcc_migrated,
+    }
+
+
+def _subscription_list(payload, *, allow_missing: bool = False) -> list[dict]:
+    if payload is None and allow_missing:
+        return []
+    if not isinstance(payload, list):
+        raise ValueError("subscriptions.json 格式错误，应为订阅数组")
+    return payload
+
+
+def _migrated_subscription_list(payload, *, allow_missing: bool = False) -> list[dict]:
+    subscriptions = _subscription_list(payload, allow_missing=allow_missing)
+    subscriptions, _details = migrate_subscription_defaults(subscriptions)
+    return subscriptions
+
+
 
 def load_subscriptions() -> list[dict]:
     if not SUBSCRIPTIONS_PATH.exists():
         return []
-    try:
-        data = json.loads(SUBSCRIPTIONS_PATH.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return []
-    if not isinstance(data, list):
-        return []
-    data, budget_migrated = migrate_budget_scopes(data)
-    data, lcc_migrated = migrate_lcc_policies(data)
-    if budget_migrated or lcc_migrated:
-        SUBSCRIPTIONS_PATH.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+    data = _subscription_list(read_json(SUBSCRIPTIONS_PATH))
+    data, migration = migrate_subscription_defaults(data)
+    budget_migrated = migration["budget_scopes"]
+    lcc_migrated = migration["lcc_policies"]
     if budget_migrated:
         print(
-            f"[预算口径迁移] 已为{len(budget_migrated)}条旧订阅补默认scope=per_person: "
-            f"{budget_migrated}"
+            f"[预算口径迁移] 内存补齐{len(budget_migrated)}条旧订阅"
+            f"默认scope=per_person(文件未写入): {budget_migrated}"
         )
     if lcc_migrated:
         safe_log(
-            f"[口径迁移] 已归一{len(lcc_migrated)}条旧订阅的廉航策略: "
-            f"{lcc_migrated}"
+            f"[口径迁移] 内存归一{len(lcc_migrated)}条旧订阅的廉航策略"
+            f"(文件未写入): {lcc_migrated}"
         )
     return data
 
 
 def save_subscription(subscription: dict, index: int | None = None) -> int:
-    SUBSCRIPTIONS_PATH.parent.mkdir(exist_ok=True)
-    subscriptions = load_subscriptions()
-    if index is not None and 0 <= index < len(subscriptions):
-        existing = subscriptions[index]
-        if isinstance(existing, dict):
-            # 编辑只更新订阅内容，身份字段必须沿用原记录。
-            for identity_field in ("id", "subscription_id", "created_at"):
-                if identity_field in existing:
-                    subscription[identity_field] = existing[identity_field]
-                else:
-                    subscription.pop(identity_field, None)
-        subscriptions[index] = subscription
-        saved_index = index
-    else:
-        subscriptions.append(subscription)
-        saved_index = len(subscriptions) - 1
-    subscription_id, migrated = ensure_subscription_id(subscription)
-    if migrated:
-        safe_log(
-            f"[身份迁移] 保存路径 index={saved_index} "
-            f"subscription_id={subscription_id}"
+    saved: dict = {}
+
+    def mutate(payload):
+        subscriptions = _migrated_subscription_list(payload, allow_missing=True)
+        if index is not None and 0 <= index < len(subscriptions):
+            existing = subscriptions[index]
+            if isinstance(existing, dict):
+                # 编辑只更新订阅内容，身份字段必须沿用原记录。
+                for identity_field in ("id", "subscription_id", "created_at"):
+                    if identity_field in existing:
+                        subscription[identity_field] = existing[identity_field]
+                    else:
+                        subscription.pop(identity_field, None)
+            subscriptions[index] = subscription
+            saved_index = index
+        else:
+            subscriptions.append(subscription)
+            saved_index = len(subscriptions) - 1
+        subscription_id, identity_migrated = ensure_subscription_id(subscription)
+        saved.update(
+            {
+                "index": saved_index,
+                "subscription_id": subscription_id,
+                "identity_migrated": identity_migrated,
+            }
         )
-    SUBSCRIPTIONS_PATH.write_text(
-        json.dumps(subscriptions, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    return saved_index
+        return subscriptions
+
+    update_json(SUBSCRIPTIONS_PATH, mutate)
+    if saved["identity_migrated"]:
+        safe_log(
+            f"[身份迁移] 保存路径 index={saved['index']} "
+            f"subscription_id={saved['subscription_id']}"
+        )
+    return int(saved["index"])
 
 
 def save_subscriptions(subscriptions: list[dict]) -> None:
-    SUBSCRIPTIONS_PATH.parent.mkdir(exist_ok=True)
-    SUBSCRIPTIONS_PATH.write_text(
-        json.dumps(subscriptions, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    replacement = _subscription_list(subscriptions)
+    update_json(SUBSCRIPTIONS_PATH, lambda _current: replacement)
 
 
 def load_feedback() -> list[dict]:
     if not FEEDBACK_PATH.exists():
         return []
-    try:
-        data = json.loads(FEEDBACK_PATH.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return []
-    return data if isinstance(data, list) else []
+    data = read_json(FEEDBACK_PATH)
+    if not isinstance(data, list):
+        raise ValueError("feedback.json 格式错误，应为反馈数组")
+    return data
 
 
 def save_feedback(record: dict) -> None:
-    FEEDBACK_PATH.parent.mkdir(exist_ok=True)
-    records = load_feedback()
-    records.append(record)
-    FEEDBACK_PATH.write_text(
-        json.dumps(records, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    def mutate(payload):
+        if payload is None:
+            records = []
+        elif isinstance(payload, list):
+            records = payload
+        else:
+            raise ValueError("feedback.json 格式错误，应为反馈数组")
+        records.append(record)
+        return records
+
+    update_json(FEEDBACK_PATH, mutate)
 
 
 def notify_feedback_author(record: dict) -> bool:
@@ -900,54 +925,58 @@ DETAIL_TEMPLATE = """
 
 
 def update_subscription_preference(index: int, field: str, value: str) -> bool:
-    subscriptions = load_subscriptions()
-    if not (0 <= index < len(subscriptions)):
-        return False
+    result = {"updated": False}
 
-    subscription = subscriptions[index]
-    hard = subscription.setdefault("hard_constraints", {})
-    soft = subscription.setdefault("soft_preferences", {})
+    def mutate(payload):
+        subscriptions = _migrated_subscription_list(payload, allow_missing=True)
+        if not (0 <= index < len(subscriptions)):
+            return subscriptions
+        subscription = subscriptions[index]
+        hard = subscription.setdefault("hard_constraints", {})
+        soft = subscription.setdefault("soft_preferences", {})
 
-    if field == "time_preference":
-        value = normalize_time_preference_mode(value)
-        hard["time_preference"] = value
-        hard["time_preference_mode"] = value
-        soft["time_preference"] = value
-        soft["time_preference_mode"] = value
-        if value == "no_redeye":
-            hard["departure_time_policy"] = "no_redeye"
-            hard["arrival_time_policy"] = "no_midnight"
-            soft["departure_time_windows"] = [["06:00", "23:00"]]
-            soft["arrival_time_windows"] = [["06:00", "23:00"]]
-            soft["red_eye_allowed"] = False
-            soft["early_morning_allowed"] = True
-        elif value == "daytime":
-            hard["departure_time_policy"] = "daytime"
-            hard["arrival_time_policy"] = "daytime_only"
-            soft["departure_time_windows"] = [["06:00", "20:00"]]
-            soft["arrival_time_windows"] = [["06:00", "20:00"]]
-            soft["red_eye_allowed"] = False
-            soft["early_morning_allowed"] = True
-        elif value == "unlimited":
-            hard["departure_time_policy"] = "any"
-            hard["arrival_time_policy"] = "any"
-            soft["departure_time_windows"] = []
-            soft["arrival_time_windows"] = []
-            soft["red_eye_allowed"] = True
-            soft["early_morning_allowed"] = True
-    elif field == "airline_policy":
-        soft["airline_policy"] = value
-    elif field == "accept_self_transfer":
-        accepted = parse_bool(value)
-        hard["accept_self_transfer"] = accepted
-        soft["allow_self_transfer"] = accepted
-    elif field == "refund_flexibility":
-        soft["refund_flexibility"] = value
-    else:
-        return False
+        if field == "time_preference":
+            normalized = normalize_time_preference_mode(value)
+            hard["time_preference"] = normalized
+            hard["time_preference_mode"] = normalized
+            soft["time_preference"] = normalized
+            soft["time_preference_mode"] = normalized
+            if normalized == "no_redeye":
+                hard["departure_time_policy"] = "no_redeye"
+                hard["arrival_time_policy"] = "no_midnight"
+                soft["departure_time_windows"] = [["06:00", "23:00"]]
+                soft["arrival_time_windows"] = [["06:00", "23:00"]]
+                soft["red_eye_allowed"] = False
+                soft["early_morning_allowed"] = True
+            elif normalized == "daytime":
+                hard["departure_time_policy"] = "daytime"
+                hard["arrival_time_policy"] = "daytime_only"
+                soft["departure_time_windows"] = [["06:00", "20:00"]]
+                soft["arrival_time_windows"] = [["06:00", "20:00"]]
+                soft["red_eye_allowed"] = False
+                soft["early_morning_allowed"] = True
+            elif normalized == "unlimited":
+                hard["departure_time_policy"] = "any"
+                hard["arrival_time_policy"] = "any"
+                soft["departure_time_windows"] = []
+                soft["arrival_time_windows"] = []
+                soft["red_eye_allowed"] = True
+                soft["early_morning_allowed"] = True
+        elif field == "airline_policy":
+            soft["airline_policy"] = value
+        elif field == "accept_self_transfer":
+            accepted = parse_bool(value)
+            hard["accept_self_transfer"] = accepted
+            soft["allow_self_transfer"] = accepted
+        elif field == "refund_flexibility":
+            soft["refund_flexibility"] = value
+        else:
+            return subscriptions
+        result["updated"] = True
+        return subscriptions
 
-    save_subscription(subscription, index)
-    return True
+    update_json(SUBSCRIPTIONS_PATH, mutate)
+    return result["updated"]
 
 
 def run_single_subscription(subscription: dict) -> None:
@@ -2350,20 +2379,28 @@ def subscription_list():
 
 @app.post("/subscriptions/<int:index>/toggle")
 def toggle_subscription(index: int):
-    subscriptions = load_subscriptions()
-    if 0 <= index < len(subscriptions):
-        current = subscriptions[index].get("status", "active")
-        subscriptions[index]["status"] = "paused" if current == "active" else "active"
-        save_subscriptions(subscriptions)
+    def mutate(payload):
+        subscriptions = _migrated_subscription_list(payload, allow_missing=True)
+        if 0 <= index < len(subscriptions):
+            current = subscriptions[index].get("status", "active")
+            subscriptions[index]["status"] = (
+                "paused" if current == "active" else "active"
+            )
+        return subscriptions
+
+    update_json(SUBSCRIPTIONS_PATH, mutate)
     return redirect(url_for("subscription_list"))
 
 
 @app.post("/subscriptions/<int:index>/delete")
 def delete_subscription(index: int):
-    subscriptions = load_subscriptions()
-    if 0 <= index < len(subscriptions):
-        subscriptions.pop(index)
-        save_subscriptions(subscriptions)
+    def mutate(payload):
+        subscriptions = _migrated_subscription_list(payload, allow_missing=True)
+        if 0 <= index < len(subscriptions):
+            subscriptions.pop(index)
+        return subscriptions
+
+    update_json(SUBSCRIPTIONS_PATH, mutate)
     return redirect(url_for("subscription_list"))
 
 

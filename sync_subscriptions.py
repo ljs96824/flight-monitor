@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 
 import httpx
 from dotenv import load_dotenv
 
+from atomic_json_store import read_json, update_json
 from log_utils import safe_log
 from subscription_identity import ensure_subscription_id, subscription_id
 
@@ -27,11 +27,10 @@ load_dotenv(BASE_DIR / ".env", encoding="utf-8")
 def _load_json_list(path: Path) -> list[dict]:
     if not path.exists():
         return []
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return []
-    return data if isinstance(data, list) else []
+    data = read_json(path)
+    if not isinstance(data, list):
+        raise ValueError("subscriptions.json 格式错误，应为订阅数组")
+    return data
 
 
 def route_subscription_key(subscription: dict) -> str:
@@ -165,8 +164,21 @@ def sync_subscriptions() -> dict:
     if not remote_subscriptions:
         return {"synced": False, "added": 0, "total": len(_load_json_list(LOCAL_SUBSCRIPTIONS))}
 
-    local_subscriptions = _load_json_list(LOCAL_SUBSCRIPTIONS)
-    plan = plan_remote_ingest(local_subscriptions, remote_subscriptions)
+    state: dict = {}
+
+    def mutate(payload):
+        if payload is None:
+            local_subscriptions = []
+        elif isinstance(payload, list):
+            local_subscriptions = payload
+        else:
+            raise ValueError("subscriptions.json 格式错误，应为订阅数组")
+        plan = plan_remote_ingest(local_subscriptions, remote_subscriptions)
+        state.update(plan)
+        return plan["subscriptions"]
+
+    update_json(LOCAL_SUBSCRIPTIONS, mutate)
+    plan = state
     merged = plan["subscriptions"]
     added = plan["added"]
 
@@ -178,12 +190,6 @@ def sync_subscriptions() -> dict:
             f"local_index={decision['local_index']}"
         )
 
-    if added:
-        DATA_DIR.mkdir(exist_ok=True)
-        LOCAL_SUBSCRIPTIONS.write_text(
-            json.dumps(merged, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
     safe_log(
         f"[sync] PA仅新增摄入：新增={added} "
         f"身份命中跳过={plan['skipped_identity']} "

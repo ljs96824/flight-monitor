@@ -9,10 +9,11 @@ from unittest.mock import patch
 class ApiUsageConcurrencyTest(unittest.TestCase):
     def test_platform_backends_share_retry_and_conflict_audit_path(self):
         import api_usage
+        import local_file_lock
 
         self.assertTrue(
-            hasattr(api_usage, "_build_lock_backend"),
-            "api_usage 尚未提供跨平台锁后端工厂",
+            hasattr(local_file_lock, "build_lock_backend"),
+            "local_file_lock 尚未提供跨平台锁后端工厂",
         )
 
         class FakeMsvcrt:
@@ -48,12 +49,12 @@ class ApiUsageConcurrencyTest(unittest.TestCase):
                     root = Path(tmp)
                     usage_path = root / "api_usage.json"
                     conflict_path = root / "api_usage_conflict.log"
-                    backend = api_usage._build_lock_backend(
+                    backend = local_file_lock.build_lock_backend(
                         msvcrt_module=msvcrt_module,
                         fcntl_module=fcntl_module,
                     )
                     with (
-                        patch("api_usage._LOCK_BACKEND", backend),
+                        patch("local_file_lock.LOCK_BACKEND", backend),
                         patch("api_usage.safe_log") as log_mock,
                     ):
                         payload = api_usage.record_actual_requests(

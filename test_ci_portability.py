@@ -129,7 +129,7 @@ class CiPortabilityTest(unittest.TestCase):
                 else:
                     modules = set()
                 for module in modules & WINDOWS_ONLY_MODULES:
-                    if module == "msvcrt" and relative == "api_usage.py":
+                    if module == "msvcrt" and relative == "local_file_lock.py":
                         continue
                     violations.append(f"{relative}:{node.lineno} import {module}")
 

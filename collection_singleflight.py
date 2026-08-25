@@ -14,7 +14,7 @@ from uuid import uuid4
 
 from dotenv import load_dotenv
 
-from api_usage import _LOCK_BACKEND
+from local_file_lock import LOCK_BACKEND
 from log_utils import safe_log
 
 
@@ -246,7 +246,7 @@ class CollectionSingleflightGate:
                         f"原因={type(exc).__name__}:{exc}"
                     )
                 try:
-                    _LOCK_BACKEND.unlock(lock_file)
+                    LOCK_BACKEND.unlock(lock_file)
                 except OSError:
                     pass
                 lock_file.close()
@@ -327,7 +327,7 @@ def acquire_collection_singleflight(
             os.fsync(lock_file.fileno())
 
         previous_holder = _read_holder_stream(lock_file)
-        if not _LOCK_BACKEND.try_lock(lock_file):
+        if not LOCK_BACKEND.try_lock(lock_file):
             holder = _read_holder_stream(lock_file) or previous_holder
             lock_file.close()
             thread_lock.release()

@@ -8,20 +8,11 @@ from __future__ import annotations
 from contextlib import contextmanager
 import json
 import os
-import threading
-import time
 import uuid
 from datetime import date, datetime
 from pathlib import Path
 
-try:
-    import msvcrt as _msvcrt
-except ImportError:
-    _msvcrt = None
-    import fcntl as _fcntl
-else:
-    _fcntl = None
-
+from local_file_lock import FileLockTimeout, file_lock
 from log_utils import safe_log
 
 
@@ -30,80 +21,7 @@ DEFAULT_LOCK_TIMEOUT_SECONDS = 3.0
 DEFAULT_LOCK_RETRIES = 1
 
 
-class UsageLockTimeout(TimeoutError):
-    """等待 API 台账文件锁超时。"""
-
-
-_thread_locks: dict[str, threading.Lock] = {}
-_thread_locks_guard = threading.Lock()
-
-
-class _FileLockBackend:
-    """把 Windows/POSIX 文件锁收敛到相同的非阻塞接口。"""
-
-    def __init__(self, name, try_lock, unlock):
-        self.name = str(name)
-        self.try_lock = try_lock
-        self.unlock = unlock
-
-
-def _build_lock_backend(*, msvcrt_module=None, fcntl_module=None):
-    if msvcrt_module is not None:
-        def try_lock(lock_file):
-            lock_file.seek(0)
-            try:
-                msvcrt_module.locking(
-                    lock_file.fileno(),
-                    msvcrt_module.LK_NBLCK,
-                    1,
-                )
-            except OSError:
-                return False
-            return True
-
-        def unlock(lock_file):
-            lock_file.seek(0)
-            msvcrt_module.locking(
-                lock_file.fileno(),
-                msvcrt_module.LK_UNLCK,
-                1,
-            )
-
-        return _FileLockBackend("windows", try_lock, unlock)
-
-    if fcntl_module is not None:
-        def try_lock(lock_file):
-            try:
-                fcntl_module.flock(
-                    lock_file.fileno(),
-                    fcntl_module.LOCK_EX | fcntl_module.LOCK_NB,
-                )
-            except OSError:
-                return False
-            return True
-
-        def unlock(lock_file):
-            fcntl_module.flock(lock_file.fileno(), fcntl_module.LOCK_UN)
-
-        return _FileLockBackend("posix", try_lock, unlock)
-
-    raise RuntimeError("当前平台没有可用的文件锁后端")
-
-
-_LOCK_BACKEND = _build_lock_backend(
-    msvcrt_module=_msvcrt,
-    fcntl_module=_fcntl,
-)
-
-
-def _thread_lock_for(path: Path) -> threading.Lock:
-    key = str(path.resolve())
-    with _thread_locks_guard:
-        return _thread_locks.setdefault(key, threading.Lock())
-
-
-def _try_lock_file(lock_file) -> bool:
-    return _LOCK_BACKEND.try_lock(lock_file)
+UsageLockTimeout = FileLockTimeout
 
 
 @contextmanager
@@ -114,42 +32,8 @@ def _usage_lock(
 ):
     """用进程内锁和平台文件锁覆盖完整读改写临界区。"""
 
-    path = Path(usage_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    lock_path = path.with_name(f"{path.name}.lock")
-    thread_lock = _thread_lock_for(path)
-    wait_seconds = max(0.0, float(timeout))
-    deadline = time.monotonic() + wait_seconds
-    if not thread_lock.acquire(timeout=wait_seconds):
-        raise UsageLockTimeout(f"等待进程内锁超时: {lock_path}")
-
-    lock_file = None
-    os_locked = False
-    try:
-        lock_file = lock_path.open("a+b")
-        lock_file.seek(0, os.SEEK_END)
-        if lock_file.tell() == 0:
-            lock_file.write(b"\0")
-            lock_file.flush()
-            os.fsync(lock_file.fileno())
-
-        while True:
-            if _try_lock_file(lock_file):
-                os_locked = True
-                break
-            if time.monotonic() >= deadline:
-                raise UsageLockTimeout(f"等待文件锁超时: {lock_path}")
-            time.sleep(min(0.01, max(0.0, deadline - time.monotonic())))
+    with file_lock(usage_path, timeout=timeout):
         yield
-    finally:
-        if lock_file is not None:
-            if os_locked:
-                try:
-                    _LOCK_BACKEND.unlock(lock_file)
-                except OSError:
-                    pass
-            lock_file.close()
-        thread_lock.release()
 
 
 def _atomic_write_json(path: Path, payload: dict) -> None:

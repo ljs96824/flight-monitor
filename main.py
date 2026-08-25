@@ -20,6 +20,7 @@ BASE_DIR = Path(__file__).parent
 DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
+from atomic_json_store import read_json
 # 加载环境变量
 load_dotenv(BASE_DIR / ".env", encoding="utf-8")
 
@@ -1212,14 +1213,11 @@ def _deliver_notification(sub: dict, route: str, message_kwargs: dict) -> bool:
 def load_file_subscriptions() -> list[dict]:
     if not SUBSCRIPTIONS_PATH.exists():
         return []
-    try:
-        subscriptions = json.loads(SUBSCRIPTIONS_PATH.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        logging.error(f"subscriptions.json 解析失败: {exc}")
-        return []
+    subscriptions = read_json(SUBSCRIPTIONS_PATH)
     if not isinstance(subscriptions, list):
-        logging.error("subscriptions.json 格式错误，应为订阅数组")
-        return []
+        message = "subscriptions.json 格式错误，应为订阅数组"
+        logging.error(message)
+        raise ValueError(message)
 
     active = []
     skipped = []

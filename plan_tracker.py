@@ -6,6 +6,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+from atomic_json_store import read_json
 from filename_utils import sanitize_filename
 from flight_combo_utils import normalize_combo
 from log_utils import safe_log
@@ -384,11 +385,10 @@ def get_subscription_feedback(subscription_id, data_dir=None, unresolved_only: b
     path = _feedback_path(data_dir)
     if not path.exists():
         return []
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return []
-    records = data if isinstance(data, list) else []
+    data = read_json(path)
+    if not isinstance(data, list):
+        raise ValueError("feedback.json 格式错误，应为反馈数组")
+    records = data
     target = str(subscription_id or "")
     matched = []
     for record in records:

@@ -3,11 +3,8 @@
 from __future__ import annotations
 
 import argparse
-import json
-import os
 import shutil
 import sys
-import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import TextIO
@@ -17,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from atomic_json_store import read_json, update_json
 from log_utils import safe_log
 from subscription_identity import ensure_subscription_id
 
@@ -24,11 +22,14 @@ from subscription_identity import ensure_subscription_id
 DEFAULT_SUBSCRIPTIONS_PATH = ROOT / "data" / "subscriptions.json"
 
 
-def _load_subscriptions(path: Path) -> list:
-    payload = json.loads(path.read_text(encoding="utf-8"))
+def _subscription_list(payload) -> list:
     if not isinstance(payload, list):
         raise ValueError("subscriptions.json 顶层必须是数组")
     return payload
+
+
+def _load_subscriptions(path: Path) -> list:
+    return _subscription_list(read_json(path))
 
 
 def _emit(message: str, stream: TextIO | None) -> None:
@@ -49,28 +50,6 @@ def migrate_subscription_ids(subscriptions: list) -> list[dict]:
     return migrated
 
 
-def _atomic_write(path: Path, subscriptions: list) -> None:
-    temporary_path = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            newline="\n",
-            delete=False,
-            dir=path.parent,
-            prefix=f".{path.name}.",
-            suffix=".tmp",
-        ) as handle:
-            temporary_path = Path(handle.name)
-            json.dump(subscriptions, handle, ensure_ascii=False, indent=2)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary_path, path)
-    finally:
-        if temporary_path is not None and temporary_path.exists():
-            temporary_path.unlink()
-
-
 def run(
     path: str | Path = DEFAULT_SUBSCRIPTIONS_PATH,
     *,
@@ -79,8 +58,36 @@ def run(
     stream: TextIO | None = None,
 ) -> dict:
     subscriptions_path = Path(path)
-    subscriptions = _load_subscriptions(subscriptions_path)
-    migrated = migrate_subscription_ids(subscriptions)
+    backup_path = None
+    if execute:
+        state: dict = {}
+
+        def mutate(payload):
+            subscriptions = _subscription_list(payload)
+            migrated = migrate_subscription_ids(subscriptions)
+            local_backup = None
+            if migrated:
+                timestamp = (now or datetime.now()).strftime("%Y%m%dT%H%M%S%f")
+                local_backup = subscriptions_path.with_name(
+                    f"{subscriptions_path.name}.bak.identity.{timestamp}"
+                )
+                shutil.copy2(subscriptions_path, local_backup)
+            state.update(
+                {
+                    "subscriptions": subscriptions,
+                    "migrated": migrated,
+                    "backup_path": local_backup,
+                }
+            )
+            return subscriptions
+
+        update_json(subscriptions_path, mutate)
+        subscriptions = state["subscriptions"]
+        migrated = state["migrated"]
+        backup_path = state["backup_path"]
+    else:
+        subscriptions = _load_subscriptions(subscriptions_path)
+        migrated = migrate_subscription_ids(subscriptions)
 
     for item in migrated:
         _emit(
@@ -89,14 +96,7 @@ def run(
             stream,
         )
 
-    backup_path = None
     if execute and migrated:
-        timestamp = (now or datetime.now()).strftime("%Y%m%dT%H%M%S%f")
-        backup_path = subscriptions_path.with_name(
-            f"{subscriptions_path.name}.bak.identity.{timestamp}"
-        )
-        shutil.copy2(subscriptions_path, backup_path)
-        _atomic_write(subscriptions_path, subscriptions)
         _emit(
             f"[身份迁移执行] 总数={len(subscriptions)} 补发={len(migrated)} "
             f"备份={backup_path}",
