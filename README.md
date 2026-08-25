@@ -125,6 +125,7 @@ python -c "from pathlib import Path; src=Path('.env.example'); dst=Path('.env');
 | `SMTP_PROVIDER`、`SMTP_HOST`、`SMTP_PORT`、`SMTP_SSL` | 邮件服务商与连接参数覆盖 |
 | `PYTHONANYWHERE_TOKEN`、`PYTHONANYWHERE_USER` | 可选的订阅和详情 payload 同步 |
 | `FEEDBACK_NOTIFY_EMAIL` | 表单反馈通知收件地址 |
+| `COLLECTION_LOCK_PATH` | 同机多进程采集单飞锁；建议配置为主运行目录中的绝对路径 |
 
 其余可调阈值与诊断开关已按用途分组列在 [.env.example](.env.example)。SerpAPI 密钥别名的解析实现见 [serpapi_credentials.py](serpapi_credentials.py)。
 
@@ -261,6 +262,7 @@ python -X utf8 scripts/snapshot_run.py --output data/snapshot_check.json
 - [商务舱源能力审计](docs/cabin-capability-audit-2026-08-13.md)
 - [SerpAPI能力审计](docs/serpapi-capability-audit-2026-08-14.md)
 - [邮件回归基线纪律](docs/email-regression-baseline.md)
+- [采集轮并发与锁顺序](docs/collection-concurrency.md)
 - [设计规格目录](docs/superpowers/specs/)
 - [实施计划目录](docs/superpowers/plans/)
 

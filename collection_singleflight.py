@@ -7,15 +7,63 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import socket
 import threading
-from typing import BinaryIO
+from typing import BinaryIO, Mapping
+from uuid import uuid4
+
+from dotenv import load_dotenv
 
 from api_usage import _LOCK_BACKEND
 from log_utils import safe_log
 
 
 BASE_DIR = Path(__file__).resolve().parent
-DEFAULT_LOCK_PATH = BASE_DIR / "data" / "collection_singleflight.lock"
+
+
+def _primary_worktree_root(base_dir: str | Path) -> Path:
+    base = Path(base_dir).resolve()
+    git_marker = base / ".git"
+    if not git_marker.is_file():
+        return base
+    try:
+        marker = git_marker.read_text(encoding="utf-8").strip()
+    except OSError:
+        return base
+    prefix = "gitdir:"
+    if not marker.lower().startswith(prefix):
+        return base
+    git_dir = Path(marker[len(prefix) :].strip())
+    if not git_dir.is_absolute():
+        git_dir = (base / git_dir).resolve()
+    if git_dir.parent.name == "worktrees" and len(git_dir.parents) >= 3:
+        return git_dir.parents[2]
+    return base
+
+
+def resolve_collection_lock_path(
+    *,
+    base_dir: str | Path = BASE_DIR,
+    environ: Mapping[str, str] | None = None,
+) -> Path:
+    """解析同机共享锁路径；linked worktree默认回到主工作区。"""
+
+    primary_root = _primary_worktree_root(base_dir)
+    if environ is None:
+        load_dotenv(primary_root / ".env", encoding="utf-8")
+        values = os.environ
+    else:
+        values = environ
+    configured = str(values.get("COLLECTION_LOCK_PATH") or "").strip()
+    if configured:
+        path = Path(configured).expanduser()
+        if not path.is_absolute():
+            path = primary_root / path
+        return path.resolve()
+    return (primary_root / "data" / "collection_singleflight.lock").resolve()
+
+
+DEFAULT_LOCK_PATH = resolve_collection_lock_path()
 DEFAULT_STALE_AFTER_SECONDS = 30 * 60
 DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 60.0
 
@@ -97,6 +145,8 @@ class CollectionSingleflightGate:
     round_id: str
     lock_path: Path
     pid: int = field(default_factory=os.getpid)
+    lease_id: str = ""
+    hostname: str = ""
     holder: dict = field(default_factory=dict)
     _lock_file: BinaryIO | None = field(default=None, repr=False)
     _thread_lock: threading.Lock | None = field(default=None, repr=False)
@@ -111,20 +161,41 @@ class CollectionSingleflightGate:
         repr=False,
     )
     _released: bool = field(default=False, repr=False)
+    _lease_mismatch_logged: bool = field(default=False, repr=False)
 
     def _metadata(self) -> dict:
         return {
             "pid": self.pid,
             "round_id": self.round_id,
+            "lease_id": self.lease_id,
+            "hostname": self.hostname,
             "state": "running",
             "heartbeat_at": _now().isoformat(),
         }
 
-    def heartbeat(self) -> None:
-        if not self.acquired or self._released or self._lock_file is None:
+    def _metadata_lease_matches(self, lock_file: BinaryIO) -> bool:
+        current = _read_holder_stream(lock_file)
+        return bool(self.lease_id) and current.get("lease_id") == self.lease_id
+
+    def _log_lease_mismatch(self, action: str) -> None:
+        if self._lease_mismatch_logged:
             return
+        self._lease_mismatch_logged = True
+        safe_log(
+            f"[采集] 单飞锁租约不匹配 round={self.round_id} "
+            f"lease={self.lease_id} action={action},放弃元数据写入"
+        )
+
+    def heartbeat(self) -> bool:
+        if not self.acquired or self._released or self._lock_file is None:
+            return False
         with self._metadata_guard:
+            if not self._metadata_lease_matches(self._lock_file):
+                self._heartbeat_stop.set()
+                self._log_lease_mismatch("heartbeat")
+                return False
             _write_holder(self._lock_file, self._metadata())
+        return True
 
     def _heartbeat_loop(self) -> None:
         interval = max(0.0, float(self._heartbeat_interval_seconds))
@@ -150,22 +221,25 @@ class CollectionSingleflightGate:
     def release(self) -> None:
         if self._released:
             return
-        self._released = True
         self._heartbeat_stop.set()
+        self._released = True
         if self._heartbeat_thread is not None:
-            self._heartbeat_thread.join(timeout=2)
+            self._heartbeat_thread.join()
         try:
             if self._lock_file is not None:
                 lock_file = self._lock_file
                 self._lock_file = None
                 try:
                     with self._metadata_guard:
-                        released_metadata = self._metadata()
-                        released_metadata["state"] = "released"
-                        released_metadata["released_at"] = released_metadata[
-                            "heartbeat_at"
-                        ]
-                        _write_holder(lock_file, released_metadata)
+                        if self._metadata_lease_matches(lock_file):
+                            released_metadata = self._metadata()
+                            released_metadata["state"] = "released"
+                            released_metadata["released_at"] = released_metadata[
+                                "heartbeat_at"
+                            ]
+                            _write_holder(lock_file, released_metadata)
+                        else:
+                            self._log_lease_mismatch("release")
                 except OSError as exc:
                     safe_log(
                         f"[采集] 单飞锁释放状态写入失败 round={self.round_id} "
@@ -200,6 +274,31 @@ def _busy_gate(round_id: str, lock_path: Path, holder: dict) -> CollectionSingle
     )
 
 
+def collection_busy_status(
+    gate: CollectionSingleflightGate,
+    *,
+    entrypoint: str,
+) -> dict:
+    """记录并返回不与成功/失败混用的busy状态。"""
+
+    holder = gate.holder or {}
+    status = {
+        "status": "busy",
+        "holder_pid": holder.get("pid"),
+        "holder_round_id": holder.get("round_id"),
+        "holder_heartbeat_at": holder.get("heartbeat_at"),
+        "entrypoint": str(entrypoint),
+    }
+    safe_log(
+        "[采集状态] status=busy "
+        f"holder_pid={status['holder_pid']} "
+        f"holder_round_id={status['holder_round_id']} "
+        f"holder_heartbeat_at={status['holder_heartbeat_at']} "
+        f"entrypoint={status['entrypoint']}"
+    )
+    return status
+
+
 def acquire_collection_singleflight(
     round_id: str,
     *,
@@ -209,7 +308,9 @@ def acquire_collection_singleflight(
 ) -> CollectionSingleflightGate:
     """非阻塞获取采集轮锁；busy时返回未获取结果，不等待。"""
 
-    path = Path(lock_path or DEFAULT_LOCK_PATH)
+    path = (
+        Path(lock_path).resolve() if lock_path is not None else resolve_collection_lock_path()
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     thread_lock = _thread_lock_for(path)
     if not thread_lock.acquire(blocking=False):
@@ -249,6 +350,8 @@ def acquire_collection_singleflight(
             acquired=True,
             round_id=str(round_id),
             lock_path=path,
+            lease_id=str(uuid4()),
+            hostname=socket.gethostname(),
             holder=previous_holder,
             _lock_file=lock_file,
             _thread_lock=thread_lock,
@@ -257,7 +360,7 @@ def acquire_collection_singleflight(
                 float(heartbeat_interval_seconds),
             ),
         )
-        gate.heartbeat()
+        _write_holder(lock_file, gate._metadata())
         gate.start_heartbeat()
         return gate
     except Exception:

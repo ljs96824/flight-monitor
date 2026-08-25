@@ -178,7 +178,8 @@ class CollectionSingleflightTest(unittest.TestCase):
             release.set()
             holder.join(10)
 
-            self.assertFalse(ok)
+            self.assertEqual(ok["status"], "busy")
+            self.assertEqual(ok["entrypoint"], "single_subscription")
             start_round.assert_not_called()
             collect.assert_not_called()
             self.assertEqual(usage_path.read_bytes(), before_usage)
@@ -216,7 +217,8 @@ class CollectionSingleflightTest(unittest.TestCase):
         ):
             result = main.run(sync_remote=False)
 
-        self.assertIsNone(result)
+        self.assertEqual(result["status"], "busy")
+        self.assertEqual(result["entrypoint"], "batch")
         start_round.assert_not_called()
         build_plan.assert_not_called()
         busy_gate.release.assert_not_called()

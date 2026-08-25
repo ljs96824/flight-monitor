@@ -9,7 +9,10 @@ from typing import Callable
 
 from api_usage import load_usage, usage_snapshot
 from collection_plan import build_collection_plan, load_collection_settings
-from collection_singleflight import acquire_collection_singleflight
+from collection_singleflight import (
+    acquire_collection_singleflight,
+    collection_busy_status,
+)
 from log_utils import configure_stdio_utf8, end_round_log_archive, safe_log, start_round_log_archive
 from observations_store import (
     DEFAULT_DB_PATH,
@@ -215,7 +218,9 @@ def run_basket(
         lock_path=singleflight_lock_path,
     )
     if not singleflight.acquired:
+        busy = collection_busy_status(singleflight, entrypoint="basket")
         return {
+            **busy,
             "round_id": round_id,
             "queues": 0,
             "success": 0,
