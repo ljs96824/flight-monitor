@@ -22,6 +22,24 @@
 
 其余 7 组是已知历史债务，不是白名单。合同固定这份债务集合：新增重名会使测试失败；清理历史债务时必须同步删除对应记录。
 
+## 第七批串行清理进度
+
+### 1. 订阅列表结论文本渲染
+
+- 状态：`fixed_rendering_defect`；本项不是顶层重名，精确债务集合仍为 7 组。
+- 基线：`1947e35`；引入提交：`8d12faa`；生效位置：`web_form.py::_subscription_last_decision`。
+- 清理提交：本提交 `fix: render subscription conclusion text`；精确 SHA 由提交后闸门报告记录（提交无法在自身树中保存自身 SHA）。
+- 特征测试：`test_subscription_decision_text_normalizes_current_and_legacy_shapes`、`test_subscription_list_renders_decision_dict_as_text_not_python_repr`。
+- 删除前后：旧字符串输出完全相同；当前字典 payload 从 Python `dict` repr 修正为 `conclusion`，无 `conclusion` 时取 `label`。
+- 剩余顶层重复符号：7。
+
+完整考古结论：
+
+1. 这里没有多个定义版本。新增的服务端规范化签名为 `(value) -> str`，无默认参数、装饰器或原地修改。完整字典优先 `conclusion`，仅 `conclusion` 取该值，仅 `label` 取该值，无两字段取空串；旧字符串保持 `str(value)`，`None` 取空串。价格、相对时间、排序、日志和异常路径不变。
+2. `_subscription_last_decision` 在模块加载完成后才由 `build_subscription_list_items` 调用。两者之间不存在模块级调用；全仓也没有循环导入在 `web_form.py` 执行完成前读取该局部辅助符号。
+3. 全仓引用只存在于订阅列表构建路径和对应测试；未发现 `from ... import`、`getattr`、`__all__`、patch、模块级注册器、装饰器或默认参数表达式持有旧行为。
+4. 基线 RED 同时捕获缺失规范化函数和页面泄露 `{'label': ...}`；GREEN 锁定五种输入形态、完整页面文本、价格格式与不得出现 Python 字典 repr。
+
 ## 图表基线
 
 生效版本是第二版 `build_trend_png`：`6×2.8`、全日期旋转标签、当前价标注、`bbox_inches="tight"`。删除前记录：

@@ -911,13 +911,24 @@ def _relative_time_label(value: str) -> str:
     return f"{minutes // (24 * 60)}天前"
 
 
+def _subscription_decision_text(value) -> str:
+    if isinstance(value, dict):
+        return str(value.get("conclusion") or value.get("label") or "")
+    return str(value or "")
+
+
 def _subscription_last_decision(sub: dict, index: int) -> str:
     subscription_id = stable_subscription_id(sub) or str(index)
     record = _load_payload_result(subscription_id) or {}
     payload = record.get("payload") if isinstance(record.get("payload"), dict) else record
     if not isinstance(payload, dict) or not payload:
         return "暂无"
-    decision = payload.get("execution_advice") or payload.get("recommendation") or payload.get("push_type") or "已生成"
+    decision = _subscription_decision_text(
+        payload.get("execution_advice")
+        or payload.get("recommendation")
+        or payload.get("push_type")
+        or "已生成"
+    )
     price = payload.get("current_price") or payload.get("display_price") or payload.get("price")
     price_text = f"(¥{int(price):,})" if isinstance(price, (int, float)) and price else ""
     time_text = _relative_time_label(str(record.get("created_at") or payload.get("created_at") or ""))

@@ -161,6 +161,43 @@ class SubscriptionManagementPageTest(unittest.TestCase):
         self.assertIn(STABLE_ID, item["detail_url"])
         self.assertIn("已生成(¥1,234)", item["last_decision"])
 
+    def test_subscription_decision_text_normalizes_current_and_legacy_shapes(self):
+        cases = [
+            ({"conclusion": "可以观察", "label": "强"}, "可以观察"),
+            ({"conclusion": "继续等待"}, "继续等待"),
+            ({"label": "值得验证"}, "值得验证"),
+            ("旧版结论", "旧版结论"),
+            (None, ""),
+        ]
+
+        for value, expected in cases:
+            with self.subTest(value=value):
+                self.assertEqual(web_form._subscription_decision_text(value), expected)
+
+    def test_subscription_list_renders_decision_dict_as_text_not_python_repr(self):
+        self._write_subscriptions()
+        (web_form.PAGE_PAYLOADS_DIR / f"{ACTIVE_ID}.json").write_text(
+            json.dumps(
+                {
+                    "created_at": "2026-06-13T10:00:00",
+                    "payload": {
+                        "execution_advice": {
+                            "label": "值得验证",
+                            "conclusion": "核验支付页后再决定",
+                        },
+                        "current_price": 680,
+                    },
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        body = self.client.get("/subscriptions").get_data(as_text=True)
+
+        self.assertIn("最近判断: 核验支付页后再决定(¥680)", body)
+        self.assertNotIn("{'label'", body)
+
     def test_toggle_and_delete_subscription(self):
         self._write_subscriptions()
 
