@@ -17,7 +17,6 @@ EXPLICIT_ALLOWLIST: tuple[tuple[str, str, str], ...] = ()
 
 # 基线扫描后确认的历史债务；它们记录在 docs 中，不属于白名单。
 KNOWN_TOP_LEVEL_DUPLICATES: set[tuple[str, str]] = {
-    ("analyzer.py", "transfer_risk"),
     ("analyzer.py", "verify_fare_rules"),
     ("analyzer.py", "calc_confidence"),
     ("analyzer.py", "determine_push_type"),

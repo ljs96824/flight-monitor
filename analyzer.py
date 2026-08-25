@@ -5369,68 +5369,6 @@ def overall_score(
     }
 
 
-def transfer_risk(flight: dict) -> dict:
-    """Transfer risk grade: green/yellow/red."""
-    if (flight.get("stops") or 0) == 0:
-        return {"level": "green", "label": "直飞", "notes": []}
-
-    risks = []
-    level = "green"
-
-    def raise_level(new_level: str) -> None:
-        nonlocal level
-        order = {"green": 0, "yellow": 1, "red": 2}
-        if order[new_level] > order[level]:
-            level = new_level
-
-    us_airports = {
-        "JFK",
-        "LAX",
-        "SFO",
-        "ORD",
-        "DFW",
-        "ATL",
-        "MIA",
-        "SEA",
-        "DTW",
-        "IAH",
-        "EWR",
-    }
-
-    for layover in flight.get("layovers", []) or []:
-        wait = layover.get("wait_minutes", 0) or 0
-        city = layover.get("city", "中转地")
-        airport = layover.get("airport", "")
-
-        if wait < 75:
-            risks.append(f"{city}转机仅{wait}分钟，国际航班可能不够")
-            raise_level("red")
-        elif wait < 120:
-            risks.append(f"{city}转机{wait // 60}小时{wait % 60}分钟，需快速通关")
-            raise_level("yellow")
-        elif wait > 600:
-            risks.append(f"{city}转机超过10小时，可能需要在机场过夜或外出住宿")
-            raise_level("yellow")
-        elif wait > 360:
-            risks.append(f"{city}等待较长（{wait // 60}小时），建议了解机场休息设施")
-            raise_level("yellow")
-
-        if airport in us_airports:
-            risks.append(f"在美国{city}转机通常需要办理入境手续、提取行李重新托运")
-
-    airlines = {
-        segment.get("airline", "")
-        for segment in flight.get("segments", []) or []
-        if segment.get("airline")
-    }
-    if len(airlines) > 1:
-        risks.append(f"涉及{len(airlines)}家航司（{'、'.join(sorted(airlines))}），行李可能无法直挂")
-        raise_level("yellow")
-
-    label_map = {"green": "转机安全", "yellow": "需注意", "red": "风险较高"}
-    return {"level": level, "label": label_map[level], "notes": risks}
-
-
 def calc_transfer_risk(flight: dict) -> dict:
     """Evaluate execution risk for transfer-heavy itineraries."""
     risk_score = 0

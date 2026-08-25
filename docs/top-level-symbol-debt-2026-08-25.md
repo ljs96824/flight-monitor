@@ -91,6 +91,23 @@
 3. 外部引用只有 `notifier.py` 的静态导入与 payload 消费；未发现属性/getattr、`__all__`、patch、注册器、装饰器或默认参数表达式保存第一版对象。
 4. 删除前矩阵锁定默认个人画像、个人/商务/旅游/家庭亲子/老人同行/价格优先、未知场景、多场景拼接顺序、场景首项优先、四类取舍分支优先级、完整返回字段与类型、维度映射、库存透传、中文标点、入参不变及异常类型；删除后必须逐字一致。
 
+### 5. `analyzer.transfer_risk`
+
+- 状态：`removed_as_shadowed`。
+- 基线：`95cd952`；第一版引入提交：`58fba3b`；生效版 helper 与兼容包装器引入提交：`d1bf1bb`。
+- 清理提交：本提交 `refactor: remove shadowed transfer risk implementation`；精确 SHA 由提交后闸门报告记录。
+- 生效版本位置：清理后 `analyzer.py::calc_transfer_risk` 与唯一的 `analyzer.py::transfer_risk` 兼容包装器。
+- 特征测试：`TransferRiskCharacterizationTest` 的 7 项完整风险字典矩阵。
+- 删除前后输出：完全相同；风险等级、分数、现行原因码载体 `factors` 的值与顺序均保持原样。
+- 剩余顶层重复符号：3。
+
+完整考古结论：
+
+1. 两个 `transfer_risk` 签名均为 `(flight: dict) -> dict`，无默认参数或装饰器。第一版直接返回 `level/label/notes`，使用 `green/yellow/red`，短中转阈值为 75 分钟，并专门提示美国转机；生效版包装器委托 `calc_transfer_risk`，返回 `level/label/score/factors`，使用 `none/low/medium/high`，按停站数、中转分钟、航司集合和特定过境机场累计分数。生效版会对航司去重排序，并按“停站→中转分钟→跨航司→过境机场”固定顺序生成 `factors`；不读取换机场、显式非联程、过夜标志或老幼场景。两版都不记录日志、不原地修改输入；空字典在生效版视为直飞，`None` 或非字典 layover 按现状抛 `AttributeError`。
+2. 第一版之后只有 `calc_transfer_risk` 的函数定义，随后最终包装器立即覆盖第一版；两处之间没有模块级调用、注册或对象捕获。生产调用位于后续函数体内，运行时读取最终全局绑定；外部模块均在 `analyzer.py` 完整执行后导入，且未发现反向循环导入提前读取第一版。
+3. 全仓外部只消费航班 payload 内已经生成的 `transfer_risk` 字段；未发现 `from analyzer import transfer_risk`、`analyzer.transfer_risk`、`getattr`、`__all__`、patch、模块级注册器、装饰器或默认参数表达式保存第一版对象。模块内直接调用仅在 `analyze_all_flights` 后段；`calc_execution_grade` 直接调用当前 helper，不经过旧定义。
+4. 删除前矩阵锁定直飞、合理中转、短/长中转及 90/120/480 分钟边界、跨航司非联程、显式自行中转、换机场、过夜、信息缺失、多次中转、过境机场、老幼场景、完整字段顺序与类型、分数、`factors` 原因顺序、入参不变及异常类型；显式字段当前被忽略的行为也被锁定，删除后必须逐字一致。
+
 ## 图表基线
 
 生效版本是第二版 `build_trend_png`：`6×2.8`、全日期旋转标签、当前价标注、`bbox_inches="tight"`。删除前记录：
