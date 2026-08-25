@@ -125,6 +125,24 @@
 3. 外部静态导入只在 `test_domestic_fare_rules.py` 和 `test_email_polish.py`，均发生于模块完整加载后；未发现 `analyzer.verify_fare_rules`、`getattr`、`__all__`、patch、注册器、装饰器或默认参数表达式保存第一版对象。通知层只消费 `fare_verification` payload，不持有函数引用。
 4. 删除前矩阵锁定完整票规、明确/缺失行李、明确/缺失退改、来源冲突、仅系统推断、支付页待确认、廉航、多人混舱、基础舱、跨航司、空值与异常；同时锁定返回键类型与顺序、重复标签/原因现状、国际不变、国内原地覆盖，以及 `source/source_note/baggage.level/refund.level/change.allowed` 证据字段，删除后必须逐字一致。
 
+### 7. `analyzer.calc_confidence`
+
+- 状态：`removed_as_shadowed`。
+- 基线：`fa4ebe4`；三版分别引入于 `f36cf90`、`8c77a24`、`225a2a8`，第一版年龄解析后由 `66755776` 修订。
+- 清理提交：本提交 `refactor: remove shadowed confidence calculator`；精确 SHA 由提交后闸门报告记录。
+- 生效版本位置：清理后 `analyzer.py::calc_confidence` 唯一定义。
+- 生效函数删除前源码 SHA-256：`69059cdb0a89bec29d52bc54db9db889425ccd6ad2882f458d52abcb4a7568a7`。
+- 特征测试：`CalcConfidenceCharacterizationTest` 的 8 项五维置信度与来源覆盖矩阵。
+- 删除前后输出：完全相同；最终等级、五个分项、细节原因、字段顺序、无独立 `reason_codes` 的现状及异常类型均保持原样。
+- 剩余顶层重复符号：1。
+
+完整考古结论：
+
+1. 三版签名均为 `(flight: dict, source_stats=None, price_history=None) -> dict`，无装饰器，返回键均为 `overall/dimensions/details`。第一版把 `likely_available` 记为“高”、采用 availability 自带标签，以“高”分项数量计算总体等级，渠道与票规措辞较短；第二版把可购买性改为“中高/中/低”及固定支付页措辞，渠道说明改为“可交叉验证”，总体等级改按“中及以上”分项数量；第三版完整继承第二版，再按 `route_type/data_source/primary_source` 覆盖国内聚合主源、国内仅 Google、国际 Google 多源的渠道与可购买性说明。三版均不排序、不记录日志、不原地修改输入；假值输入归一为空字典，年龄转换错误降为未知，真值非映射航班抛 `AttributeError`，真值且不可取长度的历史样本抛 `TypeError`。
+2. 当前实际生效为第三版。AST 显示三定义在模块顶层连续出现，定义之间没有调用、赋值、注册或旧对象捕获；两个生产调用均位于后续函数体，运行时读取最终全局绑定。`notifier.py` 在 `analyzer.py` 完整加载后静态导入最终符号，`analyzer.py` 不反向导入 notifier，未发现循环导入提前读取前两版。
+3. 外部生产引用只有 `notifier.py` 的静态导入；模块内有两个运行期调用。未发现 `analyzer.calc_confidence`、`getattr`、`__all__`、patch、注册器、装饰器或默认参数表达式保存旧对象。通知层优先消费分析 payload 的 `confidence_breakdown`，缺失时才调用最终绑定。
+4. 删除前矩阵锁定价格新鲜度 30/31/120/121 分钟边界、历史样本 4/5/13/14 边界、数据源 1/2/3 边界及三层回退、票规完整/部分/缺失、可购买性三态、国内聚合主源、国内仅 Google、国际多源、采集失败与退化字段当前不产生独立分项或 `reason_codes` 的事实、总体“高/中高/中”阈值、完整字段类型与顺序、细节原因、入参不变及异常类型。
+
 ## 图表基线
 
 生效版本是第二版 `build_trend_png`：`6×2.8`、全日期旋转标签、当前价标注、`bbox_inches="tight"`。删除前记录：
