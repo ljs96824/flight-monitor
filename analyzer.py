@@ -3372,46 +3372,6 @@ def build_alert_policy(profile: dict | None) -> dict:
 
 
 def travel_profile_explanation(profile: dict | None) -> dict:
-    """User-facing explanation for why a scenario changes recommendation order."""
-    profile = profile or build_travel_profile({})
-    scenario = profile.get("scenario", "personal")
-    scenario_labels = {
-        "personal": "个人出行",
-        "business": "商务/会议",
-        "tourism": "旅游",
-        "family_visit": "探亲/回家",
-        "visit_family": "探亲/回家",
-        "family": "家庭/亲子",
-        "elderly": "有老人同行",
-        "with_elderly": "有老人同行",
-        "important": "重要事项",
-        "price_first": "价格优先",
-    }
-    basis = {
-        "business": "优先了到达时间稳定、直飞/低中转风险和可改签，价格不是唯一排序因素。",
-        "family": "优先了白天直飞、行李明确和低中转风险，减少带孩子出行的折腾。",
-        "elderly": "优先了白天到达、全服务航司和低转机风险，更适合老人出行。",
-        "important": "优先了稳定到达、可退改和低执行风险，降低考试/婚礼/医疗等重要行程的不确定性。",
-        "price_first": "优先了当前低价区间，如果能接受时间和中转不便，性价比更高。",
-        "tourism": "优先了低价日期和合理中转，同时保留基础执行风险提示。",
-        "family_visit": "优先了行李明确和合理价格，不推荐极端折腾方案。",
-        "visit_family": "优先了行李明确和合理价格，不推荐极端折腾方案。",
-    }
-    dimensions = {
-        TRAVEL_PROFILE_LABELS.get(key, key): TRAVEL_PROFILE_LEVEL_LABELS.get(value, value)
-        for key, value in profile.items()
-        if key in TRAVEL_PROFILE_LABELS
-    }
-    return {
-        "scenario": scenario,
-        "scenario_label": scenario_labels.get(scenario, "个人出行"),
-        "basis": basis.get(scenario, "按价格、时间、舒适度和执行风险做均衡排序。"),
-        "dimensions": dimensions,
-        "stock_check": profile.get("stock_check"),
-    }
-
-
-def travel_profile_explanation(profile: dict | None) -> dict:
     """User-facing explanation for why a scenario combo changes recommendation order."""
     profile = profile or build_travel_profile({})
     scenarios = _normalize_travel_scenarios(profile.get("scenarios") or profile.get("scenario"))

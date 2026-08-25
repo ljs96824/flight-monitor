@@ -74,6 +74,23 @@
 3. 全仓未发现 `from notifier import format_flight_detail`、属性/getattr、`__all__`、patch、注册器、装饰器或默认参数表达式持有旧对象。模块内共有 6 个调用点：4 个三参数路径消费当前版本，2 个五参数旧路径按当前签名会抛 `TypeError`；本次只锁定现状，不修复这些路径。
 4. 删除前矩阵锁定国内/国际直飞、一次中转、多航段、缺时刻与机型、空 segments、仅 combo、`None`、特殊字符的纯文本与后续 HTML 转义边界、票规/行李缺失、返回类型、字段顺序、日期参数现状、入参不变及五参数异常类型；删除后必须逐字一致。
 
+### 4. `analyzer.travel_profile_explanation`
+
+- 状态：`removed_as_shadowed`。
+- 基线：`f008335`；第一版引入提交：`6307ca6`；第二版引入提交：`0279a8b`。
+- 清理提交：本提交 `refactor: remove shadowed travel profile explanation`；精确 SHA 由提交后闸门报告记录。
+- 生效版本位置：清理后 `analyzer.py::travel_profile_explanation` 唯一定义。
+- 特征测试：`TravelProfileExplanationCharacterizationTest` 的 6 项完整字典矩阵。
+- 删除前后输出：完全相同；多场景顺序、冲突取舍和中文标点保持原样。
+- 剩余顶层重复符号：4。
+
+完整考古结论：
+
+1. 两版签名均为 `(profile: dict | None) -> dict`，无默认参数或装饰器。第一版只解释单个 `scenario`，返回 5 个字段；第二版按输入顺序规范化 `scenarios`，返回 7 个字段，新增 `scenarios` 与 `tradeoff`，并改写单场景依据文案。未知场景在第一版标签回退“个人出行”，第二版保留原值；`None`/假值走默认画像，真值非映射均抛 `AttributeError`。两版都不排序、不记录日志、不原地修改输入。
+2. 两个定义相邻，中间没有任何模块级节点；内部调用只在 `analyze_all_flights` 和 `analyze_round_trip` 函数体内，均在运行时读取最终全局绑定。`notifier.py` 在 `analyzer.py` 完整加载后静态导入，且 `analyzer.py` 不反向导入 `notifier`，不存在循环导入提前暴露第一版。
+3. 外部引用只有 `notifier.py` 的静态导入与 payload 消费；未发现属性/getattr、`__all__`、patch、注册器、装饰器或默认参数表达式保存第一版对象。
+4. 删除前矩阵锁定默认个人画像、个人/商务/旅游/家庭亲子/老人同行/价格优先、未知场景、多场景拼接顺序、场景首项优先、四类取舍分支优先级、完整返回字段与类型、维度映射、库存透传、中文标点、入参不变及异常类型；删除后必须逐字一致。
+
 ## 图表基线
 
 生效版本是第二版 `build_trend_png`：`6×2.8`、全日期旋转标签、当前价标注、`bbox_inches="tight"`。删除前记录：
