@@ -1,0 +1,5 @@
+# 开发与测试直接依赖；生产依赖版本沿用 requirements.txt。
+-c requirements.txt
+
+pip-tools
+pytest

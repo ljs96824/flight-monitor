@@ -92,6 +92,7 @@ class CiPortabilityTest(unittest.TestCase):
         required = [
             "name: tests",
             "branches: [main]",
+            "pull_request:",
             "workflow_dispatch:",
             "group: ci-${{ github.ref }}",
             "cancel-in-progress: true",
@@ -100,7 +101,10 @@ class CiPortabilityTest(unittest.TestCase):
             "timeout-minutes: 20",
             "MPLBACKEND: Agg",
             'python-version: "3.13"',
-            "pip install -r requirements.txt pytest",
+            'cache: "pip"',
+            "cache-dependency-path:",
+            "requirements-dev.txt",
+            "pip install -r requirements.txt -r requirements-dev.txt",
             "python -X utf8 -m pytest -q",
             "python -X utf8 -m unittest discover",
         ]

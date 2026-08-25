@@ -95,8 +95,17 @@ Flight Monitor 是一个本地优先的航班采集、约束过滤与通知系�
 
 ```bash
 python --version
-python -m pip install -r requirements.txt
-python -m pip install pytest
+python -m pip install -r requirements.txt -r requirements-dev.txt
+# pytest 已由 requirements-dev.txt 锁定
+```
+
+生产部署只需安装 [requirements.txt](requirements.txt)；本地开发与测试同时安装 [requirements-dev.txt](requirements-dev.txt)。
+
+直接依赖只在 [requirements.in](requirements.in) 与 [requirements-dev.in](requirements-dev.in) 中维护。锁文件由 pip-compile 生成，勿手改。修改输入文件后，在干净的 Python 3.13 环境执行：
+
+```bash
+python -m piptools compile --allow-unsafe --generate-hashes --no-emit-index-url --no-emit-trusted-host --output-file requirements.txt --strip-extras requirements.in
+python -m piptools compile --allow-unsafe --generate-hashes --no-emit-index-url --no-emit-trusted-host --output-file requirements-dev.txt --strip-extras requirements-dev.in
 ```
 
 ### 6.2 创建 `.env`

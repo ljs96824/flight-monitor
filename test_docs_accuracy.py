@@ -14,6 +14,9 @@ ROOT = Path(__file__).resolve().parent
 README = ROOT / "README.md"
 ENV_EXAMPLE = ROOT / ".env.example"
 LICENSE = ROOT / "LICENSE"
+REQUIREMENTS_INPUT = ROOT / "requirements.in"
+DEV_REQUIREMENTS_INPUT = ROOT / "requirements-dev.in"
+DEV_REQUIREMENTS_LOCK = ROOT / "requirements-dev.txt"
 
 EXPECTED_SECTIONS = (
     "定位",
@@ -194,7 +197,12 @@ class DocsAccuracyTest(unittest.TestCase):
     def test_quick_start_contains_required_install_run_and_scheduler_contracts(self):
         required = (
             "Python 3.13",
-            "python -m pip install -r requirements.txt",
+            "python -m pip install -r requirements.txt -r requirements-dev.txt",
+            "requirements.in",
+            "requirements-dev.in",
+            "requirements-dev.txt",
+            "pip-compile",
+            "锁文件由 pip-compile 生成，勿手改",
             "python -u -X utf8 run_web.py",
             "python -X utf8 -m pytest -q",
             "python -X utf8 -m unittest discover",
@@ -206,6 +214,9 @@ class DocsAccuracyTest(unittest.TestCase):
         )
         missing = [item for item in required if item not in self.readme]
         self.assertEqual(missing, [])
+        self.assertTrue(REQUIREMENTS_INPUT.is_file())
+        self.assertTrue(DEV_REQUIREMENTS_INPUT.is_file())
+        self.assertTrue(DEV_REQUIREMENTS_LOCK.is_file())
 
     def test_readme_source_and_quota_claims_match_current_profiles(self):
         from source_profiles import ROUTE_SOURCE_PROFILES
@@ -288,10 +299,13 @@ class DocsAccuracyTest(unittest.TestCase):
         path_only_commands = {"cd ~/flight-monitor"}
         probes = {
             "python --version": [cli_python, "--version"],
-            "python -m pip install -r requirements.txt": [
+            "python -m pip install -r requirements.txt -r requirements-dev.txt": [
                 cli_python, "-m", "pip", "install", "--help",
             ],
-            "python -m pip install pytest": [
+            "python -m piptools compile --allow-unsafe --generate-hashes --no-emit-index-url --no-emit-trusted-host --output-file requirements.txt --strip-extras requirements.in": [
+                cli_python, "-m", "pip", "install", "--help",
+            ],
+            "python -m piptools compile --allow-unsafe --generate-hashes --no-emit-index-url --no-emit-trusted-host --output-file requirements-dev.txt --strip-extras requirements-dev.in": [
                 cli_python, "-m", "pip", "install", "--help",
             ],
             "python -u -X utf8 run_web.py": [

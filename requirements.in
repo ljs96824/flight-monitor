@@ -1,0 +1,8 @@
+# 生产环境直接依赖。版本由 requirements.txt 统一锁定。
+flask
+google-search-results
+httpx
+matplotlib
+python-dotenv
+pyyaml
+requests
