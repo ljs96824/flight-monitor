@@ -63,7 +63,7 @@ class CollectionOrchestrationTest(unittest.TestCase):
             patch("main.activate_collection_plan") as activate,
             patch("main.deactivate_collection_plan") as deactivate,
             patch("main.set_current_round"),
-            patch("main.clear_current_round"),
+            patch("main.reset_current_round"),
             patch("main.start_request_cache_round"),
             patch("main.print_request_cache_stats"),
             patch("main.start_round_log_archive"),
@@ -71,6 +71,7 @@ class CollectionOrchestrationTest(unittest.TestCase):
             patch("main._run_basket_sentinel_for_main"),
             patch("main._shanghai_today", return_value=date(2026, 7, 22)),
             patch("main._make_collection_round_id", return_value="collection_test"),
+            patch("main.acquire_collection_singleflight", return_value=MagicMock(acquired=True)),
             patch(
                 "main._collection_plan_log_options",
                 return_value={
@@ -102,8 +103,9 @@ class CollectionOrchestrationTest(unittest.TestCase):
             patch("main.evaluate_subscription_preflight", return_value={"skip": False}),
             patch("main.init_db"),
             patch("main._make_round_id", return_value="single_test"),
+            patch("main.acquire_collection_singleflight", return_value=MagicMock(acquired=True)),
             patch("main.set_current_round"),
-            patch("main.clear_current_round"),
+            patch("main.reset_current_round"),
             patch("main.start_request_cache_round"),
             patch("main.print_request_cache_stats"),
             patch("main.start_round_log_archive"),
@@ -150,7 +152,7 @@ class CollectionOrchestrationTest(unittest.TestCase):
             patch("main.activate_collection_plan"),
             patch("main.deactivate_collection_plan"),
             patch("main.set_current_round"),
-            patch("main.clear_current_round"),
+            patch("main.reset_current_round"),
             patch("main.start_request_cache_round"),
             patch("main.print_request_cache_stats"),
             patch("main.start_round_log_archive"),
@@ -158,6 +160,7 @@ class CollectionOrchestrationTest(unittest.TestCase):
             patch("main._run_basket_sentinel_for_main"),
             patch("main._shanghai_today", return_value=date(2026, 7, 22)),
             patch("main._make_collection_round_id", return_value="collection_test"),
+            patch("main.acquire_collection_singleflight", return_value=MagicMock(acquired=True)),
             patch("main._collection_plan_log_options", return_value={}),
         ):
             main.run(sync_remote=False)

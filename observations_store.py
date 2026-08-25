@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import sqlite3
 from contextlib import contextmanager
+from contextvars import ContextVar, Token
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Iterable, Iterator
@@ -18,8 +19,12 @@ BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_DB_PATH = BASE_DIR / "data" / "observations.sqlite3"
 METHOD_VERSION = method_version("obs_store")
 
-_current_round_id: str | None = None
-_current_db_path: Path = DEFAULT_DB_PATH
+_current_round_id: ContextVar[str | None] = ContextVar(
+    "observations_current_round_id", default=None
+)
+_current_db_path: ContextVar[Path] = ContextVar(
+    "observations_current_db_path", default=DEFAULT_DB_PATH
+)
 _duration_missing_logged: set[str] = set()
 
 
@@ -33,21 +38,31 @@ def _managed_connection(path: str | Path) -> Iterator[sqlite3.Connection]:
         connection.close()
 
 
-def set_current_round(round_id: str, db_path: str | Path | None = None) -> None:
-    global _current_round_id, _current_db_path
-    _current_round_id = str(round_id) if round_id else None
-    if db_path is not None:
-        _current_db_path = Path(db_path)
+def set_current_round(
+    round_id: str,
+    db_path: str | Path | None = None,
+) -> tuple[Token, Token]:
+    round_token = _current_round_id.set(str(round_id) if round_id else None)
+    current_db_path = _current_db_path.get()
+    db_token = _current_db_path.set(
+        Path(db_path) if db_path is not None else current_db_path
+    )
+    return round_token, db_token
+
+
+def reset_current_round(tokens: tuple[Token, Token]) -> None:
+    round_token, db_token = tokens
+    _current_db_path.reset(db_token)
+    _current_round_id.reset(round_token)
 
 
 def clear_current_round() -> None:
-    global _current_round_id, _current_db_path
-    _current_round_id = None
-    _current_db_path = DEFAULT_DB_PATH
+    _current_round_id.set(None)
+    _current_db_path.set(DEFAULT_DB_PATH)
 
 
 def get_current_round() -> tuple[str | None, Path]:
-    return _current_round_id, _current_db_path
+    return _current_round_id.get(), _current_db_path.get()
 
 
 def _parse_observed_at(value: str) -> datetime | None:
@@ -83,7 +98,7 @@ def load_fresh_observation_snapshot(
     db_path: str | Path | None = None,
 ) -> dict | None:
     """只读返回某请求键最近一批面板观测；不建库、不写库。"""
-    path = Path(db_path or _current_db_path)
+    path = Path(db_path or _current_db_path.get())
     if not path.exists() or float(freshness_hours or 0) <= 0:
         return None
     uri = f"file:{path.resolve().as_posix()}?mode=ro"

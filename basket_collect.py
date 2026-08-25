@@ -9,11 +9,12 @@ from typing import Callable
 
 from api_usage import load_usage, usage_snapshot
 from collection_plan import build_collection_plan, load_collection_settings
+from collection_singleflight import acquire_collection_singleflight
 from log_utils import configure_stdio_utf8, end_round_log_archive, safe_log, start_round_log_archive
 from observations_store import (
     DEFAULT_DB_PATH,
-    clear_current_round,
     count_observations_for_round,
+    reset_current_round,
     set_current_round,
 )
 from retention import log_retention_dry_run
@@ -204,6 +205,48 @@ def run_basket(
     usage_path: str | Path = API_USAGE_PATH,
     source_builder: Callable = build_default_sources,
     aggregator_factory: Callable = FlightAggregator,
+    singleflight_lock_path: str | Path | None = None,
+) -> dict:
+    today = today or date.today()
+    now = now or datetime.now()
+    round_id = make_round_id(now)
+    singleflight = acquire_collection_singleflight(
+        round_id,
+        lock_path=singleflight_lock_path,
+    )
+    if not singleflight.acquired:
+        return {
+            "round_id": round_id,
+            "queues": 0,
+            "success": 0,
+            "failed": 0,
+            "written": 0,
+            "skipped": True,
+            "reason": "singleflight_busy",
+        }
+    try:
+        return _run_basket_locked(
+            today=today,
+            now=now,
+            state_path=state_path,
+            db_path=db_path,
+            usage_path=usage_path,
+            source_builder=source_builder,
+            aggregator_factory=aggregator_factory,
+        )
+    finally:
+        singleflight.release()
+
+
+def _run_basket_locked(
+    *,
+    today: date | None = None,
+    now: datetime | None = None,
+    state_path: str | Path = DEFAULT_STATE_PATH,
+    db_path: str | Path = DEFAULT_DB_PATH,
+    usage_path: str | Path = API_USAGE_PATH,
+    source_builder: Callable = build_default_sources,
+    aggregator_factory: Callable = FlightAggregator,
 ) -> dict:
     today = today or date.today()
     now = now or datetime.now()
@@ -220,7 +263,7 @@ def run_basket(
         _write_state(Path(state_path), state)
 
     reset_request_cache()
-    set_current_round(round_id, db_path=db_path)
+    round_context_tokens = None
     settings = load_collection_settings(CONFIG_PATH)
     start_request_cache_round(
         round_id,
@@ -235,6 +278,7 @@ def run_basket(
     failed = 0
     plan_active = False
     try:
+        round_context_tokens = set_current_round(round_id, db_path=db_path)
         plan = build_collection_plan(
             subscriptions=[],
             basket_requests=_basket_requests(state),
@@ -299,6 +343,8 @@ def run_basket(
                         f"date={depart_date} 原因={exc}"
                     )
     finally:
+        if round_context_tokens is not None:
+            reset_current_round(round_context_tokens)
         try:
             written = count_observations_for_round(round_id, db_path)
         except Exception as exc:
@@ -307,7 +353,7 @@ def run_basket(
         print_request_cache_stats()
         if plan_active:
             deactivate_collection_plan()
-        clear_current_round()
+
         round_status = "ok" if failed == 0 else "partial"
         safe_log(f"[篮子完成] 队列={queues} 成功={success} 失败={failed} 总写入={written}")
         log_retention_dry_run(BASE_DIR, config_path=CONFIG_PATH)

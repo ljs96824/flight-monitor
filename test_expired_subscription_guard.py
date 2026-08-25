@@ -153,7 +153,7 @@ class ExpiredSubscriptionGuardTest(unittest.TestCase):
             patch("main.FlightAggregator", _ErrorAggregator),
             patch("main.set_current_round"),
             patch("main.start_request_cache_round"),
-            patch("main.clear_current_round"),
+            patch("main.reset_current_round"),
             patch("main.print_request_cache_stats"),
             patch("main.safe_log") as log,
         ):
@@ -197,7 +197,7 @@ class ExpiredSubscriptionGuardTest(unittest.TestCase):
             patch("main.FlightAggregator", _ErrorAggregator),
             patch("main.set_current_round"),
             patch("main.start_request_cache_round"),
-            patch("main.clear_current_round"),
+            patch("main.reset_current_round"),
             patch("main.print_request_cache_stats"),
             patch("main.send", return_value=True) as push_send,
         ):

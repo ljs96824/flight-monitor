@@ -40,6 +40,7 @@ from collector import _normalize_detail_flight, save_raw_response
 from api_usage import load_usage, usage_snapshot
 from basket_sentinel import run_basket_sentinel
 from collection_plan import build_collection_plan, load_collection_settings
+from collection_singleflight import acquire_collection_singleflight
 from constraint_fingerprint import constraint_fingerprint
 from detail_access import canonical_detail_uuid, delivery_payload_with_detail_token
 from email_notifier import render_email, send_email
@@ -47,7 +48,7 @@ from filename_utils import sanitize_filename
 from health_check import system_health_check
 from log_utils import end_round_log_archive, redact_text, safe_log, start_round_log_archive
 from notification_config import normalize_notification_goals
-from observations_store import clear_current_round, get_current_round, set_current_round
+from observations_store import get_current_round, reset_current_round, set_current_round
 from notifier import (
     build_notification_payload,
     persist_notification_payload,
@@ -1751,6 +1752,54 @@ def process_subscription(
     manage_collection_round: bool = True,
     collection_round_id: str | None = None,
 ) -> bool:
+    """Hold the process-wide collection gate around a top-level subscription."""
+    if not manage_collection_round:
+        return _process_subscription_locked(
+            sub,
+            ensure_db=ensure_db,
+            preflight_result=preflight_result,
+            web_trigger=web_trigger,
+            manage_collection_round=False,
+            collection_round_id=collection_round_id,
+        )
+
+    preflight = preflight_result or evaluate_subscription_preflight(
+        sub,
+        today=_shanghai_today(),
+    )
+    if preflight.get("skip"):
+        _log_preflight_skip(sub, preflight)
+        safe_log(
+            "[\u8ba2\u9605\u524d\u7f6e\u6821\u9a8c] "
+            "\u672c\u8f6e\u68c0\u67e5=1 \u8df3\u8fc7=1"
+        )
+        return True
+
+    round_id = collection_round_id or _make_round_id(sub)
+    singleflight = acquire_collection_singleflight(round_id)
+    if not singleflight.acquired:
+        return False
+    try:
+        return _process_subscription_locked(
+            sub,
+            ensure_db=ensure_db,
+            preflight_result=preflight,
+            web_trigger=web_trigger,
+            manage_collection_round=True,
+            collection_round_id=round_id,
+        )
+    finally:
+        singleflight.release()
+
+
+def _process_subscription_locked(
+    sub: dict,
+    ensure_db: bool = True,
+    preflight_result: dict | None = None,
+    web_trigger: bool = False,
+    manage_collection_round: bool = True,
+    collection_round_id: str | None = None,
+) -> bool:
     """Process one subscription once and send the generated notification."""
     preflight = preflight_result or evaluate_subscription_preflight(
         sub,
@@ -1797,6 +1846,7 @@ def process_subscription(
     logging.info(f"开始处理 {route}")
     agg = None
     managed_plan_active = False
+    round_context_tokens = None
     collection_options = _collection_plan_log_options()
     round_archive_started = False
     round_status = "failed"
@@ -1811,7 +1861,7 @@ def process_subscription(
     try:
         if manage_collection_round:
             print(f"[\u89c2\u6d4b\u8f6e\u6b21] round_id={round_id}")
-            set_current_round(round_id)
+            round_context_tokens = set_current_round(round_id)
             log_options = collection_options
             start_request_cache_round(
                 round_id,
@@ -2447,7 +2497,8 @@ def process_subscription(
             print_request_cache_stats()
             if managed_plan_active:
                 deactivate_collection_plan()
-            clear_current_round()
+            if round_context_tokens is not None:
+                reset_current_round(round_context_tokens)
             log_retention_dry_run(BASE_DIR, config_path=CONFIG_PATH)
             if round_archive_started:
                 try:
@@ -2501,6 +2552,10 @@ def run(sync_remote: bool = True):
         return
 
     round_id = _make_collection_round_id()
+    singleflight = acquire_collection_singleflight(round_id)
+    if not singleflight.acquired:
+        return
+
     round_status = "failed"
     round_archive_started = False
     try:
@@ -2509,16 +2564,17 @@ def run(sync_remote: bool = True):
     except Exception as exc:
         safe_log(f"[轮档失败] round_id={round_id} 原因={type(exc).__name__}:{exc}")
     plan_active = False
-    print(f"[观测轮次] round_id={round_id}")
-    set_current_round(round_id)
-    log_options = _collection_plan_log_options()
-    start_request_cache_round(
-        round_id,
-        track_usage=True,
-        usage_path=API_USAGE_PATH,
-        quota_budgets=log_options.get("quota_budgets"),
-    )
+    round_context_tokens = None
     try:
+        print(f"[观测轮次] round_id={round_id}")
+        round_context_tokens = set_current_round(round_id)
+        log_options = _collection_plan_log_options()
+        start_request_cache_round(
+            round_id,
+            track_usage=True,
+            usage_path=API_USAGE_PATH,
+            quota_budgets=log_options.get("quota_budgets"),
+        )
         collection_plan = build_collection_plan(
             subscriptions=[sub for sub, _ in ready],
             basket_requests=[],
@@ -2554,17 +2610,21 @@ def run(sync_remote: bool = True):
                 continue
         round_status = "ok"
     finally:
-        print_request_cache_stats()
-        _run_basket_sentinel_for_main(subscriptions)
-        if plan_active:
-            deactivate_collection_plan()
-        clear_current_round()
-        log_retention_dry_run(BASE_DIR, config_path=CONFIG_PATH)
-        if round_archive_started:
-            try:
-                end_round_log_archive(status=round_status)
-            except Exception as exc:
-                safe_log(f"[轮档失败] round_id={round_id} 关闭失败={type(exc).__name__}:{exc}")
+        try:
+            if round_context_tokens is not None:
+                reset_current_round(round_context_tokens)
+            print_request_cache_stats()
+            _run_basket_sentinel_for_main(subscriptions)
+            if plan_active:
+                deactivate_collection_plan()
+            log_retention_dry_run(BASE_DIR, config_path=CONFIG_PATH)
+            if round_archive_started:
+                try:
+                    end_round_log_archive(status=round_status)
+                except Exception as exc:
+                    safe_log(f"[轮档失败] round_id={round_id} 关闭失败={type(exc).__name__}:{exc}")
+        finally:
+            singleflight.release()
 
     safe_log(
         f"[订阅前置校验] 本轮检查={preflight_checked} 跳过={preflight_skipped}"

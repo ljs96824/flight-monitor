@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parent
 EXPLICIT_ALLOWLIST: tuple[tuple[str, str, str], ...] = ()
 
 # 基线扫描后确认的历史债务；它们记录在 docs 中，不属于白名单。
-DOCUMENTED_BASELINE_DEBT: set[tuple[str, str]] = {
+KNOWN_TOP_LEVEL_DUPLICATES: set[tuple[str, str]] = {
     ("analyzer.py", "travel_profile_explanation"),
     ("analyzer.py", "transfer_risk"),
     ("analyzer.py", "verify_fare_rules"),
@@ -70,7 +70,7 @@ class TopLevelSymbolScannerTest(unittest.TestCase):
     def test_repository_has_no_undocumented_duplicate_top_level_symbols(self):
         self.assertEqual(EXPLICIT_ALLOWLIST, ())
         duplicates = set(scan_repository(ROOT))
-        allowed = DOCUMENTED_BASELINE_DEBT | {
+        allowed = KNOWN_TOP_LEVEL_DUPLICATES | {
             (path, name) for path, name, _reason in EXPLICIT_ALLOWLIST
         }
         self.assertEqual(duplicates, allowed)
