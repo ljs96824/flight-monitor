@@ -40,6 +40,23 @@
 3. 全仓引用只存在于订阅列表构建路径和对应测试；未发现 `from ... import`、`getattr`、`__all__`、patch、模块级注册器、装饰器或默认参数表达式持有旧行为。
 4. 基线 RED 同时捕获缺失规范化函数和页面泄露 `{'label': ...}`；GREEN 锁定五种输入形态、完整页面文本、价格格式与不得出现 Python 字典 repr。
 
+### 2. `price_calendar.analyze_date_savings`
+
+- 状态：`removed_as_shadowed`。
+- 基线：`f399b26`；第一版引入提交：`fa57a7b`；第二版引入提交：`c809e5f`。
+- 清理提交：本提交 `refactor: remove shadowed date savings implementation`；精确 SHA 由提交后闸门报告记录。
+- 生效版本位置：清理后 `price_calendar.py::analyze_date_savings` 唯一定义。
+- 特征测试：`test_analyze_date_savings_characterizes_active_single_leg_implementation`、`test_analyze_date_savings_characterizes_invalid_inputs_and_exceptions`。
+- 删除前后输出：完全相同；生效版提示末尾保留 `/单程`。
+- 剩余顶层重复符号：6。
+
+完整考古结论：
+
+1. 两版签名、默认参数、返回类型、过滤条件、排序、截断、空值和异常行为相同，均不原地修改输入。唯一运行差异是第一版 `tip` 以 `省¥X` 结尾，第二版以 `省¥X/单程` 结尾；第二版文档字符串也明确单程口径。
+2. 两个定义相邻，中间没有模块级调用。`analyzer.py` 仅在 `price_calendar.py` 完整执行后通过别名导入该函数；模块不存在反向导入，未发现循环导入提前读取第一版。
+3. 外部引用只有 `analyzer.py` 的静态别名导入和测试调用；未发现 `getattr`、`__all__`、patch、注册器、装饰器或默认参数表达式持有第一版对象。
+4. 删除前特征测试锁定无效当前价、过去日期、目标日期、阈值边界、节省额倒序、`limit`、完整字段和值类型、`/单程` 文案、输入不变以及异常类型；删除后同组测试输出完全一致。
+
 ## 图表基线
 
 生效版本是第二版 `build_trend_png`：`6×2.8`、全日期旋转标签、当前价标注、`bbox_inches="tight"`。删除前记录：

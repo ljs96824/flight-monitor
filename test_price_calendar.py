@@ -199,6 +199,99 @@ class PriceCalendarTest(unittest.TestCase):
         self.assertEqual(pattern["min_price"], 480)
         self.assertIn("近期最低", pattern["tip"])
 
+    def test_analyze_date_savings_characterizes_active_single_leg_implementation(self):
+        from price_calendar import WEEKDAY_NAMES, analyze_date_savings
+
+        target = date.today() + timedelta(days=20)
+        earlier_three = target - timedelta(days=3)
+        earlier_one = target - timedelta(days=1)
+        later_one = target + timedelta(days=1)
+        later_two = target + timedelta(days=2)
+        calendar = {
+            "route": "PVG-KIX",
+            "dates": {
+                (date.today() - timedelta(days=1)).isoformat(): {"min_price": 100},
+                target.isoformat(): {"min_price": 50},
+                earlier_one.isoformat(): {"min_price": 900},
+                later_one.isoformat(): {"min_price": 901},
+                later_two.isoformat(): {"min_price": 800},
+                earlier_three.isoformat(): {"min_price": 700},
+                (target + timedelta(days=3)).isoformat(): {"min_price": None},
+                (target + timedelta(days=4)).isoformat(): "invalid-row",
+            },
+        }
+        before = json.dumps(calendar, ensure_ascii=False, sort_keys=True)
+
+        rows = analyze_date_savings(
+            calendar,
+            target.isoformat(),
+            1000,
+            threshold=100,
+            limit=10,
+        )
+
+        self.assertEqual([row["save"] for row in rows], [300, 200, 100])
+        self.assertEqual(
+            [row["date"] for row in rows],
+            [earlier_three.isoformat(), later_two.isoformat(), earlier_one.isoformat()],
+        )
+        self.assertEqual(
+            rows[0],
+            {
+                "date": earlier_three.isoformat(),
+                "weekday": WEEKDAY_NAMES[earlier_three.weekday()],
+                "price": 700.0,
+                "save": 300,
+                "offset": -3,
+                "tip": (
+                    f"提前3天({earlier_three.isoformat()} "
+                    f"{WEEKDAY_NAMES[earlier_three.weekday()]})出发，省¥300/单程"
+                ),
+            },
+        )
+        self.assertEqual(
+            {key: type(value) for key, value in rows[0].items()},
+            {
+                "date": str,
+                "weekday": str,
+                "price": float,
+                "save": int,
+                "offset": int,
+                "tip": str,
+            },
+        )
+        self.assertEqual(
+            [
+                row["date"]
+                for row in analyze_date_savings(
+                    calendar,
+                    target.isoformat(),
+                    1000,
+                    threshold=100,
+                    limit=2,
+                )
+            ],
+            [earlier_three.isoformat(), later_two.isoformat()],
+        )
+        self.assertEqual(json.dumps(calendar, ensure_ascii=False, sort_keys=True), before)
+
+    def test_analyze_date_savings_characterizes_invalid_inputs_and_exceptions(self):
+        from price_calendar import analyze_date_savings
+
+        target = (date.today() + timedelta(days=20)).isoformat()
+        calendar = {"dates": {}}
+
+        for current_price in (None, "not-a-price"):
+            with self.subTest(current_price=current_price):
+                self.assertEqual(
+                    analyze_date_savings(calendar, target, current_price),
+                    [],
+                )
+        with self.assertRaises(ValueError):
+            analyze_date_savings(calendar, "not-a-date", 1000)
+        with self.assertRaises(AttributeError):
+            analyze_date_savings(None, target, 1000)
+
     def test_weekday_pattern_reports_actual_min_date_and_avoids_forced_weekend_claim(self):
         from price_calendar import analyze_weekday_pattern
 

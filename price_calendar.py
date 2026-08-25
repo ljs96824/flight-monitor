@@ -184,52 +184,6 @@ def analyze_date_savings(
     threshold: float = 100,
     limit: int = 3,
 ) -> list[dict]:
-    """Find nearby calendar dates that are materially cheaper than target."""
-    try:
-        current = float(current_price)
-    except (TypeError, ValueError):
-        return []
-
-    target = parse_date(target_date)
-    savings = []
-    for date_str, info in (calendar.get("dates") or {}).items():
-        if not isinstance(info, dict) or not _valid_price(info.get("min_price")):
-            continue
-        d = parse_date(date_str)
-        if d < date.today():
-            continue
-        diff_days = (d - target).days
-        if diff_days == 0:
-            continue
-        price = float(info["min_price"])
-        price_diff = round(current - price)
-        if price_diff < threshold:
-            continue
-        direction = "提前" if diff_days < 0 else "推迟"
-        weekday = WEEKDAY_NAMES[d.weekday()]
-        savings.append(
-            {
-                "date": date_str,
-                "weekday": weekday,
-                "price": price,
-                "save": price_diff,
-                "offset": diff_days,
-                "tip": f"{direction}{abs(diff_days)}天({date_str} {weekday})出发，省¥{price_diff}",
-            }
-        )
-
-    savings.sort(key=lambda item: item["save"], reverse=True)
-    return savings[:limit]
-
-
-def analyze_date_savings(
-    calendar: dict,
-    target_date: str,
-    current_price,
-    *,
-    threshold: float = 100,
-    limit: int = 3,
-) -> list[dict]:
     """Find cheaper future dates using the same single-leg calendar price scope."""
     try:
         current = float(current_price)
