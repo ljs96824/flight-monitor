@@ -22,6 +22,7 @@ ALLOWED_DIRECT_SQLITE_CONNECT = {
     ("readonly_snapshot.py", "_backup_sqlite", 1),
     ("readonly_snapshot.py", "_backup_sqlite", 2),
     ("readonly_snapshot.py", "_open_sqlite_watchers", 1),
+    ("runtime_backup.py", "inspect_sqlite", 1),
     ("scripts/audit_permission_pollution.py", "readonly_connection", 1),
     ("scripts/audit_tracked_sqlite_backups.py", "audit_sqlite_file", 1),
     ("storage.py", "_connect", 1),
@@ -57,6 +58,10 @@ DIRECT_CONNECT_CLOSE_OWNER = {
         "readonly_snapshot.py",
         "create_readonly_snapshot",
     ),
+    ("runtime_backup.py", "inspect_sqlite", 1): (
+        "runtime_backup.py",
+        "inspect_sqlite",
+    ),
     ("scripts/audit_permission_pollution.py", "readonly_connection", 1): (
         "scripts/audit_permission_pollution.py",
         "readonly_connection",
@@ -78,6 +83,7 @@ READONLY_CONNECT_SCOPES = {
     ("provenance.py", "readonly_connection"),
     ("readonly_snapshot.py", "_backup_sqlite"),
     ("readonly_snapshot.py", "_open_sqlite_watchers"),
+    ("runtime_backup.py", "inspect_sqlite"),
     ("scripts/audit_permission_pollution.py", "readonly_connection"),
     ("scripts/audit_tracked_sqlite_backups.py", "audit_sqlite_file"),
     ("tcurve.py", "readonly_connection"),

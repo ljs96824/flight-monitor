@@ -17,6 +17,7 @@ LICENSE = ROOT / "LICENSE"
 REQUIREMENTS_INPUT = ROOT / "requirements.in"
 DEV_REQUIREMENTS_INPUT = ROOT / "requirements-dev.in"
 DEV_REQUIREMENTS_LOCK = ROOT / "requirements-dev.txt"
+RUNTIME_BACKUP_MANUAL = ROOT / "docs" / "runtime-backup-and-restore.md"
 
 EXPECTED_SECTIONS = (
     "定位",
@@ -433,6 +434,40 @@ class DocsAccuracyTest(unittest.TestCase):
             context = self.readme[max(0, position - 180): position + len(command) + 180]
             self.assertIn("消耗配额", context)
 
+    def test_runtime_backup_manual_has_restore_replay_and_privacy_contracts(self):
+        self.assertTrue(RUNTIME_BACKUP_MANUAL.is_file())
+        text = RUNTIME_BACKUP_MANUAL.read_text(encoding="utf-8")
+        for phrase in (
+            "只有成功恢复过的备份才算有效备份",
+            "每周至少一次",
+            "每次重大改动前",
+            "--output-dir",
+            "必须是绝对路径",
+            "create",
+            "verify",
+            "restore",
+            "rehearse",
+            "--force-production",
+            "--confirm-production-restore RESTORE",
+            "未加密归档不得上传公共或共享云目录",
+            "age",
+            "7-Zip AES",
+            "real_api_calls",
+        ):
+            self.assertIn(phrase, text)
+        result = subprocess.run(
+            [sys.executable, "-X", "utf8", "scripts/runtime_backup.py", "--help"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("create", result.stdout)
+        self.assertIn("rehearse", result.stdout)
 
 if __name__ == "__main__":
     unittest.main()

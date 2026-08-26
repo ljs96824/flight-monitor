@@ -265,6 +265,7 @@ python -X utf8 scripts/snapshot_run.py --output data/snapshot_check.json
 | [notifier.py](notifier.py)、[email_notifier.py](email_notifier.py) | 统一 payload、邮件与PushPlus渲染/发送 |
 | [observations_store.py](observations_store.py)、[storage.py](storage.py) | 追加式观测库与历史/快照存储 |
 | [scripts/](scripts/) | 快照、体检、只读统计报告和本地 UI smoke |
+| [docs/runtime-backup-and-restore.md](docs/runtime-backup-and-restore.md) | 运行数据备份、隔离恢复与报告复放手册 |
 | [analytics/](analytics/) | 只读描述统计报告 |
 | [tests/fixtures/](tests/fixtures/) | 脱敏响应、表单规范化与冻结邮件夹具 |
 | [docs/](docs/) | 设计、计划、审计和回归纪律入口 |
