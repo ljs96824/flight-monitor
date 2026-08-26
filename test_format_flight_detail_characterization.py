@@ -3,7 +3,6 @@ import copy
 import html
 import inspect
 import unittest
-from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -258,40 +257,25 @@ class FormatFlightDetailCharacterizationTest(unittest.TestCase):
         }
         before = copy.deepcopy((analysis, route))
 
-        class FixedDatetime(datetime):
-            @classmethod
-            def now(cls, tz=None):
-                return cls(2026, 8, 26, 12, 34, tzinfo=tz)
-
-        with patch("notifier._days_to_depart", return_value=6, create=True), patch(
-            "notifier._city_label",
-            side_effect=lambda code: {"SHA": "上海", "PEK": "北京"}.get(code, code),
-            create=True,
-        ), patch("notifier._plan_title", return_value="方案A", create=True), patch(
-            "notifier._summary_text", return_value="固定总结", create=True
-        ), patch("notifier.datetime", FixedDatetime):
+        with patch("notifier.safe_log") as log:
             actual = format_comparison_message(analysis, route)
 
         self.assertEqual(
             actual,
             "✈️ 上海 → 北京\n\n"
-            "📅 出发日期：2026-09-01\n"
-            "⏳ 距出发还有：6天\n"
-            "以下方案按当前排序规则展示，排序不代表推荐。\n\n"
-            "━━━ 符合条件的方案 ━━━\n\n"
-            "方案A\n\n"
-            "航班:MU5101｜东方航空 | 虹桥(SHA) 08:05(上海当地) → "
+            "📅 出发日期：2026-09-01\n\n"
+            "方案对比详情暂不可用,核心推荐不受影响\n"
+            "首选方案概要：航班:MU5101｜东方航空 | 虹桥(SHA) 08:05(上海当地) → "
             "首都(PEK) 10:20(北京当地) | 直飞｜空客A320 | "
             "¥880 (来源:聚合数据（国内报价）, 采集于10:00)\n"
-            "🕐 采集时间：2026-08-26 12:34\n\n"
-            "💬 总结\n固定总结\n\n"
-            "━━━━━━━━━━━━━━━━\n"
-            "以上内容基于历史价格数据分析，仅供参考。\n"
-            "实际购买请以航司或OTA官网价格为准。\n"
-            "以上排序基于当前配置规则，不代表最优选择。请根据您的时间、预算和出行需求自行判断。",
+            "网页详情未配置,完整结果见本通知\n\n"
+            "以上内容仅保留输入中已有的结论、价格与方案概要。\n"
+            "实际购买请以航司或OTA官网价格为准。",
+        )
+        self.assertTrue(
+            any("[方案对比降级]" in str(item.args[0]) for item in log.call_args_list)
         )
         self.assertEqual((analysis, route), before)
-
     def test_production_calls_use_active_formatter_signature(self):
         tree = ast.parse((ROOT / "notifier.py").read_text(encoding="utf-8"))
         signature = inspect.signature(format_flight_detail)

@@ -15343,54 +15343,106 @@ def format_html_message(
     return message
 
 
+class ComparisonMessageUnavailable(RuntimeError):
+    """The retired legacy comparison semantics cannot be rendered safely."""
+
+
+def _format_comparison_details(
+    analysis_result: dict, route_info: dict, source_stats=None
+) -> str:
+    """Fail explicitly instead of reconstructing retired purchase-advice semantics."""
+    raise ComparisonMessageUnavailable(
+        "历史方案对比语义已退役,缺少当前口径的总结规则"
+    )
+
+
+def _comparison_location_label(value) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    code = text.upper()
+    if 2 <= len(code) <= 4 and code.isalpha():
+        city = get_airport_city(code)
+        return city if city and city != code else code
+    return text
+
+
+def _comparison_conclusion_text(value) -> str:
+    if isinstance(value, dict):
+        value = value.get("conclusion") or value.get("label")
+    return str(value or "").strip()
+
+
+def _comparison_message_fallback(
+    analysis_result: dict, route_info: dict, source_stats=None
+) -> str:
+    origin = _comparison_location_label(route_info.get("origin"))
+    destination = _comparison_location_label(route_info.get("destination"))
+    depart_date = str(route_info.get("depart_date") or "").strip()
+    lines = [
+        f"✈️ {origin} → {destination}",
+        "",
+    ]
+    if depart_date:
+        lines.extend([f"📅 出发日期：{depart_date}", ""])
+    lines.append("方案对比详情暂不可用,核心推荐不受影响")
+
+    conclusion = _comparison_conclusion_text(analysis_result.get("conclusion"))
+    if conclusion:
+        lines.append(f"当前结论：{conclusion}")
+
+    prices = analysis_result.get("price_range") or []
+    if prices and _has_valid_price(prices[0]):
+        lines.append(f"当前最低参考价：{_price_text(prices[0])}(沿用输入口径)")
+
+    recommendations = analysis_result.get("recommendations") or []
+    if recommendations:
+        flight = recommendations[0].get("flight") or {}
+        detail = format_flight_detail(flight, depart_date or None, "").replace(
+            "<br>", "\n"
+        )
+        if detail:
+            lines.append(f"首选方案概要：{detail}")
+
+    source_summary = format_source_summary(
+        source_stats
+        or route_info.get("source_stats")
+        or analysis_result.get("source_stats")
+    )
+    if source_summary:
+        lines.append(source_summary.replace("<br>", "\n"))
+
+    detail_url = valid_detail_url(
+        route_info.get("detail_url") or analysis_result.get("detail_url")
+    )
+    if detail_url:
+        lines.append(f"网页详情：{detail_url}")
+    else:
+        lines.append("网页详情未配置,完整结果见本通知")
+
+    lines.extend(
+        [
+            "",
+            "以上内容仅保留输入中已有的结论、价格与方案概要。",
+            "实际购买请以航司或OTA官网价格为准。",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def format_comparison_message(
     analysis_result: dict, route_info: dict, source_stats=None
 ) -> str:
-    """生成多方案对比推送消息。"""
-    recs = analysis_result.get("recommendations", [])
-    days_to_dept = _days_to_depart(route_info)
-    depart_date = route_info.get("depart_date", "")
-    lines = [
-        f"✈️ {_city_label(route_info.get('origin'))} → {_city_label(route_info.get('destination'))}",
-        "",
-        f"📅 出发日期：{depart_date}",
-    ]
-    if days_to_dept is not None:
-        lines.append(f"⏳ 距出发还有：{days_to_dept}天")
-    lines.append("以下方案按当前排序规则展示，排序不代表推荐。")
-    lines.extend(["", "━━━ 符合条件的方案 ━━━", ""])
-
-    for index, rec in enumerate(recs):
-        flight = rec.get("flight", {})
-        if index:
-            lines.extend(["", "━━━━━━━━━━━━━━━━", ""])
-        lines.append(_plan_title(index, rec.get("tag", "")))
-        lines.append("")
-        lines.append(format_flight_detail(flight, depart_date, "").replace("<br>", "\n"))
-
-    prices = analysis_result.get("price_range") or []
-    if len(prices) >= 2:
-        lines.extend(["", "━━━━━━━━━━━━━━━━", "", f"📊 价格区间：{_money(prices[0])} - {_money(prices[1])}", ""])
-
-    source_summary = format_source_summary(
-        source_stats or route_info.get("source_stats") or analysis_result.get("source_stats")
-    )
-    if source_summary:
-        lines.extend([source_summary, ""])
-
-    lines.extend([
-        f"🕐 采集时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}",
-        "",
-        "💬 总结",
-        _summary_text(analysis_result, days_to_dept),
-        "",
-        "━━━━━━━━━━━━━━━━",
-        "以上内容基于历史价格数据分析，仅供参考。",
-        "实际购买请以航司或OTA官网价格为准。",
-        "以上排序基于当前配置规则，不代表最优选择。请根据您的时间、预算和出行需求自行判断。",
-    ])
-    return "\n".join(lines)
-
+    """Render the legacy entry safely without inventing retired comparison claims."""
+    try:
+        return _format_comparison_details(analysis_result, route_info, source_stats)
+    except ComparisonMessageUnavailable as exc:
+        safe_log(f"[方案对比降级] 原因={exc} 处置=仅展示已有核心信息")
+        return _comparison_message_fallback(
+            analysis_result,
+            route_info,
+            source_stats,
+        )
 
 
 

@@ -21,7 +21,7 @@ IMPORT_TO_PACKAGE = {
     "yaml": "pyyaml",
 }
 EXPECTED_RUNTIME_PACKAGES = set(IMPORT_TO_PACKAGE.values())
-EXPECTED_DEV_INPUT = {"pip-tools", "pytest"}
+EXPECTED_DEV_INPUT = {"pip-tools", "pytest", "ruff"}
 EXCLUDED_PARTS = {
     ".git",
     ".pytest_cache",
