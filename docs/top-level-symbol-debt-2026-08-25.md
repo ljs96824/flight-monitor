@@ -71,7 +71,7 @@
 
 1. 第一版签名为 `(flight, date_str=None, label=None, route_info=None, analysis_result=None) -> str`，第二版为 `(flight, date_str=None, prefix="") -> str`，均无装饰器。第一版生成带 `<br>` 的富详情，包含状态、建议、路线、日期、时区、经停、时长、机型、估价、渠道、价差、新鲜度和风险；第二版只委托 `_payload_plan_leg`，输出固定顺序的纯文本时刻/经停/价格摘要。第二版会规范化 `None`，忽略 `date_str`，不展示行李与退改；五参数调用按当前行为抛 `TypeError`。两版均无排序、日志和入参原地修改。
 2. 第一版之后只有函数定义和常量赋值，没有模块级调用或对象捕获；所有调用都在函数体内，运行时从模块全局读取最终绑定。`notifier.py` 的本地导入链未发现反向导入 `notifier`，不存在循环导入在模块执行完成前暴露第一版。
-3. 全仓未发现 `from notifier import format_flight_detail`、属性/getattr、`__all__`、patch、注册器、装饰器或默认参数表达式持有旧对象。模块内共有 6 个调用点：4 个三参数路径消费当前版本，2 个五参数旧路径按当前签名会抛 `TypeError`；本次只锁定现状，不修复这些路径。
+3. 全仓未发现 `from notifier import format_flight_detail`、属性/getattr、`__all__`、patch、注册器、装饰器或默认参数表达式持有旧对象。模块内共有 6 个调用点：4 个三参数路径消费当前版本，2 个五参数旧路径按当前签名会抛 `TypeError`；后续于 2026-08-26 按下方“旧调用约定审计修正”完成修复。
 4. 删除前矩阵锁定国内/国际直飞、一次中转、多航段、缺时刻与机型、空 segments、仅 combo、`None`、特殊字符的纯文本与后续 HTML 转义边界、票规/行李缺失、返回类型、字段顺序、日期参数现状、入参不变及五参数异常类型；删除后必须逐字一致。
 
 ### 4. `analyzer.travel_profile_explanation`
@@ -160,6 +160,39 @@
 2. AST 证实第一版之后到生效版之间只有函数定义，没有模块级调用、赋值、注册或旧对象捕获；生产调用均在后续函数体内，运行时读取最终全局绑定。`notifier.py` 在 `analyzer.py` 完整执行后静态导入，`analyzer.py` 不反向导入 notifier，不存在循环导入提前读取第一版。
 3. 全仓外部引用只有 `notifier.py` 的静态导入和模块加载完成后的生产调用；未发现 `analyzer.determine_push_type` 属性缓存、`getattr`、`__all__`、patch、模块级注册器、装饰器或默认参数表达式保存第一版对象。
 4. 删除前矩阵锁定四类价格角色、历史价格展平与 n=5 门槛、九类实际返回、全部 `elif` 优先级、邻近日与同日组合、上涨/下降/持平、时间冲突、价格缺失与过期、超预算和数据不完整当前的默认行为、完整字段类型与顺序、最多四条理由、入参不变及异常类型。生效版 `_matched_constraint_reasons` 在空候选池仍追加“符合你设置的直飞条件”的既有行为也被精确锁定，本批不借清死代码改变业务。
+
+## 旧调用约定审计修正（2026-08-26）
+
+### 定性
+
+本次缺陷不是“删除被覆盖定义后，调用从正常变成 TypeError”。Python 模块加载完成后，相关调用早已解析到最后一个生效定义；真正问题是部分调用点仍按历史旧签名传参，只因路径尚未被现有夹具触达而潜伏。运行时探针只用于确认基线可达性，最终生产代码不保留探针。
+
+| 符号 | 当前生效契约 | 调用与返回消费审计 | 结论 |
+| --- | --- | --- | --- |
+| price_calendar.analyze_date_savings | (calendar, target_date, current_price, *, threshold=100, limit=3) -> list[dict] | 生产仅 analyzer.analyze_price_calendar 三位置参数调用；结果作为 savings 透传，通知层读取当前字段 date/weekday/price/save/tip，未传旧关键字或消费旧字段。 | 无旧约定。 |
+| notifier.format_flight_detail | (flight, date_str=None, prefix="") -> str | 6 个生产调用中原有 4 个符合契约；_round_trip_option_line 与 format_comparison_message 原传 5 个位置参数，已统一改为 3 参数。测试中仍保留一次直接 5 参数调用，用于锁定公开函数会拒绝历史签名，不是生产调用。 | 发现并修复 2 处。 |
+| analyzer.travel_profile_explanation | (profile) -> dict | 分析层 2 处、通知回退 2 处均传 1 参数；通知消费当前字段 dimensions/scenario_label/basis/tradeoff，未按旧版字段读取。 | 无旧约定。 |
+| analyzer.transfer_risk | (flight) -> dict | 生产仅 1 参数调用；下游消费当前 level/factors，未读取旧版 notes。 | 无旧约定。 |
+| analyzer.verify_fare_rules | (flight, hard_constraints) -> dict | 生产调用完整传入 2 个必填参数；下游消费两版共有的 level/label/matches/issues，无遗留参数或字段。 | 无旧约定。 |
+| analyzer.calc_confidence | (flight, source_stats=None, price_history=None) -> dict | 三个历史版本签名完全相同，顶层返回结构均为 overall/dimensions/details；分析层 2 处和通知回退 2 处均传 3 参数，下游只消费这 3 个当前字段。三版差异仅在分项值、文案和渠道覆盖逻辑。 | 无旧约定。 |
+| analyzer.determine_push_type | 7 参数，后 6 个均有默认值；返回 type/reasons/price_change/percentile/historical_30_price | 通知层 2 处均传 7 个位置参数；下游读取当前字段，后续新增的 source_degradation 由通知层显式附加，不是假定旧返回字段。 | 无旧约定。 |
+
+间接引用审计未发现上述七个符号经 patch()、getattr()、__all__、模块级注册器、装饰器或默认参数表达式保留旧对象；测试构造的唯一旧签名是 format_flight_detail(..., 5 args) 的有意异常契约。
+
+### 可达性裁决
+
+- `_round_trip_option_line` 的完整链为 `_append_simple_top3` → `_append_round_trip_recommendations` → 非空 `flights[:limit]` → `_round_trip_option_line`。当前仓内没有 `_append_simple_top3` 调用方，但非空航班列表在数据模型中可以成立，也没有 negative test 证明永不执行；结论为“无法确定，按可达处理”。
+- `format_comparison_message` 当前没有仓内调用方，但它是模块公开函数；当 `analysis_result.recommendations` 非空时进入旧调用。直接运行还会先遇到未定义的 `_days_to_depart/_city_label/_plan_title/_summary_text`；隔离 characterization 显式替代这些独立依赖后，确认能抵达并触发五参数 `TypeError`。结论同为“无法确定，按可达处理”。
+- 临时探针分别放在两处旧调用前。标准通知、无符合方案、数据不完整和脱敏冻结复放四个完整渲染入口均成功，两个探针在每个入口的命中数均为 `0`；这只证明当前主渲染器未消费旧 helper，不满足“当前数据模型下触发条件不可成立”等四项不可达条件，不能据此删除路径。
+- 隔离调用 `_round_trip_option_line` 与替代独立依赖后的 `format_comparison_message` 时，两个探针各命中 `1` 次，随后均在旧五参数调用抛出同一 `TypeError`。判定结束后探针已从生产代码删除。
+
+### RED / GREEN 证据
+
+1. 两条测试先分别锁定基线五参数调用的 `TypeError: format_flight_detail() takes from 1 to 3 positional arguments but 5 were given`。
+2. 测试改为期待两条路径的完整三参数输出后，修复前两条均按同一 `TypeError` 失败（RED）。
+3. `_round_trip_option_line` 改为 `format_flight_detail(flight, date_str, _option_label(index))`，`format_comparison_message` 改为 `format_flight_detail(flight, depart_date, "")`；两条完整输出与输入不变断言均通过（GREEN）。
+4. AST 调用契约扫描 `notifier.py`，生产调用若超过 3 个位置参数、使用展开参数或传入未知关键字即失败。
+5. 全仓 AST/`inspect.signature.bind` 审计其余六个符号的生产和测试调用，未发现位置参数、关键字、必填参数或展开参数违约；唯一违约是 characterization 中有意保留的直接五参数异常测试。`calc_confidence` 清理前三版签名均为 `(flight, source_stats=None, price_history=None)`，顶层返回键均为 `overall/dimensions/details`。
 
 ## 图表基线
 

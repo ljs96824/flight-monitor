@@ -1,8 +1,20 @@
+import ast
 import copy
 import html
+import inspect
 import unittest
+from datetime import datetime
+from pathlib import Path
+from unittest.mock import patch
 
-from notifier import format_flight_detail
+from notifier import (
+    _round_trip_option_line,
+    format_comparison_message,
+    format_flight_detail,
+)
+
+
+ROOT = Path(__file__).resolve().parent
 
 
 def _segment(
@@ -206,6 +218,103 @@ class FormatFlightDetailCharacterizationTest(unittest.TestCase):
         self.assertIsInstance(first, str)
         self.assertEqual(first, second)
         self.assertEqual(flight, before)
+
+    def test_round_trip_option_path_uses_active_formatter_contract(self):
+        flight = _priced_flight(
+            [_segment("MU5101", "SHA", "PEK", "08:05", "10:20")],
+            price=880,
+            stops=0,
+        )
+        before = copy.deepcopy(flight)
+
+        self.assertEqual(
+            _round_trip_option_line(
+                0,
+                flight,
+                "2026-09-01",
+                {"origin": "SHA", "destination": "PEK"},
+                {"current_min_price": 880},
+            ),
+            "方案A:MU5101｜东方航空 | 虹桥(SHA) 08:05(上海当地) → "
+            "首都(PEK) 10:20(北京当地) | 直飞｜空客A320 | "
+            "¥880 (来源:聚合数据（国内报价）, 采集于10:00)",
+        )
+        self.assertEqual(flight, before)
+
+    def test_comparison_message_path_uses_active_formatter_contract(self):
+        flight = _priced_flight(
+            [_segment("MU5101", "SHA", "PEK", "08:05", "10:20")],
+            price=880,
+            stops=0,
+        )
+        analysis = {
+            "recommendations": [{"flight": flight, "tag": "首选"}],
+            "price_range": [],
+        }
+        route = {
+            "origin": "SHA",
+            "destination": "PEK",
+            "depart_date": "2026-09-01",
+        }
+        before = copy.deepcopy((analysis, route))
+
+        class FixedDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return cls(2026, 8, 26, 12, 34, tzinfo=tz)
+
+        with patch("notifier._days_to_depart", return_value=6, create=True), patch(
+            "notifier._city_label",
+            side_effect=lambda code: {"SHA": "上海", "PEK": "北京"}.get(code, code),
+            create=True,
+        ), patch("notifier._plan_title", return_value="方案A", create=True), patch(
+            "notifier._summary_text", return_value="固定总结", create=True
+        ), patch("notifier.datetime", FixedDatetime):
+            actual = format_comparison_message(analysis, route)
+
+        self.assertEqual(
+            actual,
+            "✈️ 上海 → 北京\n\n"
+            "📅 出发日期：2026-09-01\n"
+            "⏳ 距出发还有：6天\n"
+            "以下方案按当前排序规则展示，排序不代表推荐。\n\n"
+            "━━━ 符合条件的方案 ━━━\n\n"
+            "方案A\n\n"
+            "航班:MU5101｜东方航空 | 虹桥(SHA) 08:05(上海当地) → "
+            "首都(PEK) 10:20(北京当地) | 直飞｜空客A320 | "
+            "¥880 (来源:聚合数据（国内报价）, 采集于10:00)\n"
+            "🕐 采集时间：2026-08-26 12:34\n\n"
+            "💬 总结\n固定总结\n\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "以上内容基于历史价格数据分析，仅供参考。\n"
+            "实际购买请以航司或OTA官网价格为准。\n"
+            "以上排序基于当前配置规则，不代表最优选择。请根据您的时间、预算和出行需求自行判断。",
+        )
+        self.assertEqual((analysis, route), before)
+
+    def test_production_calls_use_active_formatter_signature(self):
+        tree = ast.parse((ROOT / "notifier.py").read_text(encoding="utf-8"))
+        signature = inspect.signature(format_flight_detail)
+        violations = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            if not isinstance(node.func, ast.Name) or node.func.id != "format_flight_detail":
+                continue
+            if any(isinstance(item, ast.Starred) for item in node.args) or any(
+                item.arg is None for item in node.keywords
+            ):
+                violations.append((node.lineno, "expanded arguments"))
+                continue
+            try:
+                signature.bind(
+                    *([object()] * len(node.args)),
+                    **{item.arg: object() for item in node.keywords},
+                )
+            except TypeError as exc:
+                violations.append((node.lineno, str(exc)))
+
+        self.assertEqual(violations, [])
 
 
 if __name__ == "__main__":

@@ -2021,9 +2021,7 @@ def _round_trip_option_line(
     route_info: dict | None = None,
     analysis_result: dict | None = None,
 ) -> str:
-    return format_flight_detail(
-        flight, date_str, _option_label(index), route_info, analysis_result
-    )
+    return format_flight_detail(flight, date_str, _option_label(index))
 
 
 def _append_round_trip_recommendations(
@@ -15368,7 +15366,7 @@ def format_comparison_message(
             lines.extend(["", "━━━━━━━━━━━━━━━━", ""])
         lines.append(_plan_title(index, rec.get("tag", "")))
         lines.append("")
-        lines.append(format_flight_detail(flight, depart_date, None, route_info, analysis_result).replace("<br>", "\n"))
+        lines.append(format_flight_detail(flight, depart_date, "").replace("<br>", "\n"))
 
     prices = analysis_result.get("price_range") or []
     if len(prices) >= 2:
