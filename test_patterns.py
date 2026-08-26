@@ -32,7 +32,7 @@ class PatternsTest(unittest.TestCase):
     def test_departure_period_gap_is_explicit(self):
         result = build_patterns([], min_n=5)
         self.assertEqual(result["departure_period"]["status"], "字段不可得")
-        self.assertIn("面板未存起飞时刻(obs_store v1)", result["departure_period"]["reason"])
+        self.assertIn("面板未存起飞时刻(obs_store v2)", result["departure_period"]["reason"])
         self.assertIn("待schema扩展后自动点亮", result["departure_period"]["reason"])
 
 

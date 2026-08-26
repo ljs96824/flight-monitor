@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parent
 ALLOWED_DIRECT_SQLITE_CONNECT = {
     ("analytics/report_lib.py", "_readonly_connection", 1),
     ("observations_store.py", "_managed_connection", 1),
+    ("observations_store.py", "audit_observation_timestamps", 1),
     ("observations_store.py", "load_fresh_observation_snapshot", 1),
     ("provenance.py", "readonly_connection", 1),
     ("readonly_snapshot.py", "_backup_sqlite", 1),
@@ -37,6 +38,10 @@ DIRECT_CONNECT_CLOSE_OWNER = {
     ("observations_store.py", "_managed_connection", 1): (
         "observations_store.py",
         "_managed_connection",
+    ),
+    ("observations_store.py", "audit_observation_timestamps", 1): (
+        "observations_store.py",
+        "audit_observation_timestamps",
     ),
     ("observations_store.py", "load_fresh_observation_snapshot", 1): (
         "observations_store.py",
@@ -80,6 +85,7 @@ DIRECT_CONNECT_CLOSE_OWNER = {
 READONLY_CONNECT_SCOPES = {
     ("analytics/report_lib.py", "_readonly_connection"),
     ("observations_store.py", "load_fresh_observation_snapshot"),
+    ("observations_store.py", "audit_observation_timestamps"),
     ("provenance.py", "readonly_connection"),
     ("readonly_snapshot.py", "_backup_sqlite"),
     ("readonly_snapshot.py", "_open_sqlite_watchers"),

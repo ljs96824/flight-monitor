@@ -13,6 +13,7 @@ from typing import Iterator
 
 from airports import get_airport_city
 from method_registry import method_version
+from observation_time import resolve_observed_day_shanghai
 from provenance import build_envelope
 from source_profiles import expected_listing_sources, normalize_route_type
 
@@ -128,15 +129,40 @@ def _load_route_rows(
     airport_pair: tuple[str, str] | None,
     timeout: float,
 ) -> list[dict]:
-    columns = (
-        "observed_at, round_id, route_type, origin_airport, dest_airport, "
-        "depart_date, days_to_departure, cabin_class, source, price_cny"
-    )
     with readonly_connection(db_path, timeout=timeout) as connection:
         available = {
             row[1]
             for row in connection.execute("PRAGMA table_info(observations)").fetchall()
         }
+        columns = ", ".join(
+            [
+                "observed_at",
+                (
+                    "observed_at_utc"
+                    if "observed_at_utc" in available
+                    else "NULL AS observed_at_utc"
+                ),
+                (
+                    "observed_day_shanghai"
+                    if "observed_day_shanghai" in available
+                    else "NULL AS observed_day_shanghai"
+                ),
+                (
+                    "legacy_time_ambiguous"
+                    if "legacy_time_ambiguous" in available
+                    else "0 AS legacy_time_ambiguous"
+                ),
+                "round_id",
+                "route_type",
+                "origin_airport",
+                "dest_airport",
+                "depart_date",
+                "days_to_departure",
+                "cabin_class",
+                "source",
+                "price_cny",
+            ]
+        )
         required = {
             "observed_at",
             "round_id",
@@ -180,8 +206,9 @@ def fold_tcurve_daily_cells(rows: list[dict]) -> list[dict]:
     """折叠到城市航线、出发日、观测日，并采用当日跨源最低价。"""
     grouped: dict[tuple[str, str, str, str], dict] = {}
     for row in rows:
-        observed_at = str(row.get("observed_at") or "")
-        observed_day = observed_at[:10]
+        observed_day, timestamp_source = resolve_observed_day_shanghai(row)
+        if observed_day is None:
+            continue
         depart_date = str(row.get("depart_date") or "")
         try:
             observed_date = date.fromisoformat(observed_day)
@@ -204,8 +231,10 @@ def fold_tcurve_daily_cells(rows: list[dict]) -> list[dict]:
                 "stored_t_values": set(),
                 "round_ids": set(),
                 "lineage_missing": False,
+                "timestamp_sources": set(),
             },
         )
+        cell["timestamp_sources"].add(timestamp_source)
         cell["prices"].append(price)
         source = str(row.get("source") or "").strip().lower()
         if source:
@@ -256,6 +285,7 @@ def fold_tcurve_daily_cells(rows: list[dict]) -> list[dict]:
                 "route_types": sorted(values["route_types"]),
                 "round_ids": sorted(values["round_ids"]),
                 "lineage_complete": not values["lineage_missing"],
+                "timestamp_sources": sorted(values["timestamp_sources"]),
                 "degraded": bool(expected and not expected.issubset(coverage)),
             }
         )
@@ -310,6 +340,14 @@ def build_tcurve(
         timeout=timeout,
     )
     all_cells = fold_tcurve_daily_cells(rows)
+    ambiguous_excluded_count = sum(
+        1 for row in rows if resolve_observed_day_shanghai(row)[0] is None
+    )
+    legacy_fallback_row_count = sum(
+        1
+        for row in rows
+        if resolve_observed_day_shanghai(row)[1] == "legacy_fallback"
+    )
     degraded_count = sum(1 for cell in all_cells if cell["degraded"])
     included_cells = [
         cell for cell in all_cells if include_degraded or not cell["degraded"]
@@ -394,6 +432,8 @@ def build_tcurve(
         "min_sample": min_sample,
         "include_degraded": bool(include_degraded),
         "daily_cell_count": len(all_cells),
+        "ambiguous_excluded_count": ambiguous_excluded_count,
+        "legacy_fallback_row_count": legacy_fallback_row_count,
         "included_cell_count": len(included_cells),
         "daily_cells": all_cells,
         "degraded_count": degraded_count,

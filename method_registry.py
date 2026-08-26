@@ -6,8 +6,8 @@ from types import MappingProxyType
 
 
 _METHOD_VERSIONS = {
-    "obs_store": "v1",
-    "tcurve": "tcurve_v1",
+    "obs_store": "v2",
+    "tcurve": "tcurve_v2",
     "weekday": "weekday_v2",
     "reftier": "reftier_v1",
     "calendar": "calendar_v1",

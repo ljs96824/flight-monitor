@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+from collections import Counter
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from datetime import date, datetime, timedelta
@@ -13,6 +14,7 @@ from typing import Iterable, Iterator
 from flight_combo_utils import normalize_combo
 from log_utils import safe_log
 from method_registry import method_version
+from observation_time import canonicalize_observed_at, timestamp_kind
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -177,6 +179,9 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS observations (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   observed_at TEXT NOT NULL,
+  observed_at_utc TEXT,
+  observed_day_shanghai TEXT,
+  legacy_time_ambiguous INTEGER NOT NULL DEFAULT 0,
   round_id TEXT NOT NULL,
   route_type TEXT NOT NULL,
   origin_airport TEXT NOT NULL,
@@ -204,27 +209,144 @@ def _ensure_duration_column(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE observations ADD COLUMN duration_min INTEGER")
 
 
+def _ensure_observation_time_columns(conn: sqlite3.Connection) -> None:
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(observations)").fetchall()}
+    if "observed_at_utc" not in columns:
+        conn.execute("ALTER TABLE observations ADD COLUMN observed_at_utc TEXT")
+    if "observed_day_shanghai" not in columns:
+        conn.execute("ALTER TABLE observations ADD COLUMN observed_day_shanghai TEXT")
+    if "legacy_time_ambiguous" not in columns:
+        conn.execute(
+            "ALTER TABLE observations "
+            "ADD COLUMN legacy_time_ambiguous INTEGER NOT NULL DEFAULT 0"
+        )
+
+
 def init_observations_db(db_path: str | Path = DEFAULT_DB_PATH) -> Path:
     path = Path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with _managed_connection(path) as conn:
         conn.execute(SCHEMA)
         _ensure_duration_column(conn)
+        _ensure_observation_time_columns(conn)
     return path
 
 
-def _observed_date(observed_at: str) -> date:
-    value = str(observed_at or "").strip()
-    if not value:
-        return date.today()
+def _days_to_departure(depart_date: str, observed_day_shanghai: str) -> int:
+    return (
+        date.fromisoformat(str(depart_date))
+        - date.fromisoformat(str(observed_day_shanghai))
+    ).days
+
+
+def audit_observation_timestamps(
+    db_path: str | Path = DEFAULT_DB_PATH,
+    *,
+    assume_naive_shanghai: bool = False,
+) -> dict:
+    """Classify legacy timestamps without changing schema, rows, or file metadata."""
+    path = Path(db_path).resolve()
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    connection = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+    connection.row_factory = sqlite3.Row
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).date()
-    except ValueError:
-        return date.fromisoformat(value[:10])
+        connection.execute("PRAGMA query_only=ON")
+        rows = connection.execute(
+            "SELECT id, observed_at, depart_date, days_to_departure FROM observations"
+        ).fetchall()
+    finally:
+        connection.close()
+
+    counts = Counter(timestamp_kind(row["observed_at"]) for row in rows)
+    changes = []
+    for row in rows:
+        kind = timestamp_kind(row["observed_at"])
+        if kind == "invalid" or (kind == "naive" and not assume_naive_shanghai):
+            continue
+        canonical = canonicalize_observed_at(
+            row["observed_at"],
+            assume_naive_shanghai=assume_naive_shanghai,
+        )
+        computed = _days_to_departure(
+            row["depart_date"],
+            canonical.observed_day_shanghai,
+        )
+        stored = int(row["days_to_departure"])
+        if computed != stored:
+            changes.append({"id": int(row["id"]), "stored_t": stored, "canonical_t": computed})
+    ordered_counts = {
+        kind: int(counts[kind])
+        for kind in ("aware", "naive", "invalid")
+        if counts[kind]
+    }
+    return {
+        "classification_counts": ordered_counts,
+        "would_be_ambiguous": int(counts["invalid"])
+        + (0 if assume_naive_shanghai else int(counts["naive"])),
+        "t_assignment_changes": changes,
+    }
 
 
-def _days_to_departure(depart_date: str, observed_at: str) -> int:
-    return (date.fromisoformat(str(depart_date)) - _observed_date(observed_at)).days
+def migrate_observation_timestamps(
+    db_path: str | Path = DEFAULT_DB_PATH,
+    *,
+    assume_naive_shanghai: bool = False,
+) -> dict:
+    """Backfill canonical fields; naive interpretation is always explicit."""
+    audit = audit_observation_timestamps(
+        db_path,
+        assume_naive_shanghai=assume_naive_shanghai,
+    )
+    if audit["classification_counts"].get("naive") and not assume_naive_shanghai:
+        raise ValueError(
+            "naive legacy rows require assume_naive_shanghai=True after provenance audit"
+        )
+    path = init_observations_db(db_path)
+    migrated_aware = 0
+    migrated_naive = 0
+    ambiguous = 0
+    with _managed_connection(path) as conn:
+        rows = conn.execute("SELECT id, observed_at, depart_date FROM observations").fetchall()
+        for row_id, observed_at, depart_date in rows:
+            kind = timestamp_kind(observed_at)
+            if kind == "invalid":
+                conn.execute(
+                    "UPDATE observations SET observed_at_utc=NULL, "
+                    "observed_day_shanghai=NULL, legacy_time_ambiguous=1 WHERE id=?",
+                    (row_id,),
+                )
+                ambiguous += 1
+                continue
+            canonical = canonicalize_observed_at(
+                observed_at,
+                assume_naive_shanghai=assume_naive_shanghai,
+            )
+            days_to_departure = _days_to_departure(
+                depart_date,
+                canonical.observed_day_shanghai,
+            )
+            conn.execute(
+                "UPDATE observations SET observed_at_utc=?, "
+                "observed_day_shanghai=?, legacy_time_ambiguous=0, "
+                "days_to_departure=? WHERE id=?",
+                (
+                    canonical.observed_at_utc,
+                    canonical.observed_day_shanghai,
+                    days_to_departure,
+                    row_id,
+                ),
+            )
+            if kind == "aware":
+                migrated_aware += 1
+            else:
+                migrated_naive += 1
+    return {
+        **audit,
+        "migrated_aware": migrated_aware,
+        "migrated_naive_shanghai": migrated_naive,
+        "legacy_time_ambiguous": ambiguous,
+    }
 
 
 def _to_int_or_none(value) -> int | None:
@@ -300,9 +422,13 @@ def append_observations(
     db_path: str | Path = DEFAULT_DB_PATH,
 ) -> dict[str, int]:
     """Append valid per-source flight prices and return write/skip counts."""
-    observed_at = observed_at or datetime.now().isoformat(timespec="seconds")
+    canonical_time = canonicalize_observed_at(observed_at)
+    observed_at = canonical_time.observed_at_shanghai
     db_path = init_observations_db(db_path)
-    days_to_departure = _days_to_departure(depart_date, observed_at)
+    days_to_departure = _days_to_departure(
+        depart_date,
+        canonical_time.observed_day_shanghai,
+    )
     rows = []
     for flight in flights:
         price = _to_price(flight.get("price"))
@@ -312,6 +438,9 @@ def append_observations(
         rows.append(
             (
                 observed_at,
+                canonical_time.observed_at_utc,
+                canonical_time.observed_day_shanghai,
+                0,
                 str(round_id),
                 str(route_type or "unknown"),
                 str(origin_airport),
@@ -335,10 +464,11 @@ def append_observations(
             cursor = conn.execute(
                 """
                 INSERT OR IGNORE INTO observations (
-                    observed_at, round_id, route_type, origin_airport, dest_airport,
+                    observed_at, observed_at_utc, observed_day_shanghai,
+                    legacy_time_ambiguous, round_id, route_type, origin_airport, dest_airport,
                     depart_date, days_to_departure, cabin_class, source, flight_combo,
                     airline, stops, duration_min, price_cny, method_version
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 row,
             )

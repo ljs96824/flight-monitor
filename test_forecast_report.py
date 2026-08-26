@@ -16,14 +16,14 @@ class ForecastReportTest(unittest.TestCase):
         cells = []
         for offset in range(10):
             cells.append({"depart_date": "2026-10-01", "observed_day": f"2026-09-{10 + offset:02d}", "days_to_departure": 21 - offset, "min_price": 100 + offset, "degraded": False, "min_sources": ["juhe"]})
-        patterns = {"combo_occurrence": [], "supply_mix": {"direct": 1, "transfer": 0, "n": 1, "basis": "基于组合结构"}, "departure_period": {"status": "字段不可得", "reason": "面板未存起飞时刻(obs_store v1),待schema扩展后自动点亮"}}
+        patterns = {"combo_occurrence": [], "supply_mix": {"direct": 1, "transfer": 0, "n": 1, "basis": "基于组合结构"}, "departure_period": {"status": "字段不可得", "reason": "面板未存起飞时刻(obs_store v2),待schema扩展后自动点亮"}}
         with patch("scripts.forecast_report.load_tcurve_daily_cells", return_value=cells), patch("scripts.forecast_report.load_route_observations", return_value=[]), patch("scripts.forecast_report.build_route_patterns", return_value=patterns):
             text, _ = generate_report(db_path="unused", route="上海-大阪")
         self.assertIn("## shape(T)", text)
         self.assertIn("k=1:", text)
         self.assertIn("k=3:", text)
         self.assertIn("k=7:", text)
-        self.assertIn("面板未存起飞时刻(obs_store v1)", text)
+        self.assertIn("面板未存起飞时刻(obs_store v2)", text)
 
     def test_low_sample_shape_is_hidden_by_default_and_visible_only_in_diagnostic_mode(self):
         cells = [
@@ -37,7 +37,7 @@ class ForecastReportTest(unittest.TestCase):
             }
             for day in range(5, 9)
         ]
-        patterns = {"combo_occurrence": [], "supply_mix": {"direct": 0, "transfer": 0, "n": 0, "basis": "基于组合结构"}, "departure_period": {"status": "字段不可得", "reason": "面板未存起飞时刻(obs_store v1),待schema扩展后自动点亮"}}
+        patterns = {"combo_occurrence": [], "supply_mix": {"direct": 0, "transfer": 0, "n": 0, "basis": "基于组合结构"}, "departure_period": {"status": "字段不可得", "reason": "面板未存起飞时刻(obs_store v2),待schema扩展后自动点亮"}}
         patches = (
             patch("scripts.forecast_report.load_tcurve_daily_cells", return_value=cells),
             patch("scripts.forecast_report.load_route_observations", return_value=[]),
@@ -68,7 +68,7 @@ class ForecastReportTest(unittest.TestCase):
         patterns = {
             "combo_occurrence": [{"combo": "MU225", "label": "在33次有效观测中均出现(100%)"}],
             "supply_mix": {"direct": 1850, "transfer": 17316, "n": 19166, "basis": "基于组合结构"},
-            "departure_period": {"status": "字段不可得", "reason": "面板未存起飞时刻(obs_store v1),待schema扩展后自动点亮"},
+            "departure_period": {"status": "字段不可得", "reason": "面板未存起飞时刻(obs_store v2),待schema扩展后自动点亮"},
         }
         with patch("scripts.forecast_report.load_tcurve_daily_cells", return_value=cells), patch("scripts.forecast_report.load_route_observations", return_value=[]), patch("scripts.forecast_report.build_route_patterns", return_value=patterns):
             text, payload = generate_report(db_path="unused", route="上海-大阪")

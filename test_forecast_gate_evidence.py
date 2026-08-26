@@ -263,7 +263,7 @@ class ForecastGateEvidenceTest(unittest.TestCase):
             },
             "departure_period": {
                 "status": "字段不可得",
-                "reason": "面板未存起飞时刻(obs_store v1),待schema扩展后自动点亮",
+                "reason": "面板未存起飞时刻(obs_store v2),待schema扩展后自动点亮",
             },
         }
         with patch(

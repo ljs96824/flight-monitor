@@ -151,6 +151,11 @@ def generate_report(
                     else f"默认剔除{curve['degraded_excluded_count']}个。"
                 )
             ),
+            (
+                "观测时间归属: "
+                f"ambiguous剔除={curve.get('ambiguous_excluded_count', 0)}；"
+                f"legacy fallback行={curve.get('legacy_fallback_row_count', 0)}。"
+            ),
             f"覆盖范围: T={coverage.get('t_min')} 至 T={coverage.get('t_max')} 天；禁止外推范围外数据。",
             "",
             "缺失格清单:",

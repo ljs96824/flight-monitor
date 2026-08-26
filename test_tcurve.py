@@ -117,7 +117,7 @@ class TCurveTest(unittest.TestCase):
         t9 = self._point(curve, 9)
         self.assertEqual((t9["n"], t9["median"], t9["p25"], t9["p75"]), (3, 110, 100, 135))
         self.assertEqual(curve["depart_dates"], ["2026-08-10", "2026-08-11", "2026-08-12"])
-        self.assertEqual(curve["method_version"], "tcurve_v1")
+        self.assertEqual(curve["method_version"], "tcurve_v2")
 
     def test_sample_gate_is_insufficient_at_four_and_open_at_five(self):
         from tcurve import build_tcurve

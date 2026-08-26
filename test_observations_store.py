@@ -109,7 +109,7 @@ class ObservationsStoreTest(unittest.TestCase):
                 row = conn.execute(
                     "SELECT days_to_departure, source, flight_combo, price_cny, method_version FROM observations"
                 ).fetchone()
-            self.assertEqual(row, (27, "hasdata", "MU225", 1234.0, "v1"))
+            self.assertEqual(row, (27, "hasdata", "MU225", 1234.0, "v2"))
 
     def test_count_observations_for_round_counts_only_requested_round(self):
         from observations_store import append_observations, count_observations_for_round

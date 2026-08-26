@@ -116,7 +116,7 @@ def build_patterns(rows, *, min_n=MIN_PATTERN_N):
     total = direct + transfer
     supply = {"n": total, "direct": direct, "transfer": transfer, "direct_share": _clean_number(direct / total, 4) if total else None, "transfer_share": _clean_number(transfer / total, 4) if total else None, "basis": "基于组合结构", "sufficient": total >= min_n}
 
-    return {"method_version": METHOD_VERSION, "observed_day_n": denominator, "combo_occurrence": occurrence, "carrier_price_position": carrier_positions, "weekday_stability": weekday, "supply_mix": supply, "departure_period": {"status": "字段不可得", "reason": "面板未存起飞时刻(obs_store v1),待schema扩展后自动点亮"}}
+    return {"method_version": METHOD_VERSION, "observed_day_n": denominator, "combo_occurrence": occurrence, "carrier_price_position": carrier_positions, "weekday_stability": weekday, "supply_mix": supply, "departure_period": {"status": "字段不可得", "reason": "面板未存起飞时刻(obs_store v2),待schema扩展后自动点亮"}}
 
 
 def build_route_patterns(
