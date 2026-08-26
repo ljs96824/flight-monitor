@@ -22,14 +22,9 @@ KNOWN_F821_DEBT = frozenset(
         ("notifier.py", "_append_detailed_analysis_section", "_append_price_references"),
         ("notifier.py", "_append_detailed_analysis_section", "_append_purchase_checklist"),
         ("notifier.py", "_append_detailed_analysis_section", "_append_system_health_lines"),
-        ("notifier.py", "_append_round_trip_recommendations", "_round_trip_city_code"),
-        ("notifier.py", "_append_round_trip_recommendations", "_round_trip_date_text"),
-        ("notifier.py", "_booking_link", "_google_flights_url"),
         ("notifier.py", "_format_structured_html_message", "_append_low_option_count_notice"),
         ("notifier.py", "_format_structured_html_message", "_append_price_explanation_lines"),
         ("notifier.py", "_format_structured_html_message", "_append_push_trend_linechart"),
-        ("notifier.py", "_round_trip_score_line", "_flight_slot_label"),
-        ("notifier.py", "_round_trip_score_line", "_round_trip_time_range"),
         ("notifier.py", "generate_neutral_summary", "_plain_price_position"),
     }
 )

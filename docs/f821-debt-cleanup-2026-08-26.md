@@ -151,5 +151,42 @@ FunctionDef(build_message), Assign, If, Return
 |---|---|---|---:|
 | 1 改名残留 | complete | `a823175` | 39 |
 | 2 终止 return 后死尾 | complete | `1c7d5ed` | 15 |
-| 3 孤立 legacy renderers | implemented in this commit | this commit | 14 |
-| 4 孤立 legacy notification helpers | pending | - | 14 |
+| 3 孤立 legacy renderers | complete | `735c37d` | 14 |
+| 4 孤立 legacy notification helpers | implemented in this commit | this commit | 9 |
+
+## 提交 4：孤立 legacy notification helper 子图
+
+提交 3 已落地为 `735c37d`。本笔沿用提交 3 的全仓 AST 与已跟踪文本扫描，
+覆盖定义、名称/属性读取、导入、`getattr`、`patch`、`__all__`、默认参数、注册器、
+回调、模板、CLI、测试与脚本。扫描没有发现这些私有子图之外的引用：
+
+| 旧子图 | 直接调用图 | 外部/动态引用 | 裁决 |
+|---|---|---|---|
+| `_booking_link` | 无调用方 | 无 | 删除 |
+| `_append_simple_top3` → `_append_round_trip_recommendations` | 只有子图内这一条边；入口无调用方 | 无 | 两者一并删除 |
+| `_append_round_trip_score_top3` → `_round_trip_score_line` | 只有子图内两处循环调用；入口无调用方 | 无 | 两者一并删除 |
+| `generate_neutral_summary` | 仓内无调用方 | 无动态引用，但它是无下划线的模块级可导入兼容 API | `needs_manual_adjudication` |
+
+前三个私有子图没有生产、脚本、测试或动态上游；专项合同在删除后要求五个符号的
+定义与全部引用同时为零。`generate_neutral_summary` 不满足删除条件：调用者可传入非空
+`trend.current_position`，稳定触发已消失的 `_plain_price_position`；characterization
+锁定该可构造 `NameError` 与精确债务，避免把公开兼容面误判为死代码。
+
+### 删除记录
+
+| 被删函数 | 原功能域 | 相关旧 helper 消失提交 | 删除依据 | 删除前后输出 |
+|---|---|---|---|---|
+| `_booking_link` | 旧 Google Flights 单渠道 HTML 链接 | `_google_flights_url` 消失于 `61b9109` | 私有函数全仓只有定义，无任何静态或动态上游 | 完全相同 |
+| `_append_simple_top3` | 旧 Top3 文本入口 | 下游路线 helper 消失于 `61b9109` | 私有入口全仓只有定义 | 完全相同 |
+| `_append_round_trip_recommendations` | 旧往返路线标题与推荐行 | `_round_trip_city_code`、`_round_trip_date_text` 消失于 `61b9109` | 仅由同笔删除的孤立入口调用 | 完全相同 |
+| `_append_round_trip_score_top3` | 旧去返程综合评分 Top3 入口 | 下游时段 helper 消失于 `61b9109` | 私有入口全仓只有定义 | 完全相同 |
+| `_round_trip_score_line` | 旧评分航班明细行 | `_round_trip_time_range`、`_flight_slot_label` 消失于 `61b9109` | 仅由同笔删除的孤立入口调用 | 完全相同 |
+
+本笔 F821 由 14 个精确三元组降为 9 个。余项不是漏清：
+
+- 8 项属于仍由公开兼容入口 `format_html_message` 可达的
+  `_format_structured_html_message` / `_append_detailed_analysis_section` 链；
+- 1 项属于公开兼容函数 `generate_neutral_summary`。
+
+它们均标记 `needs_manual_adjudication`；本批不恢复 61b9109 已删除的 helper，也不编造
+替代语义。

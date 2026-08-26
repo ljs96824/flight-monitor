@@ -1983,12 +1983,6 @@ def _time_with_timezone(time_text: str, airport_code: str, show_timezone: bool) 
     return f"{time_text}({get_airport_timezone(airport_code)})"
 
 
-def _booking_link(origin: str, dest: str, date_str: str, label: str) -> str:
-    style = "color:#1a73e8;text-decoration:underline;"
-    url = _google_flights_url(origin, dest, date_str)
-    return f'<a href="{url}" style="{style}">{label}</a>'
-
-
 def _flight_booking_link(flight: dict, date_str: str | None, label: str) -> str:
     segments = flight.get("segments") or []
     first_segment = segments[0] if segments else {}
@@ -2022,36 +2016,6 @@ def _round_trip_option_line(
     analysis_result: dict | None = None,
 ) -> str:
     return format_flight_detail(flight, date_str, _option_label(index))
-
-
-def _append_round_trip_recommendations(
-    lines: list[str],
-    title: str,
-    origin: str,
-    destination: str,
-    depart_date: str | None,
-    flights: list[dict] | None,
-    route_info: dict | None = None,
-    analysis_result: dict | None = None,
-    limit: int = 5,
-) -> None:
-    flights = flights or []
-    if not flights:
-        return
-    lines.append(
-        f"<b>{title}：{_round_trip_city_code(origin)} → "
-        f"{_round_trip_city_code(destination)} | {_round_trip_date_text(depart_date)}</b>"
-    )
-    lines.append("━━━ 推荐方案 ━━━")
-    for index, flight in enumerate(flights[:limit]):
-        lines.append(
-            _round_trip_option_line(index, flight, depart_date, route_info, analysis_result)
-        )
-    lines.append("")
-
-
-def _append_simple_top3(lines: list[str], title: str, flights: list[dict] | None) -> None:
-    _append_round_trip_recommendations(lines, title, "", "", "", flights, limit=3)
 
 
 def _round_trip_combo_flight_line(prefix: str, flight: dict, date_str: str | None) -> str:
@@ -2137,45 +2101,6 @@ def _round_trip_score_flights(analysis: dict | None) -> list[dict]:
         [flight for flight in flights if _has_valid_price(flight.get("price"))],
         key=sort_key,
     )[:3]
-
-
-def _round_trip_score_line(index: int, flight: dict, date_str: str | None = None) -> str:
-    flight_no = _compact_flight_numbers(flight)
-    airline = _round_trip_airline_text(flight)
-    price = flight.get("price")
-    price_text = _price_text(price)
-    line = (
-        f"{index}. {flight_no} {airline} | {price_text} | "
-        f"{_round_trip_time_range(flight)} | {_flight_slot_label(flight)} | "
-        f"{_round_trip_stops_text(flight)} | "
-        f"{_round_trip_aircraft_text(flight)} | {_round_trip_score_text(flight)}"
-    )
-    links = _combo_full_booking_links(flight, date_str)
-    if links:
-        line += f"<br>  馃敆 {links}"
-    return line
-
-
-def _append_round_trip_score_top3(
-    lines: list[str],
-    outbound_analysis: dict,
-    return_analysis: dict,
-    route_info: dict | None = None,
-) -> None:
-    outbound_ranked = _round_trip_score_flights(outbound_analysis)
-    return_ranked = _round_trip_score_flights(return_analysis)
-    if not outbound_ranked and not return_ranked:
-        return
-    lines.append("<b>猸?缁煎悎璇勫垎Top3</b>")
-    if outbound_ranked:
-        lines.append("鈹佲攣 鍘荤▼ 鈹佲攣")
-        for index, flight in enumerate(outbound_ranked, start=1):
-            lines.append(_round_trip_score_line(index, flight, (route_info or {}).get("depart_date")))
-    if return_ranked:
-        lines.append("鈹佲攣 杩旂▼ 鈹佲攣")
-        for index, flight in enumerate(return_ranked, start=1):
-            lines.append(_round_trip_score_line(index, flight, (route_info or {}).get("return_date")))
-    lines.append("")
 
 
 def _short_month_day(date_str: str | None) -> str:

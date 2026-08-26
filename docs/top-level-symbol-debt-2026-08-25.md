@@ -203,3 +203,20 @@
 - 固定输入 PNG 字节数：`25671`
 
 源码指纹进入跨平台合同；PNG 哈希用于本机改前改后对照，避免字体后端差异造成跨平台假红。
+
+## F821 旧通知子图后续裁决（2026-08-26）
+
+此前对 `_append_simple_top3` 链的“无法确定”结论已由更完整的全仓调用图审计取代：
+已跟踪 Python AST 与全部已跟踪文本均只发现
+`_append_simple_top3` → `_append_round_trip_recommendations` 的子图内调用，未发现生产、
+脚本、测试、模板、CLI、导入、属性读取、`getattr`、`patch`、注册器、默认参数或回调
+上游。删除后的 negative contract 要求两个符号连定义与字符串式动态引用都为零。
+
+同样证据支持删除另外两个私有孤立子图：`_booking_link`，以及
+`_append_round_trip_score_top3` → `_round_trip_score_line`。五个被删函数及 61b9109
+消失的依赖逐项记录在 `docs/f821-debt-cleanup-2026-08-26.md`。
+
+`generate_neutral_summary` 虽无仓内调用方，但属于模块级公开兼容 API，且非空
+`trend.current_position` 可构造触发 `_plain_price_position` 的 F821；因此保留为
+`needs_manual_adjudication`。另有 8 项位于仍可由 `format_html_message` 兼容入口触达的
+旧 structured renderer 链，同样保留待单独裁决。当前 F821 精确债务集合为 9 项。
