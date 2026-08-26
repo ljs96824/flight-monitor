@@ -23,6 +23,7 @@ ALLOWED_DIRECT_SQLITE_CONNECT = {
     ("readonly_snapshot.py", "_backup_sqlite", 2),
     ("readonly_snapshot.py", "_open_sqlite_watchers", 1),
     ("scripts/audit_permission_pollution.py", "readonly_connection", 1),
+    ("scripts/audit_tracked_sqlite_backups.py", "audit_sqlite_file", 1),
     ("storage.py", "_connect", 1),
     ("tcurve.py", "readonly_connection", 1),
 }
@@ -60,6 +61,10 @@ DIRECT_CONNECT_CLOSE_OWNER = {
         "scripts/audit_permission_pollution.py",
         "readonly_connection",
     ),
+    ("scripts/audit_tracked_sqlite_backups.py", "audit_sqlite_file", 1): (
+        "scripts/audit_tracked_sqlite_backups.py",
+        "audit_sqlite_file",
+    ),
     ("storage.py", "_connect", 1): ("storage.py", "_connect"),
     ("tcurve.py", "readonly_connection", 1): (
         "tcurve.py",
@@ -74,6 +79,7 @@ READONLY_CONNECT_SCOPES = {
     ("readonly_snapshot.py", "_backup_sqlite"),
     ("readonly_snapshot.py", "_open_sqlite_watchers"),
     ("scripts/audit_permission_pollution.py", "readonly_connection"),
+    ("scripts/audit_tracked_sqlite_backups.py", "audit_sqlite_file"),
     ("tcurve.py", "readonly_connection"),
 }
 
@@ -173,12 +179,26 @@ def _function_node(relative_path, function_name):
 
 
 def _has_explicit_close(node):
-    return any(
-        isinstance(child, ast.Call)
-        and isinstance(child.func, ast.Attribute)
-        and child.func.attr == "close"
-        for child in ast.walk(node)
-    )
+    for child in ast.walk(node):
+        if (
+            isinstance(child, ast.Call)
+            and isinstance(child.func, ast.Attribute)
+            and child.func.attr == "close"
+        ):
+            return True
+        if (
+            isinstance(child, ast.Call)
+            and isinstance(child.func, ast.Name)
+            and child.func.id == "closing"
+            and child.args
+            and isinstance(child.args[0], ast.Call)
+            and isinstance(child.args[0].func, ast.Attribute)
+            and child.args[0].func.attr == "connect"
+            and isinstance(child.args[0].func.value, ast.Name)
+            and child.args[0].func.value.id == "sqlite3"
+        ):
+            return True
+    return False
 
 
 def _has_query_only(node):

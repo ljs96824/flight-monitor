@@ -6,6 +6,11 @@
 data/
 data/api_usage.json
 *.db
+*.sqlite3
+*.sqlite3.bak
+*-wal
+*-shm
+*-journal
 # 轮次证据与篮子哨兵状态
 data/logs/rounds/
 data/basket_sentinel.json
