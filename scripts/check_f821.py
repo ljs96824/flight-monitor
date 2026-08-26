@@ -55,13 +55,7 @@ KNOWN_F821_DEBT = frozenset(
         ("notifier.py", "format_html_message.build_message", "_sort_rule_text"),
         ("notifier.py", "format_html_message.build_message", "_trend_arrow_line"),
         ("notifier.py", "format_html_message.build_message", "_trip_rigidity_guidance"),
-        ("notifier.py", "format_alternative_message", "_display_route_summary"),
         ("notifier.py", "generate_neutral_summary", "_plain_price_position"),
-        (
-            "test_price_policy_email.py",
-            "<module>",
-            "test_email_top_summary_separates_display_transaction_and_verify_prices",
-        ),
     }
 )
 

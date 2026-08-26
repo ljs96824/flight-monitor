@@ -676,7 +676,7 @@ def test_trend_png_source_sets_date_axis_labels():
 
 if __name__ == "__main__":
     test_push_type_uses_transaction_price_when_display_price_only_looks_good()
-    test_email_top_summary_separates_display_transaction_and_verify_prices()
+    test_email_no_primary_uses_candidate_pool_reference_without_purchase_signals()
     test_email_roundtrip_excluded_single_leg_is_not_compared_to_roundtrip_total()
     test_roundtrip_analysis_builds_excluded_roundtrip_combos()
     test_excluded_roundtrip_combos_dedupes_reason_and_limits_debug_output()

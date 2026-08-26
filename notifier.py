@@ -1193,7 +1193,7 @@ def format_alternative_message(analysis, run_status: str | None = None) -> str:
         f"当前关注：{analysis.get('target_combo', '-')}，{format_price(target_price)}",
         f"替代方案：{alt.get('flight_combo', '-')}，{format_price(alt_price)}",
         f"价差：{format_price(diff)}",
-        f"路线：{_display_route_summary(alt.get('route_summary', '-'))}",
+        f"路线：{format_route_summary(alt.get('route_summary', '-'))}",
         f"总时长：{_duration_text(alt.get('duration_hours'))}",
     ])
     return _append_disclaimer(message, run_status)
