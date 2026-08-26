@@ -103,3 +103,53 @@ FunctionDef(build_message), Assign, If, Return
 | 2 终止 return 后死尾 | implemented in this commit | this commit | 15 |
 | 3 孤立 legacy renderers | pending | - | 15 |
 | 4 孤立 legacy notification helpers | pending | - | 15 |
+
+## 提交 3：孤立 legacy renderer 调用图裁决
+
+提交 2 已落地为 `1c7d5ed`。本笔对全部已跟踪 Python 文件做 AST 审计，并以文本搜索
+补齐模板、CLI 与文档引用。审计覆盖：静态名称调用、`from notifier import`、
+`notifier.<name>`、`getattr`、`patch` 字符串、`__all__`、默认参数、模块注册器、返回值与
+回调传递。
+
+| 符号 | 生产/脚本/测试调用方 | 动态或间接引用 | 裁决 |
+|---|---|---|---|
+| `format_html_message` | `test_full.py` 在可执行诊断路径中直接导入并调用；characterization 测试直接调用 | 无 `getattr`/注册器；测试不替换该符号 | 仍是可达兼容入口 |
+| `_format_structured_html_message` | `format_html_message` 三处直接调用 | characterization 测试两处 `patch` 仅隔离短/长分派 | `needs_manual_adjudication` |
+| `_append_detailed_analysis_section` | `_format_structured_html_message` 一处直接调用 | 无其他动态引用 | `needs_manual_adjudication` |
+| `_append_round_trip_block` | 删除前仅有定义；第 2 笔删除死尾后无名称调用 | 无 import/属性/getattr/patch/注册器/模板/CLI/回调 | 可删除 |
+
+### 两层可达性结论
+
+第一层不满足孤立条件：`format_html_message` 虽不在当前
+`build_notification_payload → render_email/render_detail_html/render_pushplus_sections`
+主链，但仍由 `test_full.py` 的命令行诊断路径调用；同时它是无下划线的历史兼容入口，
+仓库证据不足以断言不存在外部调用者。
+
+第二层也不满足删除条件：
+
+- `_format_structured_html_message` 在进入 `detail_level == "short"` 分支前，无条件调用
+  已消失的 `_append_push_trend_linechart`；公开兼容入口可直接构造到该 F821。
+- 非 short 路径直接调用 `_append_detailed_analysis_section`。后者无条件触达已消失的
+  `_append_purchase_checklist` 与 `_append_system_health_lines`；单程、非 compact 且有
+  `current_min` 时还触达另外三个 F821。它不是孤立函数。
+
+因此本笔不恢复 helper，也不删除这两个仍有活跃上游的 renderer；其 8 个 F821 精确
+三元组继续登记为 `needs_manual_adjudication`。这不是把“当前夹具未触达”误写成死代码。
+
+### 删除记录
+
+| 被删函数 | 原功能域 | 相关旧 helper 消失提交 | 删除依据 | 删除前后输出 |
+|---|---|---|---|---|
+| `_append_round_trip_block` | 旧往返总价、Top3、全部方案与附近日期 HTML 区块 | `_append_nearby_dates` 消失于 `61b9109` | 全仓调用图只剩定义，且无动态/外部契约证据 | 完全相同 |
+
+全仓零引用合同会扫描已跟踪 Python 文件的定义、导入、名称/属性读取和字符串式动态引用；
+未来重新引入该私有 renderer 或调用即失败。本笔 F821 由 15 降为 14。
+
+## 逐笔状态（提交 3 后）
+
+| 提交 | 状态 | 清理提交 | F821 剩余 |
+|---|---|---|---:|
+| 1 改名残留 | complete | `a823175` | 39 |
+| 2 终止 return 后死尾 | complete | `1c7d5ed` | 15 |
+| 3 孤立 legacy renderers | implemented in this commit | this commit | 14 |
+| 4 孤立 legacy notification helpers | pending | - | 14 |

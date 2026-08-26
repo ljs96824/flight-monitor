@@ -2725,63 +2725,6 @@ def _append_roundtrip_trend_chart(lines: list[str], round_trip: dict) -> None:
     lines.append("")
 
 
-def _append_round_trip_block(
-    lines: list[str],
-    outbound_analysis: dict,
-    route_info: dict,
-    return_analysis: dict | None = None,
-) -> None:
-    if not route_info.get("round_trip"):
-        return
-
-    return_analysis = return_analysis or outbound_analysis.get("return_analysis") or {}
-    round_trip = outbound_analysis.get("round_trip_analysis") or {}
-    outbound_flights = outbound_analysis.get("all_flights") or []
-    return_flights = return_analysis.get("all_flights") or []
-    top_combinations = round_trip.get("top_combinations") or []
-    max_combo = round_trip.get("max_combination")
-    outbound_min = round_trip.get("outbound_min")
-    return_min = round_trip.get("return_min")
-    total_min = round_trip.get("total_min")
-
-    lines.append("<b>💰 往返总价一览</b>")
-    if _has_valid_price(total_min):
-        lines.append(f"最优组合：{_price_text(total_min)}（去{_price_text(outbound_min)} + 回{_price_text(return_min)}）")
-    if max_combo:
-        lines.append(f"最贵组合：{_price_text(max_combo.get('total_price'))}（去{_price_text(max_combo.get('outbound_price'))} + 回{_price_text(max_combo.get('return_price'))}）")
-    target = _to_float(route_info.get("target_price"))
-    max_budget = _to_float(route_info.get("max_budget") or route_info.get("budget"))
-    if target:
-        lines.append(f"你的理想总价：{_price_text(target * 2)}")
-    if max_budget:
-        lines.append(f"你的最高预算：{_price_text(max_budget * 2)}")
-    trend = round_trip.get("trend") or {}
-    recent_prices = trend.get("recent_prices") or []
-    if recent_prices:
-        trend_line = " → ".join(_price_text(price) for price in recent_prices)
-        lines.append(f"📊 总价趋势：{trend_line} {trend.get('icon', '')} {trend.get('direction', '')}".strip())
-    if round_trip.get("advice"):
-        lines.append(round_trip["advice"])
-    if round_trip.get("mix_match_tip"):
-        lines.append(round_trip["mix_match_tip"])
-    lines.append("")
-
-    _append_roundtrip_price_reference(lines, round_trip, route_info)
-    _append_roundtrip_price_analysis(lines, round_trip)
-    _append_option_price_bar_chart(lines, outbound_analysis, True, route_info)
-
-    if top_combinations:
-        lines.append("<b>🔄 往返最优组合 Top3</b>")
-        for index, combo in enumerate(top_combinations[:3], start=1):
-            _append_round_trip_combo_card(lines, index, combo, route_info)
-        lines.append("")
-
-    _append_round_trip_change_table(lines, round_trip)
-    _append_round_trip_all_options(lines, "去程全部方案（按价格排序）", outbound_flights, route_info.get("depart_date"))
-    _append_round_trip_all_options(lines, "返程全部方案（按价格排序）", return_flights, route_info.get("return_date"))
-    if return_analysis.get("nearby_dates"):
-        _append_nearby_dates(lines, return_analysis.get("nearby_dates"))
-
 def _price_scale_lines(current_min, route_info: dict, analysis_result: dict) -> list[str]:
     price = _to_float(current_min)
     if price is None or price <= 0:

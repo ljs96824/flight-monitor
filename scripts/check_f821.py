@@ -22,7 +22,6 @@ KNOWN_F821_DEBT = frozenset(
         ("notifier.py", "_append_detailed_analysis_section", "_append_price_references"),
         ("notifier.py", "_append_detailed_analysis_section", "_append_purchase_checklist"),
         ("notifier.py", "_append_detailed_analysis_section", "_append_system_health_lines"),
-        ("notifier.py", "_append_round_trip_block", "_append_nearby_dates"),
         ("notifier.py", "_append_round_trip_recommendations", "_round_trip_city_code"),
         ("notifier.py", "_append_round_trip_recommendations", "_round_trip_date_text"),
         ("notifier.py", "_booking_link", "_google_flights_url"),
