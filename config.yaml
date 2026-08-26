@@ -7,6 +7,18 @@ source_quota_low_remaining_threshold: 50
 SERPAPI_ECONOMY_CROSS_CHECK: false
 FRESHNESS_HOURS: 6
 SUB_ROUND_FRESH_SCOPE: primary_only
+RESEARCH_COHORT_V2: false
+research_cohort_v2_gates:
+  off_disk_copy: false
+  # 09:00/15:00/21:00 三个订阅轮；代表计划外另计两次边际调用。
+  other_scheduled_calls: 2
+paused_research_routes:
+  - route: SHA->PEK
+    reason: quota_concentration_for_pvg_kix_tcurve
+    resume_when: pvg_kix_core_t_points_reach_min_n
+  - route: PVG->HKG
+    reason: quota_concentration_for_pvg_kix_tcurve
+    resume_when: pvg_kix_core_t_points_reach_min_n
 retention_days:
   payloads: 90
   round_archives: 90

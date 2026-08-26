@@ -802,6 +802,9 @@ def load_collection_settings(path: str | Path) -> dict:
             "freshness_hours": 6.0,
             "sub_round_fresh_scope": "primary_only",
             "serpapi_economy_cross_check": False,
+            "research_cohort_v2": False,
+            "research_cohort_v2_gates": {},
+            "paused_research_routes": [],
         }
     try:
         payload = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
@@ -820,5 +823,12 @@ def load_collection_settings(path: str | Path) -> dict:
         ),
         "serpapi_economy_cross_check": _as_bool(
             payload.get("SERPAPI_ECONOMY_CROSS_CHECK")
+        ),
+        "research_cohort_v2": _as_bool(payload.get("RESEARCH_COHORT_V2")),
+        "research_cohort_v2_gates": dict(
+            payload.get("research_cohort_v2_gates") or {}
+        ),
+        "paused_research_routes": list(
+            payload.get("paused_research_routes") or []
         ),
     }

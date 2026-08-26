@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
 from api_usage import load_usage, usage_snapshot
+from atomic_json_store import read_json
 from collection_plan import build_collection_plan, load_collection_settings
 from collection_singleflight import (
     acquire_collection_singleflight,
@@ -28,8 +30,17 @@ from request_cache import (
     reset_request_cache,
     start_request_cache_round,
 )
+from research_cohort import (
+    active_user_monitor_dates,
+    apply_research_round_outcomes,
+    evaluate_research_hard_gates,
+    inspect_research_migrations,
+    prepare_research_requests,
+    simulate_research_quota,
+)
 from source_profiles import retired_listing_sources
 from sources.aggregator import FlightAggregator, build_default_sources
+from subscription_preflight import evaluate_subscription_preflight, shanghai_today
 
 
 BASE_DIR = Path(__file__).parent
@@ -199,6 +210,148 @@ def _basket_requests(state: dict) -> list[dict]:
     return requests
 
 
+def _load_active_subscriptions_for_research(
+    path: str | Path,
+    *,
+    today: date,
+) -> list[dict]:
+    target = Path(path)
+    if not target.is_file():
+        return []
+    payload = read_json(target)
+    if not isinstance(payload, list):
+        raise ValueError("subscriptions.json 格式错误，应为订阅数组")
+    active = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        status = str(item.get("status") or "active").strip().lower()
+        if status not in {"active", "enabled"}:
+            continue
+        if evaluate_subscription_preflight(item, today=today).get("skip"):
+            continue
+        active.append(item)
+    return active
+
+
+def _juhe_plan_keys(plan) -> set[tuple]:
+    return {key for key in plan.request_keys if key and key[0] == "juhe"}
+
+
+def _simulate_runtime_quota(
+    *,
+    research_requests: list[dict],
+    subscriptions: list[dict],
+    settings: dict,
+    source_builder: Callable,
+    usage_path: str | Path,
+) -> dict:
+    basket_plan = build_collection_plan(
+        subscriptions=[],
+        basket_requests=research_requests,
+        source_builder=source_builder,
+        freshness_hours=settings.get("freshness_hours", 6),
+        fresh_scope=settings.get("sub_round_fresh_scope", "primary_only"),
+    )
+    subscription_plan = build_collection_plan(
+        subscriptions=subscriptions,
+        basket_requests=[],
+        source_builder=source_builder,
+        freshness_hours=settings.get("freshness_hours", 6),
+        fresh_scope=settings.get("sub_round_fresh_scope", "primary_only"),
+    )
+    usage = usage_snapshot(load_usage(usage_path))
+    budget = int((settings.get("source_quota_budget") or {}).get("juhe") or 0)
+    used = int((usage.get("cumulative") or {}).get("juhe", 0) or 0)
+    gate_config = settings.get("research_cohort_v2_gates") or {}
+    other_calls_declared = "other_scheduled_calls" in gate_config
+    quota = simulate_research_quota(
+        basket_keys=_juhe_plan_keys(basket_plan),
+        subscription_keys=_juhe_plan_keys(subscription_plan),
+        other_scheduled_calls=int(gate_config.get("other_scheduled_calls") or 0),
+        quota_remaining=max(0, budget - used),
+        retries_per_request=1,
+    )
+    quota["complete"] = bool(
+        other_calls_declared
+        and budget > 0
+        and quota["basket_planned_unique"] == len(research_requests)
+    )
+    return quota
+
+
+def _prepare_research_basket(
+    state: dict,
+    *,
+    today: date,
+    state_path: str | Path,
+    db_path: str | Path,
+    usage_path: str | Path,
+    settings: dict,
+    source_builder: Callable,
+) -> tuple[dict, list[dict], dict, dict]:
+    subscriptions_path = Path(state_path).resolve().parent / "subscriptions.json"
+    prices_path = Path(state_path).resolve().parent / "prices.db"
+    subscriptions = _load_active_subscriptions_for_research(
+        subscriptions_path,
+        today=today,
+    )
+    staged_state = deepcopy(state)
+    user_dates = active_user_monitor_dates(
+        subscriptions,
+        origin="PVG",
+        dest="KIX",
+    )
+    schedule = prepare_research_requests(
+        staged_state,
+        today=today,
+        user_monitor_dates=user_dates,
+    )
+    quota = _simulate_runtime_quota(
+        research_requests=schedule.requests,
+        subscriptions=subscriptions,
+        settings=settings,
+        source_builder=source_builder,
+        usage_path=usage_path,
+    )
+    migration = inspect_research_migrations(db_path, prices_path)
+    gate = evaluate_research_hard_gates(
+        off_disk_copy=bool(
+            (settings.get("research_cohort_v2_gates") or {}).get("off_disk_copy")
+        ),
+        quota_simulation=quota,
+        migration_status=migration,
+    )
+    safe_log(
+        "[研究配额模拟] "
+        f"basket_planned_unique={quota.get('basket_planned_unique')} "
+        f"basket_normal_actual={quota.get('basket_normal_actual')} "
+        f"basket_retry_ceiling={quota.get('basket_retry_ceiling')} "
+        f"subscription_planned_unique={quota.get('subscription_planned_unique')} "
+        f"other_scheduled_calls={quota.get('other_scheduled_calls')} "
+        f"combined_daily_expected={quota.get('combined_daily_expected')} "
+        f"combined_daily_worst_case={quota.get('combined_daily_worst_case')} "
+        f"estimated_days_remaining={quota.get('estimated_days_remaining')}"
+    )
+    safe_log(
+        f"[研究采样门] ready={gate['ready']} "
+        f"missing={','.join(gate['missing']) if gate['missing'] else 'none'}"
+    )
+    if not gate["ready"]:
+        return state, [], gate, quota
+    for item in settings.get("paused_research_routes") or []:
+        safe_log(
+            f"[研究采样] 已暂停 route={item.get('route')} "
+            f"reason={item.get('reason')} resume_when={item.get('resume_when')}"
+        )
+    for event in schedule.events:
+        safe_log(
+            f"[研究采样] 事件={event.get('kind')} slot={event.get('slot')} "
+            f"T={event.get('target_t')} 日期={event.get('depart_date')}"
+        )
+    return staged_state, schedule.requests, gate, quota
+
+
 def run_basket(
     *,
     today: date | None = None,
@@ -210,7 +363,7 @@ def run_basket(
     aggregator_factory: Callable = FlightAggregator,
     singleflight_lock_path: str | Path | None = None,
 ) -> dict:
-    today = today or date.today()
+    today = today or shanghai_today()
     now = now or datetime.now()
     round_id = make_round_id(now)
     singleflight = acquire_collection_singleflight(
@@ -253,7 +406,7 @@ def _run_basket_locked(
     source_builder: Callable = build_default_sources,
     aggregator_factory: Callable = FlightAggregator,
 ) -> dict:
-    today = today or date.today()
+    today = today or shanghai_today()
     now = now or datetime.now()
     round_id = make_round_id(now)
     round_archive_started = False
@@ -263,13 +416,46 @@ def _run_basket_locked(
         round_archive_started = True
     except Exception as exc:
         safe_log(f"[轮档失败] round_id={round_id} 原因={type(exc).__name__}:{exc}")
+    settings = load_collection_settings(CONFIG_PATH)
     state = load_or_create_state(state_path, today)
-    if renew_expired_queues(state, today):
+    research_enabled = bool(settings.get("research_cohort_v2"))
+    if research_enabled:
+        state, basket_requests, research_gate, _quota = _prepare_research_basket(
+            state,
+            today=today,
+            state_path=state_path,
+            db_path=db_path,
+            usage_path=usage_path,
+            settings=settings,
+            source_builder=source_builder,
+        )
+        if not research_gate["ready"]:
+            safe_log("[篮子跳过] 原因=研究采样硬门未通过")
+            if round_archive_started:
+                try:
+                    end_round_log_archive(status="blocked")
+                except Exception as exc:
+                    safe_log(
+                        f"[轮档失败] round_id={round_id} "
+                        f"关闭失败={type(exc).__name__}:{exc}"
+                    )
+            return {
+                "status": "blocked",
+                "reason": "research_hard_gate",
+                "round_id": round_id,
+                "queues": 0,
+                "success": 0,
+                "failed": 0,
+                "written": 0,
+            }
         _write_state(Path(state_path), state)
+    else:
+        if renew_expired_queues(state, today):
+            _write_state(Path(state_path), state)
+        basket_requests = _basket_requests(state)
 
     reset_request_cache()
     round_context_tokens = None
-    settings = load_collection_settings(CONFIG_PATH)
     start_request_cache_round(
         round_id,
         track_usage=True,
@@ -286,7 +472,7 @@ def _run_basket_locked(
         round_context_tokens = set_current_round(round_id, db_path=db_path)
         plan = build_collection_plan(
             subscriptions=[],
-            basket_requests=_basket_requests(state),
+            basket_requests=basket_requests,
             source_builder=source_builder,
             freshness_hours=settings.get("freshness_hours", 6),
             fresh_scope=settings.get("sub_round_fresh_scope", "primary_only"),
@@ -309,9 +495,45 @@ def _run_basket_locked(
         )
         plan.execute()
 
-        for route in BASKET_ROUTES:
+        if research_enabled:
+            outcomes = apply_research_round_outcomes(
+                state,
+                requests=basket_requests,
+                round_id=round_id,
+                today=today,
+                db_path=db_path,
+            )
+            _write_state(Path(state_path), state)
+            for outcome in outcomes:
+                safe_log(
+                    f"[研究采样结果] slot={outcome['slot']} state={outcome['state']}"
+                )
+
+        collection_routes = (
+            (
+                {
+                    "route": "PVG->KIX",
+                    "origin": "PVG",
+                    "dest": "KIX",
+                    "route_type": "international",
+                    "sources": ("juhe",),
+                },
+                basket_requests,
+            ),
+        ) if research_enabled else tuple(
+            (
+                route,
+                [
+                    item
+                    for item in basket_requests
+                    if item["origin"] == route["origin"] and item["dest"] == route["dest"]
+                ],
+            )
+            for route in BASKET_ROUTES
+        )
+
+        for route, route_requests in collection_routes:
             route_name = _route_name(route)
-            queue_dates = (state.get("routes") or {}).get(route_name) or {}
             try:
                 aggregator = _build_route_aggregator(
                     route,
@@ -323,9 +545,12 @@ def _run_basket_locked(
                 aggregator = None
                 route_error = exc
 
-            for queue_name in ("A", "B"):
+            for item in route_requests:
                 queues += 1
-                depart_date = str(queue_dates.get(queue_name) or "")
+                queue_name = str(item.get("queue") or "")
+                if not research_enabled and ":" in queue_name:
+                    queue_name = queue_name.rsplit(":", 1)[-1]
+                depart_date = str(item.get("depart_date") or "")
                 try:
                     if route_error is not None:
                         raise route_error
