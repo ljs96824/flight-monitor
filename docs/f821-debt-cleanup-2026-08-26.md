@@ -50,7 +50,7 @@ helper 改名：函数体逐行相同。旧签名为
 
 本提交未删除函数；仅修复两个明确的改名残留。F821 精确集合预期由 41 缩减为 39。
 
-## 逐笔状态
+## 逐笔状态（提交 1 时点）
 
 | 提交 | 状态 | 清理依据 | F821 剩余 |
 |---|---|---|---:|
@@ -58,3 +58,48 @@ helper 改名：函数体逐行相同。旧签名为
 | 2 `format_html_message` 终止 return 后死尾 | pending | 待控制流五证齐备 | 39 |
 | 3 孤立 legacy renderers | pending | 待两层调用图证明 | 39 |
 | 4 孤立 legacy notification helpers | pending | 待完整旧子图证明 | 39 |
+
+## 提交 2：`format_html_message` 终止 return 后死尾
+
+提交 1 已落地为 `a823175`。删除前 AST 给出的外层函数体序列为：
+
+```text
+Expr, Assign, If, Return@15061,
+Assign, Assign, Assign, Assign, Assign, Assign,
+FunctionDef(build_message), Assign, If, Return
+```
+
+五项控制流证据：
+
+1. `return message` 是 `format_html_message.body` 的直接子节点，不在条件、循环、
+   `try/finally` 或其他控制结构中。
+2. 排除嵌套函数作用域后，外层 `Yield` / `YieldFrom` 集合为空，外层不是生成器。
+3. Python 在该无条件 return 后离开函数；尾部不存在异常处理入口、循环回边、标签或
+   其他可跳入机制。
+4. 删除前活跃前缀（函数定义起点至该 return 行末）SHA-256 为
+   `b3868a6da7ad7c54d5f9dc74a51a46683c9582ac78bebed7fcfea0cd4dec63eb`；删除后相同。
+5. 删除前后 `format_html_message` 的短消息、长消息以及现行
+   `render_email` / `render_detail_html` / `render_pushplus_sections` 输出由专项与冻结回归
+   验证；现行主链四函数源码 SHA 亦保持批次基线值。
+
+删除边界严格为首个直接 `return message` 后第一条语句至函数体结束。共删除 284 个
+源码行（含空行），Ruff 中 `format_html_message.build_message` 的 24 个 F821 三元组随之
+消失；债务计数由 39 降为 15。
+
+### 删除记录
+
+| 被删函数 | 原功能域 | 相关旧 helper 消失提交 | 删除依据 | 删除前后输出 |
+|---|---|---|---|---|
+| `format_html_message.build_message`（嵌套） | 旧单程/往返 HTML 文本拼装、趋势与购买清单 | 其依赖的 24 个 helper 统一消失于 `61b9109` | 位于外层无条件 return 后，控制流不可达 | 完全相同 |
+
+结构合同 `assert_no_statements_after_terminal_return(...)` 现在固定：首个直接终止 return
+之后不得再出现任何语句，并固定活跃前缀 SHA。
+
+## 逐笔状态（提交 2 后）
+
+| 提交 | 状态 | 清理提交 | F821 剩余 |
+|---|---|---|---:|
+| 1 改名残留 | complete | `a823175` | 39 |
+| 2 终止 return 后死尾 | implemented in this commit | this commit | 15 |
+| 3 孤立 legacy renderers | pending | - | 15 |
+| 4 孤立 legacy notification helpers | pending | - | 15 |
