@@ -9,9 +9,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterator
 
+from log_utils import safe_log
+
 
 BASE_DIR = Path(__file__).parent
 DB_PATH = BASE_DIR / "data" / "prices.db"
+_lineage_degraded_logged = False
 
 
 SNAPSHOT_COLUMNS = [
@@ -43,6 +46,7 @@ FLIGHT_DETAIL_COLUMNS = [
     "data_source",
     "price_source",
     "constraint_fingerprint",
+    "round_id",
 ]
 
 
@@ -59,6 +63,23 @@ def _connect() -> Iterator[sqlite3.Connection]:
 
 def _rows_to_dicts(rows: list[sqlite3.Row]) -> list[dict]:
     return [dict(row) for row in rows]
+
+
+def _current_round_id() -> str | None:
+    """Read active collection lineage without inferring it from timestamps."""
+    global _lineage_degraded_logged
+    try:
+        from observations_store import get_current_round
+
+        round_id, _ = get_current_round()
+    except Exception:
+        round_id = None
+    if round_id:
+        return str(round_id)
+    if not _lineage_degraded_logged:
+        _lineage_degraded_logged = True
+        safe_log("[价格lineage降级] round_id不可用,本记录保持NULL")
+    return None
 
 
 def init_db() -> None:
@@ -109,7 +130,8 @@ def init_db() -> None:
                 segments_json TEXT,
                 data_source TEXT,
                 price_source TEXT,
-                constraint_fingerprint TEXT
+                constraint_fingerprint TEXT,
+                round_id TEXT
             )
             """
         )
@@ -137,7 +159,8 @@ def init_db() -> None:
                 return_lowest REAL,
                 roundtrip_lowest REAL,
                 constraint_fingerprint TEXT,
-                sources_json TEXT
+                sources_json TEXT,
+                round_id TEXT
             )
             """
         )
@@ -182,7 +205,8 @@ def init_db() -> None:
                 fare_status TEXT,
                 push_type TEXT,
                 constraint_fingerprint TEXT,
-                constraint_sample_n INTEGER
+                constraint_sample_n INTEGER,
+                round_id TEXT
             )
             """
         )
@@ -215,6 +239,23 @@ def init_db() -> None:
             )
             """
         )
+
+
+def migrate_round_lineage_schema() -> None:
+    """Apply the explicit nullable round_id migration to existing price tables."""
+    init_db()
+    with _connect() as connection:
+        for table in (
+            "flight_details",
+            "roundtrip_price_history",
+            "push_snapshots",
+        ):
+            columns = {
+                row["name"]
+                for row in connection.execute(f"PRAGMA table_info({table})")
+            }
+            if "round_id" not in columns:
+                connection.execute(f"ALTER TABLE {table} ADD COLUMN round_id TEXT")
 
 
 def save_snapshots(records: list[dict]) -> None:
@@ -318,6 +359,7 @@ def save_flight_details(
 
     init_db()
     snapshot_time = datetime.now().isoformat(timespec="seconds")
+    round_id = _current_round_id()
     records = []
     for flight in flights:
         records.append(
@@ -338,6 +380,7 @@ def save_flight_details(
                 "data_source": flight.get("data_source"),
                 "price_source": flight.get("price_source"),
                 "constraint_fingerprint": constraint_fingerprint,
+                "round_id": round_id,
             }
         )
 
@@ -608,8 +651,8 @@ def save_roundtrip_snapshot(
             INSERT INTO roundtrip_price_history (
                 route, depart_date, return_date, snapshot_time,
                 outbound_lowest, return_lowest, roundtrip_lowest,
-                constraint_fingerprint, sources_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                constraint_fingerprint, sources_json, round_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 route,
@@ -621,6 +664,7 @@ def save_roundtrip_snapshot(
                 roundtrip_lowest,
                 constraint_fingerprint,
                 json.dumps(sorted(set(sources or [])), ensure_ascii=False),
+                _current_round_id(),
             ),
         )
 
@@ -912,8 +956,8 @@ def save_push_snapshot(
             INSERT INTO push_snapshots (
                 subscription_key, route, depart_date, return_date,
                 pushed_at, price, confidence, channels, fare_status, push_type,
-                constraint_fingerprint, constraint_sample_n
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                constraint_fingerprint, constraint_sample_n, round_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 key,
@@ -928,5 +972,6 @@ def save_push_snapshot(
                 push_type,
                 constraint_fingerprint,
                 constraint_sample_n,
+                _current_round_id(),
             ),
         )

@@ -35,6 +35,9 @@ class PlannedRequest:
     groups: set[str] = field(default_factory=set)
     consumers: set[str] = field(default_factory=set)
     reasons: set[str] = field(default_factory=set)
+    route_type: str | None = None
+    cohort_id: str | None = None
+    sample_role: str = "legacy"
 
     @property
     def key(self) -> tuple:
@@ -56,6 +59,15 @@ class PlanExecutionReport:
     panel_reused: int
     source_skips: int
     conditional_skipped: int
+    ledger_degraded: bool = False
+
+
+_SAMPLE_ROLE_PRIORITY = {
+    "legacy": 0,
+    "cross_sectional_probe": 1,
+    "user_monitor": 2,
+    "trajectory_anchor": 3,
+}
 
 
 def _positive_flights(result) -> list[dict]:
@@ -159,6 +171,9 @@ class CollectionPlan:
         group: str | None = None,
         consumer: str | None = None,
         reason: str | None = None,
+        route_type: str | None = None,
+        cohort_id: str | None = None,
+        sample_role: str = "legacy",
     ) -> PlannedRequest:
         self.expanded_total += 1
         candidate = PlannedRequest(
@@ -174,7 +189,12 @@ class CollectionPlan:
             ttl_seconds=max(0, int(ttl_seconds)),
             conditional=conditional,
             group=group,
+            route_type=str(route_type) if route_type else None,
+            cohort_id=str(cohort_id) if cohort_id else None,
+            sample_role=str(sample_role or "legacy"),
         )
+        if candidate.sample_role not in _SAMPLE_ROLE_PRIORITY:
+            raise ValueError(f"unknown sample_role: {candidate.sample_role}")
         if group:
             candidate.groups.add(str(group))
         existing = self._requests.get(candidate.key)
@@ -191,6 +211,14 @@ class CollectionPlan:
                 existing.conditional = None
             existing.group = existing.group or candidate.group
             existing.groups.update(candidate.groups)
+            existing.route_type = existing.route_type or candidate.route_type
+            if _SAMPLE_ROLE_PRIORITY[candidate.sample_role] > _SAMPLE_ROLE_PRIORITY[
+                existing.sample_role
+            ]:
+                existing.sample_role = candidate.sample_role
+                existing.cohort_id = candidate.cohort_id
+            elif not existing.cohort_id:
+                existing.cohort_id = candidate.cohort_id
         if consumer:
             existing.consumers.add(str(consumer))
         if reason:
@@ -304,66 +332,25 @@ class CollectionPlan:
                 )
 
     def execute(self) -> PlanExecutionReport:
+        from collection_ledger import CollectionLedgerSession
+        from observations_store import get_current_round
+
         before = get_request_cache_stats()
         conditional_skipped = 0
 
         ordered = list(self._requests.values())
-        for request in ordered:
-            if request.conditional:
-                continue
-            if request.key in self._quota_protected_keys:
-                self._results[request.key] = record_planned_source_skip(
-                    request.source,
-                    request.origin,
-                    request.dest,
-                    request.date_str,
-                    request.passengers,
-                    request.cabin_class,
-                    reason=self._quota_protection_reasons[request.key],
-                )
-                continue
-            self._results[request.key] = cached_fetch(
-                request.source,
-                request.origin,
-                request.dest,
-                request.date_str,
-                request.passengers,
-                request.cabin_class,
-                persist=request.persist,
-                ttl_seconds=request.ttl_seconds,
-                force_fresh=request.force_fresh,
-                request_reason="/".join(sorted(request.reasons)),
-                panel_only=request.panel_only,
-            )
+        round_id, db_path = get_current_round()
+        ledger = (
+            CollectionLedgerSession(round_id=round_id, db_path=db_path)
+            if round_id
+            else None
+        )
+        if ledger:
+            ledger.plan(ordered)
 
-        groups_with_candidates = {
-            group
-            for request in ordered
-            if not request.conditional
-            and _positive_flights(self._results.get(request.key))
-            for group in request.groups
-        }
-        for request in ordered:
-            if not request.conditional:
-                continue
-            if (
-                request.conditional == "search_has_candidates"
-                and not (request.groups & groups_with_candidates)
-            ):
-                conditional_skipped += 1
-                prefix = (
-                    "[enrichment跳过]"
-                    if "行李退改补充" in request.reasons
-                    else "[条件采集跳过]"
-                )
-                reason_label = "/".join(sorted(request.reasons)) or request.conditional
-                safe_log(
-                    f"{prefix} 原因=无列表候选 类型={reason_label} "
-                    f"航线={request.origin}->{request.dest} 日期={request.date_str}"
-                )
-                continue
+        def execute_request(request):
             if request.key in self._quota_protected_keys:
-                self._results[request.key] = record_planned_source_skip(
+                result = record_planned_source_skip(
                     request.source,
                     request.origin,
                     request.dest,
@@ -372,20 +359,92 @@ class CollectionPlan:
                     request.cabin_class,
                     reason=self._quota_protection_reasons[request.key],
                 )
-                continue
-            self._results[request.key] = cached_fetch(
-                request.source,
-                request.origin,
-                request.dest,
-                request.date_str,
-                request.passengers,
-                request.cabin_class,
-                persist=request.persist,
-                ttl_seconds=request.ttl_seconds,
-                force_fresh=request.force_fresh,
-                request_reason="/".join(sorted(request.reasons)),
-                panel_only=request.panel_only,
-            )
+                if ledger:
+                    ledger.finish(
+                        request,
+                        result,
+                        cache_status="skipped",
+                        skip_reason_code="quota",
+                    )
+                return result
+            if ledger:
+                ledger.start(request)
+            try:
+                result, cache_status, reuse_kind = cached_fetch(
+                    request.source,
+                    request.origin,
+                    request.dest,
+                    request.date_str,
+                    request.passengers,
+                    request.cabin_class,
+                    persist=request.persist,
+                    ttl_seconds=request.ttl_seconds,
+                    force_fresh=request.force_fresh,
+                    include_cache_status=True,
+                    include_cache_details=True,
+                    request_reason="/".join(sorted(request.reasons)),
+                    panel_only=request.panel_only,
+                )
+            except Exception as exc:
+                if ledger:
+                    ledger.fail_exception(request, exc)
+                raise
+            if ledger:
+                ledger.finish(
+                    request,
+                    result,
+                    cache_status=cache_status,
+                    reuse_kind=reuse_kind,
+                )
+            return result
+
+        try:
+            for request in ordered:
+                if request.conditional:
+                    continue
+                self._results[request.key] = execute_request(request)
+
+            groups_with_candidates = {
+                group
+                for request in ordered
+                if not request.conditional
+                and _positive_flights(self._results.get(request.key))
+                for group in request.groups
+            }
+            for request in ordered:
+                if not request.conditional:
+                    continue
+                if (
+                    request.conditional == "search_has_candidates"
+                    and not (request.groups & groups_with_candidates)
+                ):
+                    conditional_skipped += 1
+                    prefix = (
+                        "[enrichment跳过]"
+                        if "行李退改补充" in request.reasons
+                        else "[条件采集跳过]"
+                    )
+                    reason_label = "/".join(sorted(request.reasons)) or request.conditional
+                    safe_log(
+                        f"{prefix} 原因=无列表候选 类型={reason_label} "
+                        f"航线={request.origin}->{request.dest} 日期={request.date_str}"
+                    )
+                    if ledger:
+                        ledger.finish(
+                            request,
+                            {
+                                "flights": [],
+                                "source_status": "skipped_conditional",
+                                "skipped_reason": "无列表候选",
+                            },
+                            cache_status="skipped",
+                            skip_reason_code="conditional",
+                        )
+                    continue
+                self._results[request.key] = execute_request(request)
+        finally:
+            if ledger:
+                ledger.finalize()
 
         after = get_request_cache_stats()
         report = PlanExecutionReport(
@@ -396,6 +455,7 @@ class CollectionPlan:
             - int(before.get("panel_reused", 0)),
             source_skips=int(after.get("skipped", 0)) - int(before.get("skipped", 0)),
             conditional_skipped=conditional_skipped,
+            ledger_degraded=bool(ledger and ledger.degraded),
         )
         accounted = (
             report.actual_requests
@@ -411,7 +471,8 @@ class CollectionPlan:
             f"面板复用={report.panel_reused} "
             f"源级跳过={report.source_skips} "
             f"条件跳过={report.conditional_skipped} "
-            f"计划恒等式={accounted == self.unique_count}"
+            f"计划恒等式={accounted == self.unique_count} "
+            f"台账降级={report.ledger_degraded}"
         )
         return report
 
@@ -506,6 +567,7 @@ def _add_direction_requests(
     flex_dates: list[str],
     include_calendar: bool,
     fresh_scope: str,
+    route_type: str | None,
 ) -> None:
     for cabin in cabins:
         group = f"{group_prefix}:{origin}:{dest}:{depart_date}:{cabin}"
@@ -526,6 +588,8 @@ def _add_direction_requests(
                 group=group,
                 consumer=consumer,
                 reason="主行程",
+                route_type=route_type,
+                sample_role="user_monitor",
             )
         for source in cabin_enrichment_sources:
             plan.add_request(
@@ -539,6 +603,8 @@ def _add_direction_requests(
                 group=group,
                 consumer=consumer,
                 reason="行李退改补充",
+                route_type=route_type,
+                sample_role="user_monitor",
             )
         # 月度估算：篮子0次商务请求；每个含商务席位的往返订阅约2次/日，
         # SerpAPI 250次/月由既有reserve门继续保护。
@@ -559,6 +625,8 @@ def _add_direction_requests(
                     group=group,
                     consumer=consumer,
                     reason="弹性日期",
+                    route_type=route_type,
+                    sample_role="user_monitor",
                 )
         if include_calendar and cabin_search_sources:
             calendar_source = cabin_search_sources[0]
@@ -576,6 +644,8 @@ def _add_direction_requests(
                     group=group,
                     consumer=consumer,
                     reason="低价日历",
+                    route_type=route_type,
+                    sample_role="user_monitor",
                 )
 
 
@@ -646,6 +716,7 @@ def build_collection_plan(
             flex_dates=_flex_dates(depart_date, _value(subscription, "date_flexibility")),
             include_calendar=domestic_calendar,
             fresh_scope=plan.fresh_scope,
+            route_type=route_type,
         )
 
         same_day = _as_bool(_value(subscription, "same_day_round_trip"))
@@ -669,6 +740,7 @@ def build_collection_plan(
                 ),
                 include_calendar=domestic_calendar,
                 fresh_scope=plan.fresh_scope,
+                route_type=route_type,
             )
 
     for index, item in enumerate(basket_requests):
@@ -713,6 +785,9 @@ def build_collection_plan(
                 force_fresh=True,
                 consumer=f"basket:{item.get('queue', index)}",
                 reason="固定篮子",
+                route_type=str(route_type or "unknown"),
+                cohort_id=item.get("cohort_id"),
+                sample_role=str(item.get("sample_role") or "legacy"),
             )
     return plan
 

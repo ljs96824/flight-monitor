@@ -755,6 +755,7 @@ def cached_fetch(
     persist: bool = True,
     force_fresh: bool = False,
     include_cache_status: bool = False,
+    include_cache_details: bool = False,
     request_reason: str | None = None,
     panel_only: bool | None = None,
 ):
@@ -763,6 +764,13 @@ def cached_fetch(
     缓存键包含源、方向、日期和舱位。仅当源明确声明人数会改变 HTTP 请求时，
     才把乘客组合纳入键；当前各源均按规范化单成人请求跨订阅复用。
     """
+    def returned(value, status: str, reuse_kind: str | None = None):
+        if include_cache_details:
+            return value, status, reuse_kind
+        if include_cache_status:
+            return value, status
+        return value
+
     if cabin is not None:
         cabin_class = cabin
     key = cache_key(source, origin, dest, date_str, passengers, cabin_class)
@@ -787,7 +795,7 @@ def cached_fetch(
                 if key in _round_only_result_keys
                 else "cache"
             )
-            return (cached_result, cache_status) if include_cache_status else cached_result
+            return returned(cached_result, cache_status, "in_round_cache")
 
     skipped_result = _source_preflight_skip(
         source,
@@ -804,7 +812,7 @@ def cached_fetch(
             f"日期={key[3]} 原因={reason}"
         )
         fresh_result = copy.deepcopy(skipped_result)
-        return (fresh_result, "skipped") if include_cache_status else fresh_result
+        return returned(fresh_result, "skipped")
 
     if not force_fresh and source_name in LISTING_OBSERVATION_SOURCES:
         panel_result = panel_reuse_result(
@@ -831,7 +839,7 @@ def cached_fetch(
                 f"日期={key[3]} 采集于={panel_result.get('collected_at')} 不发API"
             )
             copied = copy.deepcopy(panel_result)
-            return (copied, "panel") if include_cache_status else copied
+            return returned(copied, "panel", "panel")
 
     if panel_only_request:
         _record_skip(source_name)
@@ -857,7 +865,7 @@ def cached_fetch(
             f"日期={key[3]} 结果=今日未采 不补采"
         )
         copied = copy.deepcopy(skipped_result)
-        return (copied, "skipped") if include_cache_status else copied
+        return returned(copied, "skipped")
 
     if not force_fresh:
         memory_entry = _request_cache.get(key)
@@ -867,7 +875,7 @@ def cached_fetch(
             if _current_stats_round_id:
                 _resolved_request_keys_this_round.add(key)
             cached_result = copy.deepcopy(memory_entry.get("result"))
-            return (cached_result, "cache") if include_cache_status else cached_result
+            return returned(cached_result, "cache", "persistent_cache")
 
         if persist:
             persisted = _read_persistent(key, ttl_seconds, cache_dir, source=source)
@@ -881,7 +889,7 @@ def cached_fetch(
                 if _current_stats_round_id:
                     _resolved_request_keys_this_round.add(key)
                 cached_result = copy.deepcopy(persisted)
-                return (cached_result, "cache") if include_cache_status else cached_result
+                return returned(cached_result, "cache", "persistent_cache")
     else:
         safe_log(f"[缓存绕过] {key[:4]} force_fresh=True,执行真实API请求")
 
@@ -900,7 +908,7 @@ def cached_fetch(
             "skipped_reason": disabled_reason,
             "error": disabled_reason,
         }
-        return (copy.deepcopy(skipped_result), "skipped") if include_cache_status else copy.deepcopy(skipped_result)
+        return returned(copy.deepcopy(skipped_result), "skipped")
 
     safe_log(
         f"[API\u8c03\u7528] \u6e90={source_name} \u822a\u7ebf={key[1]}->{key[2]} \u65e5\u671f={key[3]} "
@@ -956,7 +964,7 @@ def cached_fetch(
             f"[采集失败入池] 源={source_name} 航线={key[1]}->{key[2]} "
             f"日期={key[3]} 重试={retry_count} 原因={result['error']}"
         )
-        return (copy.deepcopy(result), "fresh") if include_cache_status else copy.deepcopy(result)
+        return returned(copy.deepcopy(result), "fresh")
     if retry_count and isinstance(result, dict):
         result.setdefault("retry_count", retry_count)
     quota_reason = _quota_failure_reason(result)
@@ -965,7 +973,7 @@ def cached_fetch(
         _archive_listing_result(source_name, key, result)
         _store_round_only_result(key, result, "round_failed")
         safe_log(f"[源熔断] 源={source_name} 原因={quota_reason} 生效范围=本进程")
-        return (copy.deepcopy(result), "fresh") if include_cache_status else copy.deepcopy(result)
+        return returned(copy.deepcopy(result), "fresh")
     collected_at = str(result.get("collected_at") or datetime.now().isoformat(timespec="seconds"))
     result["collected_at"] = collected_at
     result["collection_state"] = "fresh"
@@ -994,7 +1002,7 @@ def cached_fetch(
     else:
         _store_round_only_result(key, stored, cache_status)
     fresh_result = copy.deepcopy(result)
-    return (fresh_result, "fresh") if include_cache_status else fresh_result
+    return returned(fresh_result, "fresh")
 
 
 def get_request_cache_stats() -> dict:

@@ -40,6 +40,15 @@ def _managed_connection(path: str | Path) -> Iterator[sqlite3.Connection]:
         connection.close()
 
 
+@contextmanager
+def managed_observation_connection(
+    path: str | Path,
+) -> Iterator[sqlite3.Connection]:
+    """Public lifecycle-safe writer used by observation-adjacent schemas."""
+    with _managed_connection(path) as connection:
+        yield connection
+
+
 def set_current_round(
     round_id: str,
     db_path: str | Path | None = None,
@@ -544,5 +553,38 @@ def count_observations_for_round(
             conn.execute(
                 "SELECT COUNT(*) FROM observations WHERE round_id = ?",
                 (str(round_id),),
+            ).fetchone()[0]
+        )
+
+
+def count_observations_for_request(
+    *,
+    round_id: str,
+    source: str,
+    origin_airport: str,
+    dest_airport: str,
+    depart_date: str,
+    cabin_class: str,
+    db_path: str | Path = DEFAULT_DB_PATH,
+) -> int:
+    path = Path(db_path)
+    if not path.exists():
+        return 0
+    with _managed_connection(path) as connection:
+        return int(
+            connection.execute(
+                """
+                SELECT COUNT(*) FROM observations
+                WHERE round_id=? AND source=? AND origin_airport=?
+                  AND dest_airport=? AND depart_date=? AND cabin_class=?
+                """,
+                (
+                    str(round_id),
+                    str(source).lower(),
+                    str(origin_airport).upper(),
+                    str(dest_airport).upper(),
+                    str(depart_date),
+                    str(cabin_class or "economy"),
+                ),
             ).fetchone()[0]
         )

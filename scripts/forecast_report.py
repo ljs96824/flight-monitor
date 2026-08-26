@@ -18,6 +18,7 @@ from forecast import (
     build_shapes_by_regime,
     evaluate_forecast_eligibility,
     estimate_level,
+    filter_forecast_cells,
     lineage_complete_for_cells,
     predict_price,
     regime_departure_n,
@@ -136,10 +137,12 @@ def generate_report(
     diagnostic=False,
 ):
     db_path = resolve_observations_db(db_path)
-    all_cells = load_tcurve_daily_cells(
-        db_path,
-        route=route,
-        airport_pair=airport_pair,
+    all_cells = filter_forecast_cells(
+        load_tcurve_daily_cells(
+            db_path,
+            route=route,
+            airport_pair=airport_pair,
+        )
     )
     if not all_cells:
         text = "\n".join(

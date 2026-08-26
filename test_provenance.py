@@ -35,7 +35,7 @@ class ProvenanceTest(unittest.TestCase):
     def test_forecast_method_versions_are_registered(self):
         from method_registry import METHOD_VERSIONS, REGISTRY_VERSIONS
 
-        self.assertEqual(METHOD_VERSIONS["forecast"], "forecast_v1")
+        self.assertEqual(METHOD_VERSIONS["forecast"], "forecast_v2")
         self.assertEqual(METHOD_VERSIONS["patterns"], "patterns_v1")
         self.assertEqual(
             REGISTRY_VERSIONS["holiday_calendar"], "holiday_calendar_v1"
@@ -691,6 +691,7 @@ class ProvenanceTest(unittest.TestCase):
 
         expected = {
             "obs_store",
+            "collection_ledger",
             "tcurve",
             "weekday",
             "reftier",

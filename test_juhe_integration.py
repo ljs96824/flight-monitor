@@ -230,6 +230,8 @@ class JuheIntegrationTest(unittest.TestCase):
 
             self.assertEqual(first["source_status"], "empty")
             self.assertEqual(second["source_status"], "empty")
+            self.assertEqual(first["raw_result_count"], 0)
+            self.assertEqual(second["raw_result_count"], 0)
             self.assertEqual(first["reason"], "HTTP成功但空结果")
             self.assertEqual(len(calls), 2)
             self.assertEqual(list(cache_dir.glob("juhe_*.json")), [])

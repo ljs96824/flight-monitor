@@ -63,10 +63,16 @@ class HasDataSource(FlightSource):
             raise RuntimeError(results["error"])
         normalized_results = _normalize_hasdata_response(results)
 
+        flights = parse_google_flights(
+            normalized_results, self.name, cabin_class, date_str
+        )
+        raw_result_count = sum(
+            len(normalized_results.get(category) or [])
+            for category in ("best_flights", "other_flights")
+        )
         return {
-            "flights": parse_google_flights(
-                normalized_results, self.name, cabin_class, date_str
-            ),
+            "flights": flights,
+            "raw_result_count": raw_result_count,
             "price_insights": normalized_results.get("price_insights"),
             "source": self.name,
             "raw": results,

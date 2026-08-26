@@ -7,6 +7,7 @@ from types import MappingProxyType
 
 _METHOD_VERSIONS = {
     "obs_store": "v2",
+    "collection_ledger": "collection_ledger_v1",
     "tcurve": "tcurve_v2",
     "weekday": "weekday_v2",
     "reftier": "reftier_v1",
@@ -14,7 +15,7 @@ _METHOD_VERSIONS = {
     "price_signal": "price_signal_v2",
     "dual_source_agreement": "agreement_v1",
     "provenance": "provenance_v1",
-    "forecast": "forecast_v1",
+    "forecast": "forecast_v2",
     "patterns": "patterns_v1",
 }
 

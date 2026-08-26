@@ -104,6 +104,7 @@ class SerpApiProductionAdapterTest(unittest.TestCase):
         self.assertEqual(captured[0]["gl"], "cn")
         self.assertNotIn("selected_cabins", captured[0])
         self.assertEqual(len(result["flights"]), 13)
+        self.assertEqual(result["raw_result_count"], 13)
 
     def test_missing_key_is_a_graceful_source_skip(self):
         from sources.serpapi_source import SerpAPISource

@@ -89,8 +89,13 @@ class SerpAPISource(FlightSource):
             marketing_fallback=True,
             price_note=SERPAPI_PRICE_NOTE,
         )
+        raw_result_count = sum(
+            len(results.get(category) or [])
+            for category in ("best_flights", "other_flights")
+        )
         return {
             "flights": flights,
+            "raw_result_count": raw_result_count,
             "price_insights": results.get("price_insights"),
             "source": self.name,
             "source_status": "success" if flights else "empty",

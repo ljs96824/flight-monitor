@@ -6,12 +6,14 @@ import math
 import os
 import sqlite3
 import statistics
+from collections import Counter
 from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
 from typing import Iterator
 
 from airports import get_airport_city
+from collection_ledger import derive_daily_cell_state
 from method_registry import method_version
 from observation_time import resolve_observed_day_shanghai
 from provenance import build_envelope
@@ -21,6 +23,12 @@ from source_profiles import expected_listing_sources, normalize_route_type
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_DB_PATH = BASE_DIR / "data" / "observations.sqlite3"
 METHOD_VERSION = method_version("tcurve")
+_SAMPLE_ROLE_PRIORITY = {
+    "legacy": 0,
+    "cross_sectional_probe": 1,
+    "user_monitor": 2,
+    "trajectory_anchor": 3,
+}
 
 
 def _positive_int_env(name: str, default: int) -> int:
@@ -190,6 +198,51 @@ def _load_route_rows(
                 f"SELECT {columns} FROM observations "
                 "WHERE price_cny > 0 AND LOWER(cabin_class)='economy'"
             ).fetchall()
+        has_collection_cells = connection.execute(
+            "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='collection_cells'"
+        ).fetchone()
+        role_rows = (
+            connection.execute(
+                """
+                SELECT round_id, request_fingerprint, source, origin_airport,
+                       dest_airport, depart_date, cabin_class,
+                       observed_day_shanghai, sample_role, cohort_id,
+                       execution_status, valid_result_count, skip_reason_code,
+                       error_type, error_code
+                FROM collection_cells
+                WHERE LOWER(cabin_class)='economy'
+                """
+            ).fetchall()
+            if has_collection_cells
+            else []
+        )
+
+    role_map = {}
+    daily_outcome_map = {}
+    for role_row in role_rows:
+        role_item = dict(role_row)
+        key = (
+            str(role_item.get("round_id") or ""),
+            str(role_item.get("source") or "").lower(),
+            str(role_item.get("origin_airport") or "").upper(),
+            str(role_item.get("dest_airport") or "").upper(),
+            str(role_item.get("depart_date") or ""),
+            str(role_item.get("cabin_class") or "economy").lower(),
+        )
+        role = str(role_item.get("sample_role") or "legacy")
+        previous = role_map.get(key)
+        if previous is None or _SAMPLE_ROLE_PRIORITY.get(role, 0) > _SAMPLE_ROLE_PRIORITY.get(
+            previous[0], 0
+        ):
+            role_map[key] = (role, role_item.get("cohort_id"))
+        daily_key = (
+            str(role_item.get("origin_airport") or "").upper(),
+            str(role_item.get("dest_airport") or "").upper(),
+            str(role_item.get("depart_date") or ""),
+            str(role_item.get("observed_day_shanghai") or ""),
+            str(role_item.get("cabin_class") or "economy").lower(),
+        )
+        daily_outcome_map.setdefault(daily_key, []).append(role_item)
 
     selected = []
     for row in rows:
@@ -198,6 +251,25 @@ def _load_route_rows(
         row_dest_city = get_airport_city(item.get("dest_airport"))
         if row_origin_city != origin_city or row_dest_city != dest_city:
             continue
+        lineage_key = (
+            str(item.get("round_id") or ""),
+            str(item.get("source") or "").lower(),
+            str(item.get("origin_airport") or "").upper(),
+            str(item.get("dest_airport") or "").upper(),
+            str(item.get("depart_date") or ""),
+            str(item.get("cabin_class") or "economy").lower(),
+        )
+        role, cohort_id = role_map.get(lineage_key, ("legacy", None))
+        item["sample_role"] = role
+        item["cohort_id"] = cohort_id
+        daily_key = (
+            str(item.get("origin_airport") or "").upper(),
+            str(item.get("dest_airport") or "").upper(),
+            str(item.get("depart_date") or ""),
+            str(item.get("observed_day_shanghai") or ""),
+            str(item.get("cabin_class") or "economy").lower(),
+        )
+        item["collection_outcomes"] = daily_outcome_map.get(daily_key, [])
         selected.append(item)
     return selected
 
@@ -232,9 +304,19 @@ def fold_tcurve_daily_cells(rows: list[dict]) -> list[dict]:
                 "round_ids": set(),
                 "lineage_missing": False,
                 "timestamp_sources": set(),
+                "sample_roles": set(),
+                "cohort_ids": set(),
+                "collection_outcomes": {},
             },
         )
         cell["timestamp_sources"].add(timestamp_source)
+        cell["sample_roles"].add(str(row.get("sample_role") or "legacy"))
+        if row.get("cohort_id"):
+            cell["cohort_ids"].add(str(row["cohort_id"]))
+        for outcome in row.get("collection_outcomes") or []:
+            fingerprint = str(outcome.get("request_fingerprint") or "")
+            if fingerprint:
+                cell["collection_outcomes"][fingerprint] = outcome
         cell["prices"].append(price)
         source = str(row.get("source") or "").strip().lower()
         if source:
@@ -261,6 +343,10 @@ def fold_tcurve_daily_cells(rows: list[dict]) -> list[dict]:
         for route_type in values["route_types"]:
             expected.update(expected_search_sources(route_type, observed_day))
         coverage = set(values["sources"])
+        outcomes = list(values["collection_outcomes"].values())
+        collection_state = (
+            derive_daily_cell_state(outcomes, expected) if outcomes else "legacy"
+        )
         minimum = min(values["prices"])
         computed_t = int(values["computed_t"])
         stored_t_values = values["stored_t_values"]
@@ -286,7 +372,14 @@ def fold_tcurve_daily_cells(rows: list[dict]) -> list[dict]:
                 "round_ids": sorted(values["round_ids"]),
                 "lineage_complete": not values["lineage_missing"],
                 "timestamp_sources": sorted(values["timestamp_sources"]),
-                "degraded": bool(expected and not expected.issubset(coverage)),
+                "sample_roles": sorted(values["sample_roles"]),
+                "cohort_ids": sorted(values["cohort_ids"]),
+                "collection_state": collection_state,
+                "degraded": (
+                    bool(expected and not expected.issubset(coverage))
+                    if collection_state == "legacy"
+                    else collection_state != "valid"
+                ),
             }
         )
     return sorted(
@@ -369,6 +462,11 @@ def build_tcurve(
                 for source in (cell.get("min_sources") or [])
             }
         )
+        role_counts = Counter(
+            role
+            for cell in t_cells
+            for role in (cell.get("sample_roles") or ["legacy"])
+        )
         excluded_at_t = sum(
             1
             for cell in all_cells
@@ -397,6 +495,7 @@ def build_tcurve(
                 "p75": _clean_number(percentile_linear(prices, 0.75)) if sufficient else None,
                 "sufficient": sufficient,
                 "status": "ok" if sufficient else "样本不足",
+                "sample_role_counts": dict(sorted(role_counts.items())),
                 "provenance": envelope,
             }
         )
@@ -422,6 +521,14 @@ def build_tcurve(
             date.fromisoformat(str(current_depart_date)) - (as_of_date or date.today())
         ).days
 
+    sample_role_counts = Counter(
+        role
+        for cell in included_cells
+        for role in (cell.get("sample_roles") or ["legacy"])
+    )
+    collection_state_counts = Counter(
+        str(cell.get("collection_state") or "legacy") for cell in included_cells
+    )
     return {
         "route": f"{origin_city}-{dest_city}",
         "origin_city": origin_city,
@@ -435,6 +542,8 @@ def build_tcurve(
         "ambiguous_excluded_count": ambiguous_excluded_count,
         "legacy_fallback_row_count": legacy_fallback_row_count,
         "included_cell_count": len(included_cells),
+        "sample_role_counts": dict(sorted(sample_role_counts.items())),
+        "collection_state_counts": dict(sorted(collection_state_counts.items())),
         "daily_cells": all_cells,
         "degraded_count": degraded_count,
         "degraded_excluded_count": 0 if include_degraded else degraded_count,

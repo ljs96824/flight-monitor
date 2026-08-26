@@ -156,6 +156,26 @@ def generate_report(
                 f"ambiguous剔除={curve.get('ambiguous_excluded_count', 0)}；"
                 f"legacy fallback行={curve.get('legacy_fallback_row_count', 0)}。"
             ),
+            "样本角色构成: "
+            + (
+                " / ".join(
+                    f"{role}={count}"
+                    for role, count in sorted(
+                        (curve.get("sample_role_counts") or {}).items()
+                    )
+                )
+                or "无"
+            ),
+            "采集日格状态: "
+            + (
+                " / ".join(
+                    f"{state}={count}"
+                    for state, count in sorted(
+                        (curve.get("collection_state_counts") or {}).items()
+                    )
+                )
+                or "无"
+            ),
             f"覆盖范围: T={coverage.get('t_min')} 至 T={coverage.get('t_max')} 天；禁止外推范围外数据。",
             "",
             "缺失格清单:",

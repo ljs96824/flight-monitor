@@ -96,6 +96,7 @@ class DuffelSource(FlightSource):
 
         return {
             "flights": sorted(flights, key=lambda item: item["price"]),
+            "raw_result_count": len(offers),
             "price_insights": None,
             "source": self.name,
             "raw": results,

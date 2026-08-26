@@ -242,11 +242,13 @@ class JuheSource(FlightSource):
         collected_at = datetime.now().isoformat(timespec="seconds")
         cached = self._read_cache(origin, dest, date_str, cabin_class)
         if cached is not None:
-            flights = self.normalize(self.parse(cached), collected_at=collected_at)
+            parsed = self.parse(cached)
+            flights = self.normalize(parsed, collected_at=collected_at)
             return {
                 "flights": flights,
                 "source": self.name,
                 "raw": cached,
+                "raw_result_count": len(parsed),
                 "source_status": "cache",
                 "collected_at": collected_at,
             }
@@ -314,6 +316,7 @@ class JuheSource(FlightSource):
                 "flights": [],
                 "source": self.name,
                 "raw": raw,
+                "raw_result_count": len(parsed),
                 "source_status": "empty",
                 "reason": reason,
                 "collected_at": collected_at,
@@ -323,6 +326,7 @@ class JuheSource(FlightSource):
             "flights": flights,
             "source": self.name,
             "raw": raw,
+            "raw_result_count": len(parsed),
             "source_status": "success",
             "collected_at": collected_at,
         }

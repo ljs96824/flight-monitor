@@ -41,6 +41,9 @@ SKILL_GATE_IMPROVEMENT = _positive_float_env("SKILL_GATE_IMPROVEMENT", 0.10)
 
 # 与 T 曲线共用同一个证据门，避免诊断层出现两套“够样本”定义。
 MIN_SHAPE_N = MIN_SAMPLE_FOR_TCURVE
+FORECAST_SAMPLE_ROLES = frozenset(
+    {"trajectory_anchor", "user_monitor", "legacy"}
+)
 REGIME_ORDER = ("normal", "weekend", "holiday_eve", "holiday", "holiday_return")
 FORECAST_ELIGIBILITY_PRIORITY = (
     "lineage_incomplete",
@@ -52,9 +55,19 @@ FORECAST_ELIGIBILITY_PRIORITY = (
 )
 
 
+def filter_forecast_cells(cells):
+    """Exclude pure cross-sectional probes from trajectory shape/level."""
+    result = []
+    for item in cells or []:
+        roles = set(item.get("sample_roles") or [item.get("sample_role") or "legacy"])
+        if roles & FORECAST_SAMPLE_ROLES:
+            result.append(item)
+    return result
+
+
 def _usable(cells, cutoff_day=None):
     return [
-        item for item in cells
+        item for item in filter_forecast_cells(cells)
         if not item.get("degraded")
         and (not cutoff_day or str(item.get("observed_day")) <= str(cutoff_day))
         and float(item.get("min_price") or 0) > 0
@@ -544,7 +557,7 @@ def build_notification_forecast(route_info, *, db_path=DEFAULT_DB_PATH, as_of_da
     """通过统一资格裁决构建预测；调用方仅在 eligible 时写入 payload。"""
     origin_city, dest_city = route_cities_from_info(route_info)
     route = f"{origin_city}-{dest_city}"
-    all_cells = load_tcurve_daily_cells(db_path, route=route)
+    all_cells = filter_forecast_cells(load_tcurve_daily_cells(db_path, route=route))
     non_degraded = [item for item in all_cells if not item.get("degraded")]
     if not non_degraded:
         return {"eligible": False, "reason": "无可用非退化日格"}
