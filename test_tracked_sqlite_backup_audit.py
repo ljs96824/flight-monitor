@@ -8,11 +8,7 @@ from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parent
-EXPECTED_TRACKED_SQLITE_EXCEPTIONS = {
-    "observations.combo-normalize-20260709162848.sqlite3.bak",
-    "observations.combo-normalize-20260709164309.sqlite3.bak",
-    "observations.combo-normalize-20260709164334.sqlite3.bak",
-}
+ALLOWED_TRACKED_DATABASE_FIXTURES = set()
 
 
 class TrackedSqliteBackupAuditTest(unittest.TestCase):
@@ -74,14 +70,14 @@ class TrackedSqliteBackupAuditTest(unittest.TestCase):
             connection.commit()
         return path
 
-    def test_gitignore_contract_uses_exact_tracked_git_set(self):
+    def test_gitignore_contract_disallows_tracked_database_artifacts(self):
         from scripts.audit_tracked_sqlite_backups import (
             discover_tracked_sqlite_artifacts,
         )
 
         tracked = set(discover_tracked_sqlite_artifacts(ROOT))
 
-        self.assertEqual(tracked, EXPECTED_TRACKED_SQLITE_EXCEPTIONS)
+        self.assertEqual(tracked, ALLOWED_TRACKED_DATABASE_FIXTURES)
         ignore_lines = {
             line.strip()
             for line in (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
@@ -90,6 +86,19 @@ class TrackedSqliteBackupAuditTest(unittest.TestCase):
         self.assertTrue(
             {"*.sqlite3", "*.sqlite3.bak", "*.db", "*-wal", "*-shm", "*-journal"}
             <= ignore_lines
+        )
+
+    def test_public_report_records_current_branch_disposition(self):
+        report = (
+            ROOT / "docs" / "tracked-sqlite-backup-audit-2026-08-25.md"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("## 处置记录", report)
+        self.assertIn("删除当前分支三份备份，不重写 Git 历史", report)
+        self.assertIn(
+            "文件仍存在于76750cb及其后的历史提交中,通过git历史仍可取得;"
+            "若将来判定风险升级,可再评估filter-repo",
+            report,
         )
 
     def test_audit_uses_immutable_readonly_and_preserves_file(self):
