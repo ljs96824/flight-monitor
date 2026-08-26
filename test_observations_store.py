@@ -239,6 +239,7 @@ class ObservationsStoreTest(unittest.TestCase):
             self.assertEqual(count_observations(db_path), 1)
 
     def test_cached_fetch_records_each_fetch_argument_date_instead_of_subscription_date(self):
+        from observation_time import canonicalize_observed_at
         from observations_store import clear_current_round, set_current_round
         from request_cache import cached_fetch, reset_request_cache
 
@@ -262,12 +263,15 @@ class ObservationsStoreTest(unittest.TestCase):
                     "FROM observations GROUP BY depart_date ORDER BY depart_date"
                 ).fetchall()
 
+            observed_day = date.fromisoformat(
+                canonicalize_observed_at().observed_day_shanghai
+            )
             expected_rows = [
                 (
                     depart_date,
                     1,
-                    (date.fromisoformat(depart_date) - date.today()).days,
-                    (date.fromisoformat(depart_date) - date.today()).days,
+                    (date.fromisoformat(depart_date) - observed_day).days,
+                    (date.fromisoformat(depart_date) - observed_day).days,
                 )
                 for depart_date in ("2026-09-28", "2026-10-01", "2026-10-04")
             ]
