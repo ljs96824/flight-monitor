@@ -728,7 +728,6 @@ def _record_observations_after_fetch(source, key: tuple, result, cabin_class: st
             depart_date=fetch_depart_date,
             cabin_class=cabin_class,
             source=source_name,
-            observed_at=datetime.now().isoformat(timespec="seconds"),
             db_path=db_path,
         )
         safe_log(

@@ -3,9 +3,34 @@ import tempfile
 import unittest
 from contextlib import closing
 from pathlib import Path
+from unittest.mock import patch
 
 
 class ObservationTimestampTest(unittest.TestCase):
+    def test_request_cache_delegates_new_timestamp_to_canonical_store_clock(self):
+        import request_cache
+        from observations_store import reset_current_round, set_current_round
+
+        source = type('Source', (), {'name': 'juhe', 'route_type': 'domestic'})()
+        result = {'flights': [{'flight_combo': 'MU225', 'price': 900}]}
+        tokens = set_current_round('round-clock')
+        try:
+            with patch.object(
+                request_cache.observations_store,
+                'append_observations',
+                return_value={'written': 1, 'skipped': 0},
+            ) as append:
+                request_cache._record_observations_after_fetch(
+                    source,
+                    ('juhe', 'SHA', 'PEK', '2026-09-10', '1_0_0_0', 'economy'),
+                    result,
+                    'economy',
+                )
+        finally:
+            reset_current_round(tokens)
+
+        self.assertNotIn('observed_at', append.call_args.kwargs)
+
     def test_canonical_conversion_uses_project_timezone_across_boundaries(self):
         from observation_time import canonicalize_observed_at
 
