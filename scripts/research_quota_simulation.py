@@ -23,6 +23,7 @@ from basket_collect import (  # noqa: E402
     _simulate_runtime_quota,
 )
 from collection_plan import load_collection_settings  # noqa: E402
+from config_loader import DEFAULT_CONFIG_PATH, RUNTIME_CONFIG_PATH  # noqa: E402
 from research_cohort import (  # noqa: E402
     active_user_monitor_dates,
     evaluate_research_hard_gates,
@@ -47,6 +48,7 @@ def _build_report_inputs(
     *,
     today: date,
     config_path: str | Path,
+    runtime_config_path: str | Path | None = None,
     state_path: str | Path,
     subscriptions_path: str | Path,
     observations_path: str | Path,
@@ -56,7 +58,11 @@ def _build_report_inputs(
     scheduled_subscription_runs_per_day: int | None = None,
     other_non_subscription_calls_per_day: int | None = None,
 ) -> tuple[dict, dict, dict, list[dict]]:
-    settings = load_collection_settings(config_path)
+    settings = load_collection_settings(
+        config_path,
+        runtime_path=runtime_config_path,
+        require_runtime=runtime_config_path is not None,
+    )
     if (
         scheduled_subscription_runs_per_day is not None
         or other_non_subscription_calls_per_day is not None
@@ -104,6 +110,7 @@ def build_report(
     *,
     today: date,
     config_path: str | Path,
+    runtime_config_path: str | Path | None = None,
     state_path: str | Path,
     subscriptions_path: str | Path,
     observations_path: str | Path,
@@ -118,6 +125,7 @@ def build_report(
     quota, migrations, settings, requests = _build_report_inputs(
         today=today,
         config_path=config_path,
+        runtime_config_path=runtime_config_path,
         state_path=state_path,
         subscriptions_path=subscriptions_path,
         observations_path=observations_path,
@@ -169,7 +177,12 @@ def build_report(
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", type=Path, default=ROOT / "config.yaml")
+    parser.add_argument(
+        "--config-defaults", type=Path, default=DEFAULT_CONFIG_PATH
+    )
+    parser.add_argument(
+        "--runtime-config", type=Path, default=RUNTIME_CONFIG_PATH
+    )
     parser.add_argument(
         "--state",
         type=Path,
@@ -219,7 +232,8 @@ def main(argv=None) -> int:
     with redirect_stdout(diagnostics):
         report = build_report(
             today=args.today or shanghai_today(),
-            config_path=args.config,
+            config_path=args.config_defaults,
+            runtime_config_path=args.runtime_config,
             state_path=args.state,
             subscriptions_path=args.subscriptions,
             observations_path=args.observations,

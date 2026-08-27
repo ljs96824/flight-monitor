@@ -184,7 +184,9 @@ def main() -> None:
     load_dotenv(BASE_DIR / ".env", encoding="utf-8")
     init_db()
 
-    config = yaml.safe_load((BASE_DIR / "config.yaml").read_text(encoding="utf-8"))
+    from config_loader import load_merged_config
+
+    config = load_merged_config()
     subscription = config["subscriptions"][0]
     route = f"{subscription['origin']}-{subscription['destination']}"
     target_combo = subscription.get("target_combo", None)

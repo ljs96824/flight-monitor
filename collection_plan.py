@@ -7,6 +7,11 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
 
+from config_loader import (
+    RUNTIME_CONFIG_PATH,
+    load_merged_config,
+    load_standalone_config,
+)
 from log_utils import safe_log
 from quota_policy import MONTHLY, metrics as quota_metrics
 from request_cache import (
@@ -843,27 +848,21 @@ def build_collection_plan(
     return plan
 
 
-def load_collection_settings(path: str | Path) -> dict:
-    try:
-        import yaml
-    except ModuleNotFoundError:
-        return {
-            "source_quota_budget": {},
-            "source_quota_low_remaining_threshold": 50,
-            "freshness_hours": 6.0,
-            "sub_round_fresh_scope": "primary_only",
-            "serpapi_economy_cross_check": False,
-            "research_basket_enabled": False,
-            "research_basket_strategy": "cohort_v2",
-            "research_basket_migrated_from_legacy": False,
-            "research_cohort_v2": False,
-            "research_cohort_v2_gates": {},
-            "paused_research_routes": [],
-        }
-    try:
-        payload = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
-    except (OSError, ValueError):
-        payload = {}
+def load_collection_settings(
+    path: str | Path,
+    *,
+    runtime_path: str | Path | None = None,
+    require_runtime: bool = False,
+) -> dict:
+    if require_runtime or runtime_path is not None:
+        payload = load_merged_config(
+            path,
+            runtime_path or RUNTIME_CONFIG_PATH,
+        )
+    else:
+        # Explicit one-file fixtures remain supported; production callers always
+        # pass require_runtime=True and therefore cannot fall back to an empty budget.
+        payload = load_standalone_config(path)
     research_basket = _research_basket_config(payload)
     return {
         "source_quota_budget": dict(payload.get("source_quota_budget") or {}),

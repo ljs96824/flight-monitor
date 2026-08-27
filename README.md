@@ -72,11 +72,13 @@ Flight Monitor 是一个本地优先的航班采集、约束过滤与通知系�
 
 ## 5. 数据源与配额经济学
 
-当前源策略的单一真值见 [source_profiles.py](source_profiles.py)，额度配置见 [config.yaml](config.yaml)。
+当前源策略的单一真值见 [source_profiles.py](source_profiles.py)。阈值与硬门政策见
+[config.defaults.yaml](config.defaults.yaml)；额度包、控制台对账、研究运行态和本地订阅
+属于运行事实，只保存在被 Git 忽略的 `data/runtime_config.yaml`。
 
 | 数据源 | 当前职责 | 本地额度口径 | 明确限制 |
 | --- | --- | --- | --- |
-| 聚合数据（Juhe） | 国内、国际及港澳台经济舱主列表源 | 买断额度 550 次，本地台账估算余量 | 返回空或错误时不能推断为售罄；最终价格以支付页为准 |
+| 聚合数据（Juhe） | 国内、国际及港澳台经济舱主列表源 | 550 次/包；当前总额度与对账值只存本地运行配置 | 返回空或错误时不能推断为售罄；最终价格以支付页为准 |
 | SerpAPI | 国际及港澳台商务舱列表源，仅在商务/混舱主日期请求 | 250 次/月，预留 30 次后触发配额保护 | 经济舱交叉核对默认关闭；展示价的税费构成未拆分 |
 | Duffel | 行李、退改等规则富化 | 本系统不设本地额度上限 | 只富化已存在候选，不作为当前推荐池定价来源；供应商自身限制仍适用 |
 | HasData | 已退役，仅保留历史代码与既有观测解释 | 2026-08-14 起不再计划新请求 | 退役原因是 403/订阅终止；历史 global_min 数据不删除、不改写 |
@@ -109,7 +111,22 @@ python -m piptools compile --allow-unsafe --generate-hashes --no-emit-index-url 
 python -m piptools compile --allow-unsafe --generate-hashes --no-emit-index-url --no-emit-trusted-host --output-file requirements-dev.txt --strip-extras requirements-dev.in
 ```
 
-### 6.2 创建 `.env`
+### 6.2 创建本地运行配置
+
+将 [config.example.yaml](config.example.yaml) 复制为
+`data/runtime_config.yaml`，再在本机填写已购额度包、控制台核对时刻与余量、储备纪元、
+目标日期、研究开关及本地订阅。示例文件故意不携带任何控制台实值；缺字段、损坏或缺失
+都会在真实请求前失败，不会回退成空预算。升级旧单文件配置时使用
+[scripts/migrate_runtime_config.py](scripts/migrate_runtime_config.py)，默认仅 dry-run，
+明确加 `--write` 才会先备份旧文件并原子写入两层配置。
+其中本地 `reconciliation` 对象至少需要 `checked_at` 与
+`console_remaining`；它们只写入被忽略的 runtime 文件，避免把控制台证据模板化进
+公开配置。
+
+`config.yaml` 仅保留为政策兼容副本；生产入口读取
+`config.defaults.yaml + data/runtime_config.yaml`，两份跟踪政策文件由契约锁定为同一映射。
+
+### 6.3 创建 `.env`
 
 下面的跨平台命令只在 `.env` 不存在时复制 [.env.example](.env.example)，不会覆盖已有文件：
 
@@ -142,7 +159,7 @@ python -c "from pathlib import Path; src=Path('.env.example'); dst=Path('.env');
 
 其余可调阈值与诊断开关已按用途分组列在 [.env.example](.env.example)。SerpAPI 密钥别名的解析实现见 [serpapi_credentials.py](serpapi_credentials.py)。
 
-### 6.3 启动网页
+### 6.4 启动网页
 
 ```bash
 python -u -X utf8 run_web.py

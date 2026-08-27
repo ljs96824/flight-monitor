@@ -18,7 +18,10 @@ Existing `readonly_snapshot.create_readonly_snapshot()` remains the source of tr
 
 ## Versioned Inventory
 
-`RUNTIME_BACKUP_SPEC` is a frozen configuration with version `runtime_backup_v1`.
+`RUNTIME_BACKUP_SPEC` originally shipped as `runtime_backup_v1`. The
+2026-08-27 runtime-configuration split raised it to `runtime_backup_v2`, whose
+required core additionally includes `state/runtime_config.yaml`; see
+`docs/runtime-config-separation-2026-08-27.md`.
 
 | Tier | Runtime paths | Capture rule |
 | --- | --- | --- |

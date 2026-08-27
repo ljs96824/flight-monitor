@@ -23,7 +23,7 @@ def main(argv=None) -> int:
     parser.add_argument("--root", default=str(BASE_DIR), help="项目根目录")
     parser.add_argument(
         "--config",
-        default=str(BASE_DIR / "config.yaml"),
+        default=str(BASE_DIR / "config.defaults.yaml"),
         help="保留窗配置文件",
     )
     parser.add_argument(

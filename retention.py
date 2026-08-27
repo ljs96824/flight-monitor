@@ -15,7 +15,7 @@ DEFAULT_RETENTION_DAYS = {
 
 
 def load_retention_policy(config_path: str | Path | None = None) -> dict[str, int]:
-    """从 config.yaml 读取保留天数；读取失败时使用保守默认值。"""
+    """从策略默认配置读取保留天数；读取失败时使用保守默认值。"""
     payload = {}
     if config_path is not None:
         try:

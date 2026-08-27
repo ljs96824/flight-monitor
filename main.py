@@ -103,6 +103,7 @@ from workload_class import (
     SCHEDULED_USER_MONITOR,
     UNKNOWN,
 )
+from config_loader import DEFAULT_CONFIG_PATH, RUNTIME_CONFIG_PATH
 
 
 # 日志配置
@@ -117,7 +118,8 @@ logging.basicConfig(
 ANALYSIS_LOG = DATA_DIR / "analysis_log.jsonl"
 SUBSCRIPTIONS_PATH = DATA_DIR / "subscriptions.json"
 PAGE_PAYLOADS_DIR = DATA_DIR / "payloads"
-CONFIG_PATH = BASE_DIR / "config.yaml"
+CONFIG_PATH = DEFAULT_CONFIG_PATH
+RUNTIME_SETTINGS_PATH = RUNTIME_CONFIG_PATH
 API_USAGE_PATH = DATA_DIR / "api_usage.json"
 BASKET_SENTINEL_STATE_PATH = DATA_DIR / "basket_sentinel.json"
 ROUND_LOG_ROOT = DATA_DIR / "logs" / "rounds"
@@ -351,7 +353,11 @@ def _make_collection_round_id() -> str:
 
 
 def _collection_plan_log_options() -> dict:
-    settings = load_collection_settings(CONFIG_PATH)
+    settings = load_collection_settings(
+        CONFIG_PATH,
+        runtime_path=RUNTIME_SETTINGS_PATH,
+        require_runtime=True,
+    )
     ledger_health = usage_ledger_health(API_USAGE_PATH)
     usage_payload = ledger_health.get("usage")
     if usage_payload is None:

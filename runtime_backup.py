@@ -21,6 +21,7 @@ from typing import Callable
 from uuid import uuid4
 
 from backup_status import record_backup_created
+from config_loader import RuntimeConfigError, validate_runtime_config
 from collection_singleflight import (
     acquire_collection_singleflight,
     resolve_collection_lock_path,
@@ -34,12 +35,13 @@ DEFAULT_DATA_ROOT = PROJECT_ROOT / "data"
 MANIFEST_VERSION = "runtime_backup_manifest_v1"
 
 RUNTIME_BACKUP_SPEC = {
-    "version": "runtime_backup_v1",
+    "version": "runtime_backup_v2",
     "required_core": (
         "prices.db",
         "observations.sqlite3",
         "subscriptions.json",
         "api_usage.json",
+        "runtime_config.yaml",
     ),
     "business_state": (
         "feedback.json",
@@ -196,8 +198,8 @@ def _classify(relative: str) -> str | None:
 
 def _archive_path_for(relative: str, tier: str) -> str:
     if tier == "required_core":
-        if relative == "subscriptions.json":
-            return "state/subscriptions.json"
+        if relative in {"subscriptions.json", "runtime_config.yaml"}:
+            return f"state/{relative}"
         return f"core_snapshot/{relative}"
     if tier == "business_state":
         return f"state/{relative}"
@@ -388,6 +390,27 @@ def _strict_json(path: Path):
         ) from exc
 
 
+def _strict_yaml(path: Path):
+    try:
+        import yaml
+
+        payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, yaml.YAMLError) as exc:
+        raise RuntimeStateValidationError(
+            f"YAML解析失败: {path.name}: {type(exc).__name__}"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise RuntimeStateValidationError(f"YAML根节点不是对象: {path.name}")
+    if path.name == "runtime_config.yaml":
+        try:
+            validate_runtime_config(payload)
+        except RuntimeConfigError as exc:
+            raise RuntimeStateValidationError(
+                f"运行配置校验失败: {path.name}: {exc}"
+            ) from exc
+    return payload
+
+
 def _strict_jsonl(path: Path) -> int:
     count = 0
     line_number = 0
@@ -471,6 +494,9 @@ def _entry_for_file(
     elif path.suffix.lower() == ".jsonl":
         line_count = _strict_jsonl(path)
         validation = f"jsonl_parsed:{line_count}"
+    elif path.suffix.lower() in {".yaml", ".yml"}:
+        _strict_yaml(path)
+        validation = "yaml_parsed"
     return {
         "path": archive_path,
         "source_rel": source_rel,
@@ -733,6 +759,7 @@ def _capture_phase_a(
         data_root / "api_usage.json",
         data_root / "subscriptions.json",
         feedback,
+        data_root / "runtime_config.yaml",
     ]
 
     with ExitStack() as locks:
@@ -742,6 +769,7 @@ def _capture_phase_a(
         _strict_json(data_root / "subscriptions.json")
         if feedback.exists():
             _strict_json(feedback)
+        _strict_yaml(data_root / "runtime_config.yaml")
 
         create_readonly_snapshot(
             "core_snapshot",

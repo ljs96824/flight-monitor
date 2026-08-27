@@ -5,11 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from analyzer import analyze_all_flights, city_name
+from config_loader import DEFAULT_CONFIG_PATH, RUNTIME_CONFIG_PATH, load_merged_config
 from storage import get_latest_flights, init_db
 
 
 BASE_DIR = Path(__file__).parent
-CONFIG_PATH = BASE_DIR / "config.yaml"
+CONFIG_PATH = DEFAULT_CONFIG_PATH
 
 
 def _duration_text(minutes: int | float | None) -> str:
@@ -20,24 +21,7 @@ def _duration_text(minutes: int | float | None) -> str:
 
 
 def _load_config() -> dict:
-    subscriptions = []
-    current = {}
-    for line in CONFIG_PATH.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        if stripped.startswith("- "):
-            if current:
-                subscriptions.append(current)
-            current = {}
-            stripped = stripped[2:].strip()
-        if ":" not in stripped or stripped == "subscriptions:":
-            continue
-        key, value = stripped.split(":", 1)
-        current[key.strip()] = value.strip().strip('"').strip("'")
-    if current:
-        subscriptions.append(current)
-    return {"subscriptions": subscriptions}
+    return load_merged_config(CONFIG_PATH, RUNTIME_CONFIG_PATH)
 
 
 def _print_recommendation(rec: dict) -> None:

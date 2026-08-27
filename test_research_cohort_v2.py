@@ -596,8 +596,36 @@ class ResearchCohortV2Test(unittest.TestCase):
 
     def test_config_enables_explicit_cohort_and_preserves_paused_route_reasons(self):
         from collection_plan import load_collection_settings
+        from config_loader import DEFAULT_CONFIG_PATH
 
-        settings = load_collection_settings(Path(__file__).with_name("config.yaml"))
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
+            runtime_path = Path(directory) / "runtime_config.yaml"
+            runtime_path.write_text(
+                """
+source_quota_budget:
+  juhe:
+    packs:
+      - {id: pack-a, added: 50, added_at: 2026-08-01}
+      - {id: pack-b, added: 50, added_at: 2026-08-02}
+    reconciliation: {checked_at: 2026-08-03, console_remaining: 90}
+    reserve:
+      epoch_started_at: 2026-08-01T00:00:00+08:00
+      target_date: 2026-10-01
+RESEARCH_BASKET_ENABLED: true
+RESEARCH_BASKET_STRATEGY: cohort_v2
+paused_research_routes:
+  - route: AAA->BBB
+    reason: fixture_reason
+    resume_when: fixture_gate
+subscriptions: []
+""".lstrip(),
+                encoding="utf-8",
+            )
+            settings = load_collection_settings(
+                DEFAULT_CONFIG_PATH,
+                runtime_path=runtime_path,
+                require_runtime=True,
+            )
 
         self.assertTrue(settings["research_basket_enabled"])
         self.assertEqual(settings["research_basket_strategy"], "cohort_v2")
@@ -611,7 +639,7 @@ class ResearchCohortV2Test(unittest.TestCase):
                 item["added"]
                 for item in settings["source_quota_budget"]["juhe"]["packs"]
             ),
-            1100,
+            100,
         )
         self.assertEqual(
             settings["research_cohort_v2_gates"][
@@ -627,12 +655,12 @@ class ResearchCohortV2Test(unittest.TestCase):
         )
         self.assertEqual(
             {item["route"] for item in settings["paused_research_routes"]},
-            {"SHA->PEK", "PVG->HKG"},
+            {"AAA->BBB"},
         )
         self.assertTrue(
             all(
-                item["reason"] == "quota_concentration_for_pvg_kix_tcurve"
-                and item["resume_when"] == "pvg_kix_core_t_points_reach_min_n"
+                item["reason"] == "fixture_reason"
+                and item["resume_when"] == "fixture_gate"
                 for item in settings["paused_research_routes"]
             )
         )

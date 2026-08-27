@@ -13050,7 +13050,24 @@ def _quota_overview_text() -> str:
     )
     from collection_plan import load_collection_settings
 
-    settings = load_collection_settings(BASE_DIR / "config.yaml")
+    from config_loader import (
+        DEFAULT_CONFIG_PATH,
+        RUNTIME_CONFIG_PATH,
+        RuntimeConfigError,
+    )
+
+    try:
+        settings = load_collection_settings(
+            DEFAULT_CONFIG_PATH,
+            runtime_path=RUNTIME_CONFIG_PATH,
+            require_runtime=True,
+        )
+    except RuntimeConfigError as exc:
+        safe_log(
+            f"[配额总览] 运行配置不可用,禁止真实API "
+            f"原因={type(exc).__name__}:{exc}"
+        )
+        return "配额总览:运行配置不可用(禁止真实API)"
     try:
         usage = load_usage_strict(DEFAULT_USAGE_PATH)
     except UsageLedgerReadError as exc:

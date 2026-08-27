@@ -143,6 +143,10 @@ class ApiUsageFailClosedTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
             path = Path(directory) / "api_usage.json"
             with (
+                patch(
+                    "collection_plan.load_collection_settings",
+                    return_value={"source_quota_budget": {}},
+                ),
                 patch.object(api_usage, "DEFAULT_USAGE_PATH", path),
                 patch.object(notifier, "safe_log") as log_mock,
             ):
@@ -153,6 +157,25 @@ class ApiUsageFailClosedTest(unittest.TestCase):
         self.assertEqual(text, "配额总览:台账不可用(不得据此恢复配额)")
         self.assertTrue(
             any("展示不可用" in str(call.args[0]) for call in log_mock.call_args_list)
+        )
+
+    def test_quota_overview_discloses_missing_runtime_config(self):
+        import notifier
+
+        from config_loader import RuntimeConfigError
+
+        with (
+            patch(
+                "collection_plan.load_collection_settings",
+                side_effect=RuntimeConfigError("fixture missing"),
+            ),
+            patch.object(notifier, "safe_log") as log_mock,
+        ):
+            text = notifier._quota_overview_text()
+
+        self.assertEqual(text, "配额总览:运行配置不可用(禁止真实API)")
+        self.assertTrue(
+            any("禁止真实API" in str(call.args[0]) for call in log_mock.call_args_list)
         )
 
     def test_lock_conflict_keeps_pending_counts_and_blocks_research_gate(self):

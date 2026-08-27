@@ -12,6 +12,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from atomic_json_store import JsonStoreReadError, read_json, update_json  # noqa: E402
+from config_loader import DEFAULT_CONFIG_PATH, RUNTIME_CONFIG_PATH  # noqa: E402
 from project_time import SHANGHAI_TZ  # noqa: E402
 from scripts.research_quota_simulation import build_report  # noqa: E402
 from subscription_preflight import shanghai_today  # noqa: E402
@@ -157,7 +158,12 @@ def enable_research(
 
 
 def _add_common_paths(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--config", type=Path, default=ROOT / "config.yaml")
+    parser.add_argument(
+        "--config-defaults", type=Path, default=DEFAULT_CONFIG_PATH
+    )
+    parser.add_argument(
+        "--runtime-config", type=Path, default=RUNTIME_CONFIG_PATH
+    )
     parser.add_argument(
         "--state", type=Path, default=ROOT / "data" / "basket_state.json"
     )
@@ -200,7 +206,8 @@ def build_parser() -> argparse.ArgumentParser:
 def _readiness_report(args) -> dict:
     return build_report(
         today=args.today or shanghai_today(),
-        config_path=args.config,
+        config_path=args.config_defaults,
+        runtime_config_path=args.runtime_config,
         state_path=args.state,
         subscriptions_path=args.subscriptions,
         observations_path=args.observations,

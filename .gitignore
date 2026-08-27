@@ -4,6 +4,8 @@
 
 # 数据文件
 data/
+# Local quota facts, research switches and subscription-related runtime settings.
+data/runtime_config.yaml
 data/api_usage.json
 *.db
 *.sqlite3
@@ -41,4 +43,5 @@ data/*.sqlite3.bak
 /*_email.html
 /after_*.log
 /data/snapshots/
+/config.yaml.pre-runtime-split-*.bak
 live_run_console.txt

@@ -1,4 +1,4 @@
-# Deprecated policy-only compatibility copy. Production reads config.defaults.yaml.
+# Git-tracked policy defaults only. Runtime facts belong in data/runtime_config.yaml.
 source_quota_budget:
   juhe:
     kind: purchased_packs
@@ -23,14 +23,10 @@ source_quota_low_remaining_threshold: 50
 SERPAPI_ECONOMY_CROSS_CHECK: false
 FRESHNESS_HOURS: 6
 SUB_ROUND_FRESH_SCOPE: primary_only
-# 研究篮子总开关；false 时零采集，不再回退到旧篮子。
 RESEARCH_BASKET_ENABLED: false
-# cohort_v2 受 readiness 硬门保护；legacy 仅在显式选择时执行。
 RESEARCH_BASKET_STRATEGY: cohort_v2
 research_cohort_v2_gates:
   backup_evidence_max_age_days: 30
-  # 保守估计：09:00/15:00/21:00 三轮均按完整唯一请求计；
-  # 暂不分别建模每轮面板复用与缓存新鲜度。
   scheduled_subscription_runs_per_day: 3
   other_non_subscription_calls_per_day: 0
   minimum_expected_days: 30
@@ -40,5 +36,4 @@ retention_days:
   payloads: 90
   round_archives: 90
   backups: 180
-
 subscriptions: []

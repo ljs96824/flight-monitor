@@ -1,0 +1,16 @@
+# Copy to data/runtime_config.yaml and replace every placeholder before collection.
+source_quota_budget:
+  juhe:
+    packs:
+      - id: pack-YYYY-MM
+        added: 550
+        added_at: YYYY-MM-DD
+    # Fill the local console reconciliation fields documented in README.
+    reconciliation: {}
+    reserve:
+      epoch_started_at: YYYY-MM-DDT00:00:00+08:00
+      target_date: YYYY-MM-DD
+RESEARCH_BASKET_ENABLED: false
+RESEARCH_BASKET_STRATEGY: cohort_v2
+paused_research_routes: []
+subscriptions: []

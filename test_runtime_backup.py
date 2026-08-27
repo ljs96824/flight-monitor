@@ -38,6 +38,27 @@ def _runtime_fixture(root: Path) -> tuple[Path, Path]:
     (data / "api_usage.json").write_text(
         json.dumps({"dates": {}}), encoding="utf-8"
     )
+    (data / "runtime_config.yaml").write_text(
+        """
+source_quota_budget:
+  juhe:
+    packs:
+      - id: pack-fixture
+        added: 100
+        added_at: 2026-08-01
+    reconciliation:
+      checked_at: 2026-08-02
+      console_remaining: 90
+    reserve:
+      epoch_started_at: 2026-08-01T00:00:00+08:00
+      target_date: 2026-10-01
+RESEARCH_BASKET_ENABLED: false
+RESEARCH_BASKET_STRATEGY: cohort_v2
+paused_research_routes: []
+subscriptions: []
+""".lstrip(),
+        encoding="utf-8",
+    )
     return project, data
 
 
@@ -52,7 +73,7 @@ class RuntimeBackupInventoryTest(unittest.TestCase):
     def test_runtime_backup_spec_is_versioned_and_has_four_tiers(self):
         from runtime_backup import RUNTIME_BACKUP_SPEC
 
-        self.assertEqual(RUNTIME_BACKUP_SPEC["version"], "runtime_backup_v1")
+        self.assertEqual(RUNTIME_BACKUP_SPEC["version"], "runtime_backup_v2")
         self.assertEqual(
             set(RUNTIME_BACKUP_SPEC["required_core"]),
             {
@@ -60,6 +81,7 @@ class RuntimeBackupInventoryTest(unittest.TestCase):
                 "observations.sqlite3",
                 "subscriptions.json",
                 "api_usage.json",
+                "runtime_config.yaml",
             },
         )
         self.assertIn("feedback.json", RUNTIME_BACKUP_SPEC["business_state"])
@@ -260,7 +282,7 @@ class RuntimeBackupCaptureTest(unittest.TestCase):
                 )
 
             self.assertEqual(manifest["manifest_version"], "runtime_backup_manifest_v1")
-            self.assertEqual(manifest["runtime_backup_spec_version"], "runtime_backup_v1")
+            self.assertEqual(manifest["runtime_backup_spec_version"], "runtime_backup_v2")
             self.assertEqual(
                 manifest["capture_consistency"],
                 {
@@ -333,6 +355,7 @@ class RuntimeBackupCaptureTest(unittest.TestCase):
                 "enter:api_usage.json",
                 "enter:subscriptions.json",
                 "enter:feedback.json",
+                "enter:runtime_config.yaml",
             ],
         )
         self.assertLess(events.index("release:collection"), events.index("archive"))

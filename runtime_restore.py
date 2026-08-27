@@ -28,6 +28,7 @@ from runtime_backup import (
     _classify,
     _strict_json,
     _strict_jsonl,
+    _strict_yaml,
     build_replay_reports,
     create_runtime_backup,
     inspect_sqlite,
@@ -213,6 +214,12 @@ def verify_restored_runtime(root: str | Path) -> dict:
             except RuntimeStateValidationError as exc:
                 json_ok = False
                 raise ManifestVerificationError(f"JSONL验证失败: {archive_path}") from exc
+        elif validation == "yaml_parsed":
+            try:
+                _strict_yaml(target)
+            except RuntimeStateValidationError as exc:
+                json_ok = False
+                raise ManifestVerificationError(f"YAML验证失败: {archive_path}") from exc
         verified_count += 1
         total_bytes += actual_bytes
 
@@ -381,7 +388,7 @@ def _candidate_path(restored: Path, source_root: str) -> Path:
             else "evidence"
             if source_root in {"payloads", "logs/rounds"}
             else "required_core"
-            if source_root == "subscriptions.json"
+            if source_root in {"subscriptions.json", "runtime_config.yaml"}
             else "diagnostics",
         )
     )
@@ -471,7 +478,11 @@ def restore_to_production(
         rollback_root.mkdir(parents=True, exist_ok=False)
         os.chmod(rollback_root, 0o700)
 
-        lock_targets = [data_root / "api_usage.json", data_root / "subscriptions.json"]
+        lock_targets = [
+            data_root / "api_usage.json",
+            data_root / "subscriptions.json",
+            data_root / "runtime_config.yaml",
+        ]
         if (data_root / "feedback.json").exists():
             lock_targets.append(data_root / "feedback.json")
         with ExitStack() as locks:

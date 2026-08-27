@@ -108,7 +108,8 @@ python -X utf8 scripts/research_readiness.py
 
 备份四项分别是 `backup_restore_verified`、`off_disk_copy_verified`、
 `different_device_verified` 与 `off_disk_copy_fresh`。状态文件缺失、SHA 不一致、设备证据缺失或证据过期都会明确列入“还差”，不会回退
-读取 `config.yaml` 的人工布尔。该报告只读本地 JSON/SQLite 与计划键，不执行采集计划、
+读取跟踪策略配置中的人工布尔。该报告严格合并
+`config.defaults.yaml + data/runtime_config.yaml`，并只读本地 JSON/SQLite 与计划键，不执行采集计划、
 不调用外部 API，也不修改研究开关。
 
 运行态锁存不再靠手工编辑 `data/basket_state.json` 恢复。只读查看开关、停用原因与

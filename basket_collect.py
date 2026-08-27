@@ -13,6 +13,7 @@ from api_usage import load_usage_strict, usage_ledger_health, usage_snapshot
 from backup_status import load_backup_evidence
 from atomic_json_store import JsonStoreReadError, read_json
 from collection_plan import build_collection_plan, load_collection_settings
+from config_loader import DEFAULT_CONFIG_PATH, RUNTIME_CONFIG_PATH
 from collection_singleflight import (
     acquire_collection_singleflight,
     collection_busy_status,
@@ -53,7 +54,8 @@ from workload_class import CANARY, RESEARCH_COHORT
 
 BASE_DIR = Path(__file__).parent
 DEFAULT_STATE_PATH = BASE_DIR / "data" / "basket_state.json"
-CONFIG_PATH = BASE_DIR / "config.yaml"
+CONFIG_PATH = DEFAULT_CONFIG_PATH
+RUNTIME_SETTINGS_PATH = RUNTIME_CONFIG_PATH
 API_USAGE_PATH = BASE_DIR / "data" / "api_usage.json"
 
 BASKET_ROUTES = (
@@ -513,7 +515,11 @@ def run_basket(
     today = today or shanghai_today()
     now = now or datetime.now()
     round_id = make_round_id(now)
-    settings = load_collection_settings(CONFIG_PATH)
+    settings = load_collection_settings(
+        CONFIG_PATH,
+        runtime_path=RUNTIME_SETTINGS_PATH,
+        require_runtime=True,
+    )
     research_enabled = bool(settings.get("research_basket_enabled"))
     research_strategy = str(
         settings.get("research_basket_strategy") or "cohort_v2"
@@ -591,7 +597,11 @@ def _run_basket_locked(
         round_archive_started = True
     except Exception as exc:
         safe_log(f"[轮档失败] round_id={round_id} 原因={type(exc).__name__}:{exc}")
-    settings = settings or load_collection_settings(CONFIG_PATH)
+    settings = settings or load_collection_settings(
+        CONFIG_PATH,
+        runtime_path=RUNTIME_SETTINGS_PATH,
+        require_runtime=True,
+    )
     state = load_or_create_state(state_path, today)
     research_strategy = str(settings.get("research_basket_strategy") or "cohort_v2")
     cohort_enabled = (
