@@ -383,6 +383,16 @@ def evaluate_research_hard_gates(
     remaining_after = quota.get("remaining_after_research")
     reserve_value = quota.get("monitoring_reserve")
     quota_complete = bool(quota.get("complete"))
+    research_available_raw = quota.get("research_available")
+    research_available_value = int(research_available_raw or 0)
+    research_batch_calls = max(1, int(quota.get("research_batch_calls") or 30))
+    scheduled_anomaly = bool(quota.get("scheduled_anomaly"))
+    manual_live_used = max(0, int(quota.get("manual_live_used") or 0))
+    manual_live_buffer = max(0, int(quota.get("manual_live_buffer") or 30))
+    batch_guard_ok = (
+        research_available_raw is None
+        or research_available_value >= research_batch_calls
+    )
     backup = backup_evidence or {}
     backup_checks = backup.get("checks") or {}
     migration = migration_status or {}
@@ -402,6 +412,9 @@ def evaluate_research_hard_gates(
             and remaining_after is not None
             and reserve_value is not None
             and int(remaining_after) >= int(reserve_value)
+            and batch_guard_ok
+            and ("scheduled_anomaly" not in quota or not scheduled_anomaly)
+            and ("manual_live_used" not in quota or manual_live_used <= manual_live_buffer)
         ),
         "backup_restore_verified": bool(
             backup_checks.get("backup_restore_verified")
@@ -421,6 +434,7 @@ def evaluate_research_hard_gates(
         "monitoring_reserve": {
             "remaining_after_research": remaining_after,
             "required_reserve": reserve_value,
+            "reserve_details": quota.get("reserve_details") or {},
         },
         **(backup.get("current") or {}),
         "backup_restore_verified": (backup.get("current") or {}).get(
@@ -455,7 +469,7 @@ def evaluate_research_hard_gates(
         if not checks["worst_case_days_remaining"]:
             reasons["worst_case_days_remaining"] = "最坏情形可运行天数不足"
         if not checks["monitoring_reserve"]:
-            reasons["monitoring_reserve"] = "研究后余量低于用户监控储备"
+            reasons["monitoring_reserve"] = "储备、下一批额度或异常用量守卫未通过"
     for check_name, source_name in (
         ("timestamp_migration", "timestamp_ready"),
         ("lineage_migration", "lineage_ready"),
@@ -485,17 +499,28 @@ def apply_research_quota_guard(
     notifier=None,
     now: str | None = None,
 ) -> dict:
-    """Persistently disable research when the monitoring reserve is reached."""
+    """Disable research only when a workload-aware quota guard is tripped."""
     quota = quota_simulation or {}
     required = {"quota_remaining", "monitoring_reserve", "research_available"}
     if not required.issubset(quota):
-        return {"triggered": False, "notified": False}
+        return {"triggered": False, "notified": False, "reason_codes": []}
     remaining_value = max(0, int(quota.get("quota_remaining") or 0))
     reserve_value = max(0, int(quota.get("monitoring_reserve") or 0))
-    available_value = max(0, int(quota.get("research_available") or 0))
-    triggered = remaining_value <= reserve_value or available_value <= 0
-    if not triggered:
-        return {"triggered": False, "notified": False}
+    available_value = int(quota.get("research_available") or 0)
+    batch_calls = max(1, int(quota.get("research_batch_calls") or 30))
+    manual_used = max(0, int(quota.get("manual_live_used") or 0))
+    manual_buffer = max(0, int(quota.get("manual_live_buffer") or 30))
+    reason_codes = []
+    if remaining_value <= reserve_value:
+        reason_codes.append("monitoring_reserve_reached")
+    if available_value < batch_calls:
+        reason_codes.append("research_batch_budget_insufficient")
+    if bool(quota.get("scheduled_anomaly")):
+        reason_codes.append("scheduled_usage_anomaly")
+    if manual_used > manual_buffer:
+        reason_codes.append("manual_live_buffer_exceeded")
+    if not reason_codes:
+        return {"triggered": False, "notified": False, "reason_codes": []}
 
     cohort = _cohort_state(state)
     cohort["runtime_enabled"] = False
@@ -508,6 +533,7 @@ def apply_research_quota_guard(
             "remaining": remaining_value,
             "reserve": reserve_value,
             "research_available": available_value,
+            "reason_codes": list(reason_codes),
         }
     )
     notified = False
@@ -515,7 +541,8 @@ def apply_research_quota_guard(
         title = "[配额守卫] 研究采样已停用"
         content = (
             "[配额守卫] 研究采样已停用,用户监控继续,"
-            f"余量={remaining_value} 储备={reserve_value}"
+            f"余量={remaining_value} 储备={reserve_value} "
+            f"原因={','.join(reason_codes)}"
         )
         guard["notification_attempted"] = True
         if notifier is not None:
@@ -524,7 +551,7 @@ def apply_research_quota_guard(
             except Exception as exc:
                 guard["notification_error"] = f"{type(exc).__name__}:{exc}"
         guard["notified"] = notified
-    return {"triggered": True, "notified": notified}
+    return {"triggered": True, "notified": notified, "reason_codes": reason_codes}
 
 
 def research_runtime_enabled(state: dict, configured: bool) -> bool:

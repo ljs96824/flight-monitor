@@ -296,12 +296,16 @@ class CollectionPlanTest(unittest.TestCase):
                     "round_id": "round-a",
                     "day": "2026-07-22",
                     "counts": {"juhe": 2, "hasdata": 1},
+                    "workload_class": "unknown",
+                    "entrypoint": "unknown",
                 },
                 {
                     "recorded_at": "2026-07-23T10:00:00+08:00",
                     "round_id": "round-b",
                     "day": "2026-07-23",
                     "counts": {"juhe": 1},
+                    "workload_class": "unknown",
+                    "entrypoint": "unknown",
                 },
             ],
         )

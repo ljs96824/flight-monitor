@@ -98,6 +98,12 @@ from tracker import log_signal
 from tcurve import build_notification_tcurve
 from forecast import build_notification_forecast
 
+from workload_class import (
+    MANUAL_LIVE,
+    SCHEDULED_USER_MONITOR,
+    UNKNOWN,
+)
+
 
 # 日志配置
 LOG_PATH = DATA_DIR / "monitor.log"
@@ -1924,6 +1930,8 @@ def _process_subscription_locked(
                 track_usage=True,
                 usage_path=API_USAGE_PATH,
                 quota_budgets=log_options.get("quota_budgets"),
+                workload_class=MANUAL_LIVE if web_trigger else UNKNOWN,
+                entrypoint="web" if web_trigger else "single_subscription",
             )
             collection_plan = build_collection_plan(
                 subscriptions=[sub],
@@ -2700,6 +2708,8 @@ def _run_locked(*, sync_remote: bool, round_id: str):
             track_usage=True,
             usage_path=API_USAGE_PATH,
             quota_budgets=log_options.get("quota_budgets"),
+            workload_class=SCHEDULED_USER_MONITOR,
+            entrypoint="scheduled_batch",
         )
         collection_plan = build_collection_plan(
             subscriptions=[sub for sub, _ in ready],

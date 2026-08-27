@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 from copy import deepcopy
 import json
 from datetime import date, datetime, timedelta
@@ -47,6 +48,7 @@ from research_cohort import (
 from source_profiles import retired_listing_sources
 from sources.aggregator import FlightAggregator, build_default_sources
 from subscription_preflight import evaluate_subscription_preflight, shanghai_today
+from workload_class import CANARY, RESEARCH_COHORT
 
 
 BASE_DIR = Path(__file__).parent
@@ -290,11 +292,20 @@ def _simulate_runtime_quota(
         retries_per_request=1,
         monitoring_reserve=policy["reserve"],
     )
+    reserve_details = dict(policy.get("reserve_details") or {})
     quota.update(
         {
             "quota_total_limit": policy["total_limit"],
             "quota_used": policy["used"],
             "research_available": policy["research_available"],
+            "research_batch_calls": int(reserve_details.get("research_batch_calls") or 30),
+            "scheduled_anomaly": bool(reserve_details.get("scheduled_anomaly")),
+            "manual_live_used": int(reserve_details.get("manual_live_used") or 0),
+            "manual_live_buffer": int(reserve_details.get("manual_live_buffer") or 30),
+            "next_batch_can_start": bool(
+                reserve_details.get("next_batch_can_start", True)
+            ),
+            "reserve_details": reserve_details,
         }
     )
     quota["complete"] = bool(
@@ -436,6 +447,7 @@ def run_basket(
     aggregator_factory: Callable = FlightAggregator,
     singleflight_lock_path: str | Path | None = None,
     quota_guard_notifier=None,
+    workload_class: str = RESEARCH_COHORT,
 ) -> dict:
     today = today or shanghai_today()
     now = now or datetime.now()
@@ -466,6 +478,7 @@ def run_basket(
             source_builder=source_builder,
             aggregator_factory=aggregator_factory,
             quota_guard_notifier=quota_guard_notifier,
+            workload_class=workload_class,
         )
     finally:
         singleflight.release()
@@ -481,6 +494,7 @@ def _run_basket_locked(
     source_builder: Callable = build_default_sources,
     aggregator_factory: Callable = FlightAggregator,
     quota_guard_notifier=None,
+    workload_class: str = RESEARCH_COHORT,
 ) -> dict:
     today = today or shanghai_today()
     now = now or datetime.now()
@@ -561,6 +575,8 @@ def _run_basket_locked(
         track_usage=True,
         usage_path=usage_path,
         quota_budgets=settings["source_quota_budget"],
+        workload_class=workload_class,
+        entrypoint="basket_canary" if workload_class == CANARY else "research_basket",
     )
     safe_log(f"[篮子轮次] round_id={round_id}")
 
@@ -741,11 +757,18 @@ def _load_environment() -> None:
     load_dotenv(BASE_DIR / ".env")
 
 
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--canary", action="store_true", help="将本轮记为canary工作负载")
+    return parser
+
+
+def main(argv=None) -> int:
+    args = build_parser().parse_args(argv)
     configure_stdio_utf8()
     try:
         _load_environment()
-        summary = run_basket()
+        summary = run_basket(workload_class=CANARY if args.canary else RESEARCH_COHORT)
     except Exception as exc:
         safe_log(f"[篮子失败] route=bootstrap 原因={exc}")
         return 1

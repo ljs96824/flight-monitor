@@ -28,7 +28,7 @@ Juhe 为买断次数累加，不是自然月重置。当前配置登记两个已
 - `used`：买断源读取本地累计并叠加显式对账校准，月度源读取当月用量；
 - `remaining`：本纪元总额减本纪元已用；
 - `reserve`：用户监控储备；
-- `research_available`：余量减储备，不小于零。
+- `research_available`：余量减储备；`workload_p90` 保留负值供诊断，旧策略继续兼容。
 
 `CollectionPlan`、轮末台账和详情页配额总览不再根据“配置值是整数还是字典”自行猜测
 语义。旧整数配置仍可读取，但新 Juhe 配置必须使用 `purchased_packs`。
@@ -38,12 +38,14 @@ Juhe 为买断次数累加，不是自然月重置。当前配置登记两个已
 储备公式为：
 
 ```text
-ceil(最近7个上海自然日非研究实际调用P90 × 距2026-10-01天数 × 1.2 + 20)
+basis(day) = scheduled_user_monitor(day) + unknown(day)
+ceil(max(最近7个完整上海日basis的P90, 10) × 距2026-10-01天数 × 1.2) + 30
 ```
 
-P90 使用 nearest-rank。已由 `collection_cells.cohort_id` 识别的研究轮会从每日调用量中
-扣除；如果7日窗口完全没有实际用量，使用 2026 年 8 月实测兜底值 11.5 次/日。缺少
-lineage 时不扣除研究轮，结果偏保守而不是低估储备。
+P90 使用 nearest-rank，当天不进入完整日窗口。workload 由调用入口显式传递；历史
+entry 不回填，缺字段时按 `unknown` 保守进入储备。研究、人工活体验证与 canary 不进
+P90，重试继承原 workload。完整推导、冷启动限制和暂停规则见
+`docs/workload-aware-quota-reserve-2026-08-27.md`。
 
 ## 研究配额硬门
 
@@ -51,10 +53,12 @@ lineage 时不扣除研究轮，结果偏保守而不是低估储备。
 
 1. `expected_days_remaining >= 30`；
 2. `worst_case_days_remaining >= 20`；
-3. 执行本轮研究最坏重试预算后，`remaining_after_research >= monitoring_reserve`。
+3. 执行本轮研究最坏重试预算后仍高于储备，并且下一完整批次额度、连续高负荷与人工
+   缓冲三项守卫均通过。
 
-任一不成立，只阻断研究篮子；用户订阅轮继续运行。余量达到或跌破储备，或
-`research_available` 归零时，`basket_state.json` 的研究运行态被置为 `false`，并通过
+任一不成立，只阻断研究篮子；用户订阅轮继续运行。余量达到或跌破储备、研究可用量
+不足30次、连续两个完整日定时用户轮大于12次，或人工活体验证累计超过30次时，
+`basket_state.json` 的研究运行态被置为 `false`，并通过
 既有系统告警渠道尝试发送一次：
 
 ```text

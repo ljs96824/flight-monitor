@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 import math
 from typing import Mapping
+
+from project_time import SHANGHAI_TZ
+from workload_reserve import calculate_workload_reserve
 
 
 PURCHASED_PACKS = "purchased_packs"
 MONTHLY = "monthly"
 LEGACY_TOTAL = "legacy_total"
+WORKLOAD_P90 = "workload_p90"
 
 
 def policy_kind(policy) -> str:
@@ -65,7 +69,7 @@ def _as_date(value: date | str | None) -> date:
         return value
     if value:
         return date.fromisoformat(str(value))
-    return date.today()
+    return datetime.now(SHANGHAI_TZ).date()
 
 
 def _nearest_rank(values: list[float], percentile: float) -> float:
@@ -114,6 +118,28 @@ def recent_non_research_daily_usage(
     return [counts[key] for key in sorted(counts)]
 
 
+def workload_reserve_details(
+    policy,
+    *,
+    usage_payload: Mapping | None,
+    source: str,
+    as_of: date | str | None = None,
+) -> dict:
+    """Return the auditable derivation for a workload-aware reserve."""
+
+    if not isinstance(policy, Mapping):
+        raise ValueError("workload reserve requires a mapping policy")
+    raw = policy.get("reserve") or {}
+    if not isinstance(raw, Mapping) or str(raw.get("kind") or "").lower() != WORKLOAD_P90:
+        raise ValueError("policy does not use workload_p90 reserve")
+    return calculate_workload_reserve(
+        raw,
+        usage_payload=usage_payload,
+        source=str(source),
+        as_of=_as_date(as_of),
+    )
+
+
 def reserve(
     policy,
     *,
@@ -128,7 +154,15 @@ def reserve(
     raw = policy.get("reserve") or 0
     if not isinstance(raw, Mapping):
         return max(0, int(raw or 0))
-    if str(raw.get("kind") or "").strip().lower() != "monitoring_p90":
+    reserve_kind = str(raw.get("kind") or "").strip().lower()
+    if reserve_kind == WORKLOAD_P90:
+        return workload_reserve_details(
+            policy,
+            usage_payload=usage_payload,
+            source=source,
+            as_of=as_of,
+        )["monitoring_reserve"]
+    if reserve_kind != "monitoring_p90":
         return max(0, int(raw.get("amount") or 0))
 
     current = _as_date(as_of)
@@ -159,17 +193,17 @@ def research_available(
     as_of: date | str | None = None,
     research_round_ids: set[str] | None = None,
 ) -> int:
-    return max(
-        0,
-        remaining(policy, snapshot, source)
-        - reserve(
-            policy,
-            usage_payload=usage_payload,
-            source=source,
-            as_of=as_of,
-            research_round_ids=research_round_ids,
-        ),
+    available = remaining(policy, snapshot, source) - reserve(
+        policy,
+        usage_payload=usage_payload,
+        source=source,
+        as_of=as_of,
+        research_round_ids=research_round_ids,
     )
+    raw = policy.get("reserve") if isinstance(policy, Mapping) else None
+    if isinstance(raw, Mapping) and str(raw.get("kind") or "").lower() == WORKLOAD_P90:
+        return available
+    return max(0, available)
 
 
 def metrics(
@@ -189,11 +223,32 @@ def metrics(
         research_round_ids=research_round_ids,
     )
     policy_remaining = remaining(policy, snapshot, source)
-    return {
+    raw_reserve = policy.get("reserve") if isinstance(policy, Mapping) else None
+    workload_aware = (
+        isinstance(raw_reserve, Mapping)
+        and str(raw_reserve.get("kind") or "").lower() == WORKLOAD_P90
+    )
+    available = policy_remaining - policy_reserve
+    if not workload_aware:
+        available = max(0, available)
+    result = {
         "kind": policy_kind(policy),
         "total_limit": total_limit(policy),
         "used": used(policy, snapshot, source),
         "remaining": policy_remaining,
         "reserve": policy_reserve,
-        "research_available": max(0, policy_remaining - policy_reserve),
+        "research_available": available,
     }
+    if workload_aware:
+        details = workload_reserve_details(
+            policy,
+            usage_payload=usage_payload,
+            source=source,
+            as_of=as_of,
+        )
+        details["research_available"] = available
+        details["next_batch_can_start"] = (
+            available >= details["research_batch_calls"]
+        )
+        result["reserve_details"] = details
+    return result

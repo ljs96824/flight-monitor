@@ -15,12 +15,15 @@ source_quota_budget:
       local_ledger_used: 428
       unrecorded_usage_adjustment: 19
     reserve:
-      kind: monitoring_p90
-      window_days: 7
+      kind: workload_p90
+      window_complete_days: 7
       target_date: "2026-10-01"
+      minimum_daily_p90: 10
       safety_multiplier: 1.2
-      emergency_calls: 20
-      fallback_daily_p90: 11.5
+      manual_live_buffer: 30
+      research_batch_calls: 30
+      scheduled_anomaly_threshold: 12
+      scheduled_anomaly_consecutive_days: 2
   serpapi:
     monthly: 250
     reserve: 30

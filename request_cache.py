@@ -20,6 +20,7 @@ from flight_combo_utils import normalize_combo
 from log_utils import append_round_evidence, safe_log
 from quota_policy import MONTHLY, metrics as quota_metrics
 import observations_store
+from workload_class import UNKNOWN, normalize_workload_class
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -106,6 +107,8 @@ _track_usage_for_round = False
 _usage_path_for_round: Path | None = None
 _quota_budgets_for_round: dict[str, object] = {}
 _usage_flushed_for_round = False
+_workload_class_for_round = UNKNOWN
+_entrypoint_for_round = "unknown"
 
 
 def passenger_signature(passengers=None) -> str:
@@ -239,6 +242,8 @@ def _persist_api_usage_attempt(source_name: str) -> None:
             {source_name: 1},
             path=path,
             round_id=_current_stats_round_id,
+            workload_class=_workload_class_for_round,
+            entrypoint=_entrypoint_for_round,
         )
     except Exception as exc:
         safe_log(
@@ -1063,11 +1068,14 @@ def start_request_cache_round(
     track_usage: bool = False,
     usage_path: str | Path | None = None,
     quota_budgets: dict[str, object] | None = None,
+    workload_class: str = UNKNOWN,
+    entrypoint: str = "unknown",
 ) -> None:
     """开始新的采集轮，只清本轮统计，不清请求缓存和进程累计。"""
     global _current_stats_round_id
     global _track_usage_for_round, _usage_path_for_round, _quota_budgets_for_round
     global _usage_flushed_for_round
+    global _workload_class_for_round, _entrypoint_for_round
     _stats.clear()
     _stats.update(_empty_stats())
     _equipment_summary.clear()
@@ -1082,6 +1090,8 @@ def start_request_cache_round(
         for source, value in (quota_budgets or {}).items()
     }
     _usage_flushed_for_round = False
+    _workload_class_for_round = normalize_workload_class(workload_class)
+    _entrypoint_for_round = str(entrypoint or "unknown")
     _actual_request_keys_this_round.clear()
     _resolved_request_keys_this_round.clear()
 
@@ -1183,6 +1193,7 @@ def reset_request_cache(*, clear_memory: bool = True, reset_stats: bool = True) 
     global _current_stats_round_id
     global _track_usage_for_round, _usage_path_for_round, _quota_budgets_for_round
     global _usage_flushed_for_round
+    global _workload_class_for_round, _entrypoint_for_round
     if clear_memory:
         _request_cache.clear()
         _round_only_result_keys.clear()
@@ -1196,6 +1207,8 @@ def reset_request_cache(*, clear_memory: bool = True, reset_stats: bool = True) 
     _usage_path_for_round = None
     _quota_budgets_for_round = {}
     _usage_flushed_for_round = False
+    _workload_class_for_round = UNKNOWN
+    _entrypoint_for_round = "unknown"
     if reset_stats:
         _stats.clear()
         _stats.update(_empty_stats())

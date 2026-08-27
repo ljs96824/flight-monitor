@@ -9,12 +9,14 @@ from contextlib import contextmanager
 import json
 import os
 import uuid
-from datetime import date, datetime
+from datetime import datetime
 from pathlib import Path
 
 from local_file_lock import FileLockTimeout, file_lock
 from log_utils import safe_log
+from project_time import SHANGHAI_TZ
 from quota_policy import metrics as quota_metrics
+from workload_class import UNKNOWN, normalize_workload_class
 
 
 DEFAULT_USAGE_PATH = Path(__file__).parent / "data" / "api_usage.json"
@@ -106,6 +108,14 @@ def load_usage(path: str | Path = DEFAULT_USAGE_PATH) -> dict:
     return {"version": 2, "dates": dates, "entries": entries}
 
 
+def entry_workload_class(entry) -> str:
+    """Read workload metadata without rewriting historical ledger rows."""
+
+    if not isinstance(entry, dict):
+        return UNKNOWN
+    return normalize_workload_class(entry.get("workload_class"))
+
+
 def record_actual_requests(
     counts: dict[str, int],
     *,
@@ -113,18 +123,22 @@ def record_actual_requests(
     day: str | None = None,
     round_id: str | None = None,
     recorded_at: str | None = None,
+    workload_class: str = UNKNOWN,
+    entrypoint: str = "unknown",
     lock_timeout: float = DEFAULT_LOCK_TIMEOUT_SECONDS,
     lock_retries: int = DEFAULT_LOCK_RETRIES,
     conflict_log_path: str | Path | None = None,
 ) -> dict:
     usage_path = Path(path)
+    normalized_workload = normalize_workload_class(workload_class)
+    normalized_entrypoint = str(entrypoint or "unknown")
     attempts = max(0, int(lock_retries)) + 1
     last_error = None
     for _attempt in range(attempts):
         try:
             with _usage_lock(usage_path, timeout=lock_timeout):
                 payload = load_usage(usage_path)
-                day_key = str(day or date.today().isoformat())
+                day_key = str(day or datetime.now(SHANGHAI_TZ).date().isoformat())
                 day_counts = payload["dates"].setdefault(day_key, {})
                 actual_counts = {}
                 for source, raw_count in (counts or {}).items():
@@ -147,6 +161,8 @@ def record_actual_requests(
                             ),
                             "round_id": str(round_id or "unknown"),
                             "day": day_key,
+                            "workload_class": normalized_workload,
+                            "entrypoint": normalized_entrypoint,
                             "counts": actual_counts,
                         }
                     )
@@ -170,7 +186,7 @@ def record_actual_requests(
 
 
 def usage_snapshot(payload: dict, *, day: str | None = None) -> dict:
-    day_key = str(day or date.today().isoformat())
+    day_key = str(day or datetime.now(SHANGHAI_TZ).date().isoformat())
     dates = (payload or {}).get("dates") or {}
     today_counts = {
         str(source): int(count or 0)
