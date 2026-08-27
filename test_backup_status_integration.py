@@ -90,7 +90,7 @@ class BackupStatusIntegrationTest(unittest.TestCase):
         verify.assert_called_once_with(
             str(root / "archive.tar.gz"),
             str(root / "external.tar.gz"),
-            status_path=root / "data" / "backup_status.json",
+            status_path=root.resolve() / "data" / "backup_status.json",
             backup_id="backup-1",
             destination_kind="private_encrypted_cloud",
         )
