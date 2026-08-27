@@ -22,6 +22,7 @@ class ResearchReadinessWorkloadTest(unittest.TestCase):
                 "monitoring_reserve": True,
                 "backup_restore_verified": False,
                 "off_disk_copy_verified": False,
+                "different_device_verified": False,
                 "off_disk_copy_fresh": False,
                 "timestamp_migration": True,
                 "lineage_migration": True,

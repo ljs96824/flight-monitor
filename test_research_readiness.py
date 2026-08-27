@@ -8,7 +8,7 @@ from unittest.mock import ANY, patch
 
 
 class ResearchReadinessTest(unittest.TestCase):
-    def test_report_lists_quota_health_plus_three_existing_quota_gates(self):
+    def test_report_lists_quota_health_plus_four_backup_gates(self):
         from research_readiness import build_readiness_summary
 
         hard_gate = {
@@ -20,6 +20,7 @@ class ResearchReadinessTest(unittest.TestCase):
                 "monitoring_reserve": True,
                 "backup_restore_verified": True,
                 "off_disk_copy_verified": True,
+                "different_device_verified": True,
                 "off_disk_copy_fresh": False,
                 "timestamp_migration": True,
                 "lineage_migration": True,
@@ -32,6 +33,7 @@ class ResearchReadinessTest(unittest.TestCase):
                 "monitoring_reserve": 500,
                 "verified_restore_at": "2026-08-26T08:00:00Z",
                 "off_disk_copy_verified": True,
+                "different_device_verified": True,
                 "off_disk_copy_age_days": 31.0,
                 "timestamp_migration": True,
                 "lineage_migration": True,
@@ -47,7 +49,7 @@ class ResearchReadinessTest(unittest.TestCase):
 
         self.assertEqual(set(summary["groups"]), {"quota", "backup", "migration"})
         self.assertEqual(len(summary["groups"]["quota"]), 4)
-        self.assertEqual(len(summary["groups"]["backup"]), 3)
+        self.assertEqual(len(summary["groups"]["backup"]), 4)
         self.assertEqual(len(summary["groups"]["migration"]), 3)
         self.assertFalse(summary["ready"])
 
@@ -64,6 +66,7 @@ class ResearchReadinessTest(unittest.TestCase):
                     "monitoring_reserve": True,
                     "backup_restore_verified": False,
                     "off_disk_copy_verified": False,
+                    "different_device_verified": False,
                     "off_disk_copy_fresh": False,
                     "timestamp_migration": True,
                     "lineage_migration": True,
@@ -118,6 +121,7 @@ class ResearchReadinessTest(unittest.TestCase):
                         "checks": {
                             "backup_restore_verified": True,
                             "off_disk_copy_verified": True,
+                            "different_device_verified": True,
                             "off_disk_copy_fresh": True,
                         },
                         "current": {},

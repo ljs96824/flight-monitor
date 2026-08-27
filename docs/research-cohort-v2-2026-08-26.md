@@ -82,8 +82,8 @@ T=0再完成，在 `today > depart_date` 时停止，绝不续到 `today+60`。
 以下三项必须同时成立，才能由用户手工把 `RESEARCH_COHORT_V2` 置为 `true`：
 
 1. `data/backup_status.json` 证明 runtime backup 已成功隔离恢复、异盘副本 SHA 与本地归档
-   一致，且异盘核验距今不超过 `backup_evidence_max_age_days`（默认30天）；配置布尔不能
-   代替文件证据；
+   一致、生产状态与副本位于不同设备，且异盘核验距今不超过
+   `backup_evidence_max_age_days`（默认30天）；配置布尔与同盘不同目录都不能代替设备证据；
 2. 全系统配额模拟完整输出，且 `expected_days_remaining >= 30`、
    `worst_case_days_remaining >= 20`、`remaining_after_research >= monitoring_reserve`；
 3. observations 时间归属迁移、collection_cells 请求台账迁移和 prices round lineage
@@ -93,14 +93,14 @@ T=0再完成，在 `today > depart_date` 时停止，绝不续到 `today+60`。
 运行入口会在 `start_request_cache_round` 之前重新检查硬门。缺一项即返回
 `status=blocked`，零源调用。
 
-只读 readiness 入口一次打印十项硬门的当前值：台账健康一项、配额三项、备份三项、迁移三项。
+只读 readiness 入口一次打印十一项硬门的当前值：台账健康一项、配额三项、备份四项、迁移三项。
 
 ```powershell
 python -X utf8 scripts/research_readiness.py
 ```
 
-备份三项分别是 `backup_restore_verified`、`off_disk_copy_verified` 与
-`off_disk_copy_fresh`。状态文件缺失、SHA 不一致或证据过期都会明确列入“还差”，不会回退
+备份四项分别是 `backup_restore_verified`、`off_disk_copy_verified`、
+`different_device_verified` 与 `off_disk_copy_fresh`。状态文件缺失、SHA 不一致、设备证据缺失或证据过期都会明确列入“还差”，不会回退
 读取 `config.yaml` 的人工布尔。该报告只读本地 JSON/SQLite 与计划键，不执行采集计划、
 不调用外部 API，也不修改研究开关。
 

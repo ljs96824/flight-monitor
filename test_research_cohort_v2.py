@@ -14,6 +14,7 @@ def _ready_backup_evidence():
         "checks": {
             "backup_restore_verified": True,
             "off_disk_copy_verified": True,
+            "different_device_verified": True,
             "off_disk_copy_fresh": True,
         },
         "current": {},
@@ -284,10 +285,11 @@ class ResearchCohortV2Test(unittest.TestCase):
 
         self.assertFalse(blocked["ready"])
         self.assertEqual(
-            blocked["missing"][:3],
+            blocked["missing"][:4],
             [
                 "backup_restore_verified",
                 "off_disk_copy_verified",
+                "different_device_verified",
                 "off_disk_copy_fresh",
             ],
         )

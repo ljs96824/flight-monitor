@@ -87,6 +87,16 @@ def build_parser() -> argparse.ArgumentParser:
     restore.add_argument("--backup-status")
     restore.add_argument("--verify-off-disk")
     restore.add_argument("--off-disk-kind", default="external_path")
+    restore.add_argument(
+        "--allow-encrypted-cloud-device-exception",
+        action="store_true",
+    )
+    restore.add_argument(
+        "--trusted-cloud-root",
+        action="append",
+        type=Path,
+        default=[],
+    )
 
     rehearse = commands.add_parser(
         "rehearse",
@@ -247,6 +257,10 @@ def main(argv=None) -> int:
                     status_path=status_path,
                     backup_id=(result.get("manifest") or {}).get("backup_id"),
                     destination_kind=args.off_disk_kind,
+                    allow_trusted_cloud_exception=(
+                        args.allow_encrypted_cloud_device_exception
+                    ),
+                    trusted_cloud_roots=args.trusted_cloud_root,
                 )
             _print_summary(_verified_summary(result))
             return 0

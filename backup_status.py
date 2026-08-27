@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -10,7 +12,7 @@ from log_utils import safe_log
 from readonly_snapshot import sha256_file
 
 
-BACKUP_STATUS_VERSION = "backup_status_v1"
+BACKUP_STATUS_VERSION = "backup_status_v2"
 DEFAULT_MAX_BACKUP_EVIDENCE_AGE_DAYS = 30
 
 
@@ -24,6 +26,10 @@ class OffDiskCopyMissing(BackupEvidenceError):
 
 class OffDiskCopyMismatch(BackupEvidenceError):
     """The off-disk copy does not match the local archive."""
+
+
+class OffDiskDeviceMismatch(BackupEvidenceError):
+    """The off-disk copy is not proven independent from production storage."""
 
 
 class BackupStatusMismatch(BackupEvidenceError):
@@ -47,6 +53,11 @@ def _empty_copy() -> dict:
         "verified_at": None,
         "destination_kind": None,
         "copied_sha256": None,
+        "source_device": None,
+        "destination_device": None,
+        "different_device_verified": False,
+        "device_verification_method": None,
+        "trusted_cloud_root_verified": False,
     }
 
 
@@ -65,6 +76,127 @@ def _same_archive(payload, *, backup_id: str, archive_sha256: str) -> bool:
         isinstance(payload, dict)
         and payload.get("backup_id") == str(backup_id)
         and payload.get("archive_sha256") == str(archive_sha256)
+    )
+
+
+def _nearest_existing_path(path: str | Path) -> Path:
+    candidate = Path(path).expanduser().resolve(strict=False)
+    while not candidate.exists():
+        parent = candidate.parent
+        if parent == candidate:
+            raise OffDiskDeviceMismatch("无法定位设备: 路径及其父目录均不存在")
+        candidate = parent
+    return candidate
+
+
+def _windows_volume_serial(path: str | Path) -> str:
+    import ctypes
+    from ctypes import wintypes
+
+    probe = _nearest_existing_path(path)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    get_volume_path_name = kernel32.GetVolumePathNameW
+    get_volume_path_name.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.LPWSTR,
+        wintypes.DWORD,
+    ]
+    get_volume_path_name.restype = wintypes.BOOL
+    volume_root = ctypes.create_unicode_buffer(261)
+    if not get_volume_path_name(str(probe), volume_root, len(volume_root)):
+        raise ctypes.WinError(ctypes.get_last_error())
+
+    get_volume_information = kernel32.GetVolumeInformationW
+    get_volume_information.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.LPWSTR,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+        ctypes.POINTER(wintypes.DWORD),
+        ctypes.POINTER(wintypes.DWORD),
+        wintypes.LPWSTR,
+        wintypes.DWORD,
+    ]
+    get_volume_information.restype = wintypes.BOOL
+    serial = wintypes.DWORD()
+    max_component_length = wintypes.DWORD()
+    file_system_flags = wintypes.DWORD()
+    if not get_volume_information(
+        volume_root.value,
+        None,
+        0,
+        ctypes.byref(serial),
+        ctypes.byref(max_component_length),
+        ctypes.byref(file_system_flags),
+        None,
+        0,
+    ):
+        raise ctypes.WinError(ctypes.get_last_error())
+    return f"windows-volume-serial:{serial.value:08x}"
+
+
+def _raw_device_identifier(path: str | Path) -> str:
+    probe = _nearest_existing_path(path)
+    if os.name == "nt":
+        return _windows_volume_serial(probe)
+    return f"posix-st_dev:{os.stat(probe).st_dev}"
+
+
+def _device_fingerprint(path: str | Path) -> str:
+    raw_identifier = _raw_device_identifier(path)
+    payload = f"flight-monitor-backup-device-v1:{raw_identifier}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _is_within(path: str | Path, root: str | Path) -> bool:
+    try:
+        resolved_root = Path(root).resolve(strict=True)
+        if not resolved_root.is_dir():
+            return False
+        Path(path).resolve(strict=False).relative_to(resolved_root)
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def _device_evidence(
+    *,
+    status_path: str | Path,
+    copied_archive: str | Path,
+    destination_kind: str,
+    allow_trusted_cloud_exception: bool,
+    trusted_cloud_roots: list[str | Path] | tuple[str | Path, ...] | None,
+) -> dict:
+    source_device = _device_fingerprint(Path(status_path).parent)
+    destination_device = _device_fingerprint(copied_archive)
+    if source_device != destination_device:
+        return {
+            "source_device": source_device,
+            "destination_device": destination_device,
+            "different_device_verified": True,
+            "device_verification_method": "device_identifier",
+            "trusted_cloud_root_verified": False,
+        }
+
+    trusted_root_verified = bool(
+        str(destination_kind or "").strip().lower() == "encrypted_cloud"
+        and allow_trusted_cloud_exception
+        and any(
+            _is_within(copied_archive, root)
+            for root in (trusted_cloud_roots or ())
+        )
+    )
+    if trusted_root_verified:
+        return {
+            "source_device": source_device,
+            "destination_device": destination_device,
+            "different_device_verified": True,
+            "device_verification_method": "trusted_encrypted_cloud_root",
+            "trusted_cloud_root_verified": True,
+        }
+    raise OffDiskDeviceMismatch(
+        "异盘副本与生产状态位于同一设备; "
+        "仅显式启用且命中可信根目录的encrypted_cloud副本可豁免"
     )
 
 
@@ -119,6 +251,8 @@ def verify_off_disk_copy(
     backup_id: str,
     destination_kind: str,
     verified_at: datetime | None = None,
+    allow_trusted_cloud_exception: bool = False,
+    trusted_cloud_roots: list[str | Path] | tuple[str | Path, ...] | None = None,
 ) -> dict:
     """Verify an external copy byte-for-byte, then atomically record evidence."""
 
@@ -134,6 +268,13 @@ def verify_off_disk_copy(
     copied_hash = sha256_file(copied)
     if local_hash != copied_hash:
         raise OffDiskCopyMismatch("异盘副本SHA256与本地归档不一致")
+    device_evidence = _device_evidence(
+        status_path=status_path,
+        copied_archive=copied,
+        destination_kind=destination_kind,
+        allow_trusted_cloud_exception=allow_trusted_cloud_exception,
+        trusted_cloud_roots=trusted_cloud_roots,
+    )
 
     def mutate(current):
         if not _same_archive(
@@ -148,6 +289,7 @@ def verify_off_disk_copy(
             "verified_at": _timestamp(verified_at),
             "destination_kind": str(destination_kind or "external_path"),
             "copied_sha256": copied_hash,
+            **device_evidence,
         }
         return payload
 
@@ -160,6 +302,8 @@ def verify_off_disk_copy_from_status(
     status_path: str | Path,
     destination_kind: str = "external_path",
     verified_at: datetime | None = None,
+    allow_trusted_cloud_exception: bool = False,
+    trusted_cloud_roots: list[str | Path] | tuple[str | Path, ...] | None = None,
 ) -> dict:
     """Verify an external archive against the hash recorded at backup creation."""
 
@@ -174,6 +318,13 @@ def verify_off_disk_copy_from_status(
     copied_hash = sha256_file(copied)
     if copied_hash != expected_hash:
         raise OffDiskCopyMismatch("异盘副本SHA256与backup_status记录不一致")
+    device_evidence = _device_evidence(
+        status_path=status_path,
+        copied_archive=copied,
+        destination_kind=destination_kind,
+        allow_trusted_cloud_exception=allow_trusted_cloud_exception,
+        trusted_cloud_roots=trusted_cloud_roots,
+    )
 
     def mutate(current):
         if not _same_archive(
@@ -188,6 +339,7 @@ def verify_off_disk_copy_from_status(
             "verified_at": _timestamp(verified_at),
             "destination_kind": str(destination_kind or "external_path"),
             "copied_sha256": copied_hash,
+            **device_evidence,
         }
         return payload
 
@@ -236,6 +388,27 @@ def evaluate_backup_evidence(
         and copied_hash
         and archive_hash == copied_hash
     )
+    source_device = str(copied.get("source_device") or "")
+    destination_device = str(copied.get("destination_device") or "")
+    device_method = str(copied.get("device_verification_method") or "")
+    native_device_proof = bool(
+        source_device
+        and destination_device
+        and source_device != destination_device
+        and device_method == "device_identifier"
+    )
+    trusted_cloud_proof = bool(
+        source_device
+        and destination_device
+        and str(copied.get("destination_kind") or "").strip().lower()
+        == "encrypted_cloud"
+        and copied.get("trusted_cloud_root_verified")
+        and device_method == "trusted_encrypted_cloud_root"
+    )
+    different_device_verified = bool(
+        copied.get("different_device_verified")
+        and (native_device_proof or trusted_cloud_proof)
+    )
     copied_at = _parse_timestamp(copied.get("verified_at"))
     age_days = None
     fresh = False
@@ -246,6 +419,7 @@ def evaluate_backup_evidence(
     checks = {
         "backup_restore_verified": restored_at is not None,
         "off_disk_copy_verified": copy_verified,
+        "different_device_verified": different_device_verified,
         "off_disk_copy_fresh": fresh,
     }
     reasons = {}
@@ -253,6 +427,10 @@ def evaluate_backup_evidence(
         reasons["backup_restore_verified"] = "尚无成功隔离恢复证据"
     if not checks["off_disk_copy_verified"]:
         reasons["off_disk_copy_verified"] = "异盘副本未核验或SHA256不一致"
+    if not checks["different_device_verified"]:
+        reasons["different_device_verified"] = (
+            "异盘副本缺少独立设备证据,请重跑verify-off-disk"
+        )
     if not checks["off_disk_copy_fresh"]:
         if copied_at is None:
             reasons["off_disk_copy_fresh"] = "异盘副本核验时刻缺失或无效"
@@ -272,8 +450,18 @@ def evaluate_backup_evidence(
             "off_disk_copy_destination_kind": copied.get("destination_kind"),
             "off_disk_copy_verified_at": copied.get("verified_at"),
             "off_disk_copy_age_days": age_days,
+            "source_device": copied.get("source_device"),
+            "destination_device": copied.get("destination_device"),
+            "different_device_verified": different_device_verified,
+            "device_verification_method": copied.get(
+                "device_verification_method"
+            ),
         },
-        "requirements": {"max_backup_age_days": max_age},
+        "requirements": {
+            "max_backup_age_days": max_age,
+            "different_device_required": True,
+            "trusted_cloud_exception_requires_explicit_root": True,
+        },
     }
 
 

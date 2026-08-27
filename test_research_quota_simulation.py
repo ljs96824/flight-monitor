@@ -91,6 +91,11 @@ research_cohort_v2_gates:
                             "verified_at": "2026-08-26T00:00:00Z",
                             "destination_kind": "physical_disk",
                             "copied_sha256": "a" * 64,
+                            "source_device": "source-device",
+                            "destination_device": "destination-device",
+                            "different_device_verified": True,
+                            "device_verification_method": "device_identifier",
+                            "trusted_cloud_root_verified": False,
                         },
                     }
                 ),

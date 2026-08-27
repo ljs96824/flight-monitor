@@ -57,6 +57,18 @@ def build_parser() -> argparse.ArgumentParser:
         default="external_path",
         help="异盘介质类别，不记录实际私有路径",
     )
+    parser.add_argument(
+        "--allow-encrypted-cloud-device-exception",
+        action="store_true",
+        help="显式允许可信加密云目录不满足物理设备差异",
+    )
+    parser.add_argument(
+        "--trusted-cloud-root",
+        action="append",
+        type=Path,
+        default=[],
+        help="可信加密云根目录，可重复指定；仅与显式云豁免一起生效",
+    )
     return parser
 
 
@@ -83,10 +95,18 @@ def _off_disk_summary(status: dict) -> dict:
     copied = status.get("off_disk_copy") or {}
     return {
         "operation": "verify_off_disk",
-        "passed": bool(copied.get("verified")),
+        "passed": bool(
+            copied.get("verified") and copied.get("different_device_verified")
+        ),
         "archive_sha256": status.get("archive_sha256"),
         "destination_kind": copied.get("destination_kind"),
         "verified_at": copied.get("verified_at"),
+        "source_device": copied.get("source_device"),
+        "destination_device": copied.get("destination_device"),
+        "different_device_verified": copied.get("different_device_verified"),
+        "device_verification_method": copied.get(
+            "device_verification_method"
+        ),
         "status_fields_written": ["off_disk_copy"],
         "real_api_calls": 0,
     }
@@ -114,6 +134,10 @@ def main(argv=None) -> int:
                 args.verify_off_disk,
                 status_path=args.backup_status,
                 destination_kind=args.off_disk_kind,
+                allow_trusted_cloud_exception=(
+                    args.allow_encrypted_cloud_device_exception
+                ),
+                trusted_cloud_roots=args.trusted_cloud_root,
             )
             _print(_off_disk_summary(status))
             return 0

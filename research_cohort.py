@@ -449,6 +449,9 @@ def evaluate_research_hard_gates(
         "off_disk_copy_verified": bool(
             backup_checks.get("off_disk_copy_verified")
         ),
+        "different_device_verified": bool(
+            backup_checks.get("different_device_verified")
+        ),
         "off_disk_copy_fresh": bool(backup_checks.get("off_disk_copy_fresh")),
         "timestamp_migration": bool(migration.get("timestamp_ready")),
         "lineage_migration": bool(migration.get("lineage_ready")),
@@ -476,6 +479,9 @@ def evaluate_research_hard_gates(
         ),
         "off_disk_copy_verified": (backup.get("current") or {}).get(
             "off_disk_copy_verified"
+        ),
+        "different_device_verified": (backup.get("current") or {}).get(
+            "different_device_verified"
         ),
         "off_disk_copy_fresh": {
             "verified_at": (backup.get("current") or {}).get(

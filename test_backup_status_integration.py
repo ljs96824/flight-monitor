@@ -37,13 +37,17 @@ class BackupStatusIntegrationTest(unittest.TestCase):
                 destination=root / "restored",
                 status_path=status_path,
             )
-            verified = verify_off_disk_copy(
-                backup["archive_path"],
-                copy,
-                status_path=status_path,
-                backup_id=backup["backup_id"],
-                destination_kind="physical_disk",
-            )
+            with patch(
+                "backup_status._device_fingerprint",
+                side_effect=["source-device", "destination-device"],
+            ):
+                verified = verify_off_disk_copy(
+                    backup["archive_path"],
+                    copy,
+                    status_path=status_path,
+                    backup_id=backup["backup_id"],
+                    destination_kind="physical_disk",
+                )
 
         self.assertEqual(created["backup_id"], backup["backup_id"])
         self.assertEqual(created["archive_sha256"], backup["archive_sha256"])
@@ -93,6 +97,8 @@ class BackupStatusIntegrationTest(unittest.TestCase):
             status_path=root.resolve() / "data" / "backup_status.json",
             backup_id="backup-1",
             destination_kind="private_encrypted_cloud",
+            allow_trusted_cloud_exception=False,
+            trusted_cloud_roots=[],
         )
 
 

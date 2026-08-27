@@ -143,7 +143,13 @@ class RuntimeRestoreCliTest(unittest.TestCase):
             copied.parent.mkdir()
             shutil.copy2(backup["archive_path"], copied)
             copy_output = io.StringIO()
-            with redirect_stdout(copy_output):
+            with (
+                patch(
+                    "backup_status._device_fingerprint",
+                    side_effect=["source-device", "destination-device"],
+                ),
+                redirect_stdout(copy_output),
+            ):
                 copy_exit = main(
                     [
                         "--verify-off-disk",
@@ -182,6 +188,7 @@ class RuntimeRestoreCliTest(unittest.TestCase):
         self.assertIn("off_disk_copy", copied_result["status_fields_written"])
         self.assertTrue(hard_gate["checks"]["backup_restore_verified"])
         self.assertTrue(hard_gate["checks"]["off_disk_copy_verified"])
+        self.assertTrue(hard_gate["checks"]["different_device_verified"])
         self.assertTrue(hard_gate["checks"]["off_disk_copy_fresh"])
 
     def test_status_prints_every_persisted_field(self):

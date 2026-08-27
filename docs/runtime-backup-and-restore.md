@@ -54,7 +54,7 @@ python -X utf8 scripts/runtime_backup.py --output-dir "E:\flight-monitor-backups
 
 创建成功后，工具原子更新 `data/backup_status.json`，只记录 `backup_id`、归档
 SHA-256、恢复核验时刻与异盘副本核验结果，不记录归档路径或业务字段。新归档会使上一份
-恢复/异盘证据失效；该状态文件属于本机门禁元数据，不进入备份归档，也不会触发 strict
+恢复/异盘证据失效；设备原始标识不会落盘，状态中只保留不可逆 SHA-256 指纹。该状态文件属于本机门禁元数据，不进入备份归档，也不会触发 strict
 扫描失败。
 
 ## 2. 隔离恢复并完整核验
@@ -77,13 +77,23 @@ python -X utf8 scripts/runtime_restore.py --archive "E:\flight-monitor-backups\f
 计算 SHA-256，并与创建备份时记录在 `backup_status.json` 中的本地归档 SHA 比对：
 
 ```powershell
-python -X utf8 scripts/runtime_restore.py --verify-off-disk "F:\private-backups\flight-monitor-<backup_id>.tar.gz" --off-disk-kind physical_disk
+python -X utf8 scripts/runtime_restore.py --verify-off-disk "E:\private-backups\flight-monitor-<backup_id>.tar.gz" --off-disk-kind physical_disk
 ```
 
-只有副本存在且 SHA 与记录值完全一致时，`backup_status.json` 才写入
-`off_disk_copy.verified=true`。可用 `destination_kind` 为
-`physical_disk`、`private_encrypted_cloud` 或团队约定的其他非敏感类别；它是介质类型声明，
-不会记录私有路径。
+通过条件同时包括：副本存在、SHA 与记录值完全一致、生产状态所在设备与副本所在设备不同。
+POSIX 使用 `st_dev`，Windows 使用卷序列号；两者都只在内存中读取，状态文件仅保存哈希后的
+`source_device` / `destination_device`，并写入
+`different_device_verified=true`。同盘不同目录不构成异盘证据。
+
+私有加密云目录可在确实无法提供独立设备标识时显式豁免，但必须同时声明介质类型、开启豁免并
+给出可信根目录，三者缺一即失败：
+
+```powershell
+python -X utf8 scripts/runtime_restore.py --verify-off-disk "C:\EncryptedCloud\flight-monitor-<backup_id>.tar.gz" --off-disk-kind encrypted_cloud --allow-encrypted-cloud-device-exception --trusted-cloud-root "C:\EncryptedCloud"
+```
+
+可信根目录必须已存在且副本位于其下；路径本身不会写入状态。旧版 `backup_status.json` 没有
+设备字段时一律视为未验证，必须重新运行 `--verify-off-disk`，不能沿用旧绿灯。
 
 查看 readiness 使用的全部备份证据：
 

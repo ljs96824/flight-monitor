@@ -1,4 +1,4 @@
-"""Render the nine evidence gates required before research collection starts."""
+"""Render the evidence gates required before research collection starts."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ READINESS_GROUPS = {
     "backup": (
         "backup_restore_verified",
         "off_disk_copy_verified",
+        "different_device_verified",
         "off_disk_copy_fresh",
     ),
     "migration": (

@@ -213,6 +213,7 @@ class ApiUsageFailClosedTest(unittest.TestCase):
                 "checks": {
                     "backup_restore_verified": True,
                     "off_disk_copy_verified": True,
+                    "different_device_verified": True,
                     "off_disk_copy_fresh": True,
                 }
             },

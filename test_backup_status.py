@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 
 class BackupStatusTest(unittest.TestCase):
@@ -36,14 +37,18 @@ class BackupStatusTest(unittest.TestCase):
                 archive_sha256=archive_hash,
                 verified_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
             )
-            result = verify_off_disk_copy(
-                archive,
-                copy,
-                status_path=status_path,
-                backup_id="backup-1",
-                destination_kind="physical_disk",
-                verified_at=datetime(2026, 8, 2, tzinfo=timezone.utc),
-            )
+            with patch(
+                "backup_status._device_fingerprint",
+                side_effect=["source-device", "destination-device"],
+            ):
+                result = verify_off_disk_copy(
+                    archive,
+                    copy,
+                    status_path=status_path,
+                    backup_id="backup-1",
+                    destination_kind="physical_disk",
+                    verified_at=datetime(2026, 8, 2, tzinfo=timezone.utc),
+                )
             evidence = evaluate_backup_evidence(
                 result,
                 now=datetime(2026, 8, 27, tzinfo=timezone.utc),
@@ -61,6 +66,7 @@ class BackupStatusTest(unittest.TestCase):
             {
                 "backup_restore_verified": True,
                 "off_disk_copy_verified": True,
+                "different_device_verified": True,
                 "off_disk_copy_fresh": True,
             },
         )
@@ -146,6 +152,11 @@ class BackupStatusTest(unittest.TestCase):
                 "verified_at": "2026-07-28T00:00:00Z",
                 "destination_kind": "physical_disk",
                 "copied_sha256": "a" * 64,
+                "source_device": "source-device",
+                "destination_device": "destination-device",
+                "different_device_verified": True,
+                "device_verification_method": "device_identifier",
+                "trusted_cloud_root_verified": False,
             },
         }
         boundary = evaluate_backup_evidence(

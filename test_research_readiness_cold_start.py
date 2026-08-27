@@ -29,6 +29,7 @@ def _hard_gate(details):
             "monitoring_reserve": True,
             "backup_restore_verified": False,
             "off_disk_copy_verified": False,
+            "different_device_verified": False,
             "off_disk_copy_fresh": False,
             "timestamp_migration": True,
             "lineage_migration": True,
