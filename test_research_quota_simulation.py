@@ -73,12 +73,29 @@ source_quota_budget:
   juhe: 550
 RESEARCH_COHORT_V2: false
 research_cohort_v2_gates:
-  off_disk_copy: true
+  backup_evidence_max_age_days: 30
 """.strip(),
                 encoding="utf-8",
             )
             subscriptions.write_text("[]", encoding="utf-8")
             usage.write_text('{"version":2,"dates":{},"entries":[]}', encoding="utf-8")
+            backup_status = root / "backup_status.json"
+            backup_status.write_text(
+                json.dumps(
+                    {
+                        "backup_id": "fixture-backup",
+                        "archive_sha256": "a" * 64,
+                        "verified_restore_at": "2026-08-26T00:00:00Z",
+                        "off_disk_copy": {
+                            "verified": True,
+                            "verified_at": "2026-08-26T00:00:00Z",
+                            "destination_kind": "physical_disk",
+                            "copied_sha256": "a" * 64,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
             with closing(sqlite3.connect(observations)) as connection, connection:
                 connection.executescript(
                     """
@@ -98,7 +115,14 @@ research_cohort_v2_gates:
                     )
             before = {
                 path.name: _sha(path)
-                for path in (config, subscriptions, observations, prices, usage)
+                for path in (
+                    config,
+                    subscriptions,
+                    observations,
+                    prices,
+                    usage,
+                    backup_status,
+                )
             }
 
             NoFetchSource.calls = 0
@@ -110,12 +134,20 @@ research_cohort_v2_gates:
                 observations_path=observations,
                 prices_path=prices,
                 usage_path=usage,
+                backup_status_path=backup_status,
                 source_builder=no_fetch_source_builder,
                 other_scheduled_calls=4,
             )
             after = {
                 path.name: _sha(path)
-                for path in (config, subscriptions, observations, prices, usage)
+                for path in (
+                    config,
+                    subscriptions,
+                    observations,
+                    prices,
+                    usage,
+                    backup_status,
+                )
             }
 
         self.assertEqual(NoFetchSource.calls, 0)

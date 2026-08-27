@@ -19,6 +19,7 @@ import tempfile
 from typing import Callable
 from uuid import uuid4
 
+from backup_status import record_backup_created
 from collection_singleflight import (
     acquire_collection_singleflight,
     resolve_collection_lock_path,
@@ -57,6 +58,7 @@ RUNTIME_BACKUP_SPEC = {
         "notifications_log.txt",
     ),
     "excluded_exact": (
+        "backup_status.json",
         "basket.log",
         "debug_response.json",
         "form_normalization_baseline_before_ux31.json",
@@ -781,6 +783,7 @@ def create_runtime_backup(
     lock_path: str | Path | None = None,
     before_archive=None,
     _existing_gate=None,
+    status_path: str | Path | None = None,
 ) -> dict:
     project = Path(project_root).resolve()
     data = Path(data_root or project / "data").resolve()
@@ -903,6 +906,12 @@ def create_runtime_backup(
             output,
             backup_id,
         )
+        if status_path is not None:
+            record_backup_created(
+                status_path,
+                backup_id=backup_id,
+                archive_sha256=archive_hash,
+            )
         present_files = [item for item in manifest["files"] if item.get("present")]
         return {
             "status": "created",

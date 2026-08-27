@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from backup_status import BackupEvidenceError, verify_off_disk_copy
 from runtime_backup import (
     PROJECT_ROOT,
     RuntimeBackupError,
@@ -35,6 +36,7 @@ def _capture_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--project-root", default=str(PROJECT_ROOT))
     parser.add_argument("--data-root")
+    parser.add_argument("--backup-status")
     parser.add_argument("--no-payloads", action="store_true")
     parser.add_argument("--round-log-days", type=int, default=7)
     parser.add_argument("--include-diagnostics", action="store_true")
@@ -54,6 +56,8 @@ def build_parser() -> argparse.ArgumentParser:
     verify = commands.add_parser("verify", help="解压到临时目录并完整核验后删除")
     verify.add_argument("--archive", required=True)
     verify.add_argument("--checksum")
+    verify.add_argument("--project-root", default=str(PROJECT_ROOT))
+    verify.add_argument("--backup-status")
 
     restore = commands.add_parser("restore", help="恢复到新目录，默认使用临时目录")
     restore.add_argument("--archive", required=True)
@@ -63,6 +67,9 @@ def build_parser() -> argparse.ArgumentParser:
     restore.add_argument("--confirm-production-restore", default="")
     restore.add_argument("--project-root", default=str(PROJECT_ROOT))
     restore.add_argument("--pre-restore-output-dir")
+    restore.add_argument("--backup-status")
+    restore.add_argument("--verify-off-disk")
+    restore.add_argument("--off-disk-kind", default="external_path")
 
     rehearse = commands.add_parser(
         "rehearse",
@@ -79,6 +86,16 @@ def _print_summary(payload: dict) -> None:
     print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
 
 
+def _backup_status_path(args) -> Path:
+    configured = getattr(args, "backup_status", None)
+    if configured:
+        return Path(configured)
+    data_root = getattr(args, "data_root", None)
+    if data_root:
+        return Path(data_root).resolve() / "backup_status.json"
+    return Path(args.project_root).resolve() / "data" / "backup_status.json"
+
+
 def _create_kwargs(args) -> dict:
     return {
         "output_dir": args.output_dir,
@@ -87,6 +104,7 @@ def _create_kwargs(args) -> dict:
         "include_payloads": not args.no_payloads,
         "round_log_days": args.round_log_days,
         "include_diagnostics": args.include_diagnostics,
+        "status_path": _backup_status_path(args),
     }
 
 
@@ -125,12 +143,15 @@ def main(argv=None) -> int:
                     args.archive,
                     checksum_path=args.checksum,
                     destination=Path(directory) / "restored",
+                    status_path=_backup_status_path(args),
                 )
                 _print_summary(_verified_summary(result))
             return 0
 
         if args.command == "restore":
             if args.force_production:
+                if args.verify_off_disk:
+                    parser.error("--verify-off-disk不可与--force-production同时使用")
                 if not args.pre_restore_output_dir:
                     parser.error("--force-production需要--pre-restore-output-dir")
                 result = restore_to_production(
@@ -157,11 +178,21 @@ def main(argv=None) -> int:
                     }
                 )
                 return int(result.get("exit_code", 0))
+            status_path = _backup_status_path(args)
             result = restore_runtime_backup(
                 args.archive,
                 checksum_path=args.checksum,
                 destination=args.destination,
+                status_path=status_path,
             )
+            if args.verify_off_disk:
+                verify_off_disk_copy(
+                    args.archive,
+                    args.verify_off_disk,
+                    status_path=status_path,
+                    backup_id=(result.get("manifest") or {}).get("backup_id"),
+                    destination_kind=args.off_disk_kind,
+                )
             _print_summary(_verified_summary(result))
             return 0
 
@@ -180,6 +211,7 @@ def main(argv=None) -> int:
                 route=args.route,
                 pair=args.pair,
                 restore_destination=args.restore_destination,
+                status_path=_backup_status_path(args),
             )
             _print_summary(
                 sanitized_backup_summary(
@@ -190,7 +222,13 @@ def main(argv=None) -> int:
                 )
             )
             return 0
-    except (RuntimeBackupError, RuntimeRestoreError, OSError, ValueError) as exc:
+    except (
+        RuntimeBackupError,
+        RuntimeRestoreError,
+        BackupEvidenceError,
+        OSError,
+        ValueError,
+    ) as exc:
         print(f"[运行备份失败] {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
     raise AssertionError(f"unknown command: {args.command}")

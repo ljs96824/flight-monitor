@@ -371,7 +371,7 @@ def simulate_research_quota(
 
 def evaluate_research_hard_gates(
     *,
-    off_disk_copy: bool,
+    backup_evidence: dict,
     quota_simulation: dict,
     migration_status: dict,
     minimum_expected_days: int = 30,
@@ -382,28 +382,100 @@ def evaluate_research_hard_gates(
     worst_days = quota.get("worst_case_days_remaining")
     remaining_after = quota.get("remaining_after_research")
     reserve_value = quota.get("monitoring_reserve")
+    quota_complete = bool(quota.get("complete"))
+    backup = backup_evidence or {}
+    backup_checks = backup.get("checks") or {}
+    migration = migration_status or {}
     checks = {
-        "off_disk_copy": bool(off_disk_copy),
-        "quota_simulation": bool(quota.get("complete")),
         "expected_days_remaining": (
-            expected_days is not None
+            quota_complete
+            and expected_days is not None
             and int(expected_days) >= max(0, int(minimum_expected_days))
         ),
         "worst_case_days_remaining": (
-            worst_days is not None
+            quota_complete
+            and worst_days is not None
             and int(worst_days) >= max(0, int(minimum_worst_case_days))
         ),
         "monitoring_reserve": (
-            remaining_after is not None
+            quota_complete
+            and remaining_after is not None
             and reserve_value is not None
             and int(remaining_after) >= int(reserve_value)
         ),
-        "timestamp_migration": bool((migration_status or {}).get("timestamp_ready")),
-        "lineage_migration": bool((migration_status or {}).get("lineage_ready")),
-        "old_data_readable": bool((migration_status or {}).get("old_data_readable")),
+        "backup_restore_verified": bool(
+            backup_checks.get("backup_restore_verified")
+        ),
+        "off_disk_copy_verified": bool(
+            backup_checks.get("off_disk_copy_verified")
+        ),
+        "off_disk_copy_fresh": bool(backup_checks.get("off_disk_copy_fresh")),
+        "timestamp_migration": bool(migration.get("timestamp_ready")),
+        "lineage_migration": bool(migration.get("lineage_ready")),
+        "old_data_readable": bool(migration.get("old_data_readable")),
     }
     missing = [name for name, ready in checks.items() if not ready]
-    return {"ready": not missing, "missing": missing, "checks": checks}
+    current = {
+        "expected_days_remaining": expected_days,
+        "worst_case_days_remaining": worst_days,
+        "monitoring_reserve": {
+            "remaining_after_research": remaining_after,
+            "required_reserve": reserve_value,
+        },
+        **(backup.get("current") or {}),
+        "backup_restore_verified": (backup.get("current") or {}).get(
+            "verified_restore_at"
+        ),
+        "off_disk_copy_verified": (backup.get("current") or {}).get(
+            "off_disk_copy_verified"
+        ),
+        "off_disk_copy_fresh": {
+            "verified_at": (backup.get("current") or {}).get(
+                "off_disk_copy_verified_at"
+            ),
+            "age_days": (backup.get("current") or {}).get(
+                "off_disk_copy_age_days"
+            ),
+        },
+        "timestamp_migration": bool(migration.get("timestamp_ready")),
+        "lineage_migration": bool(migration.get("lineage_ready")),
+        "old_data_readable": bool(migration.get("old_data_readable")),
+    }
+    reasons = dict(backup.get("reasons") or {})
+    if not quota_complete:
+        for name in (
+            "expected_days_remaining",
+            "worst_case_days_remaining",
+            "monitoring_reserve",
+        ):
+            reasons[name] = "全系统配额模拟不完整"
+    else:
+        if not checks["expected_days_remaining"]:
+            reasons["expected_days_remaining"] = "预计可运行天数不足"
+        if not checks["worst_case_days_remaining"]:
+            reasons["worst_case_days_remaining"] = "最坏情形可运行天数不足"
+        if not checks["monitoring_reserve"]:
+            reasons["monitoring_reserve"] = "研究后余量低于用户监控储备"
+    for check_name, source_name in (
+        ("timestamp_migration", "timestamp_ready"),
+        ("lineage_migration", "lineage_ready"),
+        ("old_data_readable", "old_data_readable"),
+    ):
+        if not checks[check_name]:
+            reasons[check_name] = f"迁移证据未就绪:{source_name}"
+    requirements = {
+        "minimum_expected_days": max(0, int(minimum_expected_days)),
+        "minimum_worst_case_days": max(0, int(minimum_worst_case_days)),
+        **(backup.get("requirements") or {}),
+    }
+    return {
+        "ready": not missing,
+        "missing": missing,
+        "checks": checks,
+        "current": current,
+        "requirements": requirements,
+        "reasons": reasons,
+    }
 
 
 def apply_research_quota_guard(

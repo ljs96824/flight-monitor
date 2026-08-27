@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Callable
 
 from api_usage import load_usage, usage_snapshot
+from backup_status import load_backup_evidence
 from atomic_json_store import read_json
 from collection_plan import build_collection_plan, load_collection_settings
 from collection_singleflight import (
@@ -372,8 +373,12 @@ def _prepare_research_basket(
     quota["guard_triggered"] = bool(guard.get("triggered"))
     migration = inspect_research_migrations(db_path, prices_path)
     gate_config = settings.get("research_cohort_v2_gates") or {}
+    backup_evidence = load_backup_evidence(
+        Path(state_path).resolve().parent / "backup_status.json",
+        max_age_days=int(gate_config.get("backup_evidence_max_age_days", 30)),
+    )
     gate = evaluate_research_hard_gates(
-        off_disk_copy=bool(gate_config.get("off_disk_copy")),
+        backup_evidence=backup_evidence,
         quota_simulation=quota,
         migration_status=migration,
         minimum_expected_days=int(gate_config.get("minimum_expected_days", 30)),

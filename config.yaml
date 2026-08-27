@@ -30,7 +30,7 @@ FRESHNESS_HOURS: 6
 SUB_ROUND_FRESH_SCOPE: primary_only
 RESEARCH_COHORT_V2: false
 research_cohort_v2_gates:
-  off_disk_copy: false
+  backup_evidence_max_age_days: 30
   # 09:00/15:00/21:00 三个订阅轮；代表计划外另计两次边际调用。
   other_scheduled_calls: 2
   minimum_expected_days: 30

@@ -9,6 +9,19 @@ from pathlib import Path
 from unittest.mock import patch
 
 
+def _ready_backup_evidence():
+    return {
+        "checks": {
+            "backup_restore_verified": True,
+            "off_disk_copy_verified": True,
+            "off_disk_copy_fresh": True,
+        },
+        "current": {},
+        "reasons": {},
+        "requirements": {"max_backup_age_days": 30},
+    }
+
+
 class ResearchCohortV2Test(unittest.TestCase):
     def test_six_slots_contain_two_anchors_and_four_probes(self):
         from research_cohort import prepare_research_requests
@@ -259,18 +272,25 @@ class ResearchCohortV2Test(unittest.TestCase):
         from research_cohort import evaluate_research_hard_gates
 
         blocked = evaluate_research_hard_gates(
-            off_disk_copy=False,
+            backup_evidence={"checks": {}},
             quota_simulation={"complete": True, "expected_days_remaining": 30, "worst_case_days_remaining": 20, "remaining_after_research": 500, "monitoring_reserve": 400},
             migration_status={"timestamp_ready": True, "lineage_ready": True, "old_data_readable": True},
         )
         ready = evaluate_research_hard_gates(
-            off_disk_copy=True,
+            backup_evidence=_ready_backup_evidence(),
             quota_simulation={"complete": True, "expected_days_remaining": 30, "worst_case_days_remaining": 20, "remaining_after_research": 500, "monitoring_reserve": 400},
             migration_status={"timestamp_ready": True, "lineage_ready": True, "old_data_readable": True},
         )
 
         self.assertFalse(blocked["ready"])
-        self.assertIn("off_disk_copy", blocked["missing"])
+        self.assertEqual(
+            blocked["missing"][:3],
+            [
+                "backup_restore_verified",
+                "off_disk_copy_verified",
+                "off_disk_copy_fresh",
+            ],
+        )
         self.assertTrue(ready["ready"])
         self.assertEqual(ready["missing"], [])
 
@@ -291,28 +311,28 @@ class ResearchCohortV2Test(unittest.TestCase):
         }
 
         ready = evaluate_research_hard_gates(
-            off_disk_copy=True,
+            backup_evidence=_ready_backup_evidence(),
             quota_simulation=base,
             migration_status=migration,
             minimum_expected_days=30,
             minimum_worst_case_days=20,
         )
         expected_short = evaluate_research_hard_gates(
-            off_disk_copy=True,
+            backup_evidence=_ready_backup_evidence(),
             quota_simulation={**base, "expected_days_remaining": 29},
             migration_status=migration,
             minimum_expected_days=30,
             minimum_worst_case_days=20,
         )
         worst_short = evaluate_research_hard_gates(
-            off_disk_copy=True,
+            backup_evidence=_ready_backup_evidence(),
             quota_simulation={**base, "worst_case_days_remaining": 19},
             migration_status=migration,
             minimum_expected_days=30,
             minimum_worst_case_days=20,
         )
         reserve_breached = evaluate_research_hard_gates(
-            off_disk_copy=True,
+            backup_evidence=_ready_backup_evidence(),
             quota_simulation={**base, "remaining_after_research": 499},
             migration_status=migration,
             minimum_expected_days=30,
@@ -367,7 +387,7 @@ class ResearchCohortV2Test(unittest.TestCase):
             "sub_round_fresh_scope": "primary_only",
             "research_cohort_v2": True,
             "research_cohort_v2_gates": {
-                "off_disk_copy": True,
+                "backup_evidence_max_age_days": 30,
                 "other_scheduled_calls": 0,
                 "minimum_expected_days": 30,
                 "minimum_worst_case_days": 20,
@@ -593,7 +613,7 @@ class ResearchCohortV2Test(unittest.TestCase):
             "freshness_hours": 6,
             "sub_round_fresh_scope": "primary_only",
             "research_cohort_v2": True,
-            "research_cohort_v2_gates": {"off_disk_copy": True},
+            "research_cohort_v2_gates": {"backup_evidence_max_age_days": 30},
             "paused_research_routes": [
                 {"route": "SHA->PEK"},
                 {"route": "PVG->HKG"},
@@ -613,6 +633,10 @@ class ResearchCohortV2Test(unittest.TestCase):
                 patch("basket_collect.load_collection_settings", return_value=settings),
                 patch("basket_collect._load_active_subscriptions_for_research", return_value=[]),
                 patch("basket_collect.inspect_research_migrations", return_value=ready),
+                patch(
+                    "basket_collect.load_backup_evidence",
+                    return_value=_ready_backup_evidence(),
+                ),
                 patch(
                     "basket_collect._simulate_runtime_quota",
                     return_value={
@@ -665,7 +689,7 @@ class ResearchCohortV2Test(unittest.TestCase):
             "freshness_hours": 6,
             "sub_round_fresh_scope": "primary_only",
             "research_cohort_v2": True,
-            "research_cohort_v2_gates": {"off_disk_copy": True},
+            "research_cohort_v2_gates": {"backup_evidence_max_age_days": 30},
             "paused_research_routes": [],
         }
         ready = {
@@ -691,6 +715,10 @@ class ResearchCohortV2Test(unittest.TestCase):
                 patch("basket_collect.load_collection_settings", return_value=settings),
                 patch("basket_collect._load_active_subscriptions_for_research", return_value=[]),
                 patch("basket_collect.inspect_research_migrations", return_value=ready),
+                patch(
+                    "basket_collect.load_backup_evidence",
+                    return_value=_ready_backup_evidence(),
+                ),
                 patch("basket_collect._simulate_runtime_quota", return_value=quota),
                 patch(
                     "collection_ledger.init_collection_ledger",
@@ -750,7 +778,7 @@ class ResearchCohortV2Test(unittest.TestCase):
             "freshness_hours": 6,
             "sub_round_fresh_scope": "primary_only",
             "research_cohort_v2": True,
-            "research_cohort_v2_gates": {"off_disk_copy": False},
+            "research_cohort_v2_gates": {"backup_evidence_max_age_days": 30},
             "paused_research_routes": [],
         }
         FakeSource.calls.clear()

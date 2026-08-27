@@ -12,6 +12,7 @@ import tarfile
 import tempfile
 from uuid import uuid4
 
+from backup_status import record_restore_verified
 from collection_singleflight import (
     acquire_collection_singleflight,
     resolve_collection_lock_path,
@@ -238,6 +239,8 @@ def restore_runtime_backup(
     destination: str | Path | None = None,
     max_files: int = DEFAULT_MAX_FILES,
     max_total_bytes: int = DEFAULT_MAX_TOTAL_BYTES,
+    status_path: str | Path | None = None,
+    verified_at=None,
 ) -> dict:
     archive = Path(archive_path)
     archive_hash = verify_archive_checksum(archive, checksum_path)
@@ -273,6 +276,13 @@ def restore_runtime_backup(
             except OSError:
                 pass
         raise
+    if status_path is not None:
+        record_restore_verified(
+            status_path,
+            backup_id=verification["manifest"].get("backup_id"),
+            archive_sha256=archive_hash,
+            verified_at=verified_at,
+        )
     return {
         "status": "verified",
         "path": str(target),
@@ -294,11 +304,15 @@ def rehearse_runtime_backup(
     pair: str | None = None,
     restore_destination: str | Path | None = None,
     report_builder=None,
+    status_path: str | Path | None = None,
+    verified_at=None,
 ) -> dict:
     restored = restore_runtime_backup(
         archive_path,
         checksum_path=checksum_path,
         destination=restore_destination,
+        status_path=status_path,
+        verified_at=verified_at,
     )
     root = Path(restored["path"])
     source_dir = root / "replay"

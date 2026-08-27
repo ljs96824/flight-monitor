@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 from contextlib import redirect_stdout
 from copy import deepcopy
-from datetime import date
+from datetime import date, datetime, time, timezone
 import io
 import json
 from pathlib import Path
@@ -17,6 +17,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from atomic_json_store import read_json  # noqa: E402
+from backup_status import load_backup_evidence  # noqa: E402
 from basket_collect import (  # noqa: E402
     _load_active_subscriptions_for_research,
     _simulate_runtime_quota,
@@ -28,6 +29,7 @@ from research_cohort import (  # noqa: E402
     inspect_research_migrations,
     prepare_research_requests,
 )
+from project_time import SHANGHAI_TZ  # noqa: E402
 from sources.aggregator import build_default_sources  # noqa: E402
 from subscription_preflight import shanghai_today  # noqa: E402
 
@@ -41,7 +43,7 @@ def _read_state(path: Path) -> dict:
     return payload
 
 
-def build_report(
+def _build_report_inputs(
     *,
     today: date,
     config_path: str | Path,
@@ -52,8 +54,7 @@ def build_report(
     usage_path: str | Path,
     source_builder=build_default_sources,
     other_scheduled_calls: int | None = None,
-) -> dict:
-    """Build the gate report without executing or persisting a request."""
+) -> tuple[dict, dict, dict, list[dict]]:
     settings = load_collection_settings(config_path)
     if other_scheduled_calls is not None:
         settings = deepcopy(settings)
@@ -85,9 +86,50 @@ def build_report(
         today=today,
     )
     migrations = inspect_research_migrations(observations_path, prices_path)
+    return quota, migrations, settings, schedule.requests
+
+
+def build_report(
+    *,
+    today: date,
+    config_path: str | Path,
+    state_path: str | Path,
+    subscriptions_path: str | Path,
+    observations_path: str | Path,
+    prices_path: str | Path,
+    usage_path: str | Path,
+    backup_status_path: str | Path | None = None,
+    source_builder=build_default_sources,
+    other_scheduled_calls: int | None = None,
+) -> dict:
+    """Build the gate report without executing or persisting a request."""
+    quota, migrations, settings, requests = _build_report_inputs(
+        today=today,
+        config_path=config_path,
+        state_path=state_path,
+        subscriptions_path=subscriptions_path,
+        observations_path=observations_path,
+        prices_path=prices_path,
+        usage_path=usage_path,
+        source_builder=source_builder,
+        other_scheduled_calls=other_scheduled_calls,
+    )
     gate_config = settings.get("research_cohort_v2_gates") or {}
+    max_age_days = int(gate_config.get("backup_evidence_max_age_days", 30))
+    evidence_path = Path(
+        backup_status_path
+        or Path(state_path).resolve().parent / "backup_status.json"
+    )
+    report_now = datetime.combine(today, time.max, tzinfo=SHANGHAI_TZ).astimezone(
+        timezone.utc
+    )
+    backup = load_backup_evidence(
+        evidence_path,
+        now=report_now,
+        max_age_days=max_age_days,
+    )
     hard_gate = evaluate_research_hard_gates(
-        off_disk_copy=bool(gate_config.get("off_disk_copy")),
+        backup_evidence=backup,
         quota_simulation=quota,
         migration_status=migrations,
         minimum_expected_days=int(gate_config.get("minimum_expected_days", 30)),
@@ -98,14 +140,13 @@ def build_report(
     return {
         "today": today.isoformat(),
         "research_switch_enabled": bool(settings.get("research_cohort_v2")),
-        "research_request_count": len(schedule.requests),
+        "research_request_count": len(requests),
         "sample_roles": {
-            role: sum(
-                1 for item in schedule.requests if item.get("sample_role") == role
-            )
+            role: sum(1 for item in requests if item.get("sample_role") == role)
             for role in ("trajectory_anchor", "cross_sectional_probe")
         },
         "quota": quota,
+        "backup": backup,
         "migrations": migrations,
         "hard_gate": hard_gate,
     }
@@ -139,6 +180,11 @@ def main(argv=None) -> int:
         type=Path,
         default=ROOT / "data" / "api_usage.json",
     )
+    parser.add_argument(
+        "--backup-status",
+        type=Path,
+        default=ROOT / "data" / "backup_status.json",
+    )
     parser.add_argument("--today", type=date.fromisoformat, default=None)
     parser.add_argument("--other-scheduled-calls", type=int, default=None)
     args = parser.parse_args(argv)
@@ -155,6 +201,7 @@ def main(argv=None) -> int:
             observations_path=args.observations,
             prices_path=args.prices,
             usage_path=args.usage,
+            backup_status_path=args.backup_status,
             other_scheduled_calls=args.other_scheduled_calls,
         )
     if diagnostics.getvalue():

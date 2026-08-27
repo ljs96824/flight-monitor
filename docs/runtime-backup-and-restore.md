@@ -48,6 +48,11 @@ python -X utf8 scripts/runtime_backup.py create --output-dir "E:\flight-monitor-
 
 `.sha256` 是整包校验旁路文件，不能丢失，也不写入归档内部。
 
+创建成功后，工具原子更新 `data/backup_status.json`，只记录 `backup_id`、归档
+SHA-256、恢复核验时刻与异盘副本核验结果，不记录归档路径或业务字段。新归档会使上一份
+恢复/异盘证据失效；该状态文件属于本机门禁元数据，不进入备份归档，也不会触发 strict
+扫描失败。
+
 ## 2. 只验证归档
 
 `verify` 在临时目录解压、完整核验后删除临时恢复结果：
@@ -73,6 +78,18 @@ python -X utf8 scripts/runtime_backup.py restore --archive "E:\flight-monitor-ba
 ```
 
 已有目标目录会被拒绝。解压器拒绝绝对路径、`..`、symlink、hardlink、device、重复成员以及越界路径，不使用裸 `extractall`。
+
+把归档复制到另一块物理盘或私有加密云目录后，用同一次隔离恢复同时核验副本：
+
+```powershell
+python -X utf8 scripts/runtime_backup.py restore --archive "E:\flight-monitor-backups\flight-monitor-<backup_id>.tar.gz" --verify-off-disk "F:\private-backups\flight-monitor-<backup_id>.tar.gz" --off-disk-kind physical_disk
+```
+
+工具先完整恢复本地归档，再读取目标副本并逐字节计算 SHA-256。只有副本存在、不是本地
+归档同一文件、且 SHA 与本地归档完全一致时，`backup_status.json` 才写入
+`off_disk_copy.verified=true`。可用 `destination_kind` 为
+`physical_disk`、`private_encrypted_cloud` 或团队约定的其他非敏感类别；它是介质类型声明，
+不会记录私有路径。
 
 ## 4. 创建、恢复并复放
 
@@ -100,7 +117,7 @@ python -X utf8 scripts/runtime_backup.py restore --archive "E:\flight-monitor-ba
 
 - 每周至少一次执行完整 `rehearse`。
 - 每次重大改动前必须执行一次完整 `rehearse`。
-- 归档移动到其他介质后，再运行一次 `verify`，确认传输没有损坏。
+- 归档移动到其他介质后，运行带 `--verify-off-disk` 的隔离恢复，确认恢复合同与传输 SHA 同时通过。
 - 记录脱敏摘要即可；不要把私有 manifest、路线、订阅、payload 标识或归档本身提交到 Git。
 - `status=busy` 不算备份失败，但也不算已有新备份；待当前采集结束后重新执行。
 
