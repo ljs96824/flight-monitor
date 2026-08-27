@@ -96,6 +96,7 @@ Flight Monitor 是一个本地优先的航班采集、约束过滤与通知系�
 ```bash
 python --version
 python -m pip install -r requirements.txt -r requirements-dev.txt
+python -X utf8 scripts/initialize_api_usage.py
 # pytest 已由 requirements-dev.txt 锁定
 ```
 

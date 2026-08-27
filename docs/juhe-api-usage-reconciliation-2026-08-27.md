@@ -162,3 +162,20 @@ lineage 与中断状态，后者用于配额；二者仅在轮末交叉核对。
 2026-08-01 至 2026-08-26 的 17 次少记保持不变，不手工补写 `dates` 或 `entries`。
 文档中的控制台差值就是已知偏差来源；后续新轮从即时记账启用时点开始形成完整序列。
 Juhe 源内 15 分钟缓存与 Asia/Shanghai 日界归属仍按第 5 节作为独立防御项保留。
+
+## 8. 台账损坏与初始化纪律
+
+生产采集只使用严格读取：文件缺失、JSON 损坏、根节点非对象或
+`version/dates/entries` 结构不完整都会抛出 `UsageLedgerReadError`，并在任何真实
+源调用前停止本轮。读取失败不再伪装为空台账，也不会用空结构覆盖历史文件。
+
+新部署只有一个合法空账入口：
+
+```powershell
+python -X utf8 scripts/initialize_api_usage.py
+```
+
+命令发现目标文件已存在时拒绝覆盖。锁等待超时的已发生调用写入
+`data/api_usage_conflict.log`，状态为 `pending_reconciliation`，包含该笔各源计数、
+工作负载类型与入口；待对账记录未解决时，研究硬门
+`quota_ledger_healthy` 为红，用户监控仍按保守模式运行。

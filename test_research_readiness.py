@@ -8,12 +8,13 @@ from unittest.mock import ANY, patch
 
 
 class ResearchReadinessTest(unittest.TestCase):
-    def test_report_lists_exactly_three_gates_per_evidence_group(self):
+    def test_report_lists_quota_health_plus_three_existing_quota_gates(self):
         from research_readiness import build_readiness_summary
 
         hard_gate = {
             "ready": False,
             "checks": {
+                "quota_ledger_healthy": True,
                 "expected_days_remaining": True,
                 "worst_case_days_remaining": False,
                 "monitoring_reserve": True,
@@ -45,18 +46,19 @@ class ResearchReadinessTest(unittest.TestCase):
         summary = build_readiness_summary(hard_gate)
 
         self.assertEqual(set(summary["groups"]), {"quota", "backup", "migration"})
-        self.assertEqual(len(summary["groups"]["quota"]), 3)
+        self.assertEqual(len(summary["groups"]["quota"]), 4)
         self.assertEqual(len(summary["groups"]["backup"]), 3)
         self.assertEqual(len(summary["groups"]["migration"]), 3)
         self.assertFalse(summary["ready"])
 
-    def test_cli_prints_all_nine_gate_names_without_writing(self):
+    def test_cli_prints_all_gate_names_without_writing(self):
         from scripts.research_readiness import main
 
         report = {
             "hard_gate": {
                 "ready": False,
                 "checks": {
+                    "quota_ledger_healthy": True,
                     "expected_days_remaining": True,
                     "worst_case_days_remaining": False,
                     "monitoring_reserve": True,

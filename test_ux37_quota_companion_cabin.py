@@ -51,6 +51,7 @@ class QuotaOverviewContractTest(unittest.TestCase):
         self.assertIn(marker, body)
 
     def test_round_flush_logs_the_shared_overview_line(self):
+        from api_usage import initialize_usage_ledger
         from pathlib import Path
         from tempfile import TemporaryDirectory
         from unittest.mock import patch
@@ -64,6 +65,7 @@ class QuotaOverviewContractTest(unittest.TestCase):
         )
         with TemporaryDirectory(prefix="ux37-quota-") as tmpdir:
             root = Path(tmpdir)
+            initialize_usage_ledger(root / "api_usage.json")
             request_cache.reset_for_tests(root / "cache")
             request_cache.start_request_cache_round(
                 "ux37-quota-test",

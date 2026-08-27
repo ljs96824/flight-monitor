@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 class ApiUsageShanghaiDayTest(unittest.TestCase):
     def test_default_ledger_day_uses_project_timezone(self):
-        from api_usage import load_usage, record_actual_requests
+        from api_usage import initialize_usage_ledger, load_usage_strict, record_actual_requests
         from project_time import SHANGHAI_TZ
 
         class FixedDatetime:
@@ -19,9 +19,10 @@ class ApiUsageShanghaiDayTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             path = Path(tmp) / "api_usage.json"
+            initialize_usage_ledger(path)
             with patch("api_usage.datetime", FixedDatetime):
                 record_actual_requests({"juhe": 1}, path=path)
-            payload = load_usage(path)
+            payload = load_usage_strict(path)
 
         self.assertEqual(payload["entries"][0]["day"], "2026-08-28")
 

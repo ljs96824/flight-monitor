@@ -257,6 +257,13 @@ class DocsAccuracyTest(unittest.TestCase):
             "scripts/list_unresolvable_subs.py": [sys.executable, "-X", "utf8", "scripts/list_unresolvable_subs.py", "--help"],
             "scripts/list_incomplete_notification_subs.py": [sys.executable, "-X", "utf8", "scripts/list_incomplete_notification_subs.py", "--help"],
             "scripts/ui_smoke.py": [sys.executable, "-X", "utf8", "-m", "py_compile", "scripts/ui_smoke.py"],
+            "scripts/initialize_api_usage.py": [
+                sys.executable,
+                "-X",
+                "utf8",
+                "scripts/initialize_api_usage.py",
+                "--help",
+            ],
         }
         referenced = _documented_python_commands(self.readme)
         unchecked = sorted(
@@ -304,6 +311,13 @@ class DocsAccuracyTest(unittest.TestCase):
         path_only_commands = {"cd ~/flight-monitor"}
         probes = {
             "python --version": [cli_python, "--version"],
+            "python -X utf8 scripts/initialize_api_usage.py": [
+                cli_python,
+                "-X",
+                "utf8",
+                "scripts/initialize_api_usage.py",
+                "--help",
+            ],
             "python -m pip install -r requirements.txt -r requirements-dev.txt": [
                 cli_python, "-m", "pip", "install", "--help",
             ],

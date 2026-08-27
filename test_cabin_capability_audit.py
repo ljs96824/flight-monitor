@@ -126,7 +126,7 @@ class CabinCapabilityAuditTest(unittest.TestCase):
         self.assertFalse(summary["market_price_usable"])
 
     def test_mock_audit_records_only_two_actual_calls_without_secrets(self):
-        from api_usage import load_usage
+        from api_usage import initialize_usage_ledger, load_usage_strict
         from scripts.cabin_capability_audit import run_audit
 
         captured = {}
@@ -182,6 +182,7 @@ class CabinCapabilityAuditTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             usage_path = Path(tmp) / "api_usage.json"
+            initialize_usage_ledger(usage_path)
             report = run_audit(
                 execute=True,
                 env={"JUHE_FLIGHT_KEY": "secret-key", "DUFFEL_TOKEN": "secret-token"},
@@ -190,7 +191,7 @@ class CabinCapabilityAuditTest(unittest.TestCase):
                 http_post=fake_post,
                 round_id="audit-test",
             )
-            usage = load_usage(usage_path)
+            usage = load_usage_strict(usage_path)
 
         self.assertEqual(report["actual_calls"], {"juhe": 1, "duffel": 1})
         self.assertEqual(usage["entries"][-2]["counts"], {"juhe": 1})

@@ -141,9 +141,11 @@ class BasketCollectTest(unittest.TestCase):
         self.assertIn("[队列续期] route=SHA->PEK 旧=2026-07-10 新=2026-09-08", output.getvalue())
 
     def test_run_basket_forces_fresh_skips_duffel_and_isolates_route_failures(self):
+        from api_usage import initialize_usage_ledger
         from basket_collect import run_basket
 
         with tempfile.TemporaryDirectory() as tmp:
+            initialize_usage_ledger(Path(tmp) / "api_usage.json")
             output = StringIO()
             with patch("basket_collect.count_observations_for_round", return_value=123):
                 with redirect_stdout(output):
@@ -171,11 +173,13 @@ class BasketCollectTest(unittest.TestCase):
         self.assertIn("[篮子完成] 队列=6 成功=4 失败=2 总写入=123", log)
 
     def test_real_aggregator_writes_each_fresh_source_without_duffel(self):
+        from api_usage import initialize_usage_ledger
         from basket_collect import run_basket
         from sources.aggregator import FlightAggregator
 
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             root = Path(tmp)
+            initialize_usage_ledger(root / "api_usage.json")
             db_path = root / "observations.sqlite3"
             output = StringIO()
             with patch("request_cache.DEFAULT_CACHE_DIR", root / "cache"):

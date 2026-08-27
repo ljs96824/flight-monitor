@@ -604,6 +604,7 @@ class ResearchCohortV2Test(unittest.TestCase):
         )
 
     def test_enabled_basket_executes_only_six_research_juhe_slots(self):
+        from api_usage import initialize_usage_ledger
         from basket_collect import run_basket
         from test_basket_collect import FakeAggregator, FakeSource, fake_source_builder
 
@@ -628,6 +629,7 @@ class ResearchCohortV2Test(unittest.TestCase):
         FakeAggregator.collect_calls.clear()
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             root = Path(tmp)
+            initialize_usage_ledger(root / "api_usage.json")
             output = StringIO()
             with (
                 patch("basket_collect.load_collection_settings", return_value=settings),
@@ -679,7 +681,7 @@ class ResearchCohortV2Test(unittest.TestCase):
         self.assertIn("[研究采样] 已暂停 route=SHA->PEK", output.getvalue())
 
     def test_ledger_degraded_round_keeps_api_usage_but_freezes_research_progress(self):
-        from api_usage import load_usage, usage_snapshot
+        from api_usage import initialize_usage_ledger, load_usage_strict, usage_snapshot
         from basket_collect import run_basket
         from test_basket_collect import FakeAggregator, FakeSource, fake_source_builder
 
@@ -710,6 +712,7 @@ class ResearchCohortV2Test(unittest.TestCase):
         FakeSource.calls.clear()
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             root = Path(tmp)
+            initialize_usage_ledger(root / "api_usage.json")
             output = StringIO()
             with (
                 patch("basket_collect.load_collection_settings", return_value=settings),
@@ -739,7 +742,7 @@ class ResearchCohortV2Test(unittest.TestCase):
                     singleflight_lock_path=root / "collection.lock",
                 )
             state = json.loads((root / "basket_state.json").read_text(encoding="utf-8"))
-            usage = usage_snapshot(load_usage(root / "api_usage.json"))
+            usage = usage_snapshot(load_usage_strict(root / "api_usage.json"))
 
         apply_outcomes.assert_not_called()
         self.assertEqual(usage["cumulative"].get("juhe"), 6)

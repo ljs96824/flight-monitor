@@ -6,17 +6,18 @@ from pathlib import Path
 
 class WorkloadEntrypointContractTest(unittest.TestCase):
     def test_usage_entry_records_explicit_entrypoint(self):
-        from api_usage import load_usage, record_actual_requests
+        from api_usage import initialize_usage_ledger, load_usage_strict, record_actual_requests
 
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             path = Path(tmp) / "api_usage.json"
+            initialize_usage_ledger(path)
             record_actual_requests(
                 {"juhe": 1},
                 path=path,
                 workload_class="canary",
                 entrypoint="basket_canary",
             )
-            entry = load_usage(path)["entries"][0]
+            entry = load_usage_strict(path)["entries"][0]
 
         self.assertEqual(entry["workload_class"], "canary")
         self.assertEqual(entry["entrypoint"], "basket_canary")

@@ -83,7 +83,7 @@ def _run_until_terminated(
 
 class ImmediateApiUsageLedgerTest(unittest.TestCase):
     def test_completed_call_is_durable_before_keyboard_interrupt_and_round_end(self):
-        from api_usage import load_usage
+        from api_usage import initialize_usage_ledger, load_usage_strict
         from request_cache import (
             cached_fetch,
             reset_for_tests,
@@ -93,6 +93,7 @@ class ImmediateApiUsageLedgerTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             root = Path(tmp)
             usage_path = root / "api_usage.json"
+            initialize_usage_ledger(usage_path)
             reset_for_tests(root / "cache")
             self.addCleanup(reset_for_tests, None)
             start_request_cache_round(
@@ -111,7 +112,7 @@ class ImmediateApiUsageLedgerTest(unittest.TestCase):
                     force_fresh=True,
                 )
 
-            payload = load_usage(usage_path)
+            payload = load_usage_strict(usage_path)
 
         self.assertEqual(payload["dates"][next(iter(payload["dates"]))]["fake"], 1)
         self.assertEqual(len(payload["entries"]), 1)
@@ -119,7 +120,7 @@ class ImmediateApiUsageLedgerTest(unittest.TestCase):
 
 
     def test_retry_attempts_are_each_durable_before_round_end(self):
-        from api_usage import load_usage
+        from api_usage import initialize_usage_ledger, load_usage_strict
         import request_cache
 
         class RetryThenSuccessSource(_ImmediateUsageSource):
@@ -135,6 +136,7 @@ class ImmediateApiUsageLedgerTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             root = Path(tmp)
             usage_path = root / "api_usage.json"
+            initialize_usage_ledger(usage_path)
             request_cache.reset_for_tests(root / "cache")
             self.addCleanup(request_cache.reset_for_tests, None)
             request_cache.start_request_cache_round(
@@ -151,7 +153,7 @@ class ImmediateApiUsageLedgerTest(unittest.TestCase):
                     persist=False,
                     force_fresh=True,
                 )
-            payload = load_usage(usage_path)
+            payload = load_usage_strict(usage_path)
 
         self.assertEqual(payload["dates"][next(iter(payload["dates"]))]["fake"], 2)
         self.assertEqual(len(payload["entries"]), 2)
@@ -160,11 +162,12 @@ class ImmediateApiUsageLedgerTest(unittest.TestCase):
             {"retry-round"},
         )
     def test_completed_call_survives_process_termination_without_round_end(self):
-        from api_usage import load_usage
+        from api_usage import initialize_usage_ledger, load_usage_strict
 
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             root = Path(tmp)
             usage_path = root / "api_usage.json"
+            initialize_usage_ledger(usage_path)
             context = multiprocessing.get_context("spawn")
             ready = context.Event()
             process = context.Process(
@@ -177,18 +180,19 @@ class ImmediateApiUsageLedgerTest(unittest.TestCase):
             process.join(timeout=10)
             self.assertFalse(process.is_alive(), "被终止的子进程仍在运行")
 
-            payload = load_usage(usage_path)
+            payload = load_usage_strict(usage_path)
 
         self.assertEqual(payload["dates"][next(iter(payload["dates"]))]["fake"], 1)
         self.assertEqual(len(payload["entries"]), 1)
         self.assertEqual(payload["entries"][0]["round_id"], "terminated-round")
 
     def test_concurrent_rounds_append_each_attempt_without_loss(self):
-        from api_usage import load_usage
+        from api_usage import initialize_usage_ledger, load_usage_strict
 
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             root = Path(tmp)
             usage_path = root / "api_usage.json"
+            initialize_usage_ledger(usage_path)
             context = multiprocessing.get_context("spawn")
             start = context.Event()
             processes = [
@@ -210,7 +214,7 @@ class ImmediateApiUsageLedgerTest(unittest.TestCase):
             for process in processes:
                 process.join(timeout=20)
 
-            payload = load_usage(usage_path)
+            payload = load_usage_strict(usage_path)
 
         self.assertTrue(all(not process.is_alive() for process in processes))
         self.assertEqual([process.exitcode for process in processes], [0, 0])
@@ -222,12 +226,13 @@ class ImmediateApiUsageLedgerTest(unittest.TestCase):
         )
 
     def test_round_end_only_reconciles_and_never_writes_a_second_entry(self):
-        from api_usage import load_usage
+        from api_usage import initialize_usage_ledger, load_usage_strict
         import request_cache
 
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             root = Path(tmp)
             usage_path = root / "api_usage.json"
+            initialize_usage_ledger(usage_path)
             request_cache.reset_for_tests(root / "cache")
             self.addCleanup(request_cache.reset_for_tests, None)
             request_cache.start_request_cache_round(
@@ -243,12 +248,12 @@ class ImmediateApiUsageLedgerTest(unittest.TestCase):
                 persist=False,
                 force_fresh=True,
             )
-            before = load_usage(usage_path)
+            before = load_usage_strict(usage_path)
             logs = []
             with patch.object(request_cache, "safe_log", side_effect=logs.append):
                 request_cache.print_request_cache_stats()
                 request_cache.print_request_cache_stats()
-            after = load_usage(usage_path)
+            after = load_usage_strict(usage_path)
 
         self.assertEqual(len(before["entries"]), 1)
         self.assertEqual(after, before)

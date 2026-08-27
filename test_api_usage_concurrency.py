@@ -49,6 +49,7 @@ class ApiUsageConcurrencyTest(unittest.TestCase):
                     root = Path(tmp)
                     usage_path = root / "api_usage.json"
                     conflict_path = root / "api_usage_conflict.log"
+                    api_usage.initialize_usage_ledger(usage_path)
                     backend = local_file_lock.build_lock_backend(
                         msvcrt_module=msvcrt_module,
                         fcntl_module=fcntl_module,
@@ -83,7 +84,7 @@ class ApiUsageConcurrencyTest(unittest.TestCase):
                 self.assertEqual(payload["dates"], {})
                 self.assertEqual(len(platform_calls), 2)
                 self.assertEqual(rows[-1]["round_id"], f"{platform_name}-conflict")
-                self.assertEqual(rows[-1]["status"], "write_conflict")
+                self.assertEqual(rows[-1]["status"], "pending_reconciliation")
                 self.assertTrue(
                     any(
                         "[配额台账] 写入冲突" in str(call.args[0])
@@ -92,10 +93,11 @@ class ApiUsageConcurrencyTest(unittest.TestCase):
                 )
 
     def test_two_threads_record_one_hundred_entries_each_without_loss(self):
-        from api_usage import load_usage, record_actual_requests
+        from api_usage import initialize_usage_ledger, load_usage_strict, record_actual_requests
 
         with tempfile.TemporaryDirectory() as tmp:
             usage_path = Path(tmp) / "api_usage.json"
+            initialize_usage_ledger(usage_path)
             errors = []
 
             def worker(prefix):
@@ -119,7 +121,7 @@ class ApiUsageConcurrencyTest(unittest.TestCase):
             for thread in threads:
                 thread.join(timeout=15)
 
-            payload = load_usage(usage_path)
+            payload = load_usage_strict(usage_path)
 
         self.assertFalse(any(thread.is_alive() for thread in threads))
         self.assertEqual(errors, [])
@@ -127,12 +129,18 @@ class ApiUsageConcurrencyTest(unittest.TestCase):
         self.assertEqual(len(payload["entries"]), 200)
 
     def test_lock_timeout_is_audited_without_raising(self):
-        from api_usage import _usage_lock, load_usage, record_actual_requests
+        from api_usage import (
+            _usage_lock,
+            initialize_usage_ledger,
+            load_usage_strict,
+            record_actual_requests,
+        )
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             usage_path = root / "api_usage.json"
             conflict_path = root / "api_usage_conflict.log"
+            initialize_usage_ledger(usage_path)
             record_actual_requests(
                 {"juhe": 7},
                 path=usage_path,
@@ -170,21 +178,22 @@ class ApiUsageConcurrencyTest(unittest.TestCase):
                 for line in conflict_path.read_text(encoding="utf-8").splitlines()
                 if line.strip()
             ]
-            final_payload = load_usage(usage_path)
+            final_payload = load_usage_strict(usage_path)
 
         self.assertEqual(final_payload["dates"]["2026-07-22"]["juhe"], 7)
         self.assertEqual(payload["dates"]["2026-07-22"]["juhe"], 7)
         self.assertEqual(audit_rows[-1]["round_id"], "conflict-round")
-        self.assertEqual(audit_rows[-1]["status"], "write_conflict")
+        self.assertEqual(audit_rows[-1]["status"], "pending_reconciliation")
         self.assertTrue(
             any("[配额台账] 写入冲突" in str(call.args[0]) for call in log_mock.call_args_list)
         )
 
     def test_atomic_replace_failure_keeps_original_ledger_intact(self):
-        from api_usage import load_usage, record_actual_requests
+        from api_usage import initialize_usage_ledger, load_usage_strict, record_actual_requests
 
         with tempfile.TemporaryDirectory() as tmp:
             usage_path = Path(tmp) / "api_usage.json"
+            initialize_usage_ledger(usage_path)
             record_actual_requests(
                 {"juhe": 1},
                 path=usage_path,
@@ -202,7 +211,7 @@ class ApiUsageConcurrencyTest(unittest.TestCase):
                         round_id="failed-round",
                     )
 
-            payload = load_usage(usage_path)
+            payload = load_usage_strict(usage_path)
             temp_files = list(usage_path.parent.glob("api_usage.json.*.tmp"))
             final = usage_path.read_bytes()
 

@@ -257,7 +257,12 @@ class CollectionPlanTest(unittest.TestCase):
 
         self.assertEqual(plan._quota_protected_keys, set())
     def test_api_usage_ledger_accumulates_actual_requests(self):
-        from api_usage import load_usage, record_actual_requests, usage_snapshot
+        from api_usage import (
+            initialize_usage_ledger,
+            load_usage_strict,
+            record_actual_requests,
+            usage_snapshot,
+        )
         from request_cache import reset_for_tests
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -265,6 +270,7 @@ class CollectionPlanTest(unittest.TestCase):
             reset_for_tests(root / "cache")
             try:
                 path = root / "api_usage.json"
+                initialize_usage_ledger(path)
                 record_actual_requests(
                     {"juhe": 2, "hasdata": 1},
                     path=path,
@@ -280,7 +286,7 @@ class CollectionPlanTest(unittest.TestCase):
                     recorded_at="2026-07-23T10:00:00+08:00",
                 )
 
-                raw = load_usage(path)
+                raw = load_usage_strict(path)
                 snapshot = usage_snapshot(raw, day="2026-07-23")
             finally:
                 reset_for_tests(None)

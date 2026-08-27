@@ -7,6 +7,7 @@ from typing import Mapping
 
 READINESS_GROUPS = {
     "quota": (
+        "quota_ledger_healthy",
         "expected_days_remaining",
         "worst_case_days_remaining",
         "monitoring_reserve",

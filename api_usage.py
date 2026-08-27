@@ -27,6 +27,18 @@ DEFAULT_LOCK_RETRIES = 1
 UsageLockTimeout = FileLockTimeout
 
 
+class UsageLedgerReadError(RuntimeError):
+    """Raised when the quota ledger cannot be trusted for production use."""
+
+
+class UsageLedgerAlreadyExists(RuntimeError):
+    """Raised when explicit initialization would overwrite an existing ledger."""
+
+
+def _empty_usage_ledger() -> dict:
+    return {"version": 2, "dates": {}, "entries": []}
+
+
 @contextmanager
 def _usage_lock(
     usage_path: str | Path,
@@ -62,14 +74,21 @@ def _append_conflict_audit(
     conflict_log_path: str | Path | None,
     round_id: str | None,
     reason: str,
+    counts: dict[str, int],
+    workload_class: str,
+    entrypoint: str,
 ) -> None:
     audit_path = Path(conflict_log_path or usage_path.parent / "api_usage_conflict.log")
     row = {
+        "evidence_id": uuid.uuid4().hex,
         "recorded_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "round_id": str(round_id or "unknown"),
-        "status": "write_conflict",
+        "status": "pending_reconciliation",
         "usage_path": str(usage_path),
         "reason": str(reason),
+        "counts": dict(counts),
+        "workload_class": str(workload_class),
+        "entrypoint": str(entrypoint),
     }
     try:
         audit_path.parent.mkdir(parents=True, exist_ok=True)
@@ -89,23 +108,131 @@ def _append_conflict_audit(
         )
 
 
-def load_usage(path: str | Path = DEFAULT_USAGE_PATH) -> dict:
+def _validate_usage_payload(payload, *, path: Path) -> dict:
+    if not isinstance(payload, dict):
+        raise UsageLedgerReadError(f"配额台账根节点不是对象: {path}")
+    missing = {"version", "dates", "entries"} - set(payload)
+    if missing:
+        raise UsageLedgerReadError(
+            f"配额台账缺少必需字段 {','.join(sorted(missing))}: {path}"
+        )
+    if payload.get("version") != 2:
+        raise UsageLedgerReadError(
+            f"配额台账版本不受支持 version={payload.get('version')!r}: {path}"
+        )
+    dates = payload.get("dates")
+    entries = payload.get("entries")
+    if not isinstance(dates, dict) or not isinstance(entries, list):
+        raise UsageLedgerReadError(f"配额台账 dates/entries 结构无效: {path}")
+    for day, source_counts in dates.items():
+        if not isinstance(day, str) or not isinstance(source_counts, dict):
+            raise UsageLedgerReadError(f"配额台账日期桶结构无效: {path}")
+        for source, count in source_counts.items():
+            if (
+                not isinstance(source, str)
+                or isinstance(count, bool)
+                or not isinstance(count, int)
+                or count < 0
+            ):
+                raise UsageLedgerReadError(f"配额台账日期计数无效: {path}")
+    for entry in entries:
+        if not isinstance(entry, dict) or not isinstance(entry.get("counts"), dict):
+            raise UsageLedgerReadError(f"配额台账明细结构无效: {path}")
+        for source, count in entry["counts"].items():
+            if (
+                not isinstance(source, str)
+                or isinstance(count, bool)
+                or not isinstance(count, int)
+                or count < 0
+            ):
+                raise UsageLedgerReadError(f"配额台账明细计数无效: {path}")
+    return payload
+
+
+def load_usage_strict(path: str | Path = DEFAULT_USAGE_PATH) -> dict:
+    """Load a production ledger without inventing an empty replacement."""
+
     usage_path = Path(path)
     if not usage_path.exists():
-        return {"version": 2, "dates": {}, "entries": []}
+        raise UsageLedgerReadError(f"配额台账不存在: {usage_path}")
     try:
         payload = json.loads(usage_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {"version": 2, "dates": {}, "entries": []}
-    if not isinstance(payload, dict):
-        return {"version": 2, "dates": {}, "entries": []}
-    dates = payload.get("dates")
-    if not isinstance(dates, dict):
-        dates = {}
-    entries = payload.get("entries")
-    if not isinstance(entries, list):
-        entries = []
-    return {"version": 2, "dates": dates, "entries": entries}
+    except (OSError, json.JSONDecodeError) as exc:
+        raise UsageLedgerReadError(f"配额台账读取失败: {usage_path}: {exc}") from exc
+    return _validate_usage_payload(payload, path=usage_path)
+
+
+def initialize_usage_ledger(path: str | Path = DEFAULT_USAGE_PATH) -> dict:
+    """Create a new empty ledger only through this explicit initialization path."""
+
+    usage_path = Path(path)
+    with _usage_lock(usage_path):
+        if usage_path.exists():
+            raise UsageLedgerAlreadyExists(f"配额台账已存在: {usage_path}")
+        payload = _empty_usage_ledger()
+        _atomic_write_json(usage_path, payload)
+    return payload
+
+
+def load_usage_for_diagnostics(path: str | Path = DEFAULT_USAGE_PATH) -> dict:
+    """Read without mutation and expose damage explicitly to diagnostic callers."""
+
+    try:
+        return {
+            "healthy": True,
+            "usage": load_usage_strict(path),
+            "error_type": None,
+            "error": None,
+        }
+    except UsageLedgerReadError as exc:
+        return {
+            "healthy": False,
+            "usage": None,
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+        }
+
+
+def _pending_reconciliation_rows(conflict_log_path: Path) -> tuple[list[dict], str | None]:
+    if not conflict_log_path.exists():
+        return [], None
+    pending: dict[str, dict] = {}
+    reconciled: set[str] = set()
+    try:
+        lines = conflict_log_path.read_text(encoding="utf-8").splitlines()
+        for line_number, line in enumerate(lines, start=1):
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            if not isinstance(row, dict):
+                raise ValueError(f"line {line_number} root is not an object")
+            evidence_id = str(row.get("evidence_id") or f"legacy-line-{line_number}")
+            status = str(row.get("status") or "")
+            if status in {"pending_reconciliation", "write_conflict"}:
+                pending[evidence_id] = row
+            elif status == "reconciled":
+                reconciled.add(evidence_id)
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        return [], f"冲突审计读取失败:{type(exc).__name__}:{exc}"
+    return [row for key, row in pending.items() if key not in reconciled], None
+
+
+def usage_ledger_health(
+    path: str | Path = DEFAULT_USAGE_PATH,
+    *,
+    conflict_log_path: str | Path | None = None,
+) -> dict:
+    diagnostic = load_usage_for_diagnostics(path)
+    audit_path = Path(conflict_log_path or Path(path).parent / "api_usage_conflict.log")
+    pending, audit_error = _pending_reconciliation_rows(audit_path)
+    healthy = bool(diagnostic["healthy"]) and not pending and audit_error is None
+    return {
+        **diagnostic,
+        "healthy": healthy,
+        "pending_reconciliation_count": len(pending),
+        "pending_reconciliation": pending,
+        "audit_error": audit_error,
+    }
 
 
 def entry_workload_class(entry) -> str:
@@ -132,23 +259,23 @@ def record_actual_requests(
     usage_path = Path(path)
     normalized_workload = normalize_workload_class(workload_class)
     normalized_entrypoint = str(entrypoint or "unknown")
+    actual_counts = {}
+    for source, raw_count in (counts or {}).items():
+        count = max(0, int(raw_count or 0))
+        if count:
+            actual_counts[str(source)] = count
     attempts = max(0, int(lock_retries)) + 1
     last_error = None
     for _attempt in range(attempts):
         try:
             with _usage_lock(usage_path, timeout=lock_timeout):
-                payload = load_usage(usage_path)
+                payload = load_usage_strict(usage_path)
                 day_key = str(day or datetime.now(SHANGHAI_TZ).date().isoformat())
                 day_counts = payload["dates"].setdefault(day_key, {})
-                actual_counts = {}
-                for source, raw_count in (counts or {}).items():
-                    count = max(0, int(raw_count or 0))
-                    if count:
-                        source_name = str(source)
-                        actual_counts[source_name] = count
-                        day_counts[source_name] = (
-                            int(day_counts.get(source_name, 0) or 0) + count
-                        )
+                for source_name, count in actual_counts.items():
+                    day_counts[source_name] = (
+                        int(day_counts.get(source_name, 0) or 0) + count
+                    )
 
                 if actual_counts:
                     payload["entries"].append(
@@ -171,6 +298,17 @@ def record_actual_requests(
                 return payload
         except UsageLockTimeout as exc:
             last_error = exc
+        except UsageLedgerReadError as exc:
+            _append_conflict_audit(
+                usage_path=usage_path,
+                conflict_log_path=conflict_log_path,
+                round_id=round_id,
+                reason=str(exc),
+                counts=actual_counts,
+                workload_class=normalized_workload,
+                entrypoint=normalized_entrypoint,
+            )
+            raise
 
     safe_log(
         f"[配额台账] 写入冲突 round={round_id or 'unknown'} "
@@ -181,8 +319,11 @@ def record_actual_requests(
         conflict_log_path=conflict_log_path,
         round_id=round_id,
         reason=str(last_error or "等待锁超时"),
+        counts=actual_counts,
+        workload_class=normalized_workload,
+        entrypoint=normalized_entrypoint,
     )
-    return load_usage(usage_path)
+    return load_usage_strict(usage_path)
 
 
 def usage_snapshot(payload: dict, *, day: str | None = None) -> dict:

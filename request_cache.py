@@ -253,7 +253,16 @@ def _persist_api_usage_attempt(source_name: str) -> None:
         )
 
 
+def _assert_usage_ledger_readable() -> None:
+    if not _track_usage_for_round:
+        return
+    from api_usage import DEFAULT_USAGE_PATH, load_usage_strict
+
+    load_usage_strict(_usage_path_for_round or DEFAULT_USAGE_PATH)
+
+
 def _fetch_source_attempt(source, origin, dest, date_str, cabin_class, source_name: str):
+    _assert_usage_ledger_readable()
     try:
         return source.fetch(origin, dest, date_str, cabin_class)
     finally:
@@ -1072,6 +1081,10 @@ def start_request_cache_round(
     entrypoint: str = "unknown",
 ) -> None:
     """开始新的采集轮，只清本轮统计，不清请求缓存和进程累计。"""
+    if track_usage:
+        from api_usage import DEFAULT_USAGE_PATH, load_usage_strict
+
+        load_usage_strict(Path(usage_path) if usage_path else DEFAULT_USAGE_PATH)
     global _current_stats_round_id
     global _track_usage_for_round, _usage_path_for_round, _quota_budgets_for_round
     global _usage_flushed_for_round
@@ -1103,7 +1116,7 @@ def _flush_api_usage_ledger() -> None:
     from api_usage import (
         DEFAULT_USAGE_PATH,
         format_quota_overview,
-        load_usage,
+        load_usage_strict,
         round_actual_counts,
         usage_snapshot,
     )
@@ -1114,7 +1127,7 @@ def _flush_api_usage_ledger() -> None:
         for source, values in (_stats.get("by_source") or {}).items()
         if int(values.get("actual", 0) or 0) > 0
     }
-    payload = load_usage(path)
+    payload = load_usage_strict(path)
     persisted_by_source = round_actual_counts(payload, _current_stats_round_id)
     safe_log(
         f"[\u914d\u989d\u6052\u7b49\u5f0f] round={_current_stats_round_id or 'unknown'} "

@@ -25,7 +25,13 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from api_usage import DEFAULT_USAGE_PATH, load_usage, record_actual_requests, usage_snapshot
+from api_usage import (
+    DEFAULT_USAGE_PATH,
+    load_usage_for_diagnostics,
+    load_usage_strict,
+    record_actual_requests,
+    usage_snapshot,
+)
 
 
 JUHE_URL = "https://apis.juhe.cn/flight/query"
@@ -302,8 +308,17 @@ def _recommend_route(results: dict) -> dict:
     }
 
 
-def _usage_brief(path) -> dict:
-    return usage_snapshot(load_usage(path))
+def _usage_brief(path, *, strict: bool) -> dict:
+    if strict:
+        return usage_snapshot(load_usage_strict(path))
+    diagnostic = load_usage_for_diagnostics(path)
+    if diagnostic["healthy"]:
+        return usage_snapshot(diagnostic["usage"])
+    return {
+        "healthy": False,
+        "error_type": diagnostic["error_type"],
+        "error": diagnostic["error"],
+    }
 
 
 def run_audit(
@@ -340,7 +355,7 @@ def run_audit(
         "requested_cabin": DEFAULT_CABIN,
         "budget": {"total": MAX_TOTAL_CALLS, "per_source": SOURCE_CALL_LIMITS},
         "official_docs": OFFICIAL_DOCS,
-        "ledger_before": _usage_brief(usage_path),
+        "ledger_before": _usage_brief(usage_path, strict=execute),
         "calls": [],
         "results": {},
         "actual_calls": {},
@@ -440,7 +455,7 @@ def run_audit(
             )
             report["calls"].append(call_record)
 
-    report["ledger_after"] = _usage_brief(usage_path)
+    report["ledger_after"] = _usage_brief(usage_path, strict=True)
     report["recommendation"] = _recommend_route(report["results"])
     report["budget_used"] = {"total": budget.total, "per_source": dict(budget.counts)}
     return report

@@ -84,7 +84,7 @@ class SerpApiCapabilityAuditTest(unittest.TestCase):
         self.assertFalse(summary["production_gate_passed"])
 
     def test_execute_calls_each_cabin_once_and_records_two_ledger_entries(self):
-        from api_usage import load_usage
+        from api_usage import initialize_usage_ledger, load_usage_strict
         from scripts.serpapi_capability_audit import run_audit
 
         calls = []
@@ -97,6 +97,7 @@ class SerpApiCapabilityAuditTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             usage_path = Path(tmp) / "api_usage.json"
+            initialize_usage_ledger(usage_path)
             report = run_audit(
                 execute=True,
                 env={"SERPAPI_KEY": "secret"},
@@ -104,7 +105,7 @@ class SerpApiCapabilityAuditTest(unittest.TestCase):
                 http_get=fake_get,
                 round_id="audit-serpapi-test",
             )
-            usage = load_usage(usage_path)
+            usage = load_usage_strict(usage_path)
 
         self.assertEqual([call["travel_class"] for call in calls], [3, 1])
         self.assertEqual(report["actual_calls"], {"serpapi": 2})
@@ -122,15 +123,19 @@ class SerpApiCapabilityAuditTest(unittest.TestCase):
 
         aliases = ("SERPAPI_KEY", "SERPAPI_API_KEY", "SERP_API_KEY")
         with tempfile.TemporaryDirectory() as tmp:
+            from api_usage import initialize_usage_ledger
+
             for alias in aliases:
                 with self.subTest(alias=alias):
                     secret = f"secret-for-{alias}"
+                    usage_path = Path(tmp) / f"{alias}.json"
+                    initialize_usage_ledger(usage_path)
                     output = io.StringIO()
                     with redirect_stdout(output):
                         report = run_audit(
                             execute=True,
                             env={alias: secret},
-                            usage_path=Path(tmp) / f"{alias}.json",
+                            usage_path=usage_path,
                             http_get=fake_get,
                             round_id=f"audit-{alias}",
                         )
@@ -176,16 +181,20 @@ class SerpApiCapabilityAuditTest(unittest.TestCase):
             raise AssertionError("缺少密钥时不得访问网络")
 
         with tempfile.TemporaryDirectory() as tmp:
+            from api_usage import initialize_usage_ledger
+
             env_path = Path(tmp) / ".env"
             env_path.write_text(
                 "OTHER_TOKEN=do-not-log-this\nSMTP_HOST=smtp.example.com\n",
                 encoding="utf-8",
             )
+            usage_path = Path(tmp) / "api_usage.json"
+            initialize_usage_ledger(usage_path)
             report = run_audit(
                 execute=True,
                 env={},
                 env_path=env_path,
-                usage_path=Path(tmp) / "api_usage.json",
+                usage_path=usage_path,
                 http_get=fail,
             )
 

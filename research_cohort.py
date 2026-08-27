@@ -389,6 +389,7 @@ def evaluate_research_hard_gates(
     scheduled_anomaly = bool(quota.get("scheduled_anomaly"))
     manual_live_used = max(0, int(quota.get("manual_live_used") or 0))
     manual_live_buffer = max(0, int(quota.get("manual_live_buffer") or 30))
+    quota_ledger_healthy = bool(quota.get("quota_ledger_healthy", True))
     batch_guard_ok = (
         research_available_raw is None
         or research_available_value >= research_batch_calls
@@ -397,6 +398,7 @@ def evaluate_research_hard_gates(
     backup_checks = backup.get("checks") or {}
     migration = migration_status or {}
     checks = {
+        "quota_ledger_healthy": quota_ledger_healthy,
         "expected_days_remaining": (
             quota_complete
             and expected_days is not None
@@ -429,6 +431,13 @@ def evaluate_research_hard_gates(
     }
     missing = [name for name, ready in checks.items() if not ready]
     current = {
+        "quota_ledger_healthy": {
+            "healthy": quota_ledger_healthy,
+            "pending_reconciliation_count": int(
+                quota.get("pending_reconciliation_count") or 0
+            ),
+            "error": quota.get("quota_ledger_error"),
+        },
         "expected_days_remaining": expected_days,
         "worst_case_days_remaining": worst_days,
         "monitoring_reserve": {
@@ -456,6 +465,11 @@ def evaluate_research_hard_gates(
         "old_data_readable": bool(migration.get("old_data_readable")),
     }
     reasons = dict(backup.get("reasons") or {})
+    if not quota_ledger_healthy:
+        reasons["quota_ledger_healthy"] = (
+            quota.get("quota_ledger_error")
+            or "配额台账损坏或存在待人工对账记录"
+        )
     if not quota_complete:
         for name in (
             "expected_days_remaining",

@@ -40,9 +40,9 @@ class ResearchHardGateBackupTest(unittest.TestCase):
 
         self.assertFalse(result["ready"])
         self.assertEqual(result["missing"], ["off_disk_copy_fresh"])
-        self.assertEqual(len(result["checks"]), 9)
+        self.assertEqual(len(result["checks"]), 10)
 
-    def test_all_nine_gates_pass_with_fresh_verified_evidence(self):
+    def test_all_ten_gates_pass_with_fresh_verified_evidence(self):
         from research_cohort import evaluate_research_hard_gates
 
         result = evaluate_research_hard_gates(
@@ -62,7 +62,7 @@ class ResearchHardGateBackupTest(unittest.TestCase):
 
         self.assertTrue(result["ready"])
         self.assertEqual(result["missing"], [])
-        self.assertEqual(len(result["checks"]), 9)
+        self.assertEqual(len(result["checks"]), 10)
 
 
 if __name__ == "__main__":

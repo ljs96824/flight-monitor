@@ -38,7 +38,7 @@ from analyzer import (
     waiting_risk_description,
 )
 from collector import _normalize_detail_flight, save_raw_response
-from api_usage import load_usage, usage_snapshot
+from api_usage import load_usage_strict, usage_ledger_health, usage_snapshot
 from basket_sentinel import run_basket_sentinel
 from collection_plan import build_collection_plan, load_collection_settings
 from collection_singleflight import (
@@ -321,7 +321,7 @@ def _run_basket_sentinel_for_main(
     threshold = os.getenv("BASKET_SENTINEL_AFTER", "20:00")
     try:
         return run_basket_sentinel(
-            usage_payload=load_usage(API_USAGE_PATH),
+            usage_payload=load_usage_strict(API_USAGE_PATH),
             now=now,
             threshold=threshold,
             state_path=BASKET_SENTINEL_STATE_PATH,
@@ -352,12 +352,22 @@ def _make_collection_round_id() -> str:
 
 def _collection_plan_log_options() -> dict:
     settings = load_collection_settings(CONFIG_PATH)
+    ledger_health = usage_ledger_health(API_USAGE_PATH)
+    usage_payload = ledger_health.get("usage")
+    if usage_payload is None:
+        load_usage_strict(API_USAGE_PATH)
+    if not ledger_health["healthy"]:
+        safe_log(
+            "[配额台账] 用户监控保守模式 "
+            f"pending={ledger_health['pending_reconciliation_count']} "
+            f"审计错误={ledger_health.get('audit_error') or '无'};研究采样保持停用"
+        )
     return {
         "quota_budgets": settings["source_quota_budget"],
         "quota_low_remaining_threshold": settings[
             "source_quota_low_remaining_threshold"
         ],
-        "usage_snapshot": usage_snapshot(load_usage(API_USAGE_PATH)),
+        "usage_snapshot": usage_snapshot(usage_payload),
         "freshness_hours": settings["freshness_hours"],
         "fresh_scope": settings["sub_round_fresh_scope"],
     }
@@ -1909,7 +1919,9 @@ def _process_subscription_locked(
     agg = None
     managed_plan_active = False
     round_context_tokens = None
-    collection_options = _collection_plan_log_options()
+    collection_options = (
+        _collection_plan_log_options() if manage_collection_round else {}
+    )
     round_archive_started = False
     round_status = "failed"
     if manage_collection_round:

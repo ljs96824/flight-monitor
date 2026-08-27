@@ -93,7 +93,7 @@ T=0再完成，在 `today > depart_date` 时停止，绝不续到 `today+60`。
 运行入口会在 `start_request_cache_round` 之前重新检查硬门。缺一项即返回
 `status=blocked`，零源调用。
 
-只读 readiness 入口一次打印九项硬门的当前值：配额三项、备份三项、迁移三项。
+只读 readiness 入口一次打印十项硬门的当前值：台账健康一项、配额三项、备份三项、迁移三项。
 
 ```powershell
 python -X utf8 scripts/research_readiness.py

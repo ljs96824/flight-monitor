@@ -27,7 +27,13 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from api_usage import DEFAULT_USAGE_PATH, load_usage, record_actual_requests, usage_snapshot
+from api_usage import (
+    DEFAULT_USAGE_PATH,
+    load_usage_for_diagnostics,
+    load_usage_strict,
+    record_actual_requests,
+    usage_snapshot,
+)
 from serpapi_credentials import (
     SERPAPI_KEY_ALIASES,
     dotenv_variable_names,
@@ -181,8 +187,17 @@ def _redact_error(error, secret: str | None) -> str:
     return re.sub(r"(?i)(api_key=)[^&\s]+", r"\1***", text)
 
 
-def _usage_brief(path) -> dict:
-    return usage_snapshot(load_usage(path))
+def _usage_brief(path, *, strict: bool) -> dict:
+    if strict:
+        return usage_snapshot(load_usage_strict(path))
+    diagnostic = load_usage_for_diagnostics(path)
+    if diagnostic["healthy"]:
+        return usage_snapshot(diagnostic["usage"])
+    return {
+        "healthy": False,
+        "error_type": diagnostic["error_type"],
+        "error": diagnostic["error"],
+    }
 
 
 def run_audit(
@@ -209,7 +224,7 @@ def run_audit(
         "route": f"{origin.upper()}->{dest.upper()}",
         "depart_date": depart_date,
         "budget": {"total": MAX_TOTAL_CALLS, "serpapi": MAX_SERPAPI_CALLS},
-        "ledger_before": _usage_brief(usage_path),
+        "ledger_before": _usage_brief(usage_path, strict=execute),
         "actual_calls": {},
         "calls": [],
         "results": {},
@@ -291,7 +306,7 @@ def run_audit(
         "缺失时只能按市场承运回退。"
     )
     report["budget_used"] = {"total": budget.total, "serpapi": budget.counts["serpapi"]}
-    report["ledger_after"] = _usage_brief(usage_path)
+    report["ledger_after"] = _usage_brief(usage_path, strict=True)
     return report
 
 

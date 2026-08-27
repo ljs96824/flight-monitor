@@ -13041,12 +13041,22 @@ def _detail_technical_source_body(payload: dict) -> str:
 
 def _quota_overview_text() -> str:
     """只读现有台账；与轮末日志共用同一格式函数。"""
-    from api_usage import DEFAULT_USAGE_PATH, format_quota_overview, load_usage
+    from api_usage import (
+        DEFAULT_USAGE_PATH,
+        UsageLedgerReadError,
+        format_quota_overview,
+        load_usage_strict,
+    )
     from collection_plan import load_collection_settings
 
     settings = load_collection_settings(BASE_DIR / "config.yaml")
+    try:
+        usage = load_usage_strict(DEFAULT_USAGE_PATH)
+    except UsageLedgerReadError as exc:
+        safe_log(f"[配额台账] 展示不可用 原因={exc}")
+        return "配额总览:台账不可用(不得据此恢复配额)"
     return format_quota_overview(
-        load_usage(DEFAULT_USAGE_PATH),
+        usage,
         settings.get("source_quota_budget") or {},
     )
 

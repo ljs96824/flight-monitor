@@ -684,7 +684,7 @@ class RequestCacheTest(unittest.TestCase):
         self.assertEqual(list(self._request_cache_dir.glob("api_*.json")), [])
 
     def test_tracked_round_flushes_actual_usage_once(self):
-        from api_usage import load_usage
+        from api_usage import initialize_usage_ledger, load_usage_strict
         from request_cache import (
             cached_fetch,
             print_request_cache_stats,
@@ -694,6 +694,7 @@ class RequestCacheTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             usage_path = Path(tmp) / "api_usage.json"
+            initialize_usage_ledger(usage_path)
             source = CountingSource()
             reset_request_cache()
             start_request_cache_round(
@@ -711,13 +712,13 @@ class RequestCacheTest(unittest.TestCase):
             print_request_cache_stats()
             print_request_cache_stats()
 
-            usage = load_usage(usage_path)
+            usage = load_usage_strict(usage_path)
 
         today_counts = next(iter(usage["dates"].values()))
         self.assertEqual(today_counts, {"fake": 1})
 
     def test_usage_ledger_records_only_actual_and_appends_round_entry(self):
-        from api_usage import load_usage
+        from api_usage import initialize_usage_ledger, load_usage_strict
         from request_cache import (
             cached_fetch,
             print_request_cache_stats,
@@ -726,6 +727,7 @@ class RequestCacheTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             usage_path = Path(tmp) / "api_usage.json"
+            initialize_usage_ledger(usage_path)
             source = CountingSource()
             start_request_cache_round(
                 "audit-round",
@@ -742,7 +744,7 @@ class RequestCacheTest(unittest.TestCase):
                 persist=False,
             )
             print_request_cache_stats()
-            usage = load_usage(usage_path)
+            usage = load_usage_strict(usage_path)
 
         today_counts = next(iter(usage["dates"].values()))
         self.assertEqual(today_counts, {"fake": 1})
@@ -753,7 +755,7 @@ class RequestCacheTest(unittest.TestCase):
         self.assertRegex(entry["recorded_at"], r"^\d{4}-\d{2}-\d{2}T")
 
     def test_tracked_round_flushes_actual_usage_once(self):
-        from api_usage import load_usage
+        from api_usage import initialize_usage_ledger, load_usage_strict
         from request_cache import (
             cached_fetch,
             print_request_cache_stats,
@@ -763,6 +765,7 @@ class RequestCacheTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             usage_path = Path(tmp) / "api_usage.json"
+            initialize_usage_ledger(usage_path)
             source = CountingSource()
             reset_request_cache()
             start_request_cache_round(
@@ -780,7 +783,7 @@ class RequestCacheTest(unittest.TestCase):
             print_request_cache_stats()
             print_request_cache_stats()
 
-            usage = load_usage(usage_path)
+            usage = load_usage_strict(usage_path)
 
         today_counts = next(iter(usage["dates"].values()))
         self.assertEqual(today_counts, {"fake": 1})

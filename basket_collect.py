@@ -9,7 +9,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
-from api_usage import load_usage, usage_snapshot
+from api_usage import load_usage_strict, usage_ledger_health, usage_snapshot
 from backup_status import load_backup_evidence
 from atomic_json_store import read_json
 from collection_plan import build_collection_plan, load_collection_settings
@@ -270,7 +270,26 @@ def _simulate_runtime_quota(
         freshness_hours=settings.get("freshness_hours", 6),
         fresh_scope=settings.get("sub_round_fresh_scope", "primary_only"),
     )
-    usage_payload = load_usage(usage_path)
+    ledger_health = usage_ledger_health(usage_path)
+    usage_payload = ledger_health.get("usage")
+    if usage_payload is None:
+        return {
+            "complete": False,
+            "quota_ledger_healthy": False,
+            "pending_reconciliation_count": int(
+                ledger_health.get("pending_reconciliation_count") or 0
+            ),
+            "quota_ledger_error": (
+                ledger_health.get("error")
+                or ledger_health.get("audit_error")
+                or "配额台账不可读"
+            ),
+            "expected_days_remaining": None,
+            "worst_case_days_remaining": None,
+            "remaining_after_research": None,
+            "monitoring_reserve": None,
+            "research_available": 0,
+        }
     snapshot = usage_snapshot(usage_payload, day=(today or shanghai_today()).isoformat())
     juhe_policy = (settings.get("source_quota_budget") or {}).get("juhe") or 0
     research_ids = load_research_round_ids(db_path) if db_path else set()
@@ -295,6 +314,11 @@ def _simulate_runtime_quota(
     reserve_details = dict(policy.get("reserve_details") or {})
     quota.update(
         {
+            "quota_ledger_healthy": bool(ledger_health.get("healthy")),
+            "pending_reconciliation_count": int(
+                ledger_health.get("pending_reconciliation_count") or 0
+            ),
+            "quota_ledger_error": ledger_health.get("audit_error"),
             "quota_total_limit": policy["total_limit"],
             "quota_used": policy["used"],
             "research_available": policy["research_available"],
@@ -608,7 +632,7 @@ def _run_basket_locked(
             quota_low_remaining_threshold=settings[
                 "source_quota_low_remaining_threshold"
             ],
-            usage_snapshot=usage_snapshot(load_usage(usage_path)),
+            usage_snapshot=usage_snapshot(load_usage_strict(usage_path)),
             freshness_hours=settings.get("freshness_hours", 6),
             fresh_scope=settings.get("sub_round_fresh_scope", "primary_only"),
         )
