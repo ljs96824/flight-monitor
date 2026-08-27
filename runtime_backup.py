@@ -14,6 +14,7 @@ import re
 import shutil
 import sqlite3
 import subprocess
+import sys
 import tarfile
 import tempfile
 from typing import Callable
@@ -116,6 +117,10 @@ class UnknownRuntimePathsError(RuntimeBackupError):
 
 class InvalidBackupOutput(RuntimeBackupError):
     """The output directory can recurse into the project or is ambiguous."""
+
+
+class InvalidBackupLabel(RuntimeBackupError):
+    """The optional operator label is not a safe archive-name slug."""
 
 
 class RuntimeStateValidationError(RuntimeBackupError):
@@ -762,8 +767,25 @@ def _capture_phase_a(
     return payload
 
 
-def _backup_id(timestamp: datetime) -> str:
-    return f"{timestamp.strftime('%Y%m%dT%H%M%SZ')}-{uuid4().hex[:8]}"
+def _normalize_backup_label(label: str | None) -> str | None:
+    if label is None:
+        return None
+    value = str(label).strip()
+    if not value:
+        return None
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,39}", value):
+        raise InvalidBackupLabel(
+            "--label仅允许1-40位ASCII字母、数字、点、下划线或连字符"
+        )
+    return value
+
+
+def _backup_id(timestamp: datetime, label: str | None = None) -> str:
+    prefix = timestamp.strftime("%Y%m%dT%H%M%SZ")
+    safe_label = _normalize_backup_label(label)
+    if safe_label:
+        prefix = f"{prefix}-{safe_label}"
+    return f"{prefix}-{uuid4().hex[:8]}"
 
 
 def create_runtime_backup(
@@ -784,6 +806,7 @@ def create_runtime_backup(
     before_archive=None,
     _existing_gate=None,
     status_path: str | Path | None = None,
+    label: str | None = None,
 ) -> dict:
     project = Path(project_root).resolve()
     data = Path(data_root or project / "data").resolve()
@@ -801,7 +824,7 @@ def create_runtime_backup(
         timestamp = timestamp.replace(tzinfo=timezone.utc)
     timestamp = timestamp.astimezone(timezone.utc)
     created_at_utc = timestamp.isoformat().replace("+00:00", "Z")
-    backup_id = _backup_id(timestamp)
+    backup_id = _backup_id(timestamp, label)
     inventory = scan_runtime_state(
         data,
         include_payloads=include_payloads,
@@ -972,3 +995,11 @@ def sanitized_backup_summary(
         "production_state_changed": bool(production_state_changed),
         "real_api_calls": 0,
     }
+
+
+if __name__ == "__main__":
+    print(
+        "此文件是备份逻辑模块，请使用 scripts/runtime_backup.py --help",
+        file=sys.stderr,
+    )
+    raise SystemExit(2)

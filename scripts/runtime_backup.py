@@ -28,6 +28,9 @@ from runtime_restore import (
 )
 
 
+_COMMANDS = {"create", "verify", "restore", "rehearse"}
+
+
 def _capture_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--output-dir",
@@ -37,6 +40,10 @@ def _capture_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--project-root", default=str(PROJECT_ROOT))
     parser.add_argument("--data-root")
     parser.add_argument("--backup-status")
+    parser.add_argument(
+        "--label",
+        help="可选安全标签，仅允许ASCII字母、数字、点、下划线和连字符",
+    )
     parser.add_argument("--no-payloads", action="store_true")
     parser.add_argument("--round-log-days", type=int, default=7)
     parser.add_argument("--include-diagnostics", action="store_true")
@@ -44,11 +51,21 @@ def _capture_arguments(parser: argparse.ArgumentParser) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="创建并验证 flight-monitor 私有运行数据备份"
+        description="创建并验证 flight-monitor 私有运行数据备份",
+        epilog=(
+            "直接创建: runtime_backup.py --output-dir <绝对路径> [--label NAME]；"
+            "兼容子命令: create / verify / restore / rehearse"
+        ),
     )
     commands = parser.add_subparsers(dest="command", required=True)
 
-    create = commands.add_parser("create", help="创建原子备份归档")
+    create = commands.add_parser(
+        "create",
+        help="创建原子备份归档",
+        description="创建 flight-monitor 私有运行数据备份",
+        epilog="兼容子命令: create / verify / restore / rehearse",
+    )
+    create.prog = parser.prog
     _capture_arguments(create)
     create.add_argument("--route", help="可选：同时冻结该城市航线的两份分析报告")
     create.add_argument("--pair", help="可选机场对，如 PVG-KIX")
@@ -105,6 +122,7 @@ def _create_kwargs(args) -> dict:
         "round_log_days": args.round_log_days,
         "include_diagnostics": args.include_diagnostics,
         "status_path": _backup_status_path(args),
+        "label": getattr(args, "label", None),
     }
 
 
@@ -124,9 +142,42 @@ def _verified_summary(result: dict) -> dict:
     }
 
 
+def _direct_create_summary(result: dict) -> dict:
+    if result.get("status") == "busy":
+        return {
+            "operation": "create",
+            "passed": False,
+            **sanitized_backup_summary(result),
+        }
+    return {
+        "operation": "create",
+        "passed": result.get("status") == "created",
+        "archive_path": result.get("archive_path"),
+        "archive_sha256": result.get("archive_sha256"),
+        "file_count": result.get("file_count"),
+        "total_bytes": result.get("total_bytes"),
+        "sqlite_integrity": result.get("sqlite_integrity"),
+        "json_valid": result.get("json_valid"),
+        "status_fields_written": [
+            "backup_id",
+            "archive_sha256",
+            "verified_restore_at",
+            "off_disk_copy",
+        ],
+        "real_api_calls": 0,
+    }
+
+
 def main(argv=None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    direct_create = bool(
+        not arguments
+        or arguments[0] not in _COMMANDS
+    )
+    if direct_create:
+        arguments.insert(0, "create")
+    args = parser.parse_args(arguments)
     try:
         if args.command == "create":
             result = create_runtime_backup(
@@ -134,7 +185,11 @@ def main(argv=None) -> int:
                 replay_route=args.route,
                 replay_pair=args.pair,
             )
-            _print_summary(sanitized_backup_summary(result))
+            _print_summary(
+                _direct_create_summary(result)
+                if direct_create
+                else sanitized_backup_summary(result)
+            )
             return int(result.get("exit_code", 0))
 
         if args.command == "verify":

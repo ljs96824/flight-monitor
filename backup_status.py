@@ -154,6 +154,46 @@ def verify_off_disk_copy(
     return update_json(status_path, mutate)
 
 
+def verify_off_disk_copy_from_status(
+    copied_archive: str | Path,
+    *,
+    status_path: str | Path,
+    destination_kind: str = "external_path",
+    verified_at: datetime | None = None,
+) -> dict:
+    """Verify an external archive against the hash recorded at backup creation."""
+
+    status = load_backup_status(status_path)
+    backup_id = str(status.get("backup_id") or "")
+    expected_hash = str(status.get("archive_sha256") or "")
+    if not backup_id or len(expected_hash) != 64:
+        raise BackupStatusMismatch("backup_status缺少可核验的归档身份或SHA256")
+    copied = Path(copied_archive)
+    if not copied.is_file():
+        raise OffDiskCopyMissing(f"异盘副本不存在: {copied}")
+    copied_hash = sha256_file(copied)
+    if copied_hash != expected_hash:
+        raise OffDiskCopyMismatch("异盘副本SHA256与backup_status记录不一致")
+
+    def mutate(current):
+        if not _same_archive(
+            current,
+            backup_id=backup_id,
+            archive_sha256=expected_hash,
+        ):
+            raise BackupStatusMismatch("backup_status在核验期间已切换到其他归档")
+        payload = dict(current)
+        payload["off_disk_copy"] = {
+            "verified": True,
+            "verified_at": _timestamp(verified_at),
+            "destination_kind": str(destination_kind or "external_path"),
+            "copied_sha256": copied_hash,
+        }
+        return payload
+
+    return update_json(status_path, mutate)
+
+
 def load_backup_status(status_path: str | Path) -> dict:
     path = Path(status_path)
     if not path.is_file():

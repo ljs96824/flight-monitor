@@ -8,6 +8,7 @@ import os
 from pathlib import Path, PurePosixPath
 import secrets
 import shutil
+import sys
 import tarfile
 import tempfile
 from uuid import uuid4
@@ -507,3 +508,11 @@ def restore_to_production(
         "production_state_changed": True,
         "real_api_calls": 0,
     }
+
+
+if __name__ == "__main__":
+    print(
+        "此文件是恢复逻辑模块，请使用 scripts/runtime_restore.py --help",
+        file=sys.stderr,
+    )
+    raise SystemExit(2)

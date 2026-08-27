@@ -29,15 +29,19 @@
 以下示例把归档写到与项目不同的本地目录。请把路径替换为你的专用备份盘。
 
 ```powershell
-python -X utf8 scripts/runtime_backup.py create --output-dir "E:\flight-monitor-backups"
+python -X utf8 scripts/runtime_backup.py --output-dir "E:\flight-monitor-backups"
 ```
 
 默认包含 payload 和最近 7 日轮档，不包含超大的可选诊断日志。常用开关：
 
 ```powershell
-python -X utf8 scripts/runtime_backup.py create --output-dir "E:\flight-monitor-backups" --round-log-days 14 --include-diagnostics
-python -X utf8 scripts/runtime_backup.py create --output-dir "E:\flight-monitor-backups" --no-payloads
+python -X utf8 scripts/runtime_backup.py --output-dir "E:\flight-monitor-backups" --label weekly
+python -X utf8 scripts/runtime_backup.py --output-dir "E:\flight-monitor-backups" --round-log-days 14 --include-diagnostics
+python -X utf8 scripts/runtime_backup.py --output-dir "E:\flight-monitor-backups" --no-payloads
 ```
+
+`--label` 仅接受 1-40 位 ASCII 字母、数字、点、下划线或连字符，并进入本地归档名；
+不要在标签中写路线、邮箱或其他个人信息。成功摘要打印归档路径、SHA-256、文件数与总字节数。
 
 若已有采集轮运行，命令返回 `status=busy`、exit code `2`，且不产生归档或最终 manifest。它不会等待，也不会接管正在持有的 OS 文件锁。
 
@@ -53,43 +57,43 @@ SHA-256、恢复核验时刻与异盘副本核验结果，不记录归档路径�
 恢复/异盘证据失效；该状态文件属于本机门禁元数据，不进入备份归档，也不会触发 strict
 扫描失败。
 
-## 2. 只验证归档
+## 2. 隔离恢复并完整核验
 
-`verify` 在临时目录解压、完整核验后删除临时恢复结果：
+恢复入口在临时目录解压、完整核验后删除临时恢复结果：
 
 ```powershell
-python -X utf8 scripts/runtime_backup.py verify --archive "E:\flight-monitor-backups\flight-monitor-<backup_id>.tar.gz"
+python -X utf8 scripts/runtime_restore.py --archive "E:\flight-monitor-backups\flight-monitor-<backup_id>.tar.gz"
 ```
 
 校验顺序是：归档 SHA-256、tar 路径与成员类型、文件数和总展开大小、manifest 逐文件 SHA、JSON 解析、SQLite `integrity_check`、`user_version` 与表行数。
+全部通过后才原子写入 `backup_status.json.verified_restore_at`。
 
-## 3. 隔离恢复
+解压器拒绝绝对路径、`..`、symlink、hardlink、device、重复成员以及越界路径，
+不使用裸 `extractall`。归档缺失、旁路 SHA 不一致、归档损坏或 manifest 校验失败均返回非零退出码。
 
-不指定目标时，恢复到系统新建的临时目录：
+## 3. 核验异盘副本与查看状态
 
-```powershell
-python -X utf8 scripts/runtime_backup.py restore --archive "E:\flight-monitor-backups\flight-monitor-<backup_id>.tar.gz"
-```
-
-也可指定一个尚不存在的新目录：
-
-```powershell
-python -X utf8 scripts/runtime_backup.py restore --archive "E:\flight-monitor-backups\flight-monitor-<backup_id>.tar.gz" --destination "E:\flight-monitor-restore-check"
-```
-
-已有目标目录会被拒绝。解压器拒绝绝对路径、`..`、symlink、hardlink、device、重复成员以及越界路径，不使用裸 `extractall`。
-
-把归档复制到另一块物理盘或私有加密云目录后，用同一次隔离恢复同时核验副本：
+先完成第 2 步，再把归档复制到另一块物理盘或私有加密云目录。以下命令读取副本、
+计算 SHA-256，并与创建备份时记录在 `backup_status.json` 中的本地归档 SHA 比对：
 
 ```powershell
-python -X utf8 scripts/runtime_backup.py restore --archive "E:\flight-monitor-backups\flight-monitor-<backup_id>.tar.gz" --verify-off-disk "F:\private-backups\flight-monitor-<backup_id>.tar.gz" --off-disk-kind physical_disk
+python -X utf8 scripts/runtime_restore.py --verify-off-disk "F:\private-backups\flight-monitor-<backup_id>.tar.gz" --off-disk-kind physical_disk
 ```
 
-工具先完整恢复本地归档，再读取目标副本并逐字节计算 SHA-256。只有副本存在、不是本地
-归档同一文件、且 SHA 与本地归档完全一致时，`backup_status.json` 才写入
+只有副本存在且 SHA 与记录值完全一致时，`backup_status.json` 才写入
 `off_disk_copy.verified=true`。可用 `destination_kind` 为
 `physical_disk`、`private_encrypted_cloud` 或团队约定的其他非敏感类别；它是介质类型声明，
 不会记录私有路径。
+
+查看 readiness 使用的全部备份证据：
+
+```powershell
+python -X utf8 scripts/runtime_restore.py --status
+```
+
+三个推荐入口都提供完整 `--help`，失败返回非零退出码。根目录的 `runtime_backup.py`
+与 `runtime_restore.py` 仅保留纯逻辑；直接运行会明确提示改用 `scripts/`，不再静默退出。
+原 `scripts/runtime_backup.py create|verify|restore|rehearse` 子命令继续兼容已有自动化。
 
 ## 4. 创建、恢复并复放
 
@@ -117,7 +121,7 @@ python -X utf8 scripts/runtime_backup.py restore --archive "E:\flight-monitor-ba
 
 - 每周至少一次执行完整 `rehearse`。
 - 每次重大改动前必须执行一次完整 `rehearse`。
-- 归档移动到其他介质后，运行带 `--verify-off-disk` 的隔离恢复，确认恢复合同与传输 SHA 同时通过。
+- 归档移动到其他介质后，先隔离恢复，再运行独立 `--verify-off-disk` 核验传输 SHA。
 - 记录脱敏摘要即可；不要把私有 manifest、路线、订阅、payload 标识或归档本身提交到 Git。
 - `status=busy` 不算备份失败，但也不算已有新备份；待当前采集结束后重新执行。
 

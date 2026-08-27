@@ -466,8 +466,24 @@ class DocsAccuracyTest(unittest.TestCase):
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("create", result.stdout)
-        self.assertIn("rehearse", result.stdout)
+        self.assertIn("--output-dir", result.stdout)
+        self.assertIn("--label", result.stdout)
+        self.assertIn("--round-log-days", result.stdout)
+        self.assertIn("兼容子命令", result.stdout)
+        restore_help = subprocess.run(
+            [sys.executable, "-X", "utf8", "scripts/runtime_restore.py", "--help"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+            check=False,
+        )
+        self.assertEqual(restore_help.returncode, 0, restore_help.stderr)
+        self.assertIn("--archive", restore_help.stdout)
+        self.assertIn("--verify-off-disk", restore_help.stdout)
+        self.assertIn("--status", restore_help.stdout)
 
 if __name__ == "__main__":
     unittest.main()
