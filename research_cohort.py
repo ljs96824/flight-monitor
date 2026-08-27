@@ -233,6 +233,34 @@ def apply_research_round_outcomes(
     return outcomes
 
 
+def record_research_ledger_degraded(
+    state: dict,
+    *,
+    round_id: str,
+    today: date,
+    actual_requests: int,
+) -> dict:
+    """Record an evidence-degraded round without advancing research state."""
+    cohort = _cohort_state(state)
+    record = {
+        "round_id": str(round_id),
+        "observed_day_shanghai": today.isoformat(),
+        "status": "ledger_degraded",
+        "ledger_degraded": True,
+        "research_progress_applied": False,
+        "valid_research_day": False,
+        "plan_actual_requests": max(0, int(actual_requests or 0)),
+    }
+    cohort["last_round"] = record
+    cohort.setdefault("events", []).append(
+        {
+            "kind": "ledger_degraded",
+            **record,
+        }
+    )
+    return record
+
+
 def _subscription_value(subscription: dict, key: str):
     value = subscription.get(key)
     if value not in (None, ""):

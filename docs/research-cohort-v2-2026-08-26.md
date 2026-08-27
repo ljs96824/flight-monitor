@@ -48,6 +48,13 @@ T=0再完成，在 `today > depart_date` 时停止，绝不续到 `today+60`。
 
 历史 observations 不修改。
 
+## 台账降级轮
+
+`CollectionPlan.execute()` 返回的 `PlanExecutionReport.ledger_degraded` 是研究进度的硬闸。
+该值为 `true` 时，API 与观测结果仍按事实汇总，但不调用
+`apply_research_round_outcomes`，不增加 `probe_valid_n`，也不完成 T=0 锚点。篮子摘要记为
+`status=partial`、`ledger_degraded=true`、`research_progress_applied=false`，研究状态的
+`last_round` 同步登记该证据缺口；只有台账正常的轮次才推进研究状态。
 ## 全系统配额模拟
 
 只读入口为 `scripts/research_quota_simulation.py`。它只构造

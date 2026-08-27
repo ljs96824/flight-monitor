@@ -35,6 +35,7 @@ from research_cohort import (
     active_user_monitor_dates,
     apply_research_quota_guard,
     apply_research_round_outcomes,
+    record_research_ledger_degraded,
     evaluate_research_hard_gates,
     inspect_research_migrations,
     load_research_round_ids,
@@ -562,6 +563,9 @@ def _run_basket_locked(
     success = 0
     failed = 0
     plan_active = False
+    execution_report = None
+    ledger_degraded = False
+    research_progress_applied = False
     try:
         round_context_tokens = set_current_round(round_id, db_path=db_path)
         plan = build_collection_plan(
@@ -587,9 +591,22 @@ def _run_basket_locked(
             freshness_hours=settings.get("freshness_hours", 6),
             fresh_scope=settings.get("sub_round_fresh_scope", "primary_only"),
         )
-        plan.execute()
+        execution_report = plan.execute()
+        ledger_degraded = bool(execution_report.ledger_degraded)
 
-        if research_enabled:
+        if research_enabled and ledger_degraded:
+            record_research_ledger_degraded(
+                state,
+                round_id=round_id,
+                today=today,
+                actual_requests=execution_report.actual_requests,
+            )
+            _write_state(Path(state_path), state)
+            safe_log(
+                f"[研究采样告警] round={round_id} collection ledger降级,"
+                f"研究进度未推进 实际请求={execution_report.actual_requests}"
+            )
+        elif research_enabled:
             outcomes = apply_research_round_outcomes(
                 state,
                 requests=basket_requests,
@@ -597,6 +614,7 @@ def _run_basket_locked(
                 today=today,
                 db_path=db_path,
             )
+            research_progress_applied = True
             _write_state(Path(state_path), state)
             for outcome in outcomes:
                 safe_log(
@@ -678,7 +696,7 @@ def _run_basket_locked(
         if plan_active:
             deactivate_collection_plan()
 
-        round_status = "ok" if failed == 0 else "partial"
+        round_status = "ok" if failed == 0 and not ledger_degraded else "partial"
         safe_log(f"[篮子完成] 队列={queues} 成功={success} 失败={failed} 总写入={written}")
         log_retention_dry_run(BASE_DIR, config_path=CONFIG_PATH)
         if round_archive_started:
@@ -694,6 +712,19 @@ def _run_basket_locked(
         "failed": failed,
         "written": written,
     }
+    if research_enabled:
+        summary.update(
+            {
+                "status": round_status,
+                "ledger_degraded": ledger_degraded,
+                "research_progress_applied": research_progress_applied,
+                "plan_actual_requests": (
+                    int(execution_report.actual_requests)
+                    if execution_report is not None
+                    else 0
+                ),
+            }
+        )
     return summary
 
 

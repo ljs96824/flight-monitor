@@ -640,10 +640,105 @@ class ResearchCohortV2Test(unittest.TestCase):
             state = json.loads((root / "basket_state.json").read_text(encoding="utf-8"))
 
         self.assertEqual((summary["queues"], summary["success"], summary["failed"]), (6, 6, 0))
+        self.assertEqual(summary["status"], "ok")
+        self.assertFalse(summary["ledger_degraded"])
+        self.assertTrue(summary["research_progress_applied"])
+        self.assertTrue(
+            all(
+                probe["probe_valid_n"] == 1
+                for probe in state["research_cohort_v2"]["probes"].values()
+            )
+        )
         self.assertEqual(len(FakeSource.calls), 6)
         self.assertTrue(all(call[0] == "juhe" and call[1:3] == ("PVG", "KIX") for call in FakeSource.calls))
         self.assertIn("research_cohort_v2", state)
         self.assertIn("[研究采样] 已暂停 route=SHA->PEK", output.getvalue())
+
+    def test_ledger_degraded_round_keeps_api_usage_but_freezes_research_progress(self):
+        from api_usage import load_usage, usage_snapshot
+        from basket_collect import run_basket
+        from test_basket_collect import FakeAggregator, FakeSource, fake_source_builder
+
+        settings = {
+            "source_quota_budget": {"juhe": 550},
+            "source_quota_low_remaining_threshold": 50,
+            "freshness_hours": 6,
+            "sub_round_fresh_scope": "primary_only",
+            "research_cohort_v2": True,
+            "research_cohort_v2_gates": {"off_disk_copy": True},
+            "paused_research_routes": [],
+        }
+        ready = {
+            "timestamp_ready": True,
+            "lineage_ready": True,
+            "old_data_readable": True,
+        }
+        quota = {
+            "complete": True,
+            "expected_days_remaining": 30,
+            "worst_case_days_remaining": 20,
+            "remaining_after_research": 500,
+            "monitoring_reserve": 400,
+            "quota_remaining": 500,
+            "research_available": 100,
+        }
+
+        FakeSource.calls.clear()
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root = Path(tmp)
+            output = StringIO()
+            with (
+                patch("basket_collect.load_collection_settings", return_value=settings),
+                patch("basket_collect._load_active_subscriptions_for_research", return_value=[]),
+                patch("basket_collect.inspect_research_migrations", return_value=ready),
+                patch("basket_collect._simulate_runtime_quota", return_value=quota),
+                patch(
+                    "collection_ledger.init_collection_ledger",
+                    side_effect=PermissionError("ledger locked"),
+                ),
+                patch("collection_ledger.append_round_evidence"),
+                patch("basket_collect.apply_research_round_outcomes") as apply_outcomes,
+                patch("basket_collect.count_observations_for_round", return_value=6),
+                redirect_stdout(output),
+            ):
+                summary = run_basket(
+                    today=date(2026, 8, 27),
+                    state_path=root / "basket_state.json",
+                    db_path=root / "observations.sqlite3",
+                    usage_path=root / "api_usage.json",
+                    source_builder=fake_source_builder,
+                    aggregator_factory=FakeAggregator,
+                    singleflight_lock_path=root / "collection.lock",
+                )
+            state = json.loads((root / "basket_state.json").read_text(encoding="utf-8"))
+            usage = usage_snapshot(load_usage(root / "api_usage.json"))
+
+        apply_outcomes.assert_not_called()
+        self.assertEqual(usage["cumulative"].get("juhe"), 6)
+        self.assertEqual(summary["status"], "partial")
+        self.assertTrue(summary["ledger_degraded"])
+        self.assertFalse(summary["research_progress_applied"])
+        self.assertEqual(summary["plan_actual_requests"], 6)
+        self.assertEqual(
+            state["research_cohort_v2"]["last_round"]["status"],
+            "ledger_degraded",
+        )
+        self.assertFalse(
+            state["research_cohort_v2"]["last_round"]["valid_research_day"]
+        )
+        self.assertTrue(
+            all(
+                probe["probe_valid_n"] == 0
+                for probe in state["research_cohort_v2"]["probes"].values()
+            )
+        )
+        self.assertTrue(
+            all(
+                anchor["status"] == "active"
+                for anchor in state["research_cohort_v2"]["anchors"].values()
+            )
+        )
+        self.assertIn("研究进度未推进", output.getvalue())
 
     def test_enabled_basket_with_missing_gate_makes_no_source_call(self):
         from basket_collect import run_basket
