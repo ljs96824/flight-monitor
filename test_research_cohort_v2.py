@@ -387,7 +387,8 @@ class ResearchCohortV2Test(unittest.TestCase):
             "source_quota_low_remaining_threshold": 50,
             "freshness_hours": 6,
             "sub_round_fresh_scope": "primary_only",
-            "research_cohort_v2": True,
+            "research_basket_enabled": True,
+            "research_basket_strategy": "cohort_v2",
             "research_cohort_v2_gates": {
                 "backup_evidence_max_age_days": 30,
                 "other_scheduled_calls": 0,
@@ -559,12 +560,14 @@ class ResearchCohortV2Test(unittest.TestCase):
             {"timestamp_ready": True, "lineage_ready": False, "old_data_readable": True},
         )
 
-    def test_config_defaults_switch_off_and_preserves_paused_route_reasons(self):
+    def test_config_enables_explicit_cohort_and_preserves_paused_route_reasons(self):
         from collection_plan import load_collection_settings
 
         settings = load_collection_settings(Path(__file__).with_name("config.yaml"))
 
-        self.assertFalse(settings["research_cohort_v2"])
+        self.assertTrue(settings["research_basket_enabled"])
+        self.assertEqual(settings["research_basket_strategy"], "cohort_v2")
+        self.assertFalse(settings["research_basket_migrated_from_legacy"])
         self.assertEqual(
             settings["source_quota_budget"]["juhe"]["kind"],
             "purchased_packs",
@@ -615,7 +618,8 @@ class ResearchCohortV2Test(unittest.TestCase):
             "source_quota_low_remaining_threshold": 50,
             "freshness_hours": 6,
             "sub_round_fresh_scope": "primary_only",
-            "research_cohort_v2": True,
+            "research_basket_enabled": True,
+            "research_basket_strategy": "cohort_v2",
             "research_cohort_v2_gates": {"backup_evidence_max_age_days": 30},
             "paused_research_routes": [
                 {"route": "SHA->PEK"},
@@ -692,7 +696,8 @@ class ResearchCohortV2Test(unittest.TestCase):
             "source_quota_low_remaining_threshold": 50,
             "freshness_hours": 6,
             "sub_round_fresh_scope": "primary_only",
-            "research_cohort_v2": True,
+            "research_basket_enabled": True,
+            "research_basket_strategy": "cohort_v2",
             "research_cohort_v2_gates": {"backup_evidence_max_age_days": 30},
             "paused_research_routes": [],
         }
@@ -782,7 +787,8 @@ class ResearchCohortV2Test(unittest.TestCase):
             "source_quota_low_remaining_threshold": 50,
             "freshness_hours": 6,
             "sub_round_fresh_scope": "primary_only",
-            "research_cohort_v2": True,
+            "research_basket_enabled": True,
+            "research_basket_strategy": "cohort_v2",
             "research_cohort_v2_gates": {"backup_evidence_max_age_days": 30},
             "paused_research_routes": [],
         }

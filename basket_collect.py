@@ -495,6 +495,28 @@ def run_basket(
     today = today or shanghai_today()
     now = now or datetime.now()
     round_id = make_round_id(now)
+    settings = load_collection_settings(CONFIG_PATH)
+    research_enabled = bool(settings.get("research_basket_enabled"))
+    research_strategy = str(
+        settings.get("research_basket_strategy") or "cohort_v2"
+    ).strip().lower()
+    if research_strategy not in {"cohort_v2", "legacy"}:
+        raise ValueError(
+            f"RESEARCH_BASKET_STRATEGY={research_strategy!r} 无效"
+        )
+    if not research_enabled:
+        safe_log("[篮子跳过] 原因=研究篮子已停用")
+        return {
+            "status": "disabled",
+            "reason": "research_basket_disabled",
+            "actual_requests": 0,
+            "round_id": round_id,
+            "queues": 0,
+            "success": 0,
+            "failed": 0,
+            "written": 0,
+            "skipped": True,
+        }
     singleflight = acquire_collection_singleflight(
         round_id,
         lock_path=singleflight_lock_path,
@@ -522,6 +544,7 @@ def run_basket(
             aggregator_factory=aggregator_factory,
             quota_guard_notifier=quota_guard_notifier,
             workload_class=workload_class,
+            settings=settings,
         )
     finally:
         singleflight.release()
@@ -538,6 +561,7 @@ def _run_basket_locked(
     aggregator_factory: Callable = FlightAggregator,
     quota_guard_notifier=None,
     workload_class: str = RESEARCH_COHORT,
+    settings: dict | None = None,
 ) -> dict:
     today = today or shanghai_today()
     now = now or datetime.now()
@@ -549,11 +573,15 @@ def _run_basket_locked(
         round_archive_started = True
     except Exception as exc:
         safe_log(f"[轮档失败] round_id={round_id} 原因={type(exc).__name__}:{exc}")
-    settings = load_collection_settings(CONFIG_PATH)
+    settings = settings or load_collection_settings(CONFIG_PATH)
     state = load_or_create_state(state_path, today)
-    research_configured = bool(settings.get("research_cohort_v2"))
-    research_enabled = research_runtime_enabled(state, research_configured)
-    if research_configured and not research_enabled:
+    research_strategy = str(settings.get("research_basket_strategy") or "cohort_v2")
+    cohort_enabled = (
+        research_runtime_enabled(state, True)
+        if research_strategy == "cohort_v2"
+        else False
+    )
+    if research_strategy == "cohort_v2" and not cohort_enabled:
         safe_log("[篮子跳过] 原因=研究采样运行态已停用,用户监控继续")
         if round_archive_started:
             end_round_log_archive(status="blocked")
@@ -567,7 +595,7 @@ def _run_basket_locked(
             "failed": 0,
             "written": 0,
         }
-    if research_enabled:
+    if cohort_enabled:
         notifier = quota_guard_notifier or (
             lambda title, content: _default_quota_guard_notifier(
                 state_path, title, content
@@ -607,6 +635,7 @@ def _run_basket_locked(
             }
         _write_state(Path(state_path), state)
     else:
+        safe_log("[研究篮子] strategy=legacy 明示启用legacy策略")
         if renew_expired_queues(state, today):
             _write_state(Path(state_path), state)
         basket_requests = _basket_requests(state)
@@ -658,7 +687,7 @@ def _run_basket_locked(
         execution_report = plan.execute()
         ledger_degraded = bool(execution_report.ledger_degraded)
 
-        if research_enabled and ledger_degraded:
+        if cohort_enabled and ledger_degraded:
             record_research_ledger_degraded(
                 state,
                 round_id=round_id,
@@ -670,7 +699,7 @@ def _run_basket_locked(
                 f"[研究采样告警] round={round_id} collection ledger降级,"
                 f"研究进度未推进 实际请求={execution_report.actual_requests}"
             )
-        elif research_enabled:
+        elif cohort_enabled:
             outcomes = apply_research_round_outcomes(
                 state,
                 requests=basket_requests,
@@ -696,7 +725,7 @@ def _run_basket_locked(
                 },
                 basket_requests,
             ),
-        ) if research_enabled else tuple(
+        ) if cohort_enabled else tuple(
             (
                 route,
                 [
@@ -724,7 +753,7 @@ def _run_basket_locked(
             for item in route_requests:
                 queues += 1
                 queue_name = str(item.get("queue") or "")
-                if not research_enabled and ":" in queue_name:
+                if not cohort_enabled and ":" in queue_name:
                     queue_name = queue_name.rsplit(":", 1)[-1]
                 depart_date = str(item.get("depart_date") or "")
                 try:
@@ -776,7 +805,7 @@ def _run_basket_locked(
         "failed": failed,
         "written": written,
     }
-    if research_enabled:
+    if cohort_enabled:
         summary.update(
             {
                 "status": round_status,

@@ -19,6 +19,44 @@ from request_cache import (
 from source_profiles import source_supports_cabin
 
 
+RESEARCH_BASKET_STRATEGIES = frozenset({"cohort_v2", "legacy"})
+
+
+def _research_basket_config(payload: dict) -> dict:
+    explicit = (
+        "RESEARCH_BASKET_ENABLED" in payload
+        or "RESEARCH_BASKET_STRATEGY" in payload
+    )
+    migrated = not explicit and "RESEARCH_COHORT_V2" in payload
+    if explicit:
+        enabled = _as_bool(payload.get("RESEARCH_BASKET_ENABLED"))
+        strategy = str(
+            payload.get("RESEARCH_BASKET_STRATEGY") or "cohort_v2"
+        ).strip().lower()
+    elif migrated:
+        enabled = _as_bool(payload.get("RESEARCH_COHORT_V2"))
+        strategy = "cohort_v2"
+        safe_log(
+            f"[配置迁移] RESEARCH_COHORT_V2={str(enabled).lower()} "
+            "映射为 RESEARCH_BASKET_ENABLED+RESEARCH_BASKET_STRATEGY=cohort_v2"
+        )
+    else:
+        enabled = False
+        strategy = "cohort_v2"
+    if strategy not in RESEARCH_BASKET_STRATEGIES:
+        allowed = ",".join(sorted(RESEARCH_BASKET_STRATEGIES))
+        raise ValueError(
+            f"RESEARCH_BASKET_STRATEGY={strategy!r} 无效,允许值={allowed}"
+        )
+    return {
+        "research_basket_enabled": enabled,
+        "research_basket_strategy": strategy,
+        "research_basket_migrated_from_legacy": migrated,
+        # 一期兼容只供尚未迁移的只读消费方；执行入口不再读取该别名。
+        "research_cohort_v2": enabled and strategy == "cohort_v2",
+    }
+
+
 @dataclass
 class PlannedRequest:
     source: object
@@ -801,6 +839,9 @@ def load_collection_settings(path: str | Path) -> dict:
             "freshness_hours": 6.0,
             "sub_round_fresh_scope": "primary_only",
             "serpapi_economy_cross_check": False,
+            "research_basket_enabled": False,
+            "research_basket_strategy": "cohort_v2",
+            "research_basket_migrated_from_legacy": False,
             "research_cohort_v2": False,
             "research_cohort_v2_gates": {},
             "paused_research_routes": [],
@@ -809,6 +850,7 @@ def load_collection_settings(path: str | Path) -> dict:
         payload = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
     except (OSError, ValueError):
         payload = {}
+    research_basket = _research_basket_config(payload)
     return {
         "source_quota_budget": dict(payload.get("source_quota_budget") or {}),
         "source_quota_low_remaining_threshold": int(
@@ -823,7 +865,7 @@ def load_collection_settings(path: str | Path) -> dict:
         "serpapi_economy_cross_check": _as_bool(
             payload.get("SERPAPI_ECONOMY_CROSS_CHECK")
         ),
-        "research_cohort_v2": _as_bool(payload.get("RESEARCH_COHORT_V2")),
+        **research_basket,
         "research_cohort_v2_gates": dict(
             payload.get("research_cohort_v2_gates") or {}
         ),

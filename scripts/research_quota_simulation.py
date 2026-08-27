@@ -139,7 +139,9 @@ def build_report(
     )
     return {
         "today": today.isoformat(),
-        "research_switch_enabled": bool(settings.get("research_cohort_v2")),
+        "research_switch_enabled": bool(settings.get("research_basket_enabled")),
+        "research_basket_enabled": bool(settings.get("research_basket_enabled")),
+        "research_basket_strategy": settings.get("research_basket_strategy"),
         "research_request_count": len(requests),
         "sample_roles": {
             role: sum(1 for item in requests if item.get("sample_role") == role)

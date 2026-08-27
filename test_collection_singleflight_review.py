@@ -305,6 +305,13 @@ class CollectionBusySideEffectContractTest(unittest.TestCase):
             with (
                 redirect_stdout(output),
                 patch(
+                    "basket_collect.load_collection_settings",
+                    return_value={
+                        "research_basket_enabled": True,
+                        "research_basket_strategy": "cohort_v2",
+                    },
+                ),
+                patch(
                     "basket_collect.acquire_collection_singleflight",
                     return_value=self._busy_gate(),
                 ),

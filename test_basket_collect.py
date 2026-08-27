@@ -144,10 +144,23 @@ class BasketCollectTest(unittest.TestCase):
         from api_usage import initialize_usage_ledger
         from basket_collect import run_basket
 
+        legacy_settings = {
+            "source_quota_budget": {"juhe": 550},
+            "source_quota_low_remaining_threshold": 50,
+            "freshness_hours": 6,
+            "sub_round_fresh_scope": "primary_only",
+            "research_basket_enabled": True,
+            "research_basket_strategy": "legacy",
+            "research_cohort_v2_gates": {},
+            "paused_research_routes": [],
+        }
         with tempfile.TemporaryDirectory() as tmp:
             initialize_usage_ledger(Path(tmp) / "api_usage.json")
             output = StringIO()
-            with patch("basket_collect.count_observations_for_round", return_value=123):
+            with (
+                patch("basket_collect.load_collection_settings", return_value=legacy_settings),
+                patch("basket_collect.count_observations_for_round", return_value=123),
+            ):
                 with redirect_stdout(output):
                     summary = run_basket(
                         today=date(2026, 7, 10),
@@ -169,6 +182,7 @@ class BasketCollectTest(unittest.TestCase):
             [["juhe"], ["juhe", "hasdata"], ["hasdata", "juhe"]],
         )
         log = output.getvalue()
+        self.assertIn("strategy=legacy 明示启用legacy策略", log)
         self.assertEqual(log.count("[篮子失败] route=PVG->HKG"), 2)
         self.assertIn("[篮子完成] 队列=6 成功=4 失败=2 总写入=123", log)
 
@@ -177,12 +191,25 @@ class BasketCollectTest(unittest.TestCase):
         from basket_collect import run_basket
         from sources.aggregator import FlightAggregator
 
+        legacy_settings = {
+            "source_quota_budget": {"juhe": 550},
+            "source_quota_low_remaining_threshold": 50,
+            "freshness_hours": 6,
+            "sub_round_fresh_scope": "primary_only",
+            "research_basket_enabled": True,
+            "research_basket_strategy": "legacy",
+            "research_cohort_v2_gates": {},
+            "paused_research_routes": [],
+        }
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             root = Path(tmp)
             initialize_usage_ledger(root / "api_usage.json")
             db_path = root / "observations.sqlite3"
             output = StringIO()
-            with patch("request_cache.DEFAULT_CACHE_DIR", root / "cache"):
+            with (
+                patch("basket_collect.load_collection_settings", return_value=legacy_settings),
+                patch("request_cache.DEFAULT_CACHE_DIR", root / "cache"),
+            ):
                 with redirect_stdout(output):
                     summary = run_basket(
                         today=date(2026, 7, 10),
