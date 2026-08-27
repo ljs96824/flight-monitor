@@ -225,6 +225,35 @@ def _record_retry_actual(source_name: str, plan_scope: str | None = None) -> Non
         _source_stats_bucket(stats, source_name)["retries"] += 1
 
 
+def _persist_api_usage_attempt(source_name: str) -> None:
+    """Persist each source attempt immediately so round interruption cannot lose it."""
+
+    if not _track_usage_for_round:
+        return
+    from api_usage import DEFAULT_USAGE_PATH, record_actual_requests
+
+    path = _usage_path_for_round or DEFAULT_USAGE_PATH
+    try:
+        record_actual_requests(
+            {source_name: 1},
+            path=path,
+            round_id=_current_stats_round_id,
+        )
+    except Exception as exc:
+        safe_log(
+            f"[\u914d\u989d\u53f0\u8d26\u5931\u8d25] "
+            f"round={_current_stats_round_id or 'unknown'} "
+            f"\u6e90={source_name} \u539f\u56e0={exc}"
+        )
+
+
+def _fetch_source_attempt(source, origin, dest, date_str, cabin_class, source_name: str):
+    try:
+        return source.fetch(origin, dest, date_str, cabin_class)
+    finally:
+        _persist_api_usage_attempt(source_name)
+
+
 def _record_skip(source_name: str) -> None:
     for stats in (_stats, _process_stats):
         stats["skipped"] += 1
@@ -927,7 +956,14 @@ def cached_fetch(
     retry_count = 0
     try:
         try:
-            result = source.fetch(origin, dest, date_str, cabin_class)
+            result = _fetch_source_attempt(
+                source,
+                origin,
+                dest,
+                date_str,
+                cabin_class,
+                source_name,
+            )
         except OSError as first_error:
             retry_count = 1
             first_metadata = _source_exception_metadata(first_error)
@@ -948,7 +984,14 @@ def cached_fetch(
                 f"[采集触发] route_type={route_type} 航线={key[1]}->{key[2]} "
                 f"日期={key[3]} 源={source_name} 第{retry_trigger_count}次"
             )
-            result = source.fetch(origin, dest, date_str, cabin_class)
+            result = _fetch_source_attempt(
+                source,
+                origin,
+                dest,
+                date_str,
+                cabin_class,
+                source_name,
+            )
     except Exception as exc:
         result = {
             "flights": [],
@@ -1050,7 +1093,7 @@ def _flush_api_usage_ledger() -> None:
         DEFAULT_USAGE_PATH,
         format_quota_overview,
         load_usage,
-        record_actual_requests,
+        round_actual_counts,
         usage_snapshot,
     )
 
@@ -1060,16 +1103,13 @@ def _flush_api_usage_ledger() -> None:
         for source, values in (_stats.get("by_source") or {}).items()
         if int(values.get("actual", 0) or 0) > 0
     }
-    try:
-        payload = record_actual_requests(
-            actual_by_source,
-            path=path,
-            round_id=_current_stats_round_id,
-        )
-    except OSError as exc:
-        safe_log(f"[配额台账失败] round={_current_stats_round_id or 'unknown'} 原因={exc}")
-        _usage_flushed_for_round = True
-        return
+    payload = load_usage(path)
+    persisted_by_source = round_actual_counts(payload, _current_stats_round_id)
+    safe_log(
+        f"[\u914d\u989d\u6052\u7b49\u5f0f] round={_current_stats_round_id or 'unknown'} "
+        f"\u5185\u5b58\u5b9e\u9645={actual_by_source} \u5df2\u843d\u8d26={persisted_by_source} "
+        f"\u4e00\u81f4={actual_by_source == persisted_by_source}"
+    )
     snapshot = usage_snapshot(payload)
     for source, budget in _quota_budgets_for_round.items():
         today_count = int((snapshot.get("today") or {}).get(source, 0) or 0)

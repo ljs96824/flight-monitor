@@ -194,6 +194,22 @@ def usage_snapshot(payload: dict, *, day: str | None = None) -> dict:
     }
 
 
+def round_actual_counts(payload: dict, round_id: str | None) -> dict[str, int]:
+    """Sum physical API attempts already persisted for one round."""
+
+    target = str(round_id or "unknown")
+    counts: dict[str, int] = {}
+    for entry in (payload or {}).get("entries") or []:
+        if not isinstance(entry, dict) or str(entry.get("round_id")) != target:
+            continue
+        for source, raw_count in (entry.get("counts") or {}).items():
+            value = max(0, int(raw_count or 0))
+            if value:
+                source_name = str(source)
+                counts[source_name] = counts.get(source_name, 0) + value
+    return counts
+
+
 def format_quota_overview(
     payload: dict,
     quota_budgets: dict,
