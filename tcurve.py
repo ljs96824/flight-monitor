@@ -18,6 +18,7 @@ from method_registry import method_version
 from observation_time import resolve_observed_day_shanghai
 from provenance import build_envelope
 from source_profiles import expected_listing_sources, normalize_route_type
+from subscription_preflight import shanghai_today
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -518,7 +519,8 @@ def build_tcurve(
     current_t = None
     if current_depart_date:
         current_t = (
-            date.fromisoformat(str(current_depart_date)) - (as_of_date or date.today())
+            date.fromisoformat(str(current_depart_date))
+            - (as_of_date or shanghai_today())
         ).days
 
     sample_role_counts = Counter(

@@ -73,6 +73,7 @@ from price_estimator import (
     round_display_price,
 )
 from pricing import assert_same_caliber, budget_to_pp, caliber_label, itinerary_price_pp, passenger_rate_sum, price_in_scope
+from subscription_preflight import shanghai_today
 from project_time import SHANGHAI_TZ
 from source_profiles import normalize_route_type, retired_listing_sources
 from provenance import (
@@ -5889,7 +5890,7 @@ def _payload_price_calendar(route_info: dict, analysis_result: dict) -> dict:
         uncollected_by_date[key] for key in sorted(uncollected_by_date)
     ]
     savings = calendar.get("savings") or []
-    today = date.today()
+    today = shanghai_today()
     def is_future_row(row: dict) -> bool:
         if not isinstance(row, dict) or not row.get("date"):
             return False
@@ -13927,11 +13928,15 @@ def _email_price_calendar_body(payload: dict) -> str:
         if not isinstance(row, dict):
             continue
         row_date_key = str(row.get("date") or "")[:10]
-        if len(row_date_key) == 10:
+        eligible = bool(row.get("eligible_for_recommendation", True))
+        if len(row_date_key) == 10 and eligible:
             _mark_provenance_reference(payload, f"calendar.{row_date_key}.min")
         date_text = f"{str(row.get('date') or '')[5:]} {row.get('weekday') or ''}".strip()
         tags = []
-        if row.get("lowest"):
+        status_text = str(row.get("status_text") or "").strip()
+        if status_text:
+            tags.append(status_text)
+        if row.get("lowest") and eligible:
             tags.append("最低")
         if row.get("selected"):
             tags.append("你选的")
@@ -13944,6 +13949,8 @@ def _email_price_calendar_body(payload: dict) -> str:
         price_style = "color:#16a34a;font-weight:600;" if row.get("lowest") else "color:#333;"
         if row.get("selected"):
             price_style = "color:#2563eb;font-weight:600;"
+        if not eligible:
+            price_style = "color:#888;"
         row_single_price = _calendar_row_price(row)
         display_price = _calendar_display_price(
             row,
@@ -13953,8 +13960,17 @@ def _email_price_calendar_body(payload: dict) -> str:
         )
         if is_roundtrip_scope and passenger_calendar_applies and row_single_price is not None:
             tags.append(f"单人往返{_price_text(row_single_price)}×{passenger_factor:g}")
-        price_text = _price_text(display_price if display_price is not None else row.get("min_price"))
-        if not is_roundtrip_scope and "(单程)" not in price_text:
+        if display_price is None and row.get("min_price") is None:
+            price_text = status_text or "暂无价格"
+        else:
+            price_text = _price_text(
+                display_price if display_price is not None else row.get("min_price")
+            )
+        if (
+            (display_price is not None or row.get("min_price") is not None)
+            and not is_roundtrip_scope
+            and "(单程)" not in price_text
+        ):
             price_text += "(单程)"
         table.append(
             "<tr>"
@@ -14148,7 +14164,12 @@ def _email_forecast_body(payload: dict) -> str:
 
 def _price_calendar_insight_text(payload: dict) -> str:
     calendar = payload.get("price_calendar") or {}
-    rows = [row for row in (calendar.get("rows") or []) if isinstance(row, dict)]
+    rows = [
+        row
+        for row in (calendar.get("rows") or [])
+        if isinstance(row, dict)
+        and row.get("eligible_for_recommendation", True)
+    ]
     if not rows:
         return ""
     selected = next((row for row in rows if row.get("selected")), None)

@@ -36,6 +36,7 @@ from price_calendar import (
     analyze_date_savings as _calendar_date_savings,
     analyze_row_savings as _calendar_row_savings,
     analyze_weekday_pattern as _calendar_weekday_pattern,
+    calendar_record_is_eligible as _calendar_record_is_eligible,
     calendar_rows as _calendar_rows,
     calendar_price_on_date as _calendar_price_on_date,
     roundtrip_calendar_rows as _roundtrip_calendar_rows,
@@ -53,6 +54,7 @@ from log_utils import safe_log
 from mixed_cabin import match_mixed_cabin_combinations
 from observations_store import get_current_round
 from storage import get_all_history, get_latest_alternatives, get_target_history
+from subscription_preflight import shanghai_today
 
 IATA_CITY_NAMES = {
     "PVG": "上海浦东",
@@ -4129,7 +4131,7 @@ def _snapshot_timestamp(snapshot_time: str | None) -> float | None:
 
 
 def _depart_timestamp(days_to_dept: int) -> float:
-    depart_day = date.today() + timedelta(days=days_to_dept)
+    depart_day = shanghai_today() + timedelta(days=days_to_dept)
     return datetime.combine(depart_day, time.min).timestamp()
 
 
@@ -4375,7 +4377,7 @@ def weekday_analysis(db_path, route, depart_date) -> dict:
 
     sorted_days = sorted(stats.items(), key=lambda item: item[1]["avg"])
     cheapest_day = sorted_days[0][0]
-    today = weekday_names[datetime.now().weekday()]
+    today = weekday_names[shanghai_today().weekday()]
 
     return {
         "weekday_stats": dict(sorted_days),
@@ -5605,7 +5607,7 @@ def analyze(
         for price in (_to_float(record.get("price")) for record in target_history)
         if price is not None
     ]
-    days_to_dept = (date.fromisoformat(depart_date) - date.today()).days
+    days_to_dept = (date.fromisoformat(depart_date) - shanghai_today()).days
     data_points = len(prices)
 
     current_price = prices[-1] if prices else None
@@ -6203,7 +6205,11 @@ def _parse_collected_at(value) -> datetime | None:
 def _calendar_selected_price(rows: list[dict]):
     """Return the selected date's calendar price, preserving the calendar scope."""
     for row in rows or []:
-        if not isinstance(row, dict) or not row.get("selected"):
+        if (
+            not isinstance(row, dict)
+            or not row.get("selected")
+            or not row.get("eligible_for_recommendation", True)
+        ):
             continue
         try:
             price = float(row.get("min_price"))
@@ -6239,7 +6245,9 @@ def analyze_roundtrip_price_calendar(
         return_low=return_low,
         return_date=return_date,
         return_sources=return_info.get("sources") or return_info.get("source"),
-        return_observed_at=return_info.get("updated_at"),
+        return_observed_at=(
+            return_info.get("last_success_at") or return_info.get("updated_at")
+        ),
         return_sample_n=return_info.get("count"),
     )
     savings = _calendar_row_savings(rows, target_date)
@@ -6295,7 +6303,7 @@ def build_price_hint_from_calendar(calendar: dict | None) -> dict:
     """Return a compact recent price range for form-side budget anchoring."""
     prices = []
     for info in ((calendar or {}).get("dates") or {}).values():
-        if not isinstance(info, dict):
+        if not _calendar_record_is_eligible(info):
             continue
         try:
             price = float(info.get("min_price"))
@@ -9954,7 +9962,7 @@ def analyze_roundtrip_prices(
     if latest_total is None or abs(latest_total - current_total) >= 1:
         chart_rows.append(
             {
-                "date": datetime.now().date().isoformat(),
+                "date": shanghai_today().isoformat(),
                 "outbound": outbound_current,
                 "return": return_current,
                 "total": current_total,

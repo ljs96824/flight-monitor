@@ -41,6 +41,7 @@ from method_registry import method_version
 from price_calendar import analyze_row_savings, analyze_weekday_pattern, roundtrip_calendar_rows
 from price_estimator import passenger_price_factor
 from pricing import budget_to_pp, itinerary_price_pp, price_in_scope
+from subscription_preflight import shanghai_today
 
 try:
     import httpx  # noqa: F401
@@ -67,7 +68,7 @@ def resolve_snapshot_dates(
     return_date: str | None = None,
 ) -> tuple[str, str]:
     """解析快照日期；默认使用今天后第21天，也允许环境变量显式覆盖。"""
-    today = today or date.today()
+    today = today or shanghai_today()
     depart_text = depart_date or os.getenv("SNAPSHOT_DEPART_DATE")
     if not depart_text:
         depart_text = (today + timedelta(days=21)).isoformat()
@@ -394,7 +395,7 @@ def _intl_plan_snapshot(flight: dict, variant: str) -> dict:
 
 def intl_dual_source_snapshot(today: date | None = None) -> dict:
     """离线跑国际双源的 collect、过滤和方案对比链路。"""
-    depart_date = ((today or date.today()) + timedelta(days=45)).isoformat()
+    depart_date = ((today or shanghai_today()) + timedelta(days=45)).isoformat()
     original_cached_fetch = aggregator_module.cached_fetch
     original_get_source_profile = aggregator_module.get_source_profile
 
@@ -677,7 +678,7 @@ def calendar_snapshot(passenger_factor: float) -> dict:
 
 
 def tcurve_snapshot() -> dict:
-    current_t = (date.fromisoformat(DEPART_DATE) - date.today()).days
+    current_t = (date.fromisoformat(DEPART_DATE) - shanghai_today()).days
     t_values = [current_t - 7, current_t, current_t + 7]
     points = [
         {

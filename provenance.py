@@ -16,6 +16,7 @@ from flight_combo_utils import normalize_combo
 from method_registry import METHOD_VERSIONS, method_version, method_version_for_stat
 from project_time import SHANGHAI_TZ as PROJECT_TIMEZONE
 from source_profiles import expected_listing_sources, normalize_route_type
+from subscription_preflight import shanghai_today
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -299,7 +300,7 @@ def compute_dual_source_agreement(
     timeout: float = 3.0,
 ) -> dict:
     """从面板分源行计算近窗口双源历史一致度。"""
-    end = as_of_date or date.today()
+    end = as_of_date or shanghai_today()
     start, end = _window_bounds(end, window_days)
     rows = load_route_observations(
         db_path,
@@ -327,7 +328,7 @@ def build_route_provenance_context(
     timeout: float = 3.0,
 ) -> dict:
     """一次只读查询生成通知所需的观测窗口、源覆盖和一致度。"""
-    end = as_of_date or date.today()
+    end = as_of_date or shanghai_today()
     start, end = _window_bounds(end, window_days)
     computed_at = datetime.now().astimezone().isoformat(timespec="seconds")
     rows = load_route_observations(
@@ -933,6 +934,8 @@ def attach_payload_provenance(
     )
     for row in calendar.get("rows") or []:
         if not isinstance(row, dict):
+            continue
+        if not row.get("eligible_for_recommendation", True):
             continue
         row_date = str(row.get("date") or "")[:10]
         price = _valid_price(row.get("min_price") or row.get("value"))

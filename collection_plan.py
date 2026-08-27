@@ -17,6 +17,7 @@ from request_cache import (
     record_planned_source_skip,
 )
 from source_profiles import source_supports_cabin
+from subscription_preflight import shanghai_today
 
 
 RESEARCH_BASKET_STRATEGIES = frozenset({"cohort_v2", "legacy"})
@@ -563,7 +564,7 @@ def _flex_dates(center_text: str, flexibility) -> list[str]:
         if days >= stage:
             offsets.update(range(-stage, stage + 1))
     offsets.discard(0)
-    today = date.today()
+    today = shanghai_today()
     return [
         (center + timedelta(days=offset)).isoformat()
         for offset in sorted(offsets)
@@ -572,14 +573,27 @@ def _flex_dates(center_text: str, flexibility) -> list[str]:
 
 
 def _calendar_dates(target_date: str, origin: str, dest: str, cache_hours: int = 6) -> list[str]:
-    from price_calendar import _query_dates, is_stale, load_calendar
+    from price_calendar import (
+        _query_dates,
+        calendar_record_is_eligible,
+        load_calendar,
+    )
 
-    cached_dates = (load_calendar(f"{origin}-{dest}").get("dates") or {})
+    cached_dates = (
+        load_calendar(
+            f"{origin}-{dest}",
+            legacy_stale_hours=cache_hours,
+        ).get("dates")
+        or {}
+    )
     result = []
     for item in _query_dates(target_date):
         date_str = item.isoformat()
         cached = cached_dates.get(date_str)
-        if isinstance(cached, dict) and not is_stale(cached.get("updated_at"), cache_hours):
+        if isinstance(cached, dict) and calendar_record_is_eligible(
+            cached,
+            legacy_stale_hours=cache_hours,
+        ):
             continue
         result.append(date_str)
     return result

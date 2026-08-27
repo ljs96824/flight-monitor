@@ -2065,7 +2065,9 @@ def _process_subscription_locked(
             include_metadata=True,
             since=constraint_history_since,
         )
-        days_to_dept = (date.fromisoformat(sub["depart_date"]) - date.today()).days
+        days_to_dept = (
+            date.fromisoformat(sub["depart_date"]) - _shanghai_today()
+        ).days
         current_min_price = (
             analysis.get("price_range", [0])[0] if analysis.get("price_range") else 0
         )
@@ -2092,6 +2094,7 @@ def _process_subscription_locked(
                         calendar_source,
                         cabin_class=calendar_cabin_class,
                         passengers=request_passengers,
+                        round_id=get_current_round()[0],
                     )
                     outbound_price_calendar = calendar
                     price_calendar_result = analyze_price_calendar(
@@ -2328,7 +2331,7 @@ def _process_subscription_locked(
                     ),
                 )
                 return_analysis["days_to_dept"] = (
-                    date.fromisoformat(return_date) - date.today()
+                    date.fromisoformat(return_date) - _shanghai_today()
                 ).days
                 return_analysis["collected_at"] = return_collected_at
                 return_analysis["nearby_dates"] = return_nearby_dates
