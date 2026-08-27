@@ -5,6 +5,9 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
+from project_time import SHANGHAI_TZ
+from subscription_preflight import shanghai_today
+
 
 class FakeSource:
     def __init__(self, prices):
@@ -30,12 +33,12 @@ class PriceCalendarTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             data_dir = Path(tmp)
-            today = date.today()
+            today = shanghai_today()
             target = today + timedelta(days=3)
             fresh_date = (target - timedelta(days=1)).isoformat()
             stale_date = (target + timedelta(days=1)).isoformat()
-            fresh_time = (datetime.now() - timedelta(hours=1)).isoformat(timespec="seconds")
-            stale_time = (datetime.now() - timedelta(hours=7)).isoformat(timespec="seconds")
+            fresh_time = (datetime.now(SHANGHAI_TZ) - timedelta(hours=1)).isoformat(timespec="seconds")
+            stale_time = (datetime.now(SHANGHAI_TZ) - timedelta(hours=7)).isoformat(timespec="seconds")
             path = data_dir / "PVG-PEK.json"
             path.write_text(
                 json.dumps(
@@ -80,9 +83,9 @@ class PriceCalendarTest(unittest.TestCase):
     def test_calendar_rows_hide_past_dates(self):
         from price_calendar import calendar_rows
 
-        yesterday = (date.today() - timedelta(days=1)).isoformat()
-        today = date.today().isoformat()
-        tomorrow = (date.today() + timedelta(days=1)).isoformat()
+        yesterday = (shanghai_today() - timedelta(days=1)).isoformat()
+        today = shanghai_today().isoformat()
+        tomorrow = (shanghai_today() + timedelta(days=1)).isoformat()
         rows = calendar_rows(
             {
                 "route": "PVG-PEK",
@@ -103,7 +106,7 @@ class PriceCalendarTest(unittest.TestCase):
     def test_roundtrip_reference_rows_add_fixed_return_low(self):
         from price_calendar import roundtrip_calendar_rows
 
-        target = date.today() + timedelta(days=9)
+        target = shanghai_today() + timedelta(days=9)
         cheaper = target - timedelta(days=3)
         later = target + timedelta(days=1)
         return_date = target + timedelta(days=4)
@@ -136,7 +139,7 @@ class PriceCalendarTest(unittest.TestCase):
     def test_analyzer_roundtrip_calendar_uses_fixed_return_date_price(self):
         from analyzer import analyze_price_calendar
 
-        target = date.today() + timedelta(days=9)
+        target = shanghai_today() + timedelta(days=9)
         cheaper = target - timedelta(days=3)
         return_date = target + timedelta(days=4)
         outbound_calendar = {
@@ -171,7 +174,7 @@ class PriceCalendarTest(unittest.TestCase):
     def test_analyze_date_savings_and_weekday_pattern(self):
         from price_calendar import WEEKDAY_NAMES, analyze_date_savings, analyze_weekday_pattern
 
-        target = date.today() + timedelta(days=3)
+        target = shanghai_today() + timedelta(days=3)
         dates = [(target + timedelta(days=offset)).isoformat() for offset in range(-3, 5)]
         calendar = {
             "route": "PVG-PEK",
@@ -202,7 +205,7 @@ class PriceCalendarTest(unittest.TestCase):
     def test_analyze_date_savings_characterizes_active_single_leg_implementation(self):
         from price_calendar import WEEKDAY_NAMES, analyze_date_savings
 
-        target = date.today() + timedelta(days=20)
+        target = shanghai_today() + timedelta(days=20)
         earlier_three = target - timedelta(days=3)
         earlier_one = target - timedelta(days=1)
         later_one = target + timedelta(days=1)
@@ -210,7 +213,7 @@ class PriceCalendarTest(unittest.TestCase):
         calendar = {
             "route": "PVG-KIX",
             "dates": {
-                (date.today() - timedelta(days=1)).isoformat(): {"min_price": 100},
+                (shanghai_today() - timedelta(days=1)).isoformat(): {"min_price": 100},
                 target.isoformat(): {"min_price": 50},
                 earlier_one.isoformat(): {"min_price": 900},
                 later_one.isoformat(): {"min_price": 901},
@@ -278,7 +281,7 @@ class PriceCalendarTest(unittest.TestCase):
     def test_analyze_date_savings_characterizes_invalid_inputs_and_exceptions(self):
         from price_calendar import analyze_date_savings
 
-        target = (date.today() + timedelta(days=20)).isoformat()
+        target = (shanghai_today() + timedelta(days=20)).isoformat()
         calendar = {"dates": {}}
 
         for current_price in (None, "not-a-price"):
@@ -295,7 +298,7 @@ class PriceCalendarTest(unittest.TestCase):
     def test_weekday_pattern_reports_actual_min_date_and_avoids_forced_weekend_claim(self):
         from price_calendar import analyze_weekday_pattern
 
-        start = date.today() + timedelta(days=14)
+        start = shanghai_today() + timedelta(days=14)
         start += timedelta(days=(5 - start.weekday()) % 7)
         prices = [607, 599, 659, 537, 570, 760, 636, 646, 665, 679, 605, 679, 834, 669]
         calendar = {
@@ -325,7 +328,7 @@ class PriceCalendarTest(unittest.TestCase):
     def test_weekday_pattern_uses_median_and_iqr_instead_of_mean(self):
         from price_calendar import analyze_weekday_pattern
 
-        start = date.today() + timedelta(days=14)
+        start = shanghai_today() + timedelta(days=14)
         monday = start + timedelta(days=(0 - start.weekday()) % 7)
         calendar_dates = {}
         for week, price in enumerate((100, 100, 1000)):
