@@ -111,6 +111,29 @@ python -X utf8 scripts/research_readiness.py
 读取 `config.yaml` 的人工布尔。该报告只读本地 JSON/SQLite 与计划键，不执行采集计划、
 不调用外部 API，也不修改研究开关。
 
+运行态锁存不再靠手工编辑 `data/basket_state.json` 恢复。只读查看开关、停用原因与
+全部硬门：
+
+```powershell
+python -X utf8 scripts/research_control.py status
+```
+
+人工停用会保留原因与时刻，且不影响用户订阅监控：
+
+```powershell
+python -X utf8 scripts/research_control.py disable --reason "<原因>"
+```
+
+重新启用必须重新计算完整 readiness；任一硬门为红都会拒绝写入：
+
+```powershell
+python -X utf8 scripts/research_control.py enable --confirm ENABLE
+```
+
+状态写入统一走 `atomic_json_store.update_json()`。readiness 计算发生在文件锁外，
+只有通过后的短写入进入锁内；旧配额守卫元数据进入 `quota_guard_history`，不删除审计
+证据。直接改 JSON 既可能绕过硬门，也可能与采集进程竞争，不属于受支持的恢复路径。
+
 ## 版本与消费纪律
 
 - `trajectory_anchor`、`user_monitor`、`legacy` 可进入 forecast shape；

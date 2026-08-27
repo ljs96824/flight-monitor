@@ -11,7 +11,7 @@ from typing import Callable
 
 from api_usage import load_usage_strict, usage_ledger_health, usage_snapshot
 from backup_status import load_backup_evidence
-from atomic_json_store import read_json
+from atomic_json_store import JsonStoreReadError, read_json
 from collection_plan import build_collection_plan, load_collection_settings
 from collection_singleflight import (
     acquire_collection_singleflight,
@@ -375,7 +375,11 @@ def _default_quota_guard_notifier(
     subscriptions_path = Path(state_path).resolve().parent / "subscriptions.json"
     try:
         payload = read_json(subscriptions_path)
-    except (OSError, ValueError):
+    except (JsonStoreReadError, OSError, ValueError) as exc:
+        safe_log(
+            f"[配额守卫] 订阅配置不可读,按空通知列表降级 "
+            f"原因={type(exc).__name__}:{exc}"
+        )
         payload = []
     if isinstance(payload, dict):
         subscriptions = payload.get("subscriptions") or []
