@@ -387,8 +387,32 @@ def evaluate_research_hard_gates(
     research_available_value = int(research_available_raw or 0)
     research_batch_calls = max(1, int(quota.get("research_batch_calls") or 30))
     scheduled_anomaly = bool(quota.get("scheduled_anomaly"))
-    manual_live_used = max(0, int(quota.get("manual_live_used") or 0))
+    manual_live_used = max(
+        0,
+        int(
+            quota.get("manual_live_in_epoch")
+            if "manual_live_in_epoch" in quota
+            else quota.get("manual_live_used") or 0
+        ),
+    )
     manual_live_buffer = max(0, int(quota.get("manual_live_buffer") or 30))
+    canary_used = max(
+        0,
+        int(
+            quota.get("canary_in_epoch")
+            if "canary_in_epoch" in quota
+            else quota.get("canary_used") or 0
+        ),
+    )
+    canary_buffer = max(0, int(quota.get("canary_buffer") or 12))
+    manual_counter_present = (
+        "manual_live_in_epoch" in quota or "manual_live_used" in quota
+    )
+    canary_counter_present = "canary_in_epoch" in quota or "canary_used" in quota
+    manual_buffer_ok = (
+        not manual_counter_present or manual_live_used <= manual_live_buffer
+    )
+    canary_buffer_ok = not canary_counter_present or canary_used <= canary_buffer
     quota_ledger_healthy = bool(quota.get("quota_ledger_healthy", True))
     batch_guard_ok = (
         research_available_raw is None
@@ -416,7 +440,8 @@ def evaluate_research_hard_gates(
             and int(remaining_after) >= int(reserve_value)
             and batch_guard_ok
             and ("scheduled_anomaly" not in quota or not scheduled_anomaly)
-            and ("manual_live_used" not in quota or manual_live_used <= manual_live_buffer)
+            and manual_buffer_ok
+            and canary_buffer_ok
         ),
         "backup_restore_verified": bool(
             backup_checks.get("backup_restore_verified")
@@ -522,8 +547,24 @@ def apply_research_quota_guard(
     reserve_value = max(0, int(quota.get("monitoring_reserve") or 0))
     available_value = int(quota.get("research_available") or 0)
     batch_calls = max(1, int(quota.get("research_batch_calls") or 30))
-    manual_used = max(0, int(quota.get("manual_live_used") or 0))
+    manual_used = max(
+        0,
+        int(
+            quota.get("manual_live_in_epoch")
+            if "manual_live_in_epoch" in quota
+            else quota.get("manual_live_used") or 0
+        ),
+    )
     manual_buffer = max(0, int(quota.get("manual_live_buffer") or 30))
+    canary_used = max(
+        0,
+        int(
+            quota.get("canary_in_epoch")
+            if "canary_in_epoch" in quota
+            else quota.get("canary_used") or 0
+        ),
+    )
+    canary_buffer = max(0, int(quota.get("canary_buffer") or 12))
     reason_codes = []
     if remaining_value <= reserve_value:
         reason_codes.append("monitoring_reserve_reached")
@@ -533,6 +574,8 @@ def apply_research_quota_guard(
         reason_codes.append("scheduled_usage_anomaly")
     if manual_used > manual_buffer:
         reason_codes.append("manual_live_buffer_exceeded")
+    if canary_used > canary_buffer:
+        reason_codes.append("canary_buffer_exceeded")
     if not reason_codes:
         return {"triggered": False, "notified": False, "reason_codes": []}
 

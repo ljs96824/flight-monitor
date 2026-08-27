@@ -16,11 +16,13 @@ source_quota_budget:
       unrecorded_usage_adjustment: 19
     reserve:
       kind: workload_p90
+      epoch_started_at: "2026-08-27T15:39:15+08:00"
       window_complete_days: 7
       target_date: "2026-10-01"
       minimum_daily_p90: 10
       safety_multiplier: 1.2
       manual_live_buffer: 30
+      canary_buffer: 12
       research_batch_calls: 30
       scheduled_anomaly_threshold: 12
       scheduled_anomaly_consecutive_days: 2

@@ -68,6 +68,19 @@ research_available = current_remaining - monitoring_reserve
 冷启动期:最近7个完整日尚未形成完整工作负载分类,其中X日为历史unknown;储备暂按每日10次下限估算,非实测结论。连续获得7个完整分类日后自动退出该规则。
 ```
 
+## 人工与 Canary 储备纪元
+
+`reserve.epoch_started_at` 定义人工活体验证与 canary 缓冲的消费纪元。readiness 同时披露
+两类调用的 `lifetime`、`in_epoch` 和 `buffer_remaining`；硬门与自动暂停只消费
+`in_epoch`，因此数月前的开发验证不会永久阻断当前研究批次。当前纪元从
+`2026-08-27T15:39:15+08:00`（workload 分类正式上线）开始，人工缓冲为30次，canary
+缓冲为12次。
+
+这是一条估算政策，不是历史回填：旧 entry 原样保留，`lifetime` 永不归零。纪元切换只
+改变 `in_epoch` 的统计起点。缺时间戳的旧 entry 若日期早于纪元日可明确排除；同日或
+日期也不可判定时保守计入当前纪元，防止低估真实消耗。旧配置缺少纪元字段时维持兼容，
+把全部历史视作当前纪元，直到管理员显式配置新纪元。
+
 ## 自动暂停
 
 以下任一条件成立，只暂停研究采样，用户监控继续：
@@ -75,8 +88,9 @@ research_available = current_remaining - monitoring_reserve
 1. `remaining <= monitoring_reserve`；
 2. `research_available < 30`，不启动下一批；
 3. 最近两个完整上海日的 `scheduled_user_monitor` 均大于 12；
-4. 新分类台账中的 `manual_live` 累计大于 30；
-5. `ledger_degraded` 时沿用既有合同，本轮不推进 `probe_valid_n`。
+4. 当前储备纪元内 `manual_live` 累计大于 30；
+5. 当前储备纪元内 `canary` 累计大于 12；
+6. `ledger_degraded` 时沿用既有合同，本轮不推进 `probe_valid_n`。
 
 停用状态写入研究运行态并只通知一次。恢复必须由人复核 readiness 后显式处理；任何暂停
 都不改变用户订阅轮执行权。本提交不打开 `RESEARCH_COHORT_V2`，不修改 cohort 序列。

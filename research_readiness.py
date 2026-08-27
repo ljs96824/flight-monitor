@@ -125,8 +125,15 @@ def render_readiness_summary(hard_gate: dict) -> str:
             f"储备={reserve_details.get('monitoring_reserve')} "
             f"research_available={reserve_details.get('research_available')} "
             f"下一批可启动={bool(reserve_details.get('next_batch_can_start'))} "
-            f"manual_live={reserve_details.get('manual_live_used')}/"
+            f"储备纪元={reserve_details.get('reserve_epoch_started_at') or '未配置'} "
+            f"manual_live={reserve_details.get('manual_live_in_epoch', reserve_details.get('manual_live_used'))}/"
             f"{reserve_details.get('manual_live_buffer')} "
+            f"剩余={reserve_details.get('manual_live_buffer_remaining')} "
+            f"lifetime={reserve_details.get('manual_live_lifetime')} "
+            f"canary={reserve_details.get('canary_in_epoch', reserve_details.get('canary_used'))}/"
+            f"{reserve_details.get('canary_buffer')} "
+            f"剩余={reserve_details.get('canary_buffer_remaining')} "
+            f"lifetime={reserve_details.get('canary_lifetime')} "
             f"scheduled异常={bool(reserve_details.get('scheduled_anomaly'))}"
         )
     if "reserve_window_days" in reserve_details:

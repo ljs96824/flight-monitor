@@ -43,8 +43,15 @@ class ResearchReadinessWorkloadTest(unittest.TestCase):
                         "research_batch_calls": 30,
                         "next_batch_can_start": True,
                         "scheduled_anomaly": False,
-                        "manual_live_used": 4,
+                        "reserve_epoch_started_at": "2026-08-27T15:39:15+08:00",
+                        "manual_live_lifetime": 54,
+                        "manual_live_in_epoch": 4,
+                        "manual_live_buffer_remaining": 26,
                         "manual_live_buffer": 30,
+                        "canary_lifetime": 17,
+                        "canary_in_epoch": 2,
+                        "canary_buffer_remaining": 10,
+                        "canary_buffer": 12,
                     },
                 }
             },
@@ -59,6 +66,9 @@ class ResearchReadinessWorkloadTest(unittest.TestCase):
         self.assertIn("剩余天数=35", rendered)
         self.assertIn("research_available=71", rendered)
         self.assertIn("下一批可启动=True", rendered)
+        self.assertIn("储备纪元=2026-08-27T15:39:15+08:00", rendered)
+        self.assertIn("manual_live=4/30 剩余=26 lifetime=54", rendered)
+        self.assertIn("canary=2/12 剩余=10 lifetime=17", rendered)
 
 
 if __name__ == "__main__":

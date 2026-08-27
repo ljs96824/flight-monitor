@@ -9,7 +9,11 @@ def _quota(**overrides):
         "research_batch_calls": 30,
         "scheduled_anomaly": False,
         "manual_live_used": 0,
+        "manual_live_in_epoch": 0,
         "manual_live_buffer": 30,
+        "canary_used": 0,
+        "canary_in_epoch": 0,
+        "canary_buffer": 12,
     }
     payload.update(overrides)
     return payload
@@ -50,10 +54,35 @@ class ResearchWorkloadGuardTest(unittest.TestCase):
     def test_manual_live_over_buffer_stops_research(self):
         from research_cohort import apply_research_quota_guard
 
-        result = apply_research_quota_guard({}, _quota(manual_live_used=31))
+        result = apply_research_quota_guard({}, _quota(manual_live_in_epoch=31))
 
         self.assertTrue(result["triggered"])
         self.assertEqual(result["reason_codes"], ["manual_live_buffer_exceeded"])
+
+    def test_pre_epoch_manual_lifetime_does_not_stop_research(self):
+        from research_cohort import apply_research_quota_guard
+
+        result = apply_research_quota_guard(
+            {},
+            _quota(
+                manual_live_lifetime=55,
+                manual_live_used=55,
+                manual_live_in_epoch=5,
+            ),
+        )
+
+        self.assertEqual(
+            result,
+            {"triggered": False, "notified": False, "reason_codes": []},
+        )
+
+    def test_canary_over_epoch_buffer_stops_research(self):
+        from research_cohort import apply_research_quota_guard
+
+        result = apply_research_quota_guard({}, _quota(canary_in_epoch=13))
+
+        self.assertTrue(result["triggered"])
+        self.assertEqual(result["reason_codes"], ["canary_buffer_exceeded"])
 
     def test_normal_quota_does_not_stop_research(self):
         from research_cohort import apply_research_quota_guard

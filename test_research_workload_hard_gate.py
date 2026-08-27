@@ -12,7 +12,11 @@ def _quota(**overrides):
         "research_batch_calls": 30,
         "scheduled_anomaly": False,
         "manual_live_used": 0,
+        "manual_live_in_epoch": 0,
         "manual_live_buffer": 30,
+        "canary_used": 0,
+        "canary_in_epoch": 0,
+        "canary_buffer": 12,
         "reserve_details": {},
     }
     payload.update(overrides)
@@ -53,8 +57,35 @@ class ResearchWorkloadHardGateTest(unittest.TestCase):
         self.assertFalse(result["checks"]["monitoring_reserve"])
 
     def test_manual_buffer_is_part_of_monitoring_gate(self):
-        result = _evaluate(_quota(manual_live_used=31))
+        result = _evaluate(_quota(manual_live_in_epoch=31))
         self.assertFalse(result["checks"]["monitoring_reserve"])
+
+    def test_epoch_counter_is_enforced_without_legacy_alias(self):
+        quota = _quota(manual_live_in_epoch=31)
+        quota.pop("manual_live_used")
+
+        result = _evaluate(quota)
+
+        self.assertFalse(result["checks"]["monitoring_reserve"])
+
+    def test_pre_epoch_manual_lifetime_does_not_block_monitoring_gate(self):
+        result = _evaluate(
+            _quota(
+                manual_live_lifetime=55,
+                manual_live_used=55,
+                manual_live_in_epoch=5,
+            )
+        )
+        self.assertTrue(result["checks"]["monitoring_reserve"])
+
+    def test_canary_buffer_uses_only_epoch_usage(self):
+        passed = _evaluate(
+            _quota(canary_lifetime=25, canary_used=25, canary_in_epoch=5)
+        )
+        blocked = _evaluate(_quota(canary_in_epoch=13))
+
+        self.assertTrue(passed["checks"]["monitoring_reserve"])
+        self.assertFalse(blocked["checks"]["monitoring_reserve"])
 
 
 if __name__ == "__main__":

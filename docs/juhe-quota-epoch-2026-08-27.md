@@ -67,3 +67,8 @@ reserve = ceil(effective_p90 × 距2026-10-01天数 × 1.2) + 30
 
 通知尝试状态落在研究运行态中，后续轮不重复轰炸。恢复研究需人工复核控制台、储备与
 全部硬门后，再显式重置运行态；代码开关不会绕过运行态停用。
+
+人工活体验证与 canary 的缓冲按 `reserve.epoch_started_at` 分纪元消费，硬门读取
+`manual_live_in_epoch` / `canary_in_epoch`，不读取全生命周期累计。readiness 保留
+`*_lifetime` 供审计，并同时显示人工30次、canary 12次缓冲的剩余额度。切换纪元不删除、
+回填或改写任何历史台账记录。

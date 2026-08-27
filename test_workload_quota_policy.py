@@ -3,12 +3,14 @@ import unittest
 from datetime import date
 
 
-def _entry(day, count, workload_class=None):
+def _entry(day, count, workload_class=None, *, recorded_at=None):
     row = {
         "day": day,
         "round_id": f"{workload_class or 'legacy'}-{day}",
         "counts": {"juhe": count},
     }
+    if recorded_at is not None:
+        row["recorded_at"] = recorded_at
     if workload_class is not None:
         row["workload_class"] = workload_class
     return row
@@ -42,6 +44,103 @@ def _expected_reserve(effective_p90, as_of):
 
 
 class WorkloadQuotaPolicyTest(unittest.TestCase):
+    def test_manual_and_canary_budgets_are_scoped_to_reserve_epoch(self):
+        import quota_policy
+
+        policy = _policy()
+        policy["reserve"].update(
+            {
+                "epoch_started_at": "2026-08-27T15:39:15+08:00",
+                "canary_buffer": 12,
+            }
+        )
+        entries = [
+            _entry(
+                "2026-08-20",
+                50,
+                "manual_live",
+                recorded_at="2026-08-20T09:00:00+08:00",
+            ),
+            _entry(
+                "2026-08-27",
+                5,
+                "manual_live",
+                recorded_at="2026-08-27T16:00:00+08:00",
+            ),
+            _entry(
+                "2026-08-26",
+                20,
+                "canary",
+                recorded_at="2026-08-26T10:00:00+08:00",
+            ),
+            _entry(
+                "2026-08-27",
+                3,
+                "canary",
+                recorded_at="2026-08-27T17:00:00+08:00",
+            ),
+        ]
+
+        details = quota_policy.workload_reserve_details(
+            policy,
+            usage_payload={"dates": {}, "entries": entries},
+            source="juhe",
+            as_of=date(2026, 8, 28),
+        )
+
+        self.assertEqual(
+            details["reserve_epoch_started_at"],
+            "2026-08-27T15:39:15+08:00",
+        )
+        self.assertEqual(details["manual_live_lifetime"], 55)
+        self.assertEqual(details["manual_live_in_epoch"], 5)
+        self.assertEqual(details["manual_live_buffer_remaining"], 25)
+        self.assertEqual(details["canary_lifetime"], 23)
+        self.assertEqual(details["canary_in_epoch"], 3)
+        self.assertEqual(details["canary_buffer_remaining"], 9)
+        self.assertEqual(details["manual_live_used"], 5)
+        self.assertEqual(details["canary_used"], 3)
+
+    def test_switching_reserve_epoch_resets_epoch_counts_but_keeps_lifetime(self):
+        import quota_policy
+
+        entries = [
+            _entry(
+                "2026-08-28",
+                7,
+                "manual_live",
+                recorded_at="2026-08-28T12:00:00+08:00",
+            ),
+            _entry(
+                "2026-08-30",
+                4,
+                "manual_live",
+                recorded_at="2026-08-30T12:00:00+08:00",
+            ),
+        ]
+        first_policy = _policy()
+        first_policy["reserve"]["epoch_started_at"] = "2026-08-27T00:00:00+08:00"
+        second_policy = _policy()
+        second_policy["reserve"]["epoch_started_at"] = "2026-08-29T00:00:00+08:00"
+
+        first = quota_policy.workload_reserve_details(
+            first_policy,
+            usage_payload={"dates": {}, "entries": entries},
+            source="juhe",
+            as_of=date(2026, 8, 31),
+        )
+        second = quota_policy.workload_reserve_details(
+            second_policy,
+            usage_payload={"dates": {}, "entries": entries},
+            source="juhe",
+            as_of=date(2026, 8, 31),
+        )
+
+        self.assertEqual(first["manual_live_lifetime"], 11)
+        self.assertEqual(second["manual_live_lifetime"], 11)
+        self.assertEqual(first["manual_live_in_epoch"], 11)
+        self.assertEqual(second["manual_live_in_epoch"], 4)
+
     def test_recent_complete_days_exclude_today_and_manual_spikes(self):
         import quota_policy
 

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 import math
 from typing import Mapping
 
+from project_time import SHANGHAI_TZ
 from workload_class import (
     CANARY,
     MANUAL_LIVE,
@@ -22,6 +23,33 @@ def _entry_day(entry: Mapping) -> str:
 
 def _source_count(entry: Mapping, source: str) -> int:
     return max(0, int(((entry.get("counts") or {}).get(source, 0)) or 0))
+
+
+def _parse_timestamp(value) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=SHANGHAI_TZ)
+    return parsed.astimezone(timezone.utc)
+
+
+def _entry_is_in_epoch(entry: Mapping, epoch_started_at: datetime | None) -> bool:
+    if epoch_started_at is None:
+        return True
+    try:
+        recorded_at = _parse_timestamp(entry.get("recorded_at"))
+    except ValueError:
+        recorded_at = None
+    if recorded_at is not None:
+        return recorded_at >= epoch_started_at
+
+    # Legacy entries can lack a timestamp. A day strictly before the epoch is
+    # safely excluded; same-day or unknown rows stay in-epoch conservatively.
+    day_key = _entry_day(entry)
+    epoch_day = epoch_started_at.astimezone(SHANGHAI_TZ).date().isoformat()
+    return not day_key or day_key >= epoch_day
 
 
 def _nearest_rank(values: list[int], percentile: float) -> int:
@@ -61,8 +89,12 @@ def calculate_workload_reserve(
         for day_key in day_keys
     }
     entry_totals = {day_key: 0 for day_key in day_keys}
-    manual_live_used = 0
-    canary_used = 0
+    epoch_started_at_raw = str(reserve_config.get("epoch_started_at") or "").strip()
+    epoch_started_at = _parse_timestamp(epoch_started_at_raw)
+    manual_live_lifetime = 0
+    manual_live_in_epoch = 0
+    canary_lifetime = 0
+    canary_in_epoch = 0
 
     for entry in (usage_payload or {}).get("entries") or []:
         if not isinstance(entry, Mapping):
@@ -72,9 +104,13 @@ def calculate_workload_reserve(
             continue
         workload = normalize_workload_class(entry.get("workload_class"))
         if workload == MANUAL_LIVE:
-            manual_live_used += count
+            manual_live_lifetime += count
+            if _entry_is_in_epoch(entry, epoch_started_at):
+                manual_live_in_epoch += count
         elif workload == CANARY:
-            canary_used += count
+            canary_lifetime += count
+            if _entry_is_in_epoch(entry, epoch_started_at):
+                canary_in_epoch += count
         day_key = _entry_day(entry)
         if day_key not in rows:
             continue
@@ -163,6 +199,7 @@ def calculate_workload_reserve(
     days_remaining = max(0, (target_date - as_of).days)
     multiplier = max(0.0, float(reserve_config.get("safety_multiplier") or 1.2))
     manual_buffer = max(0, int(reserve_config.get("manual_live_buffer") or 30))
+    canary_buffer = max(0, int(reserve_config.get("canary_buffer") or 12))
     monitoring_reserve = max(
         0,
         math.ceil(effective_scheduled_p90 * days_remaining * multiplier)
@@ -212,9 +249,18 @@ def calculate_workload_reserve(
         "days_remaining": days_remaining,
         "target_date": target_date.isoformat(),
         "safety_multiplier": multiplier,
+        "reserve_epoch_started_at": epoch_started_at_raw or None,
         "manual_live_buffer": manual_buffer,
-        "manual_live_used": manual_live_used,
-        "canary_used": canary_used,
+        "manual_live_lifetime": manual_live_lifetime,
+        "manual_live_in_epoch": manual_live_in_epoch,
+        "manual_live_buffer_remaining": max(0, manual_buffer - manual_live_in_epoch),
+        "canary_buffer": canary_buffer,
+        "canary_lifetime": canary_lifetime,
+        "canary_in_epoch": canary_in_epoch,
+        "canary_buffer_remaining": max(0, canary_buffer - canary_in_epoch),
+        # Compatibility aliases now carry the only value safe for guards.
+        "manual_live_used": manual_live_in_epoch,
+        "canary_used": canary_in_epoch,
         "research_batch_calls": research_batch_calls,
         "scheduled_anomaly_threshold": anomaly_threshold,
         "scheduled_anomaly_consecutive_days": anomaly_days_required,

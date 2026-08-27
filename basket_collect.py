@@ -324,8 +324,27 @@ def _simulate_runtime_quota(
             "research_available": policy["research_available"],
             "research_batch_calls": int(reserve_details.get("research_batch_calls") or 30),
             "scheduled_anomaly": bool(reserve_details.get("scheduled_anomaly")),
+            "reserve_epoch_started_at": reserve_details.get(
+                "reserve_epoch_started_at"
+            ),
+            "manual_live_lifetime": int(
+                reserve_details.get("manual_live_lifetime") or 0
+            ),
+            "manual_live_in_epoch": int(
+                reserve_details.get("manual_live_in_epoch") or 0
+            ),
             "manual_live_used": int(reserve_details.get("manual_live_used") or 0),
             "manual_live_buffer": int(reserve_details.get("manual_live_buffer") or 30),
+            "manual_live_buffer_remaining": int(
+                reserve_details.get("manual_live_buffer_remaining") or 0
+            ),
+            "canary_lifetime": int(reserve_details.get("canary_lifetime") or 0),
+            "canary_in_epoch": int(reserve_details.get("canary_in_epoch") or 0),
+            "canary_used": int(reserve_details.get("canary_used") or 0),
+            "canary_buffer": int(reserve_details.get("canary_buffer") or 12),
+            "canary_buffer_remaining": int(
+                reserve_details.get("canary_buffer_remaining") or 0
+            ),
             "next_batch_can_start": bool(
                 reserve_details.get("next_batch_can_start", True)
             ),
