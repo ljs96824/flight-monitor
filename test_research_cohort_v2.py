@@ -237,7 +237,8 @@ class ResearchCohortV2Test(unittest.TestCase):
         result = simulate_research_quota(
             basket_keys={"b1", "shared"},
             subscription_keys={"shared", "s2"},
-            other_scheduled_calls=2,
+            scheduled_subscription_runs_per_day=3,
+            other_non_subscription_calls_per_day=0,
             quota_remaining=122,
             retries_per_request=1,
         )
@@ -246,17 +247,19 @@ class ResearchCohortV2Test(unittest.TestCase):
         self.assertEqual(result["basket_normal_actual"], 2)
         self.assertEqual(result["basket_retry_ceiling"], 4)
         self.assertEqual(result["subscription_planned_unique"], 2)
-        self.assertEqual(result["combined_daily_expected"], 6)
-        self.assertEqual(result["combined_daily_worst_case"], 8)
-        self.assertEqual(result["estimated_days_remaining"], 20)
+        self.assertEqual(result["subscription_daily_expected"], 6)
+        self.assertEqual(result["combined_daily_expected"], 8)
+        self.assertEqual(result["combined_daily_worst_case"], 16)
+        self.assertEqual(result["estimated_days_remaining"], 15)
 
-    def test_quota_simulation_matches_whole_system_ten_to_sixteen_budget(self):
+    def test_quota_simulation_models_three_complete_subscription_rounds(self):
         from research_cohort import simulate_research_quota
 
         result = simulate_research_quota(
             basket_keys={f"basket-{index}" for index in range(6)},
             subscription_keys={"subscription-main", "subscription-return"},
-            other_scheduled_calls=2,
+            scheduled_subscription_runs_per_day=3,
+            other_non_subscription_calls_per_day=0,
             quota_remaining=94,
             retries_per_request=1,
         )
@@ -264,10 +267,11 @@ class ResearchCohortV2Test(unittest.TestCase):
         self.assertEqual(result["basket_planned_unique"], 6)
         self.assertEqual(result["basket_retry_ceiling"], 12)
         self.assertEqual(result["subscription_planned_unique"], 2)
-        self.assertEqual(result["other_scheduled_calls"], 2)
-        self.assertEqual(result["combined_daily_expected"], 10)
-        self.assertEqual(result["combined_daily_worst_case"], 16)
-        self.assertEqual(result["estimated_days_remaining"], 9)
+        self.assertEqual(result["subscription_daily_expected"], 6)
+        self.assertEqual(result["other_non_subscription_calls_per_day"], 0)
+        self.assertEqual(result["combined_daily_expected"], 12)
+        self.assertEqual(result["combined_daily_worst_case"], 24)
+        self.assertEqual(result["estimated_days_remaining"], 7)
 
     def test_hard_gate_requires_all_three_evidence_groups(self):
         from research_cohort import evaluate_research_hard_gates
@@ -391,7 +395,8 @@ class ResearchCohortV2Test(unittest.TestCase):
             "research_basket_strategy": "cohort_v2",
             "research_cohort_v2_gates": {
                 "backup_evidence_max_age_days": 30,
-                "other_scheduled_calls": 0,
+                "scheduled_subscription_runs_per_day": 3,
+                "other_non_subscription_calls_per_day": 0,
                 "minimum_expected_days": 30,
                 "minimum_worst_case_days": 20,
             },
@@ -458,7 +463,7 @@ class ResearchCohortV2Test(unittest.TestCase):
         self.assertEqual(len(notifications), 1)
         self.assertEqual(FakeSource.calls, [])
         start_round.assert_not_called()
-    def test_runtime_quota_is_incomplete_without_explicit_other_calls(self):
+    def test_runtime_quota_requires_both_daily_workload_fields(self):
         from basket_collect import _simulate_runtime_quota
 
         def source_builder(_origin, _dest, route_type=None):
@@ -482,18 +487,47 @@ class ResearchCohortV2Test(unittest.TestCase):
                 source_builder=source_builder,
                 usage_path=usage_path,
             )
+            only_runs = _simulate_runtime_quota(
+                research_requests=[],
+                subscriptions=[],
+                settings={
+                    **base_settings,
+                    "research_cohort_v2_gates": {
+                        "scheduled_subscription_runs_per_day": 3
+                    },
+                },
+                source_builder=source_builder,
+                usage_path=usage_path,
+            )
+            only_other = _simulate_runtime_quota(
+                research_requests=[],
+                subscriptions=[],
+                settings={
+                    **base_settings,
+                    "research_cohort_v2_gates": {
+                        "other_non_subscription_calls_per_day": 0
+                    },
+                },
+                source_builder=source_builder,
+                usage_path=usage_path,
+            )
             complete = _simulate_runtime_quota(
                 research_requests=[],
                 subscriptions=[],
                 settings={
                     **base_settings,
-                    "research_cohort_v2_gates": {"other_scheduled_calls": 0},
+                    "research_cohort_v2_gates": {
+                        "scheduled_subscription_runs_per_day": 3,
+                        "other_non_subscription_calls_per_day": 0,
+                    },
                 },
                 source_builder=source_builder,
                 usage_path=usage_path,
             )
 
         self.assertFalse(incomplete["complete"])
+        self.assertFalse(only_runs["complete"])
+        self.assertFalse(only_other["complete"])
         self.assertTrue(complete["complete"])
 
     def test_migration_inspection_requires_both_schema_sections_and_readable_old_rows(self):
@@ -580,8 +614,16 @@ class ResearchCohortV2Test(unittest.TestCase):
             1100,
         )
         self.assertEqual(
-            settings["research_cohort_v2_gates"]["other_scheduled_calls"],
-            2,
+            settings["research_cohort_v2_gates"][
+                "scheduled_subscription_runs_per_day"
+            ],
+            3,
+        )
+        self.assertEqual(
+            settings["research_cohort_v2_gates"][
+                "other_non_subscription_calls_per_day"
+            ],
+            0,
         )
         self.assertEqual(
             {item["route"] for item in settings["paused_research_routes"]},

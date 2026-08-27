@@ -29,7 +29,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--usage", type=Path, default=ROOT / "data" / "api_usage.json")
     parser.add_argument("--backup-status", type=Path, default=ROOT / "data" / "backup_status.json")
     parser.add_argument("--today", type=date.fromisoformat, default=None)
-    parser.add_argument("--other-scheduled-calls", type=int, default=None)
+    parser.add_argument(
+        "--scheduled-subscription-runs-per-day",
+        type=int,
+        default=None,
+    )
+    parser.add_argument(
+        "--other-non-subscription-calls-per-day",
+        type=int,
+        default=None,
+    )
     return parser
 
 
@@ -48,7 +57,12 @@ def main(argv=None) -> int:
             prices_path=args.prices,
             usage_path=args.usage,
             backup_status_path=args.backup_status,
-            other_scheduled_calls=args.other_scheduled_calls,
+            scheduled_subscription_runs_per_day=(
+                args.scheduled_subscription_runs_per_day
+            ),
+            other_non_subscription_calls_per_day=(
+                args.other_non_subscription_calls_per_day
+            ),
         )
     if diagnostics.getvalue():
         print(diagnostics.getvalue(), file=sys.stderr, end="")

@@ -71,9 +71,12 @@ class ResearchQuotaSimulationTest(unittest.TestCase):
                 """
 source_quota_budget:
   juhe: 550
-RESEARCH_COHORT_V2: false
+RESEARCH_BASKET_ENABLED: false
+RESEARCH_BASKET_STRATEGY: cohort_v2
 research_cohort_v2_gates:
   backup_evidence_max_age_days: 30
+  scheduled_subscription_runs_per_day: 3
+  other_non_subscription_calls_per_day: 0
 """.strip(),
                 encoding="utf-8",
             )
@@ -141,7 +144,8 @@ research_cohort_v2_gates:
                 usage_path=usage,
                 backup_status_path=backup_status,
                 source_builder=no_fetch_source_builder,
-                other_scheduled_calls=4,
+                scheduled_subscription_runs_per_day=4,
+                other_non_subscription_calls_per_day=1,
             )
             after = {
                 path.name: _sha(path)
@@ -162,7 +166,14 @@ research_cohort_v2_gates:
             "cross_sectional_probe": 4,
         })
         self.assertEqual(report["quota"]["basket_planned_unique"], 6)
-        self.assertEqual(report["quota"]["other_scheduled_calls"], 4)
+        self.assertEqual(
+            report["quota"]["scheduled_subscription_runs_per_day"],
+            4,
+        )
+        self.assertEqual(
+            report["quota"]["other_non_subscription_calls_per_day"],
+            1,
+        )
         self.assertTrue(report["hard_gate"]["ready"])
         self.assertEqual(before, after)
 

@@ -2,9 +2,10 @@
 
 ## 目标与边界
 
-本方案只改变研究篮子的采样几何，不改变订阅采集、价格、推荐或通知逻辑。代码合入时
-`RESEARCH_COHORT_V2=false`，在三项启用硬门全部通过前不得打开，也不得以运行
-`basket_collect.py` 的方式试探。
+本方案只改变研究篮子的采样几何，不改变订阅采集、价格、推荐或通知逻辑。执行与策略
+分开配置：`RESEARCH_BASKET_ENABLED=false` 时零请求、零状态写入；启用后仅按
+`RESEARCH_BASKET_STRATEGY=cohort_v2|legacy` 选择显式策略。旧键
+`RESEARCH_COHORT_V2=true` 只作一期兼容迁移，等价于启用 `cohort_v2`，并打印迁移日志。
 
 ## 六槽结构
 
@@ -67,19 +68,25 @@ T=0再完成，在 `today > depart_date` 时停止，绝不续到 `today+60`。
 - `basket_normal_actual`
 - `basket_retry_ceiling`
 - `subscription_planned_unique`
-- `other_scheduled_calls`
+- `scheduled_subscription_runs_per_day`
+- `subscription_daily_expected`
+- `subscription_daily_worst_case`
+- `other_non_subscription_calls_per_day`
 - `combined_daily_expected`
 - `combined_daily_worst_case`
 - `estimated_days_remaining`
 
 篮子是独立进程且强制新鲜，不能把与订阅相同的键当作进程内复用；两者分别计入正常值。
-本机订阅轮固定在09:00、15:00、21:00，代表计划之外的两次边际调用以
-`other_scheduled_calls=2` 明示。最坏值在完整正常基线上，额外计入六个研究篮子键
-各一次 OSError 重试；这与本批新增调用的风险边界一致。
+本机订阅轮固定在09:00、15:00、21:00，因此单轮订阅唯一请求数乘以
+`scheduled_subscription_runs_per_day=3` 得到日预期值。该模型保守地把三轮都按完整唯一
+请求计，暂不分别建模每轮面板复用与缓存新鲜度。`other_non_subscription_calls_per_day`
+只容纳确有证据的非订阅、非篮子定时调用，当前为0。最坏值对篮子、三轮订阅和其他调用
+都应用同一轮内重试上限；篮子与订阅即使日期相同，也因不同进程与强制新鲜语义分别计费。
 
 ## 启用硬门
 
-以下三项必须同时成立，才能由用户手工把 `RESEARCH_COHORT_V2` 置为 `true`：
+以下三项必须同时成立，启用 `RESEARCH_BASKET_ENABLED=true` 且选择
+`RESEARCH_BASKET_STRATEGY=cohort_v2` 后才会执行研究采样：
 
 1. `data/backup_status.json` 证明 runtime backup 已成功隔离恢复、异盘副本 SHA 与本地归档
    一致、生产状态与副本位于不同设备，且异盘核验距今不超过
@@ -122,12 +129,16 @@ python -X utf8 scripts/research_readiness.py
 | basket_normal_actual | 6 |
 | basket_retry_ceiling | 12 |
 | subscription_planned_unique | 2 |
-| other_scheduled_calls | 2 |
-| combined_daily_expected | 10 |
-| combined_daily_worst_case | 16 |
-| estimated_days_remaining | 9 |
+| scheduled_subscription_runs_per_day | 3 |
+| subscription_daily_expected | 6 |
+| other_non_subscription_calls_per_day | 0 |
+| combined_daily_expected | 12 |
+| combined_daily_worst_case | 24 |
+| estimated_days_remaining | 7 |
 
-该值来自本地台账累计余量、当日活跃订阅计划键与三个已启用订阅任务时段；
+该表按当前三轮模型重算；旧模型曾把三轮订阅误写成“单轮唯一请求+固定2次”，得到
+10/16/9天，现已废弃。新值来自本地台账累计余量、当日活跃订阅计划键与三个已启用
+订阅任务时段；
 当前 Juhe 本地估算余量为94。未调用任何源。模拟前后三个生产状态文件 SHA-256
 均未变化。
 
@@ -138,5 +149,5 @@ python -X utf8 scripts/research_readiness.py
 
 上表是充值前的历史审计快照，已由
 `docs/juhe-quota-epoch-2026-08-27.md` 的 1,100 次买断纪元与动态储备口径取代，禁止继续
-用“550减全历史累计”判断余量。配置仍为 `RESEARCH_COHORT_V2=false`；配额、备份与迁移
-硬门全部通过后，才由用户手工启用。
+用“550减全历史累计”判断余量。关闭研究必须设置 `RESEARCH_BASKET_ENABLED=false`；
+关闭态不会回退到 legacy 篮子。启用后仍由 readiness 硬门决定是否实际执行。

@@ -53,13 +53,24 @@ def _build_report_inputs(
     prices_path: str | Path,
     usage_path: str | Path,
     source_builder=build_default_sources,
-    other_scheduled_calls: int | None = None,
+    scheduled_subscription_runs_per_day: int | None = None,
+    other_non_subscription_calls_per_day: int | None = None,
 ) -> tuple[dict, dict, dict, list[dict]]:
     settings = load_collection_settings(config_path)
-    if other_scheduled_calls is not None:
+    if (
+        scheduled_subscription_runs_per_day is not None
+        or other_non_subscription_calls_per_day is not None
+    ):
         settings = deepcopy(settings)
         gates = dict(settings.get("research_cohort_v2_gates") or {})
-        gates["other_scheduled_calls"] = max(0, int(other_scheduled_calls))
+        if scheduled_subscription_runs_per_day is not None:
+            gates["scheduled_subscription_runs_per_day"] = max(
+                0, int(scheduled_subscription_runs_per_day)
+            )
+        if other_non_subscription_calls_per_day is not None:
+            gates["other_non_subscription_calls_per_day"] = max(
+                0, int(other_non_subscription_calls_per_day)
+            )
         settings["research_cohort_v2_gates"] = gates
 
     subscriptions = _load_active_subscriptions_for_research(
@@ -100,7 +111,8 @@ def build_report(
     usage_path: str | Path,
     backup_status_path: str | Path | None = None,
     source_builder=build_default_sources,
-    other_scheduled_calls: int | None = None,
+    scheduled_subscription_runs_per_day: int | None = None,
+    other_non_subscription_calls_per_day: int | None = None,
 ) -> dict:
     """Build the gate report without executing or persisting a request."""
     quota, migrations, settings, requests = _build_report_inputs(
@@ -112,7 +124,8 @@ def build_report(
         prices_path=prices_path,
         usage_path=usage_path,
         source_builder=source_builder,
-        other_scheduled_calls=other_scheduled_calls,
+        scheduled_subscription_runs_per_day=scheduled_subscription_runs_per_day,
+        other_non_subscription_calls_per_day=other_non_subscription_calls_per_day,
     )
     gate_config = settings.get("research_cohort_v2_gates") or {}
     max_age_days = int(gate_config.get("backup_evidence_max_age_days", 30))
@@ -188,7 +201,16 @@ def main(argv=None) -> int:
         default=ROOT / "data" / "backup_status.json",
     )
     parser.add_argument("--today", type=date.fromisoformat, default=None)
-    parser.add_argument("--other-scheduled-calls", type=int, default=None)
+    parser.add_argument(
+        "--scheduled-subscription-runs-per-day",
+        type=int,
+        default=None,
+    )
+    parser.add_argument(
+        "--other-non-subscription-calls-per-day",
+        type=int,
+        default=None,
+    )
     args = parser.parse_args(argv)
 
     if hasattr(sys.stdout, "reconfigure"):
@@ -204,7 +226,12 @@ def main(argv=None) -> int:
             prices_path=args.prices,
             usage_path=args.usage,
             backup_status_path=args.backup_status,
-            other_scheduled_calls=args.other_scheduled_calls,
+            scheduled_subscription_runs_per_day=(
+                args.scheduled_subscription_runs_per_day
+            ),
+            other_non_subscription_calls_per_day=(
+                args.other_non_subscription_calls_per_day
+            ),
         )
     if diagnostics.getvalue():
         print(diagnostics.getvalue(), file=sys.stderr, end="")

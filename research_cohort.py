@@ -330,24 +330,32 @@ def simulate_research_quota(
     *,
     basket_keys: set,
     subscription_keys: set,
-    other_scheduled_calls: int,
+    scheduled_subscription_runs_per_day: int,
+    other_non_subscription_calls_per_day: int,
     quota_remaining: int,
     retries_per_request: int = 1,
     monitoring_reserve: int = 0,
 ) -> dict:
-    """Model whole-system daily Juhe use and the research-basket retry ceiling."""
+    """Model daily Juhe use across the basket and repeated subscription rounds."""
     basket = set(basket_keys)
     subscriptions = set(subscription_keys)
-    other = max(0, int(other_scheduled_calls or 0))
+    subscription_runs = max(0, int(scheduled_subscription_runs_per_day or 0))
+    other = max(0, int(other_non_subscription_calls_per_day or 0))
     retries = max(0, int(retries_per_request or 0))
-    # The basket is a separate force-fresh process, so an equal subscription
-    # key is still another real request. Worst case adds the one permitted
-    # OSError retry for each research-basket key to the whole-system baseline.
-    expected = len(basket) + len(subscriptions) + other
-    worst = expected + len(basket) * retries
+    # The basket and each scheduled subscription round are separate force-fresh
+    # processes. Equal keys therefore remain separate real-request costs.
+    basket_retry_ceiling = len(basket) * (1 + retries)
+    subscription_daily_expected = len(subscriptions) * subscription_runs
+    subscription_daily_worst_case = subscription_daily_expected * (1 + retries)
+    other_daily_worst_case = other * (1 + retries)
+    expected = len(basket) + subscription_daily_expected + other
+    worst = (
+        basket_retry_ceiling
+        + subscription_daily_worst_case
+        + other_daily_worst_case
+    )
     remaining = max(0, int(quota_remaining or 0))
     reserve_value = max(0, int(monitoring_reserve or 0))
-    basket_retry_ceiling = len(basket) * (1 + retries)
     expected_days = remaining // expected if expected else None
     worst_days = remaining // worst if worst else None
     return {
@@ -355,7 +363,11 @@ def simulate_research_quota(
         "basket_normal_actual": len(basket),
         "basket_retry_ceiling": basket_retry_ceiling,
         "subscription_planned_unique": len(subscriptions),
-        "other_scheduled_calls": other,
+        "scheduled_subscription_runs_per_day": subscription_runs,
+        "subscription_daily_expected": subscription_daily_expected,
+        "subscription_daily_worst_case": subscription_daily_worst_case,
+        "other_non_subscription_calls_per_day": other,
+        "other_non_subscription_worst_case": other_daily_worst_case,
         "combined_daily_expected": expected,
         "combined_daily_worst_case": worst,
         "estimated_days_remaining": expected_days,

@@ -50,7 +50,8 @@ reserve = ceil(effective_p90 × 距2026-10-01天数 × 1.2) + 30
 
 ## 研究配额硬门
 
-即使 `RESEARCH_COHORT_V2=true`，以下三项也必须同时成立：
+即使 `RESEARCH_BASKET_ENABLED=true` 且
+`RESEARCH_BASKET_STRATEGY=cohort_v2`，以下三项也必须同时成立：
 
 1. `expected_days_remaining >= 30`；
 2. `worst_case_days_remaining >= 20`；

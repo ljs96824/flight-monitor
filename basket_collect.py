@@ -302,11 +302,19 @@ def _simulate_runtime_quota(
         research_round_ids=research_ids,
     )
     gate_config = settings.get("research_cohort_v2_gates") or {}
-    other_calls_declared = "other_scheduled_calls" in gate_config
+    quota_model_declared = {
+        "scheduled_subscription_runs_per_day",
+        "other_non_subscription_calls_per_day",
+    }.issubset(gate_config)
     quota = simulate_research_quota(
         basket_keys=_juhe_plan_keys(basket_plan),
         subscription_keys=_juhe_plan_keys(subscription_plan),
-        other_scheduled_calls=int(gate_config.get("other_scheduled_calls") or 0),
+        scheduled_subscription_runs_per_day=int(
+            gate_config.get("scheduled_subscription_runs_per_day") or 0
+        ),
+        other_non_subscription_calls_per_day=int(
+            gate_config.get("other_non_subscription_calls_per_day") or 0
+        ),
         quota_remaining=policy["remaining"],
         retries_per_request=1,
         monitoring_reserve=policy["reserve"],
@@ -352,7 +360,7 @@ def _simulate_runtime_quota(
         }
     )
     quota["complete"] = bool(
-        other_calls_declared
+        quota_model_declared
         and policy["total_limit"] > 0
         and quota["basket_planned_unique"] == len(research_requests)
     )
@@ -451,7 +459,13 @@ def _prepare_research_basket(
         f"basket_normal_actual={quota.get('basket_normal_actual')} "
         f"basket_retry_ceiling={quota.get('basket_retry_ceiling')} "
         f"subscription_planned_unique={quota.get('subscription_planned_unique')} "
-        f"other_scheduled_calls={quota.get('other_scheduled_calls')} "
+        f"scheduled_subscription_runs_per_day="
+        f"{quota.get('scheduled_subscription_runs_per_day')} "
+        f"subscription_daily_expected={quota.get('subscription_daily_expected')} "
+        f"subscription_daily_worst_case="
+        f"{quota.get('subscription_daily_worst_case')} "
+        f"other_non_subscription_calls_per_day="
+        f"{quota.get('other_non_subscription_calls_per_day')} "
         f"combined_daily_expected={quota.get('combined_daily_expected')} "
         f"combined_daily_worst_case={quota.get('combined_daily_worst_case')} "
         f"expected_days_remaining={quota.get('expected_days_remaining')} "

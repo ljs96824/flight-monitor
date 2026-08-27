@@ -93,7 +93,8 @@ research_available = current_remaining - monitoring_reserve
 6. `ledger_degraded` 时沿用既有合同，本轮不推进 `probe_valid_n`。
 
 停用状态写入研究运行态并只通知一次。恢复必须由人复核 readiness 后显式处理；任何暂停
-都不改变用户订阅轮执行权。本提交不打开 `RESEARCH_COHORT_V2`，不修改 cohort 序列。
+都不改变用户订阅轮执行权。研究执行权由 `RESEARCH_BASKET_ENABLED` 与
+`RESEARCH_BASKET_STRATEGY` 显式控制；关闭态不回退 legacy，也不修改 cohort 序列。
 
 当前分支基于轮末汇总台账。此前独立开发中的“真实调用返回后立即入账”改动合并时，
 必须把同一轮上下文中的 `workload_class` 与 `entrypoint` 原样传给逐调用写入函数；不得

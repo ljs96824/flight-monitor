@@ -39,8 +39,10 @@ RESEARCH_BASKET_ENABLED: true
 RESEARCH_BASKET_STRATEGY: cohort_v2
 research_cohort_v2_gates:
   backup_evidence_max_age_days: 30
-  # 09:00/15:00/21:00 三个订阅轮；代表计划外另计两次边际调用。
-  other_scheduled_calls: 2
+  # 保守估计：09:00/15:00/21:00 三轮均按完整唯一请求计；
+  # 暂不分别建模每轮面板复用与缓存新鲜度。
+  scheduled_subscription_runs_per_day: 3
+  other_non_subscription_calls_per_day: 0
   minimum_expected_days: 30
   minimum_worst_case_days: 20
 paused_research_routes:
