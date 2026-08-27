@@ -1,4 +1,5 @@
 import hashlib
+import json
 import os
 import tempfile
 import unittest
@@ -86,6 +87,39 @@ class BackupDeviceEvidenceTest(unittest.TestCase):
         self.assertEqual(copy["destination_device"], "destination-device-hash")
         self.assertTrue(copy["different_device_verified"])
         self.assertTrue(evidence["checks"]["different_device_verified"])
+
+    def test_verifying_legacy_status_upgrades_status_version(self):
+        from backup_status import (
+            BACKUP_STATUS_VERSION,
+            verify_off_disk_copy_from_status,
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            status_path, copied = _status_with_copy(Path(directory))
+            legacy = json.loads(status_path.read_text(encoding='utf-8'))
+            legacy['status_version'] = 'backup_status_v1'
+            legacy['off_disk_copy'] = {
+                'verified': True,
+                'verified_at': '2026-08-27T00:00:00Z',
+                'destination_kind': 'physical_disk',
+                'copied_sha256': legacy['archive_sha256'],
+            }
+            status_path.write_text(
+                json.dumps(legacy, ensure_ascii=False),
+                encoding='utf-8',
+            )
+
+            with patch(
+                'backup_status._device_fingerprint',
+                side_effect=['source-device-hash', 'destination-device-hash'],
+            ):
+                status = verify_off_disk_copy_from_status(
+                    copied,
+                    status_path=status_path,
+                    destination_kind='physical_disk',
+                )
+
+        self.assertEqual(status['status_version'], BACKUP_STATUS_VERSION)
 
     def test_encrypted_cloud_exception_requires_switch_and_trusted_root(self):
         from backup_status import BackupEvidenceError, verify_off_disk_copy_from_status

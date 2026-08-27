@@ -284,6 +284,7 @@ def verify_off_disk_copy(
         ):
             raise BackupStatusMismatch("backup_status与待核验本地归档不一致")
         payload = dict(current)
+        payload['status_version'] = BACKUP_STATUS_VERSION
         payload["off_disk_copy"] = {
             "verified": True,
             "verified_at": _timestamp(verified_at),
@@ -334,6 +335,7 @@ def verify_off_disk_copy_from_status(
         ):
             raise BackupStatusMismatch("backup_status在核验期间已切换到其他归档")
         payload = dict(current)
+        payload['status_version'] = BACKUP_STATUS_VERSION
         payload["off_disk_copy"] = {
             "verified": True,
             "verified_at": _timestamp(verified_at),
