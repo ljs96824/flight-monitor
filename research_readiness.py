@@ -23,6 +23,24 @@ READINESS_GROUPS = {
     ),
 }
 
+COLD_START_MACHINE_FIELDS = (
+    "reserve_window_days",
+    "fully_classified_days",
+    "pure_unknown_days",
+    "mixed_days",
+    "telemetry_missing_days",
+    "observed_raw_p90",
+    "effective_scheduled_p90",
+    "scheduled_daily_floor",
+    "cold_start_active",
+    "cold_start_reason",
+    "cold_start_estimated",
+    "cold_start_exit_condition",
+    "cold_start_expected_exit_at",
+    "monitoring_reserve",
+    "research_available",
+)
+
 
 def build_readiness_summary(hard_gate: dict) -> dict:
     checks = hard_gate.get("checks") or {}
@@ -92,11 +110,14 @@ def render_readiness_summary(hard_gate: dict) -> str:
             f"[配额推导] {row.get('day')} "
             f"scheduled={int(row.get('scheduled_user_monitor') or 0)} "
             f"unknown={int(row.get('unknown') or 0)} "
-            f"reserve_basis={int(row.get('reserve_basis') or 0)}"
+            f"reserve_basis={int(row.get('reserve_basis') or 0)} "
+            f"day_type={row.get('day_type') or 'legacy'} "
+            f"sample_value={int(row.get('sample_value') or 0)}"
         )
     if reserve_details:
         lines.append(
             f"[配额推导] P90={reserve_details.get('scheduled_daily_p90')} "
+            f"原始P90={reserve_details.get('observed_raw_p90')} "
             f"下限{reserve_details.get('minimum_daily_p90')}生效="
             f"{bool(reserve_details.get('minimum_floor_applied'))} "
             f"剩余天数={reserve_details.get('days_remaining')} "
@@ -107,6 +128,23 @@ def render_readiness_summary(hard_gate: dict) -> str:
             f"{reserve_details.get('manual_live_buffer')} "
             f"scheduled异常={bool(reserve_details.get('scheduled_anomaly'))}"
         )
+    if "reserve_window_days" in reserve_details:
+        for field in COLD_START_MACHINE_FIELDS:
+            lines.append(f"[配额机器字段] {field}={reserve_details.get(field)}")
+        if reserve_details.get("cold_start_active"):
+            unknown_days = len(reserve_details.get("pure_unknown_days") or [])
+            floor = int(reserve_details.get("scheduled_daily_floor") or 0)
+            lines.append(
+                "冷启动期:最近7个完整日尚未形成完整工作负载分类,"
+                f"其中{unknown_days}日为历史unknown;"
+                f"储备暂按每日{floor}次下限估算,非实测结论。"
+                "连续获得7个完整分类日后自动退出该规则。"
+            )
+        else:
+            lines.append(
+                "冷启动期已结束:最近7个完整日均具备完整工作负载分类,"
+                "储备按实测P90计算。"
+            )
     missing = ",".join(summary["missing"]) if summary["missing"] else "无"
     lines.append(f"[研究就绪] 还差={missing}")
     return "\n".join(lines)

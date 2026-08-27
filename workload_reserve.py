@@ -55,6 +55,8 @@ def calculate_workload_reserve(
             MANUAL_LIVE: 0,
             CANARY: 0,
             UNKNOWN: 0,
+            "entry_total": 0,
+            "classified_entry_total": 0,
         }
         for day_key in day_keys
     }
@@ -77,6 +79,9 @@ def calculate_workload_reserve(
         if day_key not in rows:
             continue
         rows[day_key][workload] += count
+        rows[day_key]["entry_total"] += count
+        if workload != UNKNOWN:
+            rows[day_key]["classified_entry_total"] += count
         entry_totals[day_key] += count
 
     aggregate_dates = (usage_payload or {}).get("dates") or {}
@@ -85,26 +90,83 @@ def calculate_workload_reserve(
             0,
             int(((aggregate_dates.get(day_key) or {}).get(source, 0)) or 0),
         )
-        # Old ledgers may have only daily aggregates. Their unclassified
-        # remainder is conservatively treated as monitoring demand.
+        # Aggregate calls without an entry cannot be classified. Pure legacy
+        # days are estimated at the floor; mixed days keep the unknown amount.
         rows[day_key][UNKNOWN] += max(0, aggregate_count - entry_totals[day_key])
-        rows[day_key]["reserve_basis"] = (
-            rows[day_key][SCHEDULED_USER_MONITOR] + rows[day_key][UNKNOWN]
+        rows[day_key]["aggregate_total"] = aggregate_count
+        rows[day_key]["telemetry_consistent"] = (
+            aggregate_count == entry_totals[day_key]
         )
 
-    raw_p90 = _nearest_rank(
-        [rows[day_key]["reserve_basis"] for day_key in day_keys],
+    scheduled_floor = max(0, int(reserve_config.get("minimum_daily_p90") or 10))
+    for day_key in day_keys:
+        row = rows[day_key]
+        has_records = row["entry_total"] > 0 or row["aggregate_total"] > 0
+        classified_total = row["classified_entry_total"]
+        unknown_total = row[UNKNOWN]
+        if not has_records:
+            day_type = "telemetry_missing"
+            sample_value = scheduled_floor
+        elif classified_total == 0 and unknown_total > 0:
+            day_type = "pure_unknown"
+            sample_value = scheduled_floor
+        elif classified_total > 0 and unknown_total == 0:
+            day_type = "fully_classified"
+            sample_value = row[SCHEDULED_USER_MONITOR]
+        else:
+            day_type = "mixed"
+            sample_value = max(
+                row[SCHEDULED_USER_MONITOR] + unknown_total,
+                scheduled_floor,
+            )
+        row["day_type"] = day_type
+        row["telemetry_missing"] = day_type == "telemetry_missing"
+        row["sample_value"] = sample_value
+        # Compatibility alias retained for existing reports and tests.
+        row["reserve_basis"] = sample_value
+
+    observed_raw_p90 = _nearest_rank(
+        [rows[day_key]["sample_value"] for day_key in day_keys],
         0.90,
     )
-    minimum_p90 = max(0, int(reserve_config.get("minimum_daily_p90") or 10))
-    scheduled_p90 = max(raw_p90, minimum_p90)
+    effective_scheduled_p90 = max(observed_raw_p90, scheduled_floor)
+    fully_classified_days = [
+        day_key
+        for day_key in day_keys
+        if rows[day_key]["day_type"] == "fully_classified"
+    ]
+    pure_unknown_days = [
+        day_key
+        for day_key in day_keys
+        if rows[day_key]["day_type"] == "pure_unknown"
+    ]
+    mixed_days = [
+        day_key for day_key in day_keys if rows[day_key]["day_type"] == "mixed"
+    ]
+    telemetry_missing_days = [
+        day_key
+        for day_key in day_keys
+        if rows[day_key]["day_type"] == "telemetry_missing"
+    ]
+    cold_start_active = len(fully_classified_days) != window_days
+    trailing_fully_classified = 0
+    for day_key in reversed(day_keys):
+        if rows[day_key]["day_type"] != "fully_classified":
+            break
+        trailing_fully_classified += 1
+    days_until_exit = max(0, window_days - trailing_fully_classified)
+    cold_start_expected_exit_at = (
+        as_of if not cold_start_active else as_of + timedelta(days=days_until_exit)
+    ).isoformat()
+
     target_date = date.fromisoformat(str(reserve_config.get("target_date")))
     days_remaining = max(0, (target_date - as_of).days)
     multiplier = max(0.0, float(reserve_config.get("safety_multiplier") or 1.2))
     manual_buffer = max(0, int(reserve_config.get("manual_live_buffer") or 30))
     monitoring_reserve = max(
         0,
-        math.ceil(scheduled_p90 * days_remaining * multiplier) + manual_buffer,
+        math.ceil(effective_scheduled_p90 * days_remaining * multiplier)
+        + manual_buffer,
     )
     anomaly_threshold = max(
         0,
@@ -124,10 +186,29 @@ def calculate_workload_reserve(
     )
     return {
         "daily_counts": [rows[day_key] for day_key in day_keys],
-        "raw_scheduled_daily_p90": raw_p90,
-        "scheduled_daily_p90": scheduled_p90,
-        "minimum_daily_p90": minimum_p90,
-        "minimum_floor_applied": scheduled_p90 != raw_p90,
+        "reserve_window_days": window_days,
+        "fully_classified_days": fully_classified_days,
+        "pure_unknown_days": pure_unknown_days,
+        "mixed_days": mixed_days,
+        "telemetry_missing_days": telemetry_missing_days,
+        "observed_raw_p90": observed_raw_p90,
+        "effective_scheduled_p90": effective_scheduled_p90,
+        "scheduled_daily_floor": scheduled_floor,
+        "cold_start_active": cold_start_active,
+        "cold_start_reason": (
+            "window_contains_unclassified_days"
+            if cold_start_active
+            else "seven_fully_classified_days"
+        ),
+        "cold_start_estimated": cold_start_active,
+        "cold_start_exit_condition": "最近7个完整上海日全部为完全分类日",
+        "cold_start_expected_exit_at": cold_start_expected_exit_at,
+        # Compatibility aliases for consumers introduced before cold-start
+        # day typing became explicit.
+        "raw_scheduled_daily_p90": observed_raw_p90,
+        "scheduled_daily_p90": effective_scheduled_p90,
+        "minimum_daily_p90": scheduled_floor,
+        "minimum_floor_applied": effective_scheduled_p90 != observed_raw_p90,
         "days_remaining": days_remaining,
         "target_date": target_date.isoformat(),
         "safety_multiplier": multiplier,

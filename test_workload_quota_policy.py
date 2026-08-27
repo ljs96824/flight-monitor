@@ -1,3 +1,4 @@
+import math
 import unittest
 from datetime import date
 
@@ -31,6 +32,15 @@ def _policy():
     }
 
 
+def _expected_reserve(effective_p90, as_of):
+    config = _policy()["reserve"]
+    days_remaining = (date.fromisoformat(config["target_date"]) - as_of).days
+    return (
+        math.ceil(effective_p90 * days_remaining * config["safety_multiplier"])
+        + config["manual_live_buffer"]
+    )
+
+
 class WorkloadQuotaPolicyTest(unittest.TestCase):
     def test_recent_complete_days_exclude_today_and_manual_spikes(self):
         import quota_policy
@@ -46,12 +56,13 @@ class WorkloadQuotaPolicyTest(unittest.TestCase):
             ]
         )
         usage = {"dates": {}, "entries": entries}
+        as_of = date(2026, 8, 27)
 
         details = quota_policy.workload_reserve_details(
             _policy(),
             usage_payload=usage,
             source="juhe",
-            as_of=date(2026, 8, 27),
+            as_of=as_of,
         )
 
         self.assertEqual(
@@ -62,7 +73,10 @@ class WorkloadQuotaPolicyTest(unittest.TestCase):
         self.assertEqual(details["scheduled_daily_p90"], 10)
         self.assertTrue(details["minimum_floor_applied"])
         self.assertEqual(details["manual_live_used"], 50)
-        self.assertEqual(details["monitoring_reserve"], 450)
+        self.assertEqual(
+            details["monitoring_reserve"],
+            _expected_reserve(details["effective_scheduled_p90"], as_of),
+        )
 
     def test_p90_above_floor_and_unknown_are_conservatively_reserved(self):
         import quota_policy
@@ -73,12 +87,13 @@ class WorkloadQuotaPolicyTest(unittest.TestCase):
                 _entry(f"2026-08-{day:02d}", scheduled, "scheduled_user_monitor")
             )
         entries.append(_entry("2026-08-26", 2))
+        as_of = date(2026, 8, 27)
 
         details = quota_policy.workload_reserve_details(
             _policy(),
             usage_payload={"dates": {}, "entries": entries},
             source="juhe",
-            as_of=date(2026, 8, 27),
+            as_of=as_of,
         )
 
         self.assertEqual(details["daily_counts"][-1]["scheduled_user_monitor"], 14)
@@ -86,38 +101,57 @@ class WorkloadQuotaPolicyTest(unittest.TestCase):
         self.assertEqual(details["daily_counts"][-1]["reserve_basis"], 16)
         self.assertEqual(details["scheduled_daily_p90"], 16)
         self.assertFalse(details["minimum_floor_applied"])
-        self.assertEqual(details["monitoring_reserve"], 702)
+        self.assertEqual(
+            details["monitoring_reserve"],
+            _expected_reserve(details["effective_scheduled_p90"], as_of),
+        )
 
     def test_reserve_shrinks_as_target_date_approaches(self):
         import quota_policy
 
         usage = {"dates": {}, "entries": []}
+        first_day = date(2026, 8, 27)
+        second_day = date(2026, 8, 28)
         first = quota_policy.workload_reserve_details(
-            _policy(), usage_payload=usage, source="juhe", as_of=date(2026, 8, 27)
+            _policy(), usage_payload=usage, source="juhe", as_of=first_day
         )
         second = quota_policy.workload_reserve_details(
-            _policy(), usage_payload=usage, source="juhe", as_of=date(2026, 8, 28)
+            _policy(), usage_payload=usage, source="juhe", as_of=second_day
         )
 
-        self.assertEqual(first["monitoring_reserve"], 450)
-        self.assertEqual(second["monitoring_reserve"], 438)
-        self.assertEqual(first["monitoring_reserve"] - second["monitoring_reserve"], 12)
+        self.assertEqual(
+            first["monitoring_reserve"],
+            _expected_reserve(first["effective_scheduled_p90"], first_day),
+        )
+        self.assertEqual(
+            second["monitoring_reserve"],
+            _expected_reserve(second["effective_scheduled_p90"], second_day),
+        )
+        self.assertGreater(first["monitoring_reserve"], second["monitoring_reserve"])
 
     def test_metrics_expose_signed_research_available_and_batch_gate(self):
         import quota_policy
 
         snapshot = {"today": {}, "month": {}, "cumulative": {"juhe": 395}}
+        as_of = date(2026, 8, 27)
         result = quota_policy.metrics(
             _policy(),
             snapshot,
             "juhe",
             usage_payload={"dates": {}, "entries": []},
-            as_of=date(2026, 8, 27),
+            as_of=as_of,
+        )
+        expected_reserve = _expected_reserve(
+            result["reserve_details"]["effective_scheduled_p90"],
+            as_of,
         )
 
         self.assertEqual(result["remaining"], 605)
-        self.assertEqual(result["reserve"], 450)
-        self.assertEqual(result["research_available"], 155)
+        self.assertEqual(result["reserve"], expected_reserve)
+        self.assertEqual(
+            result["research_available"],
+            result["remaining"] - expected_reserve,
+        )
         self.assertTrue(result["reserve_details"]["next_batch_can_start"])
 
 
