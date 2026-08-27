@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+import hashlib
 import json
 import os
 import uuid
@@ -33,6 +34,34 @@ class UsageLedgerReadError(RuntimeError):
 
 class UsageLedgerAlreadyExists(RuntimeError):
     """Raised when explicit initialization would overwrite an existing ledger."""
+
+
+class UsageReconciliationError(RuntimeError):
+    """Raised when pending quota evidence cannot be reconciled safely."""
+
+
+KNOWN_PRE_EPOCH_DATE_ENTRY_EXEMPTIONS = {
+    ("2026-07-22", "duffel"): (50, 0),
+    ("2026-07-22", "hasdata"): (88, 0),
+    ("2026-07-22", "juhe"): (196, 0),
+}
+
+# These calls are absent from both dates and entries, so they cannot be repaired
+# by an internal dates/entries consistency check. They remain disclosed only.
+KNOWN_PRE_EPOCH_EXTERNAL_USAGE_GAPS = (
+    {
+        "period": "2026-08-01..2026-08-26",
+        "source": "juhe",
+        "count": 17,
+        "reason": "interrupted rounds before per-call persistence",
+    },
+    {
+        "period": "2026-07-27",
+        "source": "juhe",
+        "count": 1,
+        "reason": "interrupted round before per-call persistence",
+    },
+)
 
 
 def _empty_usage_ledger() -> dict:
@@ -68,31 +97,12 @@ def _atomic_write_json(path: Path, payload: dict) -> None:
             pass
 
 
-def _append_conflict_audit(
-    *,
-    usage_path: Path,
-    conflict_log_path: str | Path | None,
-    round_id: str | None,
-    reason: str,
-    counts: dict[str, int],
-    workload_class: str,
-    entrypoint: str,
-) -> None:
-    audit_path = Path(conflict_log_path or usage_path.parent / "api_usage_conflict.log")
-    row = {
-        "evidence_id": uuid.uuid4().hex,
-        "recorded_at": datetime.now().astimezone().isoformat(timespec="seconds"),
-        "round_id": str(round_id or "unknown"),
-        "status": "pending_reconciliation",
-        "usage_path": str(usage_path),
-        "reason": str(reason),
-        "counts": dict(counts),
-        "workload_class": str(workload_class),
-        "entrypoint": str(entrypoint),
-    }
+def _append_audit_row(audit_path: Path, row: dict) -> bool:
     try:
         audit_path.parent.mkdir(parents=True, exist_ok=True)
-        encoded = (json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8")
+        encoded = (json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n").encode(
+            "utf-8"
+        )
         descriptor = os.open(
             audit_path,
             os.O_APPEND | os.O_CREAT | os.O_WRONLY | getattr(os, "O_BINARY", 0),
@@ -102,10 +112,90 @@ def _append_conflict_audit(
             os.fsync(descriptor)
         finally:
             os.close(descriptor)
+        return True
     except OSError as exc:
-        safe_log(
-            f"[配额台账] 冲突审计失败 round={round_id or 'unknown'} 原因={exc}"
-        )
+        safe_log(f"[配额台账] 冲突审计失败 原因={exc}")
+        return False
+
+
+def _append_conflict_audit(
+    *,
+    usage_path: Path,
+    conflict_log_path: str | Path | None,
+    round_id: str | None,
+    reason: str,
+    counts: dict[str, int],
+    workload_class: str,
+    entrypoint: str,
+    day: str | None = None,
+    recorded_at: str | None = None,
+) -> None:
+    audit_path = Path(conflict_log_path or usage_path.parent / "api_usage_conflict.log")
+    row = {
+        "evidence_id": uuid.uuid4().hex,
+        "recorded_at": str(
+            recorded_at
+            or datetime.now().astimezone().isoformat(timespec="seconds")
+        ),
+        "day": str(day or datetime.now(SHANGHAI_TZ).date().isoformat()),
+        "round_id": str(round_id or "unknown"),
+        "status": "pending_reconciliation",
+        "usage_path": str(usage_path),
+        "reason": str(reason),
+        "counts": dict(counts),
+        "workload_class": str(workload_class),
+        "entrypoint": str(entrypoint),
+    }
+    if not _append_audit_row(audit_path, row):
+        safe_log(f"[配额台账] 冲突证据未落档 round={round_id or 'unknown'}")
+
+
+def _entry_date_totals(payload: dict) -> dict[tuple[str, str], int]:
+    totals: dict[tuple[str, str], int] = {}
+    for entry in payload.get("entries") or []:
+        day = str(entry.get("day") or "")
+        for source, count in (entry.get("counts") or {}).items():
+            key = (day, str(source))
+            totals[key] = totals.get(key, 0) + int(count or 0)
+    return totals
+
+
+def usage_consistency_report(payload: dict) -> dict:
+    """Compare aggregate day buckets with the sum of immutable entry rows."""
+
+    entry_totals = _entry_date_totals(payload)
+    aggregate_totals = {
+        (str(day), str(source)): int(count or 0)
+        for day, sources in (payload.get("dates") or {}).items()
+        for source, count in (sources or {}).items()
+    }
+    keys = sorted(set(entry_totals) | set(aggregate_totals))
+    mismatches = []
+    exemptions = []
+    for day, source in keys:
+        aggregate = aggregate_totals.get((day, source), 0)
+        entries = entry_totals.get((day, source), 0)
+        if aggregate == entries:
+            continue
+        row = {
+            "day": day,
+            "source": source,
+            "dates_count": aggregate,
+            "entries_count": entries,
+        }
+        if KNOWN_PRE_EPOCH_DATE_ENTRY_EXEMPTIONS.get((day, source)) == (
+            aggregate,
+            entries,
+        ):
+            exemptions.append(row)
+        else:
+            mismatches.append(row)
+    return {
+        "healthy": not mismatches,
+        "mismatches": mismatches,
+        "exemptions": exemptions,
+        "known_external_gaps": [dict(row) for row in KNOWN_PRE_EPOCH_EXTERNAL_USAGE_GAPS],
+    }
 
 
 def _validate_usage_payload(payload, *, path: Path) -> dict:
@@ -146,6 +236,14 @@ def _validate_usage_payload(payload, *, path: Path) -> dict:
                 or count < 0
             ):
                 raise UsageLedgerReadError(f"配额台账明细计数无效: {path}")
+    consistency = usage_consistency_report(payload)
+    if not consistency["healthy"]:
+        first = consistency["mismatches"][0]
+        raise UsageLedgerReadError(
+            "配额台账 dates/entries 计数不一致 "
+            f"day={first['day']} source={first['source']} "
+            f"dates={first['dates_count']} entries={first['entries_count']}: {path}"
+        )
     return payload
 
 
@@ -217,6 +315,167 @@ def _pending_reconciliation_rows(conflict_log_path: Path) -> tuple[list[dict], s
     return [row for key, row in pending.items() if key not in reconciled], None
 
 
+def list_reconciliation_evidence(
+    conflict_log_path: str | Path,
+) -> list[dict]:
+    pending, error = _pending_reconciliation_rows(Path(conflict_log_path))
+    if error:
+        raise UsageReconciliationError(error)
+    return pending
+
+
+def _find_reconciliation_state(
+    conflict_log_path: Path,
+    evidence_id: str,
+) -> tuple[dict | None, dict | None]:
+    if not conflict_log_path.exists():
+        return None, None
+    pending = None
+    resolution = None
+    try:
+        for line_number, line in enumerate(
+            conflict_log_path.read_text(encoding="utf-8").splitlines(), start=1
+        ):
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            if not isinstance(row, dict):
+                raise ValueError(f"line {line_number} root is not an object")
+            if str(row.get("evidence_id") or "") != evidence_id:
+                continue
+            status = str(row.get("status") or "")
+            if status in {"pending_reconciliation", "write_conflict"}:
+                pending = row
+            elif status == "reconciled":
+                resolution = row
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        raise UsageReconciliationError(
+            f"冲突审计读取失败:{type(exc).__name__}:{exc}"
+        ) from exc
+    return pending, resolution
+
+
+def _evidence_day(row: dict) -> str:
+    if row.get("day"):
+        return str(row["day"])
+    raw = str(row.get("recorded_at") or "")
+    try:
+        observed = datetime.fromisoformat(raw)
+        if observed.tzinfo is None:
+            raise ValueError("timestamp has no timezone")
+        return observed.astimezone(SHANGHAI_TZ).date().isoformat()
+    except ValueError as exc:
+        raise UsageReconciliationError(
+            "pending证据缺少可验证的day，拒绝按时间猜测请求归属"
+        ) from exc
+
+
+def _backup_usage_ledger(usage_path: Path) -> dict:
+    raw = usage_path.read_bytes()
+    digest = hashlib.sha256(raw).hexdigest()
+    stamp = datetime.now().astimezone().strftime("%Y%m%dT%H%M%S")
+    backup_path = usage_path.with_name(
+        f"{usage_path.name}.reconcile-{stamp}-{digest[:8]}-{uuid.uuid4().hex[:8]}.bak"
+    )
+    with backup_path.open("xb") as stream:
+        stream.write(raw)
+        stream.flush()
+        os.fsync(stream.fileno())
+    return {"path": str(backup_path), "sha256": digest}
+
+
+def reconcile_usage_evidence(
+    evidence_id: str,
+    *,
+    action: str,
+    usage_path: str | Path = DEFAULT_USAGE_PATH,
+    conflict_log_path: str | Path | None = None,
+    reason: str | None = None,
+) -> dict:
+    """Apply or dismiss one exact pending row without estimating its counts."""
+
+    evidence_key = str(evidence_id or "").strip()
+    if not evidence_key:
+        raise UsageReconciliationError("evidence_id不能为空")
+    normalized_action = str(action or "").strip().lower()
+    if normalized_action not in {"apply", "dismiss"}:
+        raise UsageReconciliationError(f"不支持的对账动作:{action}")
+    normalized_reason = str(reason or "").strip()
+    if normalized_action == "dismiss" and not normalized_reason:
+        raise UsageReconciliationError("dismiss必须提供非空reason")
+
+    ledger_path = Path(usage_path)
+    audit_path = Path(conflict_log_path or ledger_path.parent / "api_usage_conflict.log")
+    with _usage_lock(ledger_path):
+        payload = load_usage_strict(ledger_path)
+        pending, resolution = _find_reconciliation_state(audit_path, evidence_key)
+        already_applied = any(
+            str(entry.get("reconciliation_evidence_id") or "") == evidence_key
+            for entry in payload.get("entries") or []
+        )
+        if resolution is not None:
+            return {
+                "status": "already_reconciled",
+                "action": str(resolution.get("action") or "unknown"),
+                "evidence_id": evidence_key,
+                "backup": None,
+            }
+        if pending is None:
+            raise UsageReconciliationError(f"未找到pending证据:{evidence_key}")
+
+        backup = _backup_usage_ledger(ledger_path)
+        if normalized_action == "apply" and not already_applied:
+            day_key = _evidence_day(pending)
+            counts = {}
+            for source, raw_count in (pending.get("counts") or {}).items():
+                if isinstance(raw_count, bool) or not isinstance(raw_count, int) or raw_count < 0:
+                    raise UsageReconciliationError(
+                        f"pending证据counts无效 source={source!r}"
+                    )
+                if raw_count:
+                    counts[str(source)] = raw_count
+            day_counts = payload["dates"].setdefault(day_key, {})
+            for source, count in counts.items():
+                day_counts[source] = int(day_counts.get(source, 0) or 0) + count
+            payload["entries"].append(
+                {
+                    "recorded_at": datetime.now().astimezone().isoformat(
+                        timespec="seconds"
+                    ),
+                    "round_id": str(pending.get("round_id") or "unknown"),
+                    "day": day_key,
+                    "workload_class": normalize_workload_class(
+                        pending.get("workload_class")
+                    ),
+                    "entrypoint": str(pending.get("entrypoint") or "unknown"),
+                    "counts": counts,
+                    "reconciliation_evidence_id": evidence_key,
+                }
+            )
+            _atomic_write_json(ledger_path, payload)
+
+        resolution_row = {
+            "evidence_id": evidence_key,
+            "recorded_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "round_id": str(pending.get("round_id") or "unknown"),
+            "status": "reconciled",
+            "action": normalized_action,
+            "reason": normalized_reason or "counts applied exactly from pending evidence",
+            "backup_path": backup["path"],
+            "backup_sha256": backup["sha256"],
+        }
+        if not _append_audit_row(audit_path, resolution_row):
+            raise UsageReconciliationError(
+                "台账已更新但reconciled事件未落档；可用同一evidence_id安全重试"
+            )
+        return {
+            "status": "reconciled",
+            "action": normalized_action,
+            "evidence_id": evidence_key,
+            "backup": backup,
+        }
+
+
 def usage_ledger_health(
     path: str | Path = DEFAULT_USAGE_PATH,
     *,
@@ -225,13 +484,25 @@ def usage_ledger_health(
     diagnostic = load_usage_for_diagnostics(path)
     audit_path = Path(conflict_log_path or Path(path).parent / "api_usage_conflict.log")
     pending, audit_error = _pending_reconciliation_rows(audit_path)
-    healthy = bool(diagnostic["healthy"]) and not pending and audit_error is None
+    consistency = None
+    if diagnostic["healthy"]:
+        consistency = usage_consistency_report(diagnostic["usage"])
+    healthy = (
+        bool(diagnostic["healthy"])
+        and bool(consistency and consistency["healthy"])
+        and not pending
+        and audit_error is None
+    )
     return {
         **diagnostic,
         "healthy": healthy,
         "pending_reconciliation_count": len(pending),
         "pending_reconciliation": pending,
         "audit_error": audit_error,
+        "consistency": consistency,
+        "known_pre_epoch_external_usage_gaps": [
+            dict(row) for row in KNOWN_PRE_EPOCH_EXTERNAL_USAGE_GAPS
+        ],
     }
 
 
@@ -259,6 +530,11 @@ def record_actual_requests(
     usage_path = Path(path)
     normalized_workload = normalize_workload_class(workload_class)
     normalized_entrypoint = str(entrypoint or "unknown")
+    day_key = str(day or datetime.now(SHANGHAI_TZ).date().isoformat())
+    recorded_at_value = str(
+        recorded_at
+        or datetime.now().astimezone().isoformat(timespec="seconds")
+    )
     actual_counts = {}
     for source, raw_count in (counts or {}).items():
         count = max(0, int(raw_count or 0))
@@ -266,11 +542,11 @@ def record_actual_requests(
             actual_counts[str(source)] = count
     attempts = max(0, int(lock_retries)) + 1
     last_error = None
+    last_error_kind = None
     for _attempt in range(attempts):
         try:
             with _usage_lock(usage_path, timeout=lock_timeout):
                 payload = load_usage_strict(usage_path)
-                day_key = str(day or datetime.now(SHANGHAI_TZ).date().isoformat())
                 day_counts = payload["dates"].setdefault(day_key, {})
                 for source_name, count in actual_counts.items():
                     day_counts[source_name] = (
@@ -280,12 +556,7 @@ def record_actual_requests(
                 if actual_counts:
                     payload["entries"].append(
                         {
-                            "recorded_at": str(
-                                recorded_at
-                                or datetime.now().astimezone().isoformat(
-                                    timespec="seconds"
-                                )
-                            ),
+                            "recorded_at": recorded_at_value,
                             "round_id": str(round_id or "unknown"),
                             "day": day_key,
                             "workload_class": normalized_workload,
@@ -298,6 +569,13 @@ def record_actual_requests(
                 return payload
         except UsageLockTimeout as exc:
             last_error = exc
+            last_error_kind = "lock"
+        except OSError as exc:
+            # Windows can briefly deny os.replace even while our process lock is
+            # held (for example, an indexer opening the destination). Re-run the
+            # complete locked read-modify-write; never retry only the replace.
+            last_error = exc
+            last_error_kind = "write"
         except UsageLedgerReadError as exc:
             _append_conflict_audit(
                 usage_path=usage_path,
@@ -307,6 +585,8 @@ def record_actual_requests(
                 counts=actual_counts,
                 workload_class=normalized_workload,
                 entrypoint=normalized_entrypoint,
+                day=day_key,
+                recorded_at=recorded_at_value,
             )
             raise
 
@@ -322,7 +602,11 @@ def record_actual_requests(
         counts=actual_counts,
         workload_class=normalized_workload,
         entrypoint=normalized_entrypoint,
+        day=day_key,
+        recorded_at=recorded_at_value,
     )
+    if last_error_kind == "write":
+        raise last_error
     return load_usage_strict(usage_path)
 
 

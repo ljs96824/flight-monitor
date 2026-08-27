@@ -107,8 +107,8 @@
 `22:35:45+08:00`，没有 23 点或 0 点附近的轮次。控制台与本地除六个中断日外
 逐日一致，因此本次差异不是 UTC/Asia/Shanghai 跨日归属造成。
 
-现行 `record_actual_requests()` 默认使用 `date.today()` 作为日键，长期仍应改为
-项目统一的 Asia/Shanghai 时钟；这属于日期语义防御，不是本次 17 次缺口的根因。
+现行 `record_actual_requests()` 使用项目统一的 Asia/Shanghai 时钟生成日键；本次
+逐调用持久化同时把日键写入冲突证据，后续对账无需按文件时间猜测归属。
 
 ### 5.4 篮子与订阅轮重复计数
 
@@ -179,3 +179,34 @@ python -X utf8 scripts/initialize_api_usage.py
 `data/api_usage_conflict.log`，状态为 `pending_reconciliation`，包含该笔各源计数、
 工作负载类型与入口；待对账记录未解决时，研究硬门
 `quota_ledger_healthy` 为红，用户监控仍按保守模式运行。
+
+## 9. Pending 证据恢复工作流
+
+安全阻断不能靠手工改 JSON 解除。只读查看全部待处理证据：
+
+```powershell
+python -X utf8 scripts/reconcile_api_usage.py list
+```
+
+确认该证据确为已发生的供应商请求后，按证据原样入账：
+
+```powershell
+python -X utf8 scripts/reconcile_api_usage.py apply --evidence-id <ID> --confirm APPLY
+```
+
+确认该证据不应入账时，必须留下人工理由：
+
+```powershell
+python -X utf8 scripts/reconcile_api_usage.py dismiss --evidence-id <ID> --reason "<原因>" --confirm DISMISS
+```
+
+`apply` 只使用 pending 行已经记录的 `counts/day/workload_class/entrypoint`，禁止从
+时间或轮档猜请求次数。每次修改前会生成带原台账 SHA-256 的备份；处理结果以新的
+`reconciled` 事件追加到冲突日志，不改写原证据。`evidence_id` 同时写入台账 entry，
+所以即使“台账已写、结果事件未写”时重试，也不会重复增加计数。
+
+严格读取还校验 `dates[day][source]` 等于当日 entries 的同源计数和。唯一内部豁免是
+2026-07-22 三个精确旧聚合元组：该日台账升级前只有 dates 汇总，没有 entry lineage；
+任意金额变化或纪元后的不一致都会令 `quota_ledger_healthy=false`。控制台证明的
+8 月 17 次和 7 月 27 日 1 次漏记不存在于 dates 与 entries 任一侧，只作为
+`known_pre_epoch_external_usage_gaps` 披露，不回填、不借此放宽内部一致性合同。
