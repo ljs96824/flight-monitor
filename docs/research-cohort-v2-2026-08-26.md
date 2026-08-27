@@ -75,8 +75,9 @@ T=0再完成，在 `today > depart_date` 时停止，绝不续到 `today+60`。
 以下三项必须同时成立，才能由用户手工把 `RESEARCH_COHORT_V2` 置为 `true`：
 
 1. 已生成并成功恢复验证 runtime backup，且复制到另一块物理盘或私有加密云目录，
-   配置证据 `off_disk_copy=true`；
-2. 上述全系统配额模拟完整输出，不能只报篮子6次；
+   配置证据 `off_disk_copy=true`（该人工布尔将在后续提交改为可验证备份证据）；
+2. 全系统配额模拟完整输出，且 `expected_days_remaining >= 30`、
+   `worst_case_days_remaining >= 20`、`remaining_after_research >= monitoring_reserve`；
 3. observations 时间归属迁移、collection_cells 请求台账迁移和 prices round lineage
    迁移均已在生产库完成，旧数据可只读查询。时区列只属于第一项；collection_cells
    与 prices 的 round_id 列共同构成第二项，不得把缺失的台账误报成时区迁移失败。
@@ -116,6 +117,7 @@ T=0再完成，在 `today > depart_date` 时停止，绝不续到 `today+60`。
 `observations` 历史行数保持 86,227，新增 `collection_cells` 为0行；prices三表
 `round_id` 列已存在且历史值保持 NULL。由此迁移与旧数据可读硬门已通过。
 
-当前唯一未通过项为 `off_disk_copy`。因此配置仍为
-`RESEARCH_COHORT_V2=false`，不得自动启用；待用户完成异盘或私有加密云复制并把
-`research_cohort_v2_gates.off_disk_copy` 明确置为 `true` 后，再由用户手工启用。
+上表是充值前的历史审计快照，已由
+`docs/juhe-quota-epoch-2026-08-27.md` 的 1,100 次买断纪元与动态储备口径取代，禁止继续
+用“550减全历史累计”判断余量。配置仍为 `RESEARCH_COHORT_V2=false`；配额、备份与迁移
+硬门全部通过后，才由用户手工启用。

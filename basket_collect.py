@@ -16,6 +16,7 @@ from collection_singleflight import (
     collection_busy_status,
 )
 from log_utils import configure_stdio_utf8, end_round_log_archive, safe_log, start_round_log_archive
+from quota_policy import metrics as quota_metrics
 from observations_store import (
     DEFAULT_DB_PATH,
     count_observations_for_round,
@@ -32,10 +33,13 @@ from request_cache import (
 )
 from research_cohort import (
     active_user_monitor_dates,
+    apply_research_quota_guard,
     apply_research_round_outcomes,
     evaluate_research_hard_gates,
     inspect_research_migrations,
+    load_research_round_ids,
     prepare_research_requests,
+    research_runtime_enabled,
     simulate_research_quota,
 )
 from source_profiles import retired_listing_sources
@@ -245,6 +249,8 @@ def _simulate_runtime_quota(
     settings: dict,
     source_builder: Callable,
     usage_path: str | Path,
+    db_path: str | Path | None = None,
+    today: date | None = None,
 ) -> dict:
     basket_plan = build_collection_plan(
         subscriptions=[],
@@ -260,24 +266,64 @@ def _simulate_runtime_quota(
         freshness_hours=settings.get("freshness_hours", 6),
         fresh_scope=settings.get("sub_round_fresh_scope", "primary_only"),
     )
-    usage = usage_snapshot(load_usage(usage_path))
-    budget = int((settings.get("source_quota_budget") or {}).get("juhe") or 0)
-    used = int((usage.get("cumulative") or {}).get("juhe", 0) or 0)
+    usage_payload = load_usage(usage_path)
+    snapshot = usage_snapshot(usage_payload, day=(today or shanghai_today()).isoformat())
+    juhe_policy = (settings.get("source_quota_budget") or {}).get("juhe") or 0
+    research_ids = load_research_round_ids(db_path) if db_path else set()
+    policy = quota_metrics(
+        juhe_policy,
+        snapshot,
+        "juhe",
+        usage_payload=usage_payload,
+        as_of=today,
+        research_round_ids=research_ids,
+    )
     gate_config = settings.get("research_cohort_v2_gates") or {}
     other_calls_declared = "other_scheduled_calls" in gate_config
     quota = simulate_research_quota(
         basket_keys=_juhe_plan_keys(basket_plan),
         subscription_keys=_juhe_plan_keys(subscription_plan),
         other_scheduled_calls=int(gate_config.get("other_scheduled_calls") or 0),
-        quota_remaining=max(0, budget - used),
+        quota_remaining=policy["remaining"],
         retries_per_request=1,
+        monitoring_reserve=policy["reserve"],
+    )
+    quota.update(
+        {
+            "quota_total_limit": policy["total_limit"],
+            "quota_used": policy["used"],
+            "research_available": policy["research_available"],
+        }
     )
     quota["complete"] = bool(
         other_calls_declared
-        and budget > 0
+        and policy["total_limit"] > 0
         and quota["basket_planned_unique"] == len(research_requests)
     )
     return quota
+
+
+def _default_quota_guard_notifier(
+    state_path: str | Path,
+    title: str,
+    content: str,
+) -> bool:
+    subscriptions_path = Path(state_path).resolve().parent / "subscriptions.json"
+    try:
+        payload = read_json(subscriptions_path)
+    except (OSError, ValueError):
+        payload = []
+    if isinstance(payload, dict):
+        subscriptions = payload.get("subscriptions") or []
+    else:
+        subscriptions = payload or []
+    try:
+        from main import _notify_system_alert
+
+        return bool(_notify_system_alert(list(subscriptions), title, content))
+    except Exception as exc:
+        safe_log(f"[配额守卫] 通知失败 原因={type(exc).__name__}:{exc}")
+        return False
 
 
 def _prepare_research_basket(
@@ -289,6 +335,7 @@ def _prepare_research_basket(
     usage_path: str | Path,
     settings: dict,
     source_builder: Callable,
+    quota_guard_notifier=None,
 ) -> tuple[dict, list[dict], dict, dict]:
     subscriptions_path = Path(state_path).resolve().parent / "subscriptions.json"
     prices_path = Path(state_path).resolve().parent / "prices.db"
@@ -313,15 +360,31 @@ def _prepare_research_basket(
         settings=settings,
         source_builder=source_builder,
         usage_path=usage_path,
+        db_path=db_path,
+        today=today,
     )
+    guard = apply_research_quota_guard(
+        staged_state,
+        quota,
+        notifier=quota_guard_notifier,
+    )
+    quota["guard_triggered"] = bool(guard.get("triggered"))
     migration = inspect_research_migrations(db_path, prices_path)
+    gate_config = settings.get("research_cohort_v2_gates") or {}
     gate = evaluate_research_hard_gates(
-        off_disk_copy=bool(
-            (settings.get("research_cohort_v2_gates") or {}).get("off_disk_copy")
-        ),
+        off_disk_copy=bool(gate_config.get("off_disk_copy")),
         quota_simulation=quota,
         migration_status=migration,
+        minimum_expected_days=int(gate_config.get("minimum_expected_days", 30)),
+        minimum_worst_case_days=int(
+            gate_config.get("minimum_worst_case_days", 20)
+        ),
     )
+    if guard.get("triggered"):
+        gate["checks"]["quota_guard"] = False
+        if "quota_guard" not in gate["missing"]:
+            gate["missing"].insert(0, "quota_guard")
+        gate["ready"] = False
     safe_log(
         "[研究配额模拟] "
         f"basket_planned_unique={quota.get('basket_planned_unique')} "
@@ -331,14 +394,18 @@ def _prepare_research_basket(
         f"other_scheduled_calls={quota.get('other_scheduled_calls')} "
         f"combined_daily_expected={quota.get('combined_daily_expected')} "
         f"combined_daily_worst_case={quota.get('combined_daily_worst_case')} "
-        f"estimated_days_remaining={quota.get('estimated_days_remaining')}"
+        f"expected_days_remaining={quota.get('expected_days_remaining')} "
+        f"worst_case_days_remaining={quota.get('worst_case_days_remaining')} "
+        f"remaining_after_research={quota.get('remaining_after_research')} "
+        f"monitoring_reserve={quota.get('monitoring_reserve')}"
     )
     safe_log(
         f"[研究采样门] ready={gate['ready']} "
         f"missing={','.join(gate['missing']) if gate['missing'] else 'none'}"
     )
     if not gate["ready"]:
-        return state, [], gate, quota
+        guarded_state = staged_state if guard.get("triggered") else state
+        return guarded_state, [], gate, quota
     for item in settings.get("paused_research_routes") or []:
         safe_log(
             f"[研究采样] 已暂停 route={item.get('route')} "
@@ -362,6 +429,7 @@ def run_basket(
     source_builder: Callable = build_default_sources,
     aggregator_factory: Callable = FlightAggregator,
     singleflight_lock_path: str | Path | None = None,
+    quota_guard_notifier=None,
 ) -> dict:
     today = today or shanghai_today()
     now = now or datetime.now()
@@ -391,6 +459,7 @@ def run_basket(
             usage_path=usage_path,
             source_builder=source_builder,
             aggregator_factory=aggregator_factory,
+            quota_guard_notifier=quota_guard_notifier,
         )
     finally:
         singleflight.release()
@@ -405,6 +474,7 @@ def _run_basket_locked(
     usage_path: str | Path = API_USAGE_PATH,
     source_builder: Callable = build_default_sources,
     aggregator_factory: Callable = FlightAggregator,
+    quota_guard_notifier=None,
 ) -> dict:
     today = today or shanghai_today()
     now = now or datetime.now()
@@ -418,9 +488,29 @@ def _run_basket_locked(
         safe_log(f"[轮档失败] round_id={round_id} 原因={type(exc).__name__}:{exc}")
     settings = load_collection_settings(CONFIG_PATH)
     state = load_or_create_state(state_path, today)
-    research_enabled = bool(settings.get("research_cohort_v2"))
+    research_configured = bool(settings.get("research_cohort_v2"))
+    research_enabled = research_runtime_enabled(state, research_configured)
+    if research_configured and not research_enabled:
+        safe_log("[篮子跳过] 原因=研究采样运行态已停用,用户监控继续")
+        if round_archive_started:
+            end_round_log_archive(status="blocked")
+        return {
+            "status": "blocked",
+            "reason": "research_runtime_disabled",
+            "user_monitoring_enabled": True,
+            "round_id": round_id,
+            "queues": 0,
+            "success": 0,
+            "failed": 0,
+            "written": 0,
+        }
     if research_enabled:
-        state, basket_requests, research_gate, _quota = _prepare_research_basket(
+        notifier = quota_guard_notifier or (
+            lambda title, content: _default_quota_guard_notifier(
+                state_path, title, content
+            )
+        )
+        state, basket_requests, research_gate, quota = _prepare_research_basket(
             state,
             today=today,
             state_path=state_path,
@@ -428,8 +518,11 @@ def _run_basket_locked(
             usage_path=usage_path,
             settings=settings,
             source_builder=source_builder,
+            quota_guard_notifier=notifier,
         )
         if not research_gate["ready"]:
+            if quota.get("guard_triggered"):
+                _write_state(Path(state_path), state)
             safe_log("[篮子跳过] 原因=研究采样硬门未通过")
             if round_archive_started:
                 try:
@@ -442,6 +535,7 @@ def _run_basket_locked(
             return {
                 "status": "blocked",
                 "reason": "research_hard_gate",
+                "user_monitoring_enabled": True,
                 "round_id": round_id,
                 "queues": 0,
                 "success": 0,

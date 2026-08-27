@@ -81,14 +81,19 @@ def build_report(
         settings=settings,
         source_builder=source_builder,
         usage_path=usage_path,
+        db_path=observations_path,
+        today=today,
     )
     migrations = inspect_research_migrations(observations_path, prices_path)
+    gate_config = settings.get("research_cohort_v2_gates") or {}
     hard_gate = evaluate_research_hard_gates(
-        off_disk_copy=bool(
-            (settings.get("research_cohort_v2_gates") or {}).get("off_disk_copy")
-        ),
+        off_disk_copy=bool(gate_config.get("off_disk_copy")),
         quota_simulation=quota,
         migration_status=migrations,
+        minimum_expected_days=int(gate_config.get("minimum_expected_days", 30)),
+        minimum_worst_case_days=int(
+            gate_config.get("minimum_worst_case_days", 20)
+        ),
     )
     return {
         "today": today.isoformat(),

@@ -238,6 +238,24 @@ class CollectionPlanTest(unittest.TestCase):
         self.assertIn("[采集计划] 唯一请求=1 juhe=1", output.getvalue())
         self.assertIn("余量低于阈值50", output.getvalue())
 
+    def test_purchased_pack_policy_is_not_treated_as_monthly_hard_skip(self):
+        from collection_plan import CollectionPlan
+
+        source = FakeSource("juhe", [{"flight_combo": "MU1", "price": 800}])
+        plan = CollectionPlan(subscription_count=1)
+        plan.add_request(source, "SHA", "PEK", "2026-08-20", persist=False)
+        plan.log_summary(
+            quota_budgets={
+                "juhe": {
+                    "kind": "purchased_packs",
+                    "packs": [{"id": "pack-a", "added": 550}],
+                    "reserve": 500,
+                }
+            },
+            usage_snapshot={"cumulative": {"juhe": 549}},
+        )
+
+        self.assertEqual(plan._quota_protected_keys, set())
     def test_api_usage_ledger_accumulates_actual_requests(self):
         from api_usage import load_usage, record_actual_requests, usage_snapshot
         from request_cache import reset_for_tests

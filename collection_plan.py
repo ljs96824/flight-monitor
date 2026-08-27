@@ -8,6 +8,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from log_utils import safe_log
+from quota_policy import MONTHLY, metrics as quota_metrics
 from request_cache import (
     cache_key,
     cached_fetch,
@@ -288,15 +289,14 @@ class CollectionPlan:
                 and key not in self.panel_only_keys
             }
             planned = len(planned_keys)
-            if isinstance(raw_budget, dict):
-                monthly = max(0, int(raw_budget.get("monthly") or 0))
-                reserve = max(0, int(raw_budget.get("reserve") or 0))
-                monthly_used = int((snapshot.get("month") or {}).get(source, 0) or 0)
-                usable_limit = max(0, monthly - reserve)
-                remaining_after = usable_limit - monthly_used - planned
-                if monthly_used + planned > usable_limit:
+            quota = quota_metrics(raw_budget, snapshot, source)
+            remaining_after = quota["remaining"] - planned
+            if quota["kind"] == MONTHLY:
+                usable_limit = max(0, quota["total_limit"] - quota["reserve"])
+                usable_after = usable_limit - quota["used"] - planned
+                if quota["used"] + planned > usable_limit:
                     reason = (
-                        f"月度配额保护(本月已用={monthly_used},计划={planned},"
+                        f"月度配额保护(本月已用={quota['used']},计划={planned},"
                         f"可用上限={usable_limit})"
                     )
                     self._quota_protected_keys.update(planned_keys)
@@ -304,30 +304,29 @@ class CollectionPlan:
                         {key: reason for key in planned_keys}
                     )
                     safe_log(
-                        f"[配额保护] 源={source} 本月已用={monthly_used} "
-                        f"计划消耗={planned} 月预算={monthly} 预留={reserve} "
-                        f"结果=计划项转源级跳过"
+                        f"[配额保护] 源={source} 本月已用={quota['used']} "
+                        f"计划消耗={planned} 月预算={quota['total_limit']} "
+                        f"预留={quota['reserve']} 结果=计划项转源级跳过"
                     )
-                elif remaining_after < int(quota_low_remaining_threshold):
+                elif usable_after < int(quota_low_remaining_threshold):
                     safe_log(
                         f"⚠ [采集计划] 源={source} 计划消耗={planned} "
-                        f"本月已用={monthly_used} 月预算={monthly} 预留={reserve} "
-                        f"预计可用余量={remaining_after}"
+                        f"本月已用={quota['used']} 月预算={quota['total_limit']} "
+                        f"预留={quota['reserve']} 预计可用余量={usable_after}"
                     )
                 continue
 
-            budget = int(raw_budget or 0)
-            cumulative = int((snapshot.get("cumulative") or {}).get(source, 0) or 0)
-            remaining_after = budget - cumulative - planned
-            if cumulative + planned > budget:
+            if remaining_after < 0:
                 safe_log(
-                    f"⚠ [采集计划] 源={source} 计划消耗={planned} 累计已用={cumulative} "
-                    f"预算={budget} 预计超出={-remaining_after}"
+                    f"⚠ [采集计划] 源={source} 计划消耗={planned} "
+                    f"本epoch已用={quota['used']} 预算={quota['total_limit']} "
+                    f"预计超出={-remaining_after}"
                 )
             elif remaining_after < int(quota_low_remaining_threshold):
                 safe_log(
-                    f"⚠ [采集计划] 源={source} 计划消耗={planned} 累计已用={cumulative} "
-                    f"预算={budget} 预计余量={remaining_after} "
+                    f"⚠ [采集计划] 源={source} 计划消耗={planned} "
+                    f"本epoch已用={quota['used']} 预算={quota['total_limit']} "
+                    f"预计余量={remaining_after} "
                     f"余量低于阈值{int(quota_low_remaining_threshold)}"
                 )
 

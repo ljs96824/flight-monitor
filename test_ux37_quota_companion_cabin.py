@@ -30,8 +30,9 @@ class QuotaOverviewContractTest(unittest.TestCase):
 
         self.assertEqual(
             format_quota_overview(payload, budgets, day="2026-08-14"),
-            "[配额总览] juhe 余量估算=500/550(买断) · "
-            "serpapi 本月余量=240/250(reserve=30) · duffel=不限额",
+            "[配额总览] juhe 本epoch已用=50/预算550 余量估算=500 储备=0 "
+            "研究可用=500(以聚合数据控制台为准) · "
+            "serpapi 本月已用=10/250 余量估算=240(reserve=30) · duffel=不限额",
         )
 
     def test_detail_source_section_appends_the_same_overview_line(self):
@@ -57,8 +58,9 @@ class QuotaOverviewContractTest(unittest.TestCase):
         import request_cache
 
         marker = (
-            "[配额总览] juhe 余量估算=550/550(买断) · "
-            "serpapi 本月余量=250/250(reserve=30) · duffel=不限额"
+            "[配额总览] juhe 本epoch已用=0/预算550 余量估算=550 储备=0 "
+            "研究可用=550(以聚合数据控制台为准) · "
+            "serpapi 本月已用=0/250 余量估算=250(reserve=30) · duffel=不限额"
         )
         with TemporaryDirectory(prefix="ux37-quota-") as tmpdir:
             root = Path(tmpdir)

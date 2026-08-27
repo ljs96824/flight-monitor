@@ -260,12 +260,12 @@ class ResearchCohortV2Test(unittest.TestCase):
 
         blocked = evaluate_research_hard_gates(
             off_disk_copy=False,
-            quota_simulation={"complete": True},
+            quota_simulation={"complete": True, "expected_days_remaining": 30, "worst_case_days_remaining": 20, "remaining_after_research": 500, "monitoring_reserve": 400},
             migration_status={"timestamp_ready": True, "lineage_ready": True, "old_data_readable": True},
         )
         ready = evaluate_research_hard_gates(
             off_disk_copy=True,
-            quota_simulation={"complete": True},
+            quota_simulation={"complete": True, "expected_days_remaining": 30, "worst_case_days_remaining": 20, "remaining_after_research": 500, "monitoring_reserve": 400},
             migration_status={"timestamp_ready": True, "lineage_ready": True, "old_data_readable": True},
         )
 
@@ -274,6 +274,167 @@ class ResearchCohortV2Test(unittest.TestCase):
         self.assertTrue(ready["ready"])
         self.assertEqual(ready["missing"], [])
 
+    def test_hard_gate_requires_all_three_quota_boundaries(self):
+        from research_cohort import evaluate_research_hard_gates
+
+        migration = {
+            "timestamp_ready": True,
+            "lineage_ready": True,
+            "old_data_readable": True,
+        }
+        base = {
+            "complete": True,
+            "expected_days_remaining": 30,
+            "worst_case_days_remaining": 20,
+            "remaining_after_research": 500,
+            "monitoring_reserve": 500,
+        }
+
+        ready = evaluate_research_hard_gates(
+            off_disk_copy=True,
+            quota_simulation=base,
+            migration_status=migration,
+            minimum_expected_days=30,
+            minimum_worst_case_days=20,
+        )
+        expected_short = evaluate_research_hard_gates(
+            off_disk_copy=True,
+            quota_simulation={**base, "expected_days_remaining": 29},
+            migration_status=migration,
+            minimum_expected_days=30,
+            minimum_worst_case_days=20,
+        )
+        worst_short = evaluate_research_hard_gates(
+            off_disk_copy=True,
+            quota_simulation={**base, "worst_case_days_remaining": 19},
+            migration_status=migration,
+            minimum_expected_days=30,
+            minimum_worst_case_days=20,
+        )
+        reserve_breached = evaluate_research_hard_gates(
+            off_disk_copy=True,
+            quota_simulation={**base, "remaining_after_research": 499},
+            migration_status=migration,
+            minimum_expected_days=30,
+            minimum_worst_case_days=20,
+        )
+
+        self.assertTrue(ready["ready"])
+        self.assertIn("expected_days_remaining", expected_short["missing"])
+        self.assertIn("worst_case_days_remaining", worst_short["missing"])
+        self.assertIn("monitoring_reserve", reserve_breached["missing"])
+
+    def test_quota_guard_disables_research_once_without_touching_monitoring(self):
+        from research_cohort import apply_research_quota_guard
+
+        state = {"research_cohort_v2": {"runtime_enabled": True}}
+        notifications = []
+        quota = {
+            "quota_remaining": 439,
+            "monitoring_reserve": 440,
+            "research_available": 0,
+        }
+
+        first = apply_research_quota_guard(
+            state,
+            quota,
+            notifier=lambda title, content: notifications.append((title, content)) or True,
+            now="2026-08-27T12:00:00+08:00",
+        )
+        second = apply_research_quota_guard(
+            state,
+            quota,
+            notifier=lambda title, content: notifications.append((title, content)) or True,
+            now="2026-08-27T12:01:00+08:00",
+        )
+
+        self.assertTrue(first["triggered"])
+        self.assertFalse(state["research_cohort_v2"]["runtime_enabled"])
+        self.assertTrue(state["research_cohort_v2"]["user_monitoring_enabled"])
+        self.assertTrue(first["notified"])
+        self.assertFalse(second["notified"])
+        self.assertEqual(len(notifications), 1)
+        self.assertIn("余量=439 储备=440", notifications[0][1])
+
+    def test_basket_quota_guard_persists_runtime_stop_and_notifies_once(self):
+        from basket_collect import run_basket
+        from test_basket_collect import FakeAggregator, FakeSource, fake_source_builder
+
+        settings = {
+            "source_quota_budget": {"juhe": 1100},
+            "source_quota_low_remaining_threshold": 50,
+            "freshness_hours": 6,
+            "sub_round_fresh_scope": "primary_only",
+            "research_cohort_v2": True,
+            "research_cohort_v2_gates": {
+                "off_disk_copy": True,
+                "other_scheduled_calls": 0,
+                "minimum_expected_days": 30,
+                "minimum_worst_case_days": 20,
+            },
+            "paused_research_routes": [],
+        }
+        low_quota = {
+            "complete": True,
+            "expected_days_remaining": 29,
+            "worst_case_days_remaining": 19,
+            "remaining_after_research": 433,
+            "monitoring_reserve": 440,
+            "quota_remaining": 439,
+            "research_available": 0,
+        }
+        notifications = []
+        FakeSource.calls.clear()
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root = Path(tmp)
+            with (
+                patch("basket_collect.load_collection_settings", return_value=settings),
+                patch("basket_collect._load_active_subscriptions_for_research", return_value=[]),
+                patch("basket_collect._simulate_runtime_quota", return_value=low_quota),
+                patch(
+                    "basket_collect.inspect_research_migrations",
+                    return_value={
+                        "timestamp_ready": True,
+                        "lineage_ready": True,
+                        "old_data_readable": True,
+                    },
+                ),
+                patch("basket_collect.start_request_cache_round") as start_round,
+            ):
+                first = run_basket(
+                    today=date(2026, 8, 27),
+                    state_path=root / "basket_state.json",
+                    db_path=root / "observations.sqlite3",
+                    usage_path=root / "api_usage.json",
+                    source_builder=fake_source_builder,
+                    aggregator_factory=FakeAggregator,
+                    singleflight_lock_path=root / "collection.lock",
+                    quota_guard_notifier=lambda title, content: (
+                        notifications.append((title, content)) or True
+                    ),
+                )
+                second = run_basket(
+                    today=date(2026, 8, 27),
+                    state_path=root / "basket_state.json",
+                    db_path=root / "observations.sqlite3",
+                    usage_path=root / "api_usage.json",
+                    source_builder=fake_source_builder,
+                    aggregator_factory=FakeAggregator,
+                    singleflight_lock_path=root / "collection.lock",
+                    quota_guard_notifier=lambda title, content: (
+                        notifications.append((title, content)) or True
+                    ),
+                )
+            state = json.loads((root / "basket_state.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(first["reason"], "research_hard_gate")
+        self.assertEqual(second["reason"], "research_runtime_disabled")
+        self.assertTrue(first["user_monitoring_enabled"])
+        self.assertTrue(second["user_monitoring_enabled"])
+        self.assertFalse(state["research_cohort_v2"]["runtime_enabled"])
+        self.assertEqual(len(notifications), 1)
+        self.assertEqual(FakeSource.calls, [])
+        start_round.assert_not_called()
     def test_runtime_quota_is_incomplete_without_explicit_other_calls(self):
         from basket_collect import _simulate_runtime_quota
 
@@ -383,6 +544,17 @@ class ResearchCohortV2Test(unittest.TestCase):
 
         self.assertFalse(settings["research_cohort_v2"])
         self.assertEqual(
+            settings["source_quota_budget"]["juhe"]["kind"],
+            "purchased_packs",
+        )
+        self.assertEqual(
+            sum(
+                item["added"]
+                for item in settings["source_quota_budget"]["juhe"]["packs"]
+            ),
+            1100,
+        )
+        self.assertEqual(
             settings["research_cohort_v2_gates"]["other_scheduled_calls"],
             2,
         )
@@ -443,7 +615,15 @@ class ResearchCohortV2Test(unittest.TestCase):
                 patch("basket_collect.inspect_research_migrations", return_value=ready),
                 patch(
                     "basket_collect._simulate_runtime_quota",
-                    return_value={"complete": True},
+                    return_value={
+                        "complete": True,
+                        "expected_days_remaining": 30,
+                        "worst_case_days_remaining": 20,
+                        "remaining_after_research": 500,
+                        "monitoring_reserve": 400,
+                        "quota_remaining": 500,
+                        "research_available": 100,
+                    },
                 ),
                 patch("basket_collect.count_observations_for_round", return_value=6),
                 redirect_stdout(output),
@@ -494,7 +674,15 @@ class ResearchCohortV2Test(unittest.TestCase):
                 ),
                 patch(
                     "basket_collect._simulate_runtime_quota",
-                    return_value={"complete": True},
+                    return_value={
+                        "complete": True,
+                        "expected_days_remaining": 30,
+                        "worst_case_days_remaining": 20,
+                        "remaining_after_research": 500,
+                        "monitoring_reserve": 400,
+                        "quota_remaining": 500,
+                        "research_available": 100,
+                    },
                 ),
                 patch("basket_collect.start_request_cache_round") as start_round,
             ):

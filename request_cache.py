@@ -18,6 +18,7 @@ from domestic_fare_rules import AIRCRAFT_NAMES, re_match_aircraft_code
 from filename_utils import sanitize_filename
 from flight_combo_utils import normalize_combo
 from log_utils import append_round_evidence, safe_log
+from quota_policy import MONTHLY, metrics as quota_metrics
 import observations_store
 
 
@@ -1077,7 +1078,7 @@ def start_request_cache_round(
     _track_usage_for_round = bool(track_usage)
     _usage_path_for_round = Path(usage_path) if usage_path else None
     _quota_budgets_for_round = {
-        str(source): copy.deepcopy(value) if isinstance(value, dict) else int(value or 0)
+        str(source): copy.deepcopy(value)
         for source, value in (quota_budgets or {}).items()
     }
     _usage_flushed_for_round = False
@@ -1113,22 +1114,25 @@ def _flush_api_usage_ledger() -> None:
     snapshot = usage_snapshot(payload)
     for source, budget in _quota_budgets_for_round.items():
         today_count = int((snapshot.get("today") or {}).get(source, 0) or 0)
-        cumulative = int((snapshot.get("cumulative") or {}).get(source, 0) or 0)
-        if isinstance(budget, dict):
-            monthly_budget = max(0, int(budget.get("monthly") or 0))
-            reserve = max(0, int(budget.get("reserve") or 0))
-            month_count = int((snapshot.get("month") or {}).get(source, 0) or 0)
-            remaining = monthly_budget - month_count
+        quota = quota_metrics(
+            budget,
+            snapshot,
+            source,
+            usage_payload=payload,
+        )
+        if quota["kind"] == MONTHLY:
             safe_log(
                 f"[配额台账] {source} 今日={today_count} "
-                f"本月={month_count}/{monthly_budget} 余量估算={remaining} "
-                f"预留={reserve} (本地估算,以SerpAPI控制台为准)"
+                f"本月已用={quota['used']}/{quota['total_limit']} "
+                f"余量估算={quota['remaining']} 预留={quota['reserve']} "
+                f"(本地估算,以SerpAPI控制台为准)"
             )
             continue
-        remaining = int(budget) - cumulative
         safe_log(
-            f"[配额台账] {source} 今日={today_count} 累计={cumulative} "
-            f"预算={budget} 余量估算={remaining} "
+            f"[配额台账] {source} 今日={today_count} "
+            f"本epoch已用={quota['used']}/预算{quota['total_limit']} "
+            f"余量估算={quota['remaining']} 储备={quota['reserve']} "
+            f"研究可用={quota['research_available']} "
             f"(本地估算,以聚合数据控制台为准)"
         )
     _usage_flushed_for_round = True

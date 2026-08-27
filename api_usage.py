@@ -14,6 +14,7 @@ from pathlib import Path
 
 from local_file_lock import FileLockTimeout, file_lock
 from log_utils import safe_log
+from quota_policy import metrics as quota_metrics
 
 
 DEFAULT_USAGE_PATH = Path(__file__).parent / "data" / "api_usage.json"
@@ -219,21 +220,26 @@ def format_quota_overview(
     """用既有台账快照生成轮末与详情页共用的配额总览。"""
     snapshot = usage_snapshot(payload, day=day)
     budgets = quota_budgets or {}
-
-    juhe_budget = int(budgets.get("juhe") or 0)
-    juhe_used = int((snapshot.get("cumulative") or {}).get("juhe", 0) or 0)
-    juhe_remaining = max(0, juhe_budget - juhe_used)
-
-    serpapi_budget = budgets.get("serpapi") or {}
-    if not isinstance(serpapi_budget, dict):
-        serpapi_budget = {"monthly": int(serpapi_budget or 0), "reserve": 0}
-    serpapi_monthly = int(serpapi_budget.get("monthly") or 0)
-    serpapi_reserve = int(serpapi_budget.get("reserve") or 0)
-    serpapi_used = int((snapshot.get("month") or {}).get("serpapi", 0) or 0)
-    serpapi_remaining = max(0, serpapi_monthly - serpapi_used)
+    juhe = quota_metrics(
+        budgets.get("juhe") or 0,
+        snapshot,
+        "juhe",
+        usage_payload=payload,
+        as_of=day,
+    )
+    serpapi = quota_metrics(
+        budgets.get("serpapi") or 0,
+        snapshot,
+        "serpapi",
+        usage_payload=payload,
+        as_of=day,
+    )
 
     return (
-        f"[配额总览] juhe 余量估算={juhe_remaining}/{juhe_budget}(买断) · "
-        f"serpapi 本月余量={serpapi_remaining}/{serpapi_monthly}"
-        f"(reserve={serpapi_reserve}) · duffel=不限额"
+        f"[配额总览] juhe 本epoch已用={juhe['used']}/预算{juhe['total_limit']} "
+        f"余量估算={juhe['remaining']} 储备={juhe['reserve']} "
+        f"研究可用={juhe['research_available']}(以聚合数据控制台为准) · "
+        f"serpapi 本月已用={serpapi['used']}/{serpapi['total_limit']} "
+        f"余量估算={serpapi['remaining']}(reserve={serpapi['reserve']}) · "
+        "duffel=不限额"
     )

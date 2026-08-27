@@ -7,7 +7,7 @@ flight source directly; execution remains owned by ``CollectionPlan``.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 import sqlite3
 from typing import Callable, Iterable
@@ -305,6 +305,7 @@ def simulate_research_quota(
     other_scheduled_calls: int,
     quota_remaining: int,
     retries_per_request: int = 1,
+    monitoring_reserve: int = 0,
 ) -> dict:
     """Model whole-system daily Juhe use and the research-basket retry ceiling."""
     basket = set(basket_keys)
@@ -317,15 +318,25 @@ def simulate_research_quota(
     expected = len(basket) + len(subscriptions) + other
     worst = expected + len(basket) * retries
     remaining = max(0, int(quota_remaining or 0))
+    reserve_value = max(0, int(monitoring_reserve or 0))
+    basket_retry_ceiling = len(basket) * (1 + retries)
+    expected_days = remaining // expected if expected else None
+    worst_days = remaining // worst if worst else None
     return {
         "basket_planned_unique": len(basket),
         "basket_normal_actual": len(basket),
-        "basket_retry_ceiling": len(basket) * (1 + retries),
+        "basket_retry_ceiling": basket_retry_ceiling,
         "subscription_planned_unique": len(subscriptions),
         "other_scheduled_calls": other,
         "combined_daily_expected": expected,
         "combined_daily_worst_case": worst,
-        "estimated_days_remaining": remaining // expected if expected else None,
+        "estimated_days_remaining": expected_days,
+        "expected_days_remaining": expected_days,
+        "worst_case_days_remaining": worst_days,
+        "quota_remaining": remaining,
+        "monitoring_reserve": reserve_value,
+        "research_available": max(0, remaining - reserve_value),
+        "remaining_after_research": remaining - basket_retry_ceiling,
         "complete": True,
     }
 
@@ -335,16 +346,121 @@ def evaluate_research_hard_gates(
     off_disk_copy: bool,
     quota_simulation: dict,
     migration_status: dict,
+    minimum_expected_days: int = 30,
+    minimum_worst_case_days: int = 20,
 ) -> dict:
+    quota = quota_simulation or {}
+    expected_days = quota.get("expected_days_remaining")
+    worst_days = quota.get("worst_case_days_remaining")
+    remaining_after = quota.get("remaining_after_research")
+    reserve_value = quota.get("monitoring_reserve")
     checks = {
         "off_disk_copy": bool(off_disk_copy),
-        "quota_simulation": bool((quota_simulation or {}).get("complete")),
+        "quota_simulation": bool(quota.get("complete")),
+        "expected_days_remaining": (
+            expected_days is not None
+            and int(expected_days) >= max(0, int(minimum_expected_days))
+        ),
+        "worst_case_days_remaining": (
+            worst_days is not None
+            and int(worst_days) >= max(0, int(minimum_worst_case_days))
+        ),
+        "monitoring_reserve": (
+            remaining_after is not None
+            and reserve_value is not None
+            and int(remaining_after) >= int(reserve_value)
+        ),
         "timestamp_migration": bool((migration_status or {}).get("timestamp_ready")),
         "lineage_migration": bool((migration_status or {}).get("lineage_ready")),
         "old_data_readable": bool((migration_status or {}).get("old_data_readable")),
     }
     missing = [name for name, ready in checks.items() if not ready]
     return {"ready": not missing, "missing": missing, "checks": checks}
+
+
+def apply_research_quota_guard(
+    state: dict,
+    quota_simulation: dict,
+    *,
+    notifier=None,
+    now: str | None = None,
+) -> dict:
+    """Persistently disable research when the monitoring reserve is reached."""
+    quota = quota_simulation or {}
+    required = {"quota_remaining", "monitoring_reserve", "research_available"}
+    if not required.issubset(quota):
+        return {"triggered": False, "notified": False}
+    remaining_value = max(0, int(quota.get("quota_remaining") or 0))
+    reserve_value = max(0, int(quota.get("monitoring_reserve") or 0))
+    available_value = max(0, int(quota.get("research_available") or 0))
+    triggered = remaining_value <= reserve_value or available_value <= 0
+    if not triggered:
+        return {"triggered": False, "notified": False}
+
+    cohort = _cohort_state(state)
+    cohort["runtime_enabled"] = False
+    cohort["user_monitoring_enabled"] = True
+    guard = cohort.setdefault("quota_guard", {})
+    guard.update(
+        {
+            "triggered": True,
+            "disabled_at": str(now or datetime.now().astimezone().isoformat(timespec="seconds")),
+            "remaining": remaining_value,
+            "reserve": reserve_value,
+            "research_available": available_value,
+        }
+    )
+    notified = False
+    if not guard.get("notification_attempted"):
+        title = "[配额守卫] 研究采样已停用"
+        content = (
+            "[配额守卫] 研究采样已停用,用户监控继续,"
+            f"余量={remaining_value} 储备={reserve_value}"
+        )
+        guard["notification_attempted"] = True
+        if notifier is not None:
+            try:
+                notified = bool(notifier(title, content))
+            except Exception as exc:
+                guard["notification_error"] = f"{type(exc).__name__}:{exc}"
+        guard["notified"] = notified
+    return {"triggered": True, "notified": notified}
+
+
+def research_runtime_enabled(state: dict, configured: bool) -> bool:
+    if not configured:
+        return False
+    cohort = state.get("research_cohort_v2")
+    if not isinstance(cohort, dict):
+        return True
+    return bool(cohort.get("runtime_enabled", True))
+
+
+def load_research_round_ids(db_path: str | Path) -> set[str]:
+    """Read round ids already attributed to the research cohort."""
+    from tcurve import readonly_connection
+
+    try:
+        with readonly_connection(db_path) as connection:
+            tables = {
+                str(row[0])
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_schema WHERE type='table'"
+                )
+            }
+            if "collection_cells" not in tables:
+                return set()
+            return {
+                str(row[0])
+                for row in connection.execute(
+                    "SELECT DISTINCT round_id FROM collection_cells "
+                    "WHERE cohort_id = ? AND round_id IS NOT NULL",
+                    (RESEARCH_COHORT_ID,),
+                )
+                if row[0]
+            }
+    except (OSError, sqlite3.Error):
+        return set()
 
 
 def _table_columns(connection, table: str) -> set[str]:

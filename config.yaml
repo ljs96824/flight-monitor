@@ -1,5 +1,26 @@
 source_quota_budget:
-  juhe: 550
+  juhe:
+    kind: purchased_packs
+    packs:
+      - id: pack-2026-07
+        added: 550
+        added_at: "2026-07-22"
+      - id: pack-2026-08-27
+        added: 550
+        added_at: "2026-08-27"
+    reconciliation:
+      checked_at: "2026-08-27"
+      console_used: 447
+      console_remaining: 653
+      local_ledger_used: 428
+      unrecorded_usage_adjustment: 19
+    reserve:
+      kind: monitoring_p90
+      window_days: 7
+      target_date: "2026-10-01"
+      safety_multiplier: 1.2
+      emergency_calls: 20
+      fallback_daily_p90: 11.5
   serpapi:
     monthly: 250
     reserve: 30
@@ -12,6 +33,8 @@ research_cohort_v2_gates:
   off_disk_copy: false
   # 09:00/15:00/21:00 三个订阅轮；代表计划外另计两次边际调用。
   other_scheduled_calls: 2
+  minimum_expected_days: 30
+  minimum_worst_case_days: 20
 paused_research_routes:
   - route: SHA->PEK
     reason: quota_concentration_for_pvg_kix_tcurve
