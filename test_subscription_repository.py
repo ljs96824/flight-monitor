@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from subscription_repository import (
     LOCAL_OWNER_ID,
+    SubscriptionIdentityMigrationRequired,
     SubscriptionOwnerScopeError,
     SubscriptionRepository,
 )
@@ -91,6 +92,21 @@ def _repository_mutate_worker(
         results.put(f"{type(exc).__name__}: {exc}")
 
 
+def _repository_patch_worker(
+    path_text: str,
+    patch_payload: dict,
+    barrier,
+    results,
+) -> None:
+    try:
+        repository = SubscriptionRepository(Path(path_text))
+        barrier.wait(timeout=10)
+        saved = repository.update(LOCAL_OWNER_ID, SUB_A, patch_payload)
+        results.put(saved)
+    except BaseException as exc:  # pragma: no cover - 子进程错误由父进程断言
+        results.put(f"{type(exc).__name__}: {exc}")
+
+
 class SubscriptionRepositoryTest(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()
@@ -169,39 +185,48 @@ class SubscriptionRepositoryTest(unittest.TestCase):
         )
         self.assertFalse(self.repository.delete(LOCAL_OWNER_ID, "missing"))
 
-    def test_m0_legacy_index_resolution_persists_stable_identity_once(self):
+    def test_m0_legacy_index_resolution_is_read_only_and_requires_migration(self):
         legacy = _subscription("", 1000)
         legacy.pop("subscription_id")
         self.path.write_text(
             json.dumps([legacy], ensure_ascii=False),
             encoding="utf-8",
         )
+        original = self.path.read_bytes()
 
-        first = self.repository.resolve_legacy_index(LOCAL_OWNER_ID, 0)
-        first_bytes = self.path.read_bytes()
-        second = self.repository.resolve_legacy_index(LOCAL_OWNER_ID, 0)
+        with self.assertRaises(SubscriptionIdentityMigrationRequired):
+            self.repository.resolve_legacy_index(LOCAL_OWNER_ID, 0)
 
-        self.assertTrue(first["subscription_id"])
-        self.assertEqual(second["subscription_id"], first["subscription_id"])
-        self.assertEqual(self.path.read_bytes(), first_bytes)
+        self.assertEqual(self.path.read_bytes(), original)
 
-    def test_update_promotes_legacy_id_to_subscription_id_like_old_save_path(self):
+    def test_crud_does_not_promote_legacy_id_after_migration_preflight(self):
         legacy = _subscription(SUB_A, 1000)
         legacy["id"] = legacy.pop("subscription_id")
-        self.path.write_text(
-            json.dumps([legacy], ensure_ascii=False),
-            encoding="utf-8",
-        )
-        replacement = _subscription("replacement-must-not-win", 2500)
+        operations = {
+            "get": lambda: self.repository.get(LOCAL_OWNER_ID, SUB_A),
+            "update": lambda: self.repository.update(
+                LOCAL_OWNER_ID,
+                SUB_A,
+                {"hard_constraints": {"max_budget": 2500}},
+            ),
+            "delete": lambda: self.repository.delete(LOCAL_OWNER_ID, SUB_A),
+            "create": lambda: self.repository.create(
+                LOCAL_OWNER_ID,
+                _subscription(SUB_B, 2000),
+            ),
+        }
+        for name, operation in operations.items():
+            with self.subTest(operation=name):
+                self.path.write_text(
+                    json.dumps([legacy], ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                original = self.path.read_bytes()
 
-        saved = self.repository.update(LOCAL_OWNER_ID, SUB_A, replacement)
+                with self.assertRaises(SubscriptionIdentityMigrationRequired):
+                    operation()
 
-        self.assertEqual(saved["id"], SUB_A)
-        self.assertEqual(saved["subscription_id"], SUB_A)
-        self.assertEqual(
-            json.loads(self.path.read_text(encoding="utf-8"))[0],
-            saved,
-        )
+                self.assertEqual(self.path.read_bytes(), original)
 
     def test_nonlocal_owner_cannot_observe_or_mutate_local_records(self):
         self.repository.create(LOCAL_OWNER_ID, _subscription(SUB_A, 1000))
@@ -324,6 +349,51 @@ class SubscriptionRepositoryTest(unittest.TestCase):
         saved = json.loads(self.path.read_text(encoding="utf-8"))[0]
         self.assertEqual(saved["status"], "paused")
         self.assertEqual(saved["last_attempt"], expected_attempt)
+
+    def test_same_subscription_concurrent_partial_updates_merge_lock_time_state(self):
+        original = _subscription(SUB_A, 1000)
+        original["notification_goals"] = {"method": "both", "email": ""}
+        self.path.write_text(
+            json.dumps([original], ensure_ascii=False),
+            encoding="utf-8",
+        )
+        context = multiprocessing.get_context("spawn")
+        barrier = context.Barrier(2)
+        results = context.Queue()
+        processes = [
+            context.Process(
+                target=_repository_patch_worker,
+                args=(
+                    str(self.path),
+                    {"hard_constraints": {"max_budget": 3000}},
+                    barrier,
+                    results,
+                ),
+            ),
+            context.Process(
+                target=_repository_patch_worker,
+                args=(
+                    str(self.path),
+                    {"notification_goals": {"method": "email"}},
+                    barrier,
+                    results,
+                ),
+            ),
+        ]
+        for process in processes:
+            process.start()
+        for process in processes:
+            process.join(timeout=20)
+
+        self.assertEqual([process.exitcode for process in processes], [0, 0])
+        child_results = [results.get(timeout=2) for _ in processes]
+        self.assertTrue(all(isinstance(item, dict) for item in child_results))
+        saved = json.loads(self.path.read_text(encoding="utf-8"))[0]
+        self.assertEqual(saved["subscription_id"], SUB_A)
+        self.assertEqual(saved["origin"], "PVG")
+        self.assertEqual(saved["hard_constraints"]["max_budget"], 3000)
+        self.assertEqual(saved["notification_goals"]["method"], "email")
+        self.assertEqual(saved["notification_goals"]["email"], "")
 
 
 if __name__ == "__main__":

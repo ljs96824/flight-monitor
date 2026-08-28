@@ -202,17 +202,24 @@ class FormUx3TwoPagesTest(unittest.TestCase):
     def test_edit_compatibility_entry_redirects_to_full_page_and_keeps_saved_mode(self):
         fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
         saved = fixture["scenarios"]["solo_minimal"]["normalized_subscription"]
+        persisted = {
+            **saved,
+            "subscription_id": "123e4567-e89b-12d3-a456-426614174130",
+        }
         original = web_form.SUBSCRIPTIONS_PATH
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "subscriptions.json"
-            path.write_text(json.dumps([saved], ensure_ascii=False), encoding="utf-8")
+            path.write_text(
+                json.dumps([persisted], ensure_ascii=False),
+                encoding="utf-8",
+            )
             web_form.SUBSCRIPTIONS_PATH = path
             try:
                 redirect_response = self.client.get("/?edit=0")
                 self.assertEqual(redirect_response.status_code, 302)
                 self.assertTrue(redirect_response.headers["Location"].endswith("/settings?edit=0"))
                 html = self._page("/settings?edit=0")
-                migrated_subscription_id = json.loads(
+                persisted_subscription_id = json.loads(
                     path.read_text(encoding="utf-8")
                 )[0]["subscription_id"]
             finally:
@@ -220,7 +227,7 @@ class FormUx3TwoPagesTest(unittest.TestCase):
 
         self.assertIn('name="monitor_mode" value="quick"', html)
         self.assertIn(
-            f'name="subscription_index" value="{migrated_subscription_id}"',
+            f'name="subscription_index" value="{persisted_subscription_id}"',
             html,
         )
 
@@ -274,8 +281,14 @@ class FormUx3TwoPagesTest(unittest.TestCase):
                 with patch.object(web_form, "start_background_collection"):
                     for name, case in fixture.items():
                         expected = case["normalized_subscription"]
+                        persisted = {
+                            **expected,
+                            "subscription_id": (
+                                "123e4567-e89b-12d3-a456-426614174131"
+                            ),
+                        }
                         path.write_text(
-                            json.dumps([expected], ensure_ascii=False),
+                            json.dumps([persisted], ensure_ascii=False),
                             encoding="utf-8",
                         )
                         html = self._page("/settings?edit=0")

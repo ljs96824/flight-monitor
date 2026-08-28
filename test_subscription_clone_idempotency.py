@@ -44,6 +44,7 @@ class SubscriptionCloneIdempotencyTest(unittest.TestCase):
 
     def test_edit_post_keeps_count_and_original_identity(self):
         original = _subscription(created_at="2026-05-27T06:33:38", budget=8000)
+        original["subscription_id"] = "sub-1"
         rebuilt = _subscription(created_at="2026-08-17T22:00:00", budget=9000, subscription_id="")
         rebuilt.pop("id")
 
@@ -295,6 +296,32 @@ class SubscriptionIdentityMigrationTest(unittest.TestCase):
             self.assertEqual(second["migrated"], 0)
             self.assertIsNone(second["backup_path"])
             self.assertEqual(path.read_bytes(), migrated_bytes)
+
+    def test_identity_migration_cli_write_alias_executes_and_is_idempotent(self):
+        from scripts import migrate_subscription_ids as migration
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "subscriptions.json"
+            path.write_text(
+                json.dumps(self._without_ids(), ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+
+            with patch.object(migration, "run", wraps=migration.run) as run_mock:
+                first_code = migration.main(["--path", str(path), "--write"])
+            first_bytes = path.read_bytes()
+            with patch.object(
+                migration,
+                "run",
+                wraps=migration.run,
+            ) as run_mock_second:
+                second_code = migration.main(["--path", str(path), "--write"])
+
+            self.assertEqual(first_code, 0)
+            self.assertEqual(second_code, 0)
+            self.assertTrue(run_mock.call_args.kwargs["execute"])
+            self.assertTrue(run_mock_second.call_args.kwargs["execute"])
+            self.assertEqual(path.read_bytes(), first_bytes)
 
 
 if __name__ == "__main__":
