@@ -15,11 +15,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 # Keys deliberately exclude line numbers so harmless line movement does not churn the
 # contract. New or resolved triples must be reviewed and this set changed explicitly.
-KNOWN_F821_DEBT = frozenset(
-    {
-        ("notifier.py", "generate_neutral_summary", "_plain_price_position"),
-    }
-)
+KNOWN_F821_DEBT = frozenset()
 
 
 def _scope_for_line(tree: ast.AST, line: int) -> str:

@@ -1593,8 +1593,12 @@ def generate_neutral_summary(analysis, trend, price_insights=None):
             lines.append(f"当前最低价¥{min_price:,.0f}，低于近60天平均价¥{avg_price:,.0f}。")
         else:
             lines.append(f"当前最低价¥{min_price:,.0f}，高于近60天平均价¥{avg_price:,.0f}。")
-    if position:
-        lines.append(f"当前价格处于近60天的{_plain_price_position(position)}。")
+    position_text = str(position or "").strip()
+    for marker in ("🟢", "🔴", "🟡", "🟠"):
+        position_text = position_text.replace(marker, "")
+    position_text = position_text.strip()
+    if position_text:
+        lines.append(f"当前价格处于近60天的{position_text}。")
     if "上涨" in recent:
         lines.append("近期价格呈上涨趋势。")
     elif "下降" in recent:

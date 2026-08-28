@@ -236,3 +236,25 @@ FunctionDef(build_message), Assign, If, Return
 本次 F821 精确债务由 9 个 scope triple 降为 1 个，仅保留：
 `("notifier.py", "generate_neutral_summary", "_plain_price_position")`。
 该剩余项仍为 `needs_manual_adjudication`，不属于本次旧 HTML renderer 子图。
+
+## 2026-08-28：neutral summary 最后一项 F821 收口
+
+基线为 `89d777a`。当前 HEAD 的全仓已跟踪文本与 Python AST 复核覆盖直接调用、
+`from notifier import`、`notifier.generate_neutral_summary`、`getattr`、`patch`、
+`__all__`、默认参数、注册器、回调、CLI、调试脚本、测试和模板：
+
+- 仓内生产、脚本和模板可执行调用方为 0；动态引用为 0。
+- 测试只有直接 compatibility/characterization 调用；历史审计文档允许保留名称。
+- 仓外调用无法证明为 0，因此保留公开符号及完整签名
+  `(analysis, trend, price_insights=None)`。
+
+`61b9109^` 中 `_plain_price_position` 的完整语义可精确恢复：将输入转为字符串、
+首尾去空白、依次删除 `🟢`、`🔴`、`🟡`、`🟠`，再去一次首尾空白。
+`61b9109` 对 `notifier.py` 的大规模重写删除了 helper，却留下
+`generate_neutral_summary` 的调用点，形成可构造的 `NameError`。本次不复活 helper，
+只在公开函数内内联同一字符串清洗，并在清洗结果非空时才生成位置句。
+
+历史实现与当前基线均返回 `list[str]`，不是单个 `str`；本次保持真实公共返回合同不变，
+同时锁定每个列表项为字符串、输入不变，以及网络、发送与落盘零副作用。修复前指定
+造例稳定抛出 `_plain_price_position` 的 `NameError`；修复后完整位置、趋势、价格比较
+矩阵通过。F821 精确债务集合现为 `frozenset()`，现有 checker 与 CI 调用方式不变。

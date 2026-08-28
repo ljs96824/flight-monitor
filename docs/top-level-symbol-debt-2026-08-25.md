@@ -229,3 +229,12 @@
 renderer 已删除。F821 精确债务由 9 项降为 1 项，仅余
 `generate_neutral_summary::_plain_price_position`，完整调用图与源码指纹见
 `docs/f821-debt-cleanup-2026-08-26.md`。
+
+## neutral summary 最后一项 F821 清偿（2026-08-28）
+
+后续从 `61b9109^` 找回了 `_plain_price_position` 的完整、无歧义历史实现；该 helper
+消失于 `61b9109`，调用点漏迁移。基于 `89d777a` 的当前调用图确认仓内生产与动态
+调用方均为 0，但仓外兼容调用不能证明不存在，因此没有删除公开函数。修复保留原签名
+与 `list[str]` 返回结构，只把四种状态标记清洗语义内联到函数中，不复活旧 helper
+子图。F821 精确债务集合由 1 项清空；完整 RED/GREEN、调用图与副作用合同见
+`docs/f821-debt-cleanup-2026-08-26.md`。

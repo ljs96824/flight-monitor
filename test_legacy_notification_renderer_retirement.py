@@ -115,12 +115,10 @@ class LegacyNotificationRendererRetirementTest(unittest.TestCase):
         self.assertEqual(definitions, set())
         self.assertEqual(references | attributes, set())
 
-    def test_f821_debt_is_the_single_explicit_triple(self):
+    def test_f821_debt_is_empty(self):
         from scripts.check_f821 import KNOWN_F821_DEBT, scan_f821
 
-        expected = frozenset(
-            {("notifier.py", "generate_neutral_summary", "_plain_price_position")}
-        )
+        expected = frozenset()
         self.assertEqual(KNOWN_F821_DEBT, expected)
         self.assertEqual(scan_f821(), expected)
 
