@@ -29,7 +29,7 @@ jobs:
             requirements-dev.txt
       - run: python -m pip install --upgrade pip
       - run: pip install -r requirements.txt -r requirements-dev.txt
-      - name: Ruff F821 exact-debt gate
+      - name: Ruff F821 zero-debt gate
         run: python -X utf8 scripts/check_f821.py
       - name: Import notifier
         run: python -c "import notifier"

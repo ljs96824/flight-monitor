@@ -1,4 +1,4 @@
-"""Run Ruff F821 and enforce the repository's exact known-debt set."""
+"""Run Ruff F821 and require the repository to have zero findings."""
 
 from __future__ import annotations
 
@@ -13,8 +13,8 @@ import sys
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-# Keys deliberately exclude line numbers so harmless line movement does not churn the
-# contract. New or resolved triples must be reviewed and this set changed explicitly.
+# Historical compatibility only. Enforcement deliberately does not read this value:
+# undefined names may not be registered as debt after the zero-debt gate was adopted.
 KNOWN_F821_DEBT = frozenset()
 
 
@@ -77,28 +77,28 @@ def _format_rows(rows) -> str:
     return "\n".join(f"  {path} | {scope} | {symbol}" for path, scope, symbol in sorted(rows))
 
 
-def main(argv=None) -> int:
+def enforce_zero_f821(findings) -> int:
+    findings = frozenset(findings)
+    if findings:
+        print("[F821] zero-debt gate failed:\n" + _format_rows(findings))
+        return 1
+    print("[F821] zero-debt gate passed")
+    return 0
+
+
+def main(argv=None, *, root: Path = PROJECT_ROOT) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--print-current",
         action="store_true",
-        help="Print the current F821 scope triples without enforcing the debt contract.",
+        help="Print the current F821 scope triples without enforcing the zero gate.",
     )
     args = parser.parse_args(argv)
-    current = scan_f821()
+    current = scan_f821(Path(root))
     if args.print_current:
         print(_format_rows(current))
         return 0
-    added = current - KNOWN_F821_DEBT
-    resolved = KNOWN_F821_DEBT - current
-    if added or resolved:
-        if added:
-            print("[F821] unregistered findings:\n" + _format_rows(added))
-        if resolved:
-            print("[F821] resolved debt still registered:\n" + _format_rows(resolved))
-        return 1
-    print(f"[F821] exact debt matched: {len(current)} scope triples")
-    return 0
+    return enforce_zero_f821(current)
 
 
 if __name__ == "__main__":

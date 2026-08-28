@@ -258,3 +258,26 @@ FunctionDef(build_message), Assign, If, Return
 同时锁定每个列表项为字符串、输入不变，以及网络、发送与落盘零副作用。修复前指定
 造例稳定抛出 `_plain_price_position` 的 `NameError`；修复后完整位置、趋势、价格比较
 矩阵通过。F821 精确债务集合现为 `frozenset()`，现有 checker 与 CI 调用方式不变。
+
+## 2026-08-28：绝对零门制度收口
+
+基线为 `76cfbb1`。收口提交以 subject
+`ci: enforce zero F821 debt` 唯一定位；Git commit 不能在自身内容中嵌入其最终
+SHA，最终 SHA 与公开 Actions run 由交付报告记录。
+
+- 当前全仓 `scan_f821() == frozenset()`。
+- `main()` 直接把扫描结果交给 `enforce_zero_f821()`；生产判断不读取
+  `KNOWN_F821_DEBT`，该空常量仅为历史测试兼容保留。
+- 任一命中立即返回 1，并按“文件 | 作用域 | 符号”打印；零命中打印
+  `zero-debt gate passed`。
+- 临时目录红测写入 `broken.py`，完整调用 `main([], root=tmp)` 后返回 1，并精确
+  打印 `broken.py | broken | missing_symbol`；测试前主动清空
+  `scan_f821` 的 LRU cache，并用 `addCleanup` 保证测试后清空。
+- 已跟踪 Python 与 Ruff 配置的 suppression 合同禁止 bare `# noqa`、
+  `# noqa: F821` 及含 F821 的 per-file ignore；精确允许集合为空。
+- CI step 更名为 `Ruff F821 zero-debt gate`，顺序仍为 F821、模块导入、pytest、
+  unittest。双平台最终结果与 run URL 在 push 后写入交付报告，避免在提交内容中伪造
+  尚未发生的 CI 证据。
+
+旧的 known-debt 比对与相关输出均已从执行脚本删除；历史段落保留原文，只表示当时的
+清债过程，不再构成当前政策入口。
