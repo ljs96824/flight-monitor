@@ -23,12 +23,11 @@ class UiSmokeCiObservationContractTest(unittest.TestCase):
         self.assertIsNotNone(match, "workflow缺少独立ui-smoke job")
         return match.group(0)
 
-    def test_job_has_complete_runtime_and_observation_boundary(self):
+    def test_job_has_complete_runtime_and_blocking_boundary(self):
         job = self._ui_job()
         required = (
             "runs-on: ubuntu-latest",
             "timeout-minutes: 20",
-            "continue-on-error: true",
             "MPLBACKEND: Agg",
             'NO_LIVE_API: "1"',
             "actions/checkout@v4",
@@ -44,6 +43,7 @@ class UiSmokeCiObservationContractTest(unittest.TestCase):
             "npx playwright install --with-deps chromium",
         )
         self.assertEqual([item for item in required if item not in job], [])
+        self.assertNotIn("continue-on-error:", job)
         self.assertNotIn("requirements-dev.txt", job)
         self.assertNotRegex(job, r"(?m)^\s*- run: npm install(?:\s|$)")
 
@@ -92,12 +92,11 @@ class UiSmokeCiObservationContractTest(unittest.TestCase):
             lock["packages"][""]["devDependencies"]["playwright"], version
         )
 
-    def test_contributing_documents_observation_and_zero_api_evidence(self):
+    def test_contributing_documents_blocking_gate_and_zero_api_evidence(self):
         text = CONTRIBUTING.read_text(encoding="utf-8")
         required = (
-            "观察模式",
-            "steps.smoke.outcome",
-            "连续 7 次",
+            "阻断模式",
+            "7/7",
             "pull_request",
             "workflow_dispatch",
             "continue-on-error",
