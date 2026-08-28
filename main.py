@@ -52,6 +52,7 @@ from filename_utils import sanitize_filename
 from health_check import system_health_check
 from log_utils import end_round_log_archive, redact_text, safe_log, start_round_log_archive
 from notification_config import normalize_notification_goals
+from observation_time import canonicalize_observed_at
 from observations_store import get_current_round, reset_current_round, set_current_round
 from notifier import (
     build_notification_payload,
@@ -2459,10 +2460,25 @@ def _process_subscription_locked(
             price_insights=data.get("price_insights"),
         )
         analysis["confidence"] = signal_record.get("confidence")
+        health_cabin_class = (
+            "business"
+            if str(
+                (sub.get("hard_constraints") or {}).get("cabin_arrangement")
+                or sub.get("cabin_arrangement")
+                or ""
+            ).strip()
+            == "business_all"
+            else "economy"
+        )
         analysis["system_health"] = system_health_check(
             source_stats=data.get("source_stats", {}),
             flights=flights,
             analysis_result=analysis,
+            route_type=route_type,
+            cabin_class=health_cabin_class,
+            observed_day=canonicalize_observed_at(
+                run_collected_at
+            ).observed_day_shanghai,
         )
 
         log_entry = {**analysis, "logged_at": datetime.now().isoformat()}

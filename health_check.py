@@ -3,6 +3,7 @@ from pathlib import Path
 
 from atomic_json_store import JsonStoreReadError, read_json, update_json
 from log_utils import safe_log
+from source_profiles import expected_listing_sources
 
 
 BASE_DIR = Path(__file__).parent
@@ -118,6 +119,19 @@ def _active_source_count(source_stats: dict | None) -> int:
     return count
 
 
+def _successful_listing_sources(source_stats: dict | None) -> set[str]:
+    successful = set()
+    for source, info in _source_entries(source_stats).items():
+        normalized = str(source).strip().lower()
+        if (
+            normalized
+            and normalized not in ENRICHMENT_SOURCES
+            and _is_success(info.get("status"))
+        ):
+            successful.add(normalized)
+    return successful
+
+
 def _prices(flights: list[dict] | None) -> list[float]:
     prices = []
     for flight in flights or []:
@@ -162,15 +176,36 @@ def _score(active_sources: int, option_count: int, prices: list[float]) -> int:
     return max(0, min(100, score))
 
 
-def system_health_check(source_stats=None, flights=None, analysis_result=None) -> dict:
+def system_health_check(
+    source_stats=None,
+    flights=None,
+    analysis_result=None,
+    *,
+    route_type=None,
+    cabin_class="economy",
+    observed_day=None,
+) -> dict:
     """Monitor data-source health, data quality, and analysis confidence."""
     warnings = []
     source_history, source_warnings = _update_source_history(source_stats)
     warnings.extend(source_warnings)
 
-    active_sources = _active_source_count(source_stats)
-    if active_sources < 2:
+    expected_sources = expected_listing_sources(
+        route_type,
+        observed_day=observed_day,
+        cabin_class=cabin_class,
+    )
+    successful_sources = _successful_listing_sources(source_stats)
+    missing_sources = expected_sources - successful_sources
+    coverage_complete = not missing_sources
+    source_diversity_n = _active_source_count(source_stats)
+    cross_check_status = (
+        "performed" if source_diversity_n >= 2 else "not_performed"
+    )
+    if not coverage_complete:
         warnings.append("数据覆盖不足")
+    elif len(expected_sources) == 1 and source_diversity_n == 1:
+        safe_log("覆盖完整,当前为单源正式报价,未进行额外交叉验证")
 
     option_count = 0
     if source_stats and source_stats.get("after_dedup") is not None:
@@ -189,7 +224,7 @@ def system_health_check(source_stats=None, flights=None, analysis_result=None) -
     if any(price <= 0 for price in prices):
         warnings.append("数据异常：最低价为0或负数")
 
-    score = _score(active_sources, option_count, prices)
+    score = _score(source_diversity_n, option_count, prices)
     if warnings:
         score = max(0, score - min(30, len(warnings) * 8))
 
@@ -208,7 +243,13 @@ def system_health_check(source_stats=None, flights=None, analysis_result=None) -
         "level": level,
         "emoji": emoji,
         "warnings": warnings,
-        "active_sources": active_sources,
+        "active_sources": source_diversity_n,
+        "coverage_complete": coverage_complete,
+        "expected_sources": sorted(expected_sources),
+        "successful_sources": sorted(successful_sources),
+        "missing_sources": sorted(missing_sources),
+        "source_diversity_n": source_diversity_n,
+        "cross_check_status": cross_check_status,
         "option_count": option_count,
         "source_history": source_history,
         "checked_at": datetime.now().isoformat(),

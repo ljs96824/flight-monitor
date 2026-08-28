@@ -129,7 +129,7 @@ class SourceHealthPersistenceTest(unittest.TestCase):
         self.assertEqual(after, before)
         self.assertEqual(result["source_history"], payload)
 
-    def test_healthy_result_shape_and_score_match_legacy_behavior(self):
+    def test_persistence_fields_survive_historical_policy_coverage_result(self):
         import health_check
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -145,6 +145,8 @@ class SourceHealthPersistenceTest(unittest.TestCase):
                         "after_dedup": 6,
                     },
                     flights=[{"price": 100}, {"price": 120}],
+                    route_type="international",
+                    observed_day="2026-08-13",
                 )
 
         self.assertEqual(
@@ -155,6 +157,12 @@ class SourceHealthPersistenceTest(unittest.TestCase):
                 "emoji": "🔴",
                 "warnings": ["数据覆盖不足"],
                 "active_sources": 1,
+                "coverage_complete": False,
+                "expected_sources": ["hasdata", "juhe"],
+                "successful_sources": ["juhe"],
+                "missing_sources": ["hasdata"],
+                "source_diversity_n": 1,
+                "cross_check_status": "not_performed",
                 "option_count": 6,
                 "source_history": {
                     "juhe": {
