@@ -180,7 +180,7 @@ python -X utf8 -m pytest -q
 python -X utf8 -m unittest discover
 ```
 
-真实浏览器交互目前在本机验收，CI 的浏览器供应接线尚未启用。启动器自动探测 Edge、Chrome 与 Chromium；也可用 `BROWSER_PATH` 指定，Windows 继续兼容 `EDGE_PATH`。失败时才写入所给日志与产物目录，成功不落盘：
+真实浏览器交互同时在本机验收，并由公开 CI 的独立 `ui-smoke` job 以观察模式运行。CI 用锁定版本的 Playwright 供应 Chromium，测试驱动仍是现有 CDP 脚本；退出观察模式的判据见 [CONTRIBUTING.md](CONTRIBUTING.md)。启动器自动探测 Edge、Chrome 与 Chromium；也可用 `BROWSER_PATH` 指定，Windows 继续兼容 `EDGE_PATH`。失败时才写入所给日志与产物目录，成功不落盘：
 
 ```bash
 python -X utf8 scripts/ui_smoke.py --log-path data/ui-smoke-artifacts/ui-smoke.log --artifact-dir data/ui-smoke-artifacts

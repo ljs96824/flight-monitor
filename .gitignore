@@ -23,6 +23,9 @@ __pycache__/
 *.pyc
 *.pyo
 
+# Node.js CI-only browser dependency
+node_modules/
+
 # 系统文件
 .DS_Store
 Thumbs.db

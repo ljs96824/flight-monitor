@@ -37,6 +37,49 @@ jobs:
         run: python -c "import web_form"
       - run: python -X utf8 -m pytest -q -p no:cacheprovider
       - run: python -X utf8 -m unittest discover
-      - name: UI smoke (browser provisioning pending)
-        if: ${{ false }}
-        run: python -X utf8 scripts/ui_smoke.py
+
+  ui-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    continue-on-error: true
+    env:
+      MPLBACKEND: Agg
+      NO_LIVE_API: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+      - run: python -m pip install --upgrade pip
+      - run: pip install -r requirements.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Export Playwright Chromium path
+        run: node -e "console.log('BROWSER_PATH=' + require('playwright').chromium.executablePath())" >> "$GITHUB_ENV"
+      - name: Run UI smoke
+        id: smoke
+        run: python -X utf8 scripts/ui_smoke.py --log-path "${{ runner.temp }}/ui-smoke/ui-smoke.log" --artifact-dir "${{ runner.temp }}/ui-smoke"
+      - name: Upload UI smoke failure artifacts
+        if: ${{ always() && steps.smoke.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ui-smoke
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Record UI smoke observation
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          {
+            echo "## UI smoke observation"
+            echo "- steps.smoke.outcome: \`${{ steps.smoke.outcome }}\`"
+            echo "- github.event_name: \`${{ github.event_name }}\`"
+            echo "- github.sha: \`${{ github.sha }}\`"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
