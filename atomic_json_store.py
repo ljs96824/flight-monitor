@@ -6,6 +6,7 @@ from copy import deepcopy
 import json
 import os
 from pathlib import Path
+import time
 from typing import Callable, TypeVar
 from uuid import uuid4
 
@@ -14,6 +15,8 @@ from log_utils import safe_log
 
 
 JsonValue = TypeVar("JsonValue")
+ATOMIC_REPLACE_RETRIES = 2
+ATOMIC_REPLACE_RETRY_DELAY_SECONDS = 0.05
 
 
 class JsonStoreReadError(RuntimeError):
@@ -45,7 +48,14 @@ def _write_json_atomic(path: Path, payload) -> None:
             json.dump(payload, stream, ensure_ascii=False, indent=2)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temporary, path)
+        for attempt in range(ATOMIC_REPLACE_RETRIES + 1):
+            try:
+                os.replace(temporary, path)
+                break
+            except PermissionError:
+                if attempt >= ATOMIC_REPLACE_RETRIES:
+                    raise
+                time.sleep(ATOMIC_REPLACE_RETRY_DELAY_SECONDS * (attempt + 1))
     finally:
         try:
             temporary.unlink(missing_ok=True)

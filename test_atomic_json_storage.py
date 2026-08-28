@@ -90,6 +90,41 @@ def _subscription(identifier, budget):
 
 
 class AtomicJsonStoreTest(unittest.TestCase):
+    def test_transient_replace_permission_error_retries_without_rerunning_mutator(self):
+        import atomic_json_store
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "state.json"
+            path.write_text('{"count":0}\n', encoding="utf-8")
+            original_replace = atomic_json_store.os.replace
+            replace_attempts = 0
+            mutator_calls = 0
+
+            def flaky_replace(source, destination):
+                nonlocal replace_attempts
+                replace_attempts += 1
+                if replace_attempts == 1:
+                    raise PermissionError(13, "simulated transient replace denial")
+                return original_replace(source, destination)
+
+            def mutate(payload):
+                nonlocal mutator_calls
+                mutator_calls += 1
+                return {"count": int(payload["count"]) + 1}
+
+            with patch.object(
+                atomic_json_store.os,
+                "replace",
+                side_effect=flaky_replace,
+            ):
+                result = atomic_json_store.update_json(path, mutate)
+            saved = json.loads(path.read_text(encoding="utf-8"))
+
+        self.assertEqual(replace_attempts, 2)
+        self.assertEqual(mutator_calls, 1)
+        self.assertEqual(result, {"count": 1})
+        self.assertEqual(saved, {"count": 1})
+
     def test_replace_failure_keeps_original_bytes_and_removes_temp_file(self):
         from atomic_json_store import update_json
 
