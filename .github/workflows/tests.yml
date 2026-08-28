@@ -41,7 +41,6 @@ jobs:
   ui-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    continue-on-error: true
     env:
       MPLBACKEND: Agg
       NO_LIVE_API: "1"
