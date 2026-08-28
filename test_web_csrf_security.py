@@ -83,7 +83,7 @@ class GlobalCsrfContractTest(unittest.TestCase):
 
     def test_every_unsafe_route_rejects_missing_token_before_side_effects(self):
         side_effects = {
-            "save_subscription": Mock(),
+            "subscription_repository": Mock(),
             "start_background_collection": Mock(),
             "update_json": Mock(),
             "save_feedback": Mock(),
@@ -96,7 +96,11 @@ class GlobalCsrfContractTest(unittest.TestCase):
         }
 
         with (
-            patch.object(web_form, "save_subscription", side_effects["save_subscription"]),
+            patch.object(
+                web_form,
+                "_subscription_repository",
+                side_effects["subscription_repository"],
+            ),
             patch.object(
                 web_form,
                 "start_background_collection",
@@ -143,8 +147,12 @@ class GlobalCsrfContractTest(unittest.TestCase):
         web_form.app.config["CSRF_CLOCK"] = lambda: now
         valid = csrf_token(self.client)
 
-        with patch.object(web_form, "save_subscription") as save, patch.object(
-            web_form, "start_background_collection"
+        with patch.object(
+            web_form,
+            "_subscription_repository",
+        ) as repository_factory, patch.object(
+            web_form,
+            "start_background_collection",
         ) as start:
             wrong = self.client.post(
                 "/subscribe",
@@ -159,7 +167,7 @@ class GlobalCsrfContractTest(unittest.TestCase):
         self.assertEqual(wrong.status_code, 403)
         self.assertEqual(expired.status_code, 403)
         self.assertNotIn("forged-secret-token", wrong.get_data(as_text=True))
-        save.assert_not_called()
+        repository_factory.assert_not_called()
         start.assert_not_called()
 
     def test_non_ascii_and_oversized_tokens_are_rejected_as_403(self):

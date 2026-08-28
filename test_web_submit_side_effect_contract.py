@@ -15,6 +15,7 @@ class WebSubmitSideEffectContractTest(unittest.TestCase):
         enable_csrf(self.client)
 
     def test_successful_submit_saves_before_starting_background_collection(self):
+        subscription_id = "123e4567-e89b-12d3-a456-426614174172"
         subscription = {
             "origin": "PVG",
             "destination": "KIX",
@@ -23,19 +24,25 @@ class WebSubmitSideEffectContractTest(unittest.TestCase):
                 "email": "user@example.com",
             },
         }
-        background_subscription = {**subscription, "_index": 72}
+        saved_subscription = {**subscription, "subscription_id": subscription_id}
+        background_subscription = {**saved_subscription, "_index": 0}
         lifecycle = Mock()
+        repository = Mock()
+
+        def update(owner_id, target_id, item):
+            lifecycle.save(owner_id, target_id, item)
+            return saved_subscription
+
+        repository.update.side_effect = update
+        repository.list_for_owner.return_value = [saved_subscription]
 
         with (
             patch.object(web_form, "build_subscription", return_value=subscription),
             patch.object(
                 web_form,
-                "save_subscription",
-                side_effect=lambda item, index: (
-                    lifecycle.save(item, index),
-                    72,
-                )[1],
-            ) as save_subscription,
+                "_subscription_repository",
+                return_value=repository,
+            ),
             patch.object(
                 web_form,
                 "start_background_collection",
@@ -47,18 +54,27 @@ class WebSubmitSideEffectContractTest(unittest.TestCase):
         ):
             response = self.client.post(
                 "/subscribe",
-                data={"subscription_index": "72", "form_page": "full"},
+                data={"subscription_index": subscription_id, "form_page": "full"},
             )
 
         self.assertEqual(response.status_code, 302)
         self.assertTrue(
-            response.headers["Location"].endswith("/success?index=72")
+            response.headers["Location"].endswith(
+                f"/success?subscription_id={subscription_id}"
+            )
         )
-        save_subscription.assert_called_once_with(subscription, 72)
+        repository.update.assert_called_once_with(
+            web_form.LOCAL_OWNER_ID,
+            subscription_id,
+            subscription,
+        )
         start_background_collection.assert_called_once_with(background_subscription)
         self.assertEqual(
             lifecycle.mock_calls,
-            [call.save(subscription, 72), call.start(background_subscription)],
+            [
+                call.save(web_form.LOCAL_OWNER_ID, subscription_id, subscription),
+                call.start(background_subscription),
+            ],
         )
 
     def test_notification_dispatch_calls_only_channels_selected_by_method(self):

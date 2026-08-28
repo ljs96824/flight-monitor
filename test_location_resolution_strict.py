@@ -99,7 +99,7 @@ class WebLocationValidationTest(unittest.TestCase):
     def test_unknown_location_post_does_not_create_subscription(self):
         with (
             web_form.app.test_client() as client,
-            patch("web_form.save_subscription") as save_subscription,
+            patch("web_form._subscription_repository") as repository_factory,
             patch("web_form.start_background_collection") as start_collection,
         ):
             enable_csrf(client)
@@ -108,7 +108,7 @@ class WebLocationValidationTest(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("无法识别目的地", response.get_data(as_text=True))
         self.assertIn("北京", response.get_data(as_text=True))
-        save_subscription.assert_not_called()
+        repository_factory.assert_not_called()
         start_collection.assert_not_called()
 
     def test_price_hint_rejects_partial_or_unknown_input_without_reading_calendar(self):

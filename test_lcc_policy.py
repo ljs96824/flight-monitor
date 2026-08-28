@@ -603,9 +603,11 @@ class LccSubscriptionTest(unittest.TestCase):
         )
 
         with tempfile.TemporaryDirectory() as tmp:
+            from subscription_repository import LOCAL_OWNER_ID, SubscriptionRepository
+
             path = Path(tmp) / "subscriptions.json"
+            SubscriptionRepository(path).create(LOCAL_OWNER_ID, subscription)
             with patch.object(web_form, "SUBSCRIPTIONS_PATH", path):
-                web_form.save_subscription(subscription)
                 loaded = web_form.load_subscriptions()
         self.assertEqual(loaded[0]["lcc_policy"], "exclude_lcc")
 

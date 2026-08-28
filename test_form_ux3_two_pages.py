@@ -212,11 +212,17 @@ class FormUx3TwoPagesTest(unittest.TestCase):
                 self.assertEqual(redirect_response.status_code, 302)
                 self.assertTrue(redirect_response.headers["Location"].endswith("/settings?edit=0"))
                 html = self._page("/settings?edit=0")
+                migrated_subscription_id = json.loads(
+                    path.read_text(encoding="utf-8")
+                )[0]["subscription_id"]
             finally:
                 web_form.SUBSCRIPTIONS_PATH = original
 
         self.assertIn('name="monitor_mode" value="quick"', html)
-        self.assertIn('name="subscription_index" value="0"', html)
+        self.assertIn(
+            f'name="subscription_index" value="{migrated_subscription_id}"',
+            html,
+        )
 
     def test_new_page_modes_are_server_owned_hidden_values(self):
         quick = self._page("/")

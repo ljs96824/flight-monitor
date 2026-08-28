@@ -10,6 +10,7 @@ from unittest.mock import Mock, call, patch
 
 import main
 import web_form
+from local_file_lock import file_lock
 from subscription_attempts import attempt_time, record_subscription_attempt
 
 
@@ -388,31 +389,32 @@ class WebStartupHandshakeContractTest(unittest.TestCase):
             body = response.get_data(as_text=True)
         token = body.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
 
-        def save(item, index):
-            lifecycle.json_lock_released(item, index)
-            return 0
-
         def start(item):
-            lifecycle.thread_started(item)
-            lifecycle.singleflight_attempted()
+            with file_lock(self.path, timeout=0):
+                lifecycle.json_lock_reacquired()
+                lifecycle.thread_started(item)
+                lifecycle.singleflight_attempted()
             return {"status": "started", "entrypoint": "web"}
 
         with (
             patch.object(web_form, "build_subscription", return_value=subscription),
-            patch.object(web_form, "save_subscription", side_effect=save),
             patch.object(web_form, "start_background_collection", side_effect=start),
             patch.object(web_form, "record_last_attempt"),
         ):
             response = client.post(
                 "/subscribe",
-                data={"csrf_token": token, "form_page": "full"},
+                data={
+                    "csrf_token": token,
+                    "form_page": "full",
+                    "subscription_index": TEST_SUBSCRIPTION_ID,
+                },
             )
 
         self.assertEqual(response.status_code, 302)
         self.assertEqual(
             lifecycle.mock_calls,
             [
-                call.json_lock_released(subscription, None),
+                call.json_lock_reacquired(),
                 call.thread_started({**subscription, "_index": 0}),
                 call.singleflight_attempted(),
             ],

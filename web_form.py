@@ -47,7 +47,11 @@ from pricing import passenger_rate_sum
 
 from detail_access import canonical_detail_uuid, detail_token_authorized
 from log_utils import safe_log
-from subscription_identity import ensure_subscription_id, subscription_id as stable_subscription_id
+from subscription_identity import subscription_id as stable_subscription_id
+from subscription_repository import (
+    LOCAL_OWNER_ID,
+    SubscriptionRepository,
+)
 from subscription_attempts import attempt_time as _attempt_time, record_subscription_attempt
 from notification_config import (
     DEFAULT_NOTIFICATION_METHOD,
@@ -73,6 +77,7 @@ app.config.setdefault(
 )
 
 STARTUP_HANDSHAKE_SESSION_KEY = "_collection_startup_handshakes"
+LEGACY_INDEX_EDIT_COMPATIBILITY = "M0_REMOVE_IN_M1"
 ALLOWED_STARTUP_STATUSES = {
     "started",
     "busy",
@@ -354,30 +359,30 @@ SUCCESS_TEMPLATE = """
   </div>
   <a href="{{ url_for('index') }}">继续添加订阅</a>
   <a class="secondary-link" href="{{ url_for('subscription_list') }}">查看我的所有监控 →</a>
-  {% if index is not none %}
+  {% if subscription_id %}
   <div class="card" style="margin-top:16px;">
     <p><b>想让推荐更准确？你还可以补充（可选）：</b></p>
     <p>这些不影响监控运行，只让推荐排序更贴合你的需求。</p>
     <div class="quick-actions">
-      <form method="post" action="{{ url_for('quick_update_subscription', index=index) }}">
+      <form method="post" action="{{ url_for('quick_update_subscription', subscription_id=subscription_id) }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="field" value="time_preference">
         <input type="hidden" name="value" value="no_redeye">
         <button type="submit">不接受红眼</button>
       </form>
-      <form method="post" action="{{ url_for('quick_update_subscription', index=index) }}">
+      <form method="post" action="{{ url_for('quick_update_subscription', subscription_id=subscription_id) }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="field" value="airline_policy">
         <input type="hidden" name="value" value="prefer_full_service">
         <button type="submit">偏好全服务航司</button>
       </form>
-      <form method="post" action="{{ url_for('quick_update_subscription', index=index) }}">
+      <form method="post" action="{{ url_for('quick_update_subscription', subscription_id=subscription_id) }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="field" value="accept_self_transfer">
         <input type="hidden" name="value" value="false">
         <button type="submit">不接受非联程</button>
       </form>
-      <form method="post" action="{{ url_for('quick_update_subscription', index=index) }}">
+      <form method="post" action="{{ url_for('quick_update_subscription', subscription_id=subscription_id) }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="field" value="refund_flexibility">
         <input type="hidden" name="value" value="preferred">
@@ -385,7 +390,7 @@ SUCCESS_TEMPLATE = """
       </form>
     </div>
   </div>
-  <a class="secondary-link" href="{{ url_for('index', edit=index) }}">修改这条监控的偏好</a>
+  <a class="secondary-link" href="{{ url_for('index', edit=subscription_id) }}">修改这条监控的偏好</a>
   {% endif %}
 </body>
 </html>
@@ -449,11 +454,11 @@ LIST_TEMPLATE = """
     <div class="decision">最近判断: {{ item.last_decision }}</div>
     <div class="actions">
       <a class="button-link" href="{{ item.detail_url }}">查看详情</a>
-      <a class="button-link" href="{{ url_for('index', edit=item.index) }}">编辑</a>
-      <form method="post" action="{{ url_for('toggle_subscription', index=item.index) }}">
+      {% if item.subscription_id %}<a class="button-link" href="{{ url_for('index', edit=item.subscription_id) }}">编辑</a>{% endif %}
+      {% if item.subscription_id %}<form method="post" action="{{ url_for('toggle_subscription', subscription_id=item.subscription_id) }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit">{{ "暂停" if item.status == "active" else "恢复" }}</button>
-      </form>
+      </form>{% endif %}
       {% if item.delete_url %}<a class="button-link danger" href="{{ item.delete_url }}">删除</a>{% endif %}
     </div>
   </div>
@@ -710,9 +715,7 @@ def _migrated_subscription_list(payload, *, allow_missing: bool = False) -> list
 
 
 def load_subscriptions() -> list[dict]:
-    if not SUBSCRIPTIONS_PATH.exists():
-        return []
-    data = _subscription_list(read_json(SUBSCRIPTIONS_PATH))
+    data = _subscription_repository().list_for_owner(LOCAL_OWNER_ID)
     data, migration = migrate_subscription_defaults(data)
     budget_migrated = migration["budget_scopes"]
     lcc_migrated = migration["lcc_policies"]
@@ -729,47 +732,68 @@ def load_subscriptions() -> list[dict]:
     return data
 
 
-def save_subscription(subscription: dict, index: int | None = None) -> int:
-    saved: dict = {}
+def _subscription_repository() -> SubscriptionRepository:
+    """Bind the repository to the currently configured server-side path."""
 
-    def mutate(payload):
-        subscriptions = _migrated_subscription_list(payload, allow_missing=True)
-        if index is not None and 0 <= index < len(subscriptions):
-            existing = subscriptions[index]
-            if isinstance(existing, dict):
-                # 编辑只更新订阅内容，身份字段必须沿用原记录。
-                for identity_field in ("id", "subscription_id", "created_at"):
-                    if identity_field in existing:
-                        subscription[identity_field] = existing[identity_field]
-                    else:
-                        subscription.pop(identity_field, None)
-            subscriptions[index] = subscription
-            saved_index = index
-        else:
-            subscriptions.append(subscription)
-            saved_index = len(subscriptions) - 1
-        subscription_id, identity_migrated = ensure_subscription_id(subscription)
-        saved.update(
-            {
-                "index": saved_index,
-                "subscription_id": subscription_id,
-                "identity_migrated": identity_migrated,
-            }
-        )
-        return subscriptions
+    return SubscriptionRepository(SUBSCRIPTIONS_PATH)
 
-    update_json(SUBSCRIPTIONS_PATH, mutate)
-    if saved["identity_migrated"]:
+
+def _subscription_position(subscription_id_value: str) -> int | None:
+    """Return the legacy read-only position used by downstream payloads."""
+
+    for index, item in enumerate(
+        _subscription_repository().list_for_owner(LOCAL_OWNER_ID)
+    ):
+        if stable_subscription_id(item) == subscription_id_value:
+            return index
+    return None
+
+
+def _resolve_edit_subscription_id(
+    reference,
+    *,
+    log_legacy: bool = True,
+) -> str | None:
+    """Resolve the M0 numeric edit compatibility input to a stable identity."""
+
+    value = str(reference or "").strip()
+    if not value:
+        return None
+    if not value.isdigit():
+        return value
+    index = int(value)
+    subscription = _subscription_repository().resolve_legacy_index(
+        LOCAL_OWNER_ID,
+        index,
+    )
+    if subscription is None:
+        return None
+    resolved = stable_subscription_id(subscription)
+    if resolved and log_legacy:
         safe_log(
-            f"[身份迁移] 保存路径 index={saved['index']} "
-            f"subscription_id={saved['subscription_id']}"
+            "[订阅编辑迁移] "
+            f"M0兼容 index={index} subscription_id={resolved}; M1删除该入口"
         )
-    return int(saved["index"])
+    return resolved or None
 
 
-def save_subscriptions(subscriptions: list[dict]) -> None:
-    replacement = _subscription_list(subscriptions)
-    update_json(SUBSCRIPTIONS_PATH, lambda _current: replacement)
+def _ensure_subscription_list_identities(subscriptions: list[dict]) -> list[dict]:
+    """M0 upgrade path: list links must leave index identity behind."""
+
+    repository = _subscription_repository()
+    for index, subscription in enumerate(subscriptions):
+        if stable_subscription_id(subscription):
+            continue
+        resolved = repository.resolve_legacy_index(LOCAL_OWNER_ID, index)
+        resolved_id = stable_subscription_id(resolved or {})
+        if not resolved_id:
+            continue
+        subscription["subscription_id"] = resolved_id
+        safe_log(
+            "[身份迁移] 列表路径 "
+            f"index={index} subscription_id={resolved_id}"
+        )
+    return subscriptions
 
 
 def load_feedback() -> list[dict]:
@@ -940,7 +964,8 @@ def build_subscription_list_items(subscriptions: list[dict]) -> list[dict]:
     for index, sub in enumerate(subscriptions):
         route_type = _sub_value(sub, "route_type", "domestic")
         round_trip = bool(sub.get("round_trip") or _sub_value(sub, "trip_type") == "round_trip")
-        subscription_id = canonical_detail_uuid(stable_subscription_id(sub))
+        subscription_id = stable_subscription_id(sub)
+        detail_subscription_id = canonical_detail_uuid(subscription_id)
         items.append(
             {
                 "index": index,
@@ -954,13 +979,16 @@ def build_subscription_list_items(subscriptions: list[dict]) -> list[dict]:
                 "last_decision": _subscription_last_decision(sub, index),
                 "scenario": _subscription_scenario_text(sub),
                 "detail_url": (
-                    url_for("detail", sub=subscription_id)
-                    if subscription_id
+                    url_for("detail", sub=detail_subscription_id)
+                    if detail_subscription_id
                     else ""
                 ),
                 "delete_url": (
-                    url_for("delete_subscription", subscription_id=subscription_id)
-                    if subscription_id
+                    url_for(
+                        "delete_subscription",
+                        subscription_id=detail_subscription_id,
+                    )
+                    if detail_subscription_id
                     else ""
                 ),
             }
@@ -1006,14 +1034,21 @@ DETAIL_TEMPLATE = """
 """
 
 
-def update_subscription_preference(index: int, field: str, value: str) -> bool:
-    result = {"updated": False}
+def update_subscription_preference(
+    subscription_id_value: str,
+    field: str,
+    value: str,
+) -> bool:
+    if field not in {
+        "time_preference",
+        "airline_policy",
+        "accept_self_transfer",
+        "refund_flexibility",
+    }:
+        return False
+    repository = _subscription_repository()
 
-    def mutate(payload):
-        subscriptions = _migrated_subscription_list(payload, allow_missing=True)
-        if not (0 <= index < len(subscriptions)):
-            return subscriptions
-        subscription = subscriptions[index]
+    def mutate(subscription):
         hard = subscription.setdefault("hard_constraints", {})
         soft = subscription.setdefault("soft_preferences", {})
 
@@ -1050,15 +1085,18 @@ def update_subscription_preference(index: int, field: str, value: str) -> bool:
             accepted = parse_bool(value)
             hard["accept_self_transfer"] = accepted
             soft["allow_self_transfer"] = accepted
-        elif field == "refund_flexibility":
-            soft["refund_flexibility"] = value
         else:
-            return subscriptions
-        result["updated"] = True
-        return subscriptions
+            soft["refund_flexibility"] = value
+        return subscription
 
-    update_json(SUBSCRIPTIONS_PATH, mutate)
-    return result["updated"]
+    return (
+        repository.mutate(
+            LOCAL_OWNER_ID,
+            subscription_id_value,
+            mutate,
+        )
+        is not None
+    )
 
 
 def record_last_attempt(
@@ -2521,17 +2559,20 @@ def settings():
     edit_index = None
     edit_arg = request.args.get("edit")
     if edit_arg not in (None, ""):
-        try:
-            candidate_index = int(edit_arg)
-            subscriptions = load_subscriptions()
-            if 0 <= candidate_index < len(subscriptions):
-                edit_values = subscription_to_form_values(
-                    {**subscriptions[candidate_index], "_index": candidate_index}
-                )
-                edit_index = candidate_index
-        except ValueError:
-            edit_values = {}
-            edit_index = None
+        edit_subscription_id = _resolve_edit_subscription_id(edit_arg)
+        if edit_subscription_id is None:
+            abort(404)
+        subscription = _subscription_repository().get(
+            LOCAL_OWNER_ID,
+            edit_subscription_id,
+        )
+        if subscription is None:
+            abort(404)
+        migrated, _details = migrate_subscription_defaults([subscription])
+        edit_values = subscription_to_form_values(
+            {**migrated[0], "_index": edit_subscription_id}
+        )
+        edit_index = edit_subscription_id
     return _render_form_page("full", edit_values, edit_index=edit_index)
 
 @app.get("/favicon.ico")
@@ -2647,13 +2688,38 @@ def subscribe():
         print("[表单] 订阅构建完成")
 
         print("[表单] 开始保存订阅")
-        raw_index = request.form.get("subscription_index")
-        edit_index = int(raw_index) if str(raw_index).strip().isdigit() else None
-        index = save_subscription(subscription, edit_index)
-        print(f"[表单] 订阅保存完成: index={index}")
+        repository = _subscription_repository()
+        edit_reference = str(request.form.get("subscription_index") or "").strip()
+        edit_subscription_id = _resolve_edit_subscription_id(edit_reference)
+        if edit_reference:
+            if edit_subscription_id is None:
+                raise ValueError("订阅已删除或编辑链接已失效，请返回列表重试。")
+            saved_subscription = repository.update(
+                LOCAL_OWNER_ID,
+                edit_subscription_id,
+                subscription,
+            )
+            if saved_subscription is None:
+                raise ValueError("订阅已删除或不属于当前用户，请返回列表重试。")
+        else:
+            had_identity = bool(stable_subscription_id(subscription))
+            saved_subscription = repository.create(LOCAL_OWNER_ID, subscription)
+            if not had_identity:
+                safe_log(
+                    "[身份迁移] 保存路径 "
+                    f"subscription_id={stable_subscription_id(saved_subscription)}"
+                )
+        saved_subscription_id = stable_subscription_id(saved_subscription)
+        if not saved_subscription_id:
+            raise ValueError("订阅保存后缺少稳定身份。")
+        index = _subscription_position(saved_subscription_id)
+        print(
+            "[表单] 订阅保存完成: "
+            f"subscription_id={saved_subscription_id} index={index}"
+        )
 
         print("[表单] 开始触发后台采集")
-        background_subscription = {**subscription, "_index": index}
+        background_subscription = {**saved_subscription, "_index": index}
         startup_result = _startup_result(
             start_background_collection(background_subscription),
             default_status="confirming",
@@ -2661,13 +2727,14 @@ def subscribe():
         print(f"[表单] 后台采集触发完成: status={startup_result['status']}")
         _remember_startup_handshake(background_subscription, startup_result)
 
-        return redirect(url_for("success", index=index))
+        return redirect(
+            url_for("success", subscription_id=saved_subscription_id)
+        )
     except ValueError as exc:
         print(f"[表单] 提交订阅失败: {exc}")
         page_mode = "full" if request.form.get("form_page") == "full" else "quick"
         values = _submitted_form_values(request.form)
-        raw_index = request.form.get("subscription_index")
-        edit_index = int(raw_index) if str(raw_index).strip().isdigit() else None
+        edit_index = str(request.form.get("subscription_index") or "").strip() or None
         return _render_form_page(
             page_mode,
             values,
@@ -2682,25 +2749,28 @@ def subscribe():
 
 @app.get("/subscriptions")
 def subscription_list():
-    subscriptions = load_subscriptions()
+    subscriptions = _ensure_subscription_list_identities(load_subscriptions())
     return render_template_string(
         LIST_TEMPLATE,
         items=build_subscription_list_items(subscriptions),
     )
 
 
-@app.post("/subscriptions/<int:index>/toggle")
-def toggle_subscription(index: int):
-    def mutate(payload):
-        subscriptions = _migrated_subscription_list(payload, allow_missing=True)
-        if 0 <= index < len(subscriptions):
-            current = subscriptions[index].get("status", "active")
-            subscriptions[index]["status"] = (
-                "paused" if current == "active" else "active"
-            )
-        return subscriptions
+@app.post("/subscriptions/<subscription_id>/toggle")
+def toggle_subscription(subscription_id: str):
+    repository = _subscription_repository()
 
-    update_json(SUBSCRIPTIONS_PATH, mutate)
+    def mutate(subscription):
+        current = subscription.get("status", "active")
+        subscription["status"] = "paused" if current == "active" else "active"
+        return subscription
+
+    if repository.mutate(
+        LOCAL_OWNER_ID,
+        subscription_id,
+        mutate,
+    ) is None:
+        abort(404)
     return redirect(url_for("subscription_list"))
 
 
@@ -2709,14 +2779,10 @@ def delete_subscription(subscription_id: str):
     canonical_id = canonical_detail_uuid(subscription_id)
     if canonical_id is None:
         abort(404)
-    subscriptions = load_subscriptions()
-    matched = next(
-        (
-            item
-            for item in subscriptions
-            if stable_subscription_id(item) == canonical_id
-        ),
-        None,
+    repository = _subscription_repository()
+    matched = repository.get(
+        LOCAL_OWNER_ID,
+        canonical_id,
     )
     if matched is None:
         abort(404)
@@ -2734,41 +2800,48 @@ def delete_subscription(subscription_id: str):
             error="必须明确确认后才能删除这条监控。",
         ), 400
 
-    result = {"deleted": False}
-
-    def mutate(payload):
-        current = _migrated_subscription_list(payload, allow_missing=True)
-        retained = []
-        for item in current:
-            if not result["deleted"] and stable_subscription_id(item) == canonical_id:
-                result["deleted"] = True
-                continue
-            retained.append(item)
-        return retained
-
-    update_json(SUBSCRIPTIONS_PATH, mutate)
-    if not result["deleted"]:
+    if not repository.delete(LOCAL_OWNER_ID, canonical_id):
         abort(404)
     return redirect(url_for("subscription_list"))
 
 
-@app.post("/subscriptions/<int:index>/quick-update")
-def quick_update_subscription(index: int):
+@app.post("/subscriptions/<subscription_id>/quick-update")
+def quick_update_subscription(subscription_id: str):
     field = request.form.get("field", "")
     value = request.form.get("value", "")
-    ok = update_subscription_preference(index, field, value)
-    print(f"[表单] 快捷更新偏好: index={index}, field={field}, ok={ok}")
-    return redirect(url_for("success", index=index))
+    ok = update_subscription_preference(subscription_id, field, value)
+    print(
+        "[表单] 快捷更新偏好: "
+        f"subscription_id={subscription_id}, field={field}, ok={ok}"
+    )
+    if not ok:
+        abort(404)
+    return redirect(url_for("success", subscription_id=subscription_id))
 
 
 @app.get("/success")
 def success():
     subscriptions = load_subscriptions()
-    try:
-        index = int(request.args.get("index", len(subscriptions) - 1))
-    except ValueError:
-        index = len(subscriptions) - 1
-    subscription = subscriptions[index] if subscriptions else {}
+    requested_id = str(request.args.get("subscription_id") or "").strip()
+    index = None
+    subscription = {}
+    if requested_id:
+        subscription = _subscription_repository().get(
+            LOCAL_OWNER_ID,
+            requested_id,
+        ) or {}
+        if subscription:
+            migrated, _details = migrate_subscription_defaults([subscription])
+            subscription = migrated[0]
+            index = _subscription_position(requested_id)
+    elif subscriptions:
+        try:
+            index = int(request.args.get("index", len(subscriptions) - 1))
+        except ValueError:
+            index = len(subscriptions) - 1
+        if 0 <= index < len(subscriptions):
+            subscription = subscriptions[index]
+            requested_id = stable_subscription_id(subscription) or ""
     stored_attempt = subscription.get("last_attempt") or {}
     session_attempt = _take_startup_handshake(subscription)
     selected_attempt = _select_startup_attempt(stored_attempt, session_attempt)
@@ -2777,7 +2850,8 @@ def success():
         SUCCESS_TEMPLATE,
         summary=build_success_summary(subscription) if subscription else {},
         first_push_time=first_push_text(),
-        index=index if subscriptions else None,
+        index=index,
+        subscription_id=requested_id or None,
         startup_status=display_status,
         startup_message=startup_status_message(display_status),
     )

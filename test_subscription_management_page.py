@@ -201,7 +201,7 @@ class SubscriptionManagementPageTest(unittest.TestCase):
     def test_toggle_and_delete_subscription(self):
         self._write_subscriptions()
 
-        response = self.client.post("/subscriptions/0/toggle")
+        response = self.client.post(f"/subscriptions/{ACTIVE_ID}/toggle")
         self.assertEqual(response.status_code, 302)
         subscriptions = json.loads(web_form.SUBSCRIPTIONS_PATH.read_text(encoding="utf-8"))
         self.assertEqual(subscriptions[0]["status"], "paused")

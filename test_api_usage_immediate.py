@@ -32,7 +32,7 @@ def _run_concurrent_round(
     usage_path: str,
     cache_dir: str,
     round_id: str,
-    start_event,
+    start_barrier,
     request_count: int,
 ) -> None:
     from request_cache import cached_fetch, reset_for_tests, start_request_cache_round
@@ -43,7 +43,7 @@ def _run_concurrent_round(
         track_usage=True,
         usage_path=usage_path,
     )
-    start_event.wait(timeout=10)
+    start_barrier.wait(timeout=10)
     source = _ImmediateUsageSource()
     for index in range(request_count):
         cached_fetch(
@@ -194,7 +194,7 @@ class ImmediateApiUsageLedgerTest(unittest.TestCase):
             usage_path = root / "api_usage.json"
             initialize_usage_ledger(usage_path)
             context = multiprocessing.get_context("spawn")
-            start = context.Event()
+            start = context.Barrier(3)
             processes = [
                 context.Process(
                     target=_run_concurrent_round,
@@ -210,7 +210,7 @@ class ImmediateApiUsageLedgerTest(unittest.TestCase):
             ]
             for process in processes:
                 process.start()
-            start.set()
+            start.wait(timeout=10)
             for process in processes:
                 process.join(timeout=20)
 

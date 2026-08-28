@@ -152,17 +152,21 @@ class SubscriptionCloneIdempotencyTest(unittest.TestCase):
         self.assertEqual(sync_module._subscription_key(subscription), "id:canonical-id")
 
     def test_new_save_generates_subscription_id(self):
+        from subscription_repository import LOCAL_OWNER_ID, SubscriptionRepository
+
         subscription = _subscription(created_at="2026-08-17T12:00:00", subscription_id="")
         subscription.pop("id")
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "subscriptions.json"
-            with patch.object(web_form, "SUBSCRIPTIONS_PATH", path):
-                saved_index = web_form.save_subscription(subscription)
+            saved_subscription = SubscriptionRepository(path).create(
+                LOCAL_OWNER_ID,
+                subscription,
+            )
             saved = json.loads(path.read_text(encoding="utf-8"))
 
-        self.assertEqual(saved_index, 0)
         self.assertEqual(len(saved), 1)
+        self.assertEqual(saved_subscription, saved[0])
         UUID(saved[0]["subscription_id"])
 
 

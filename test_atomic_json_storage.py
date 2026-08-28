@@ -25,7 +25,7 @@ def _feedback_append_worker(path_text, record, barrier, result_queue):
 
 def _subscription_edit_worker(
     path_text,
-    index,
+    subscription_id,
     replacement,
     barrier,
     result_queue,
@@ -33,12 +33,15 @@ def _subscription_edit_worker(
     """把旧实现的两次订阅读取对齐，稳定暴露最后写入者覆盖。"""
 
     try:
-        import web_form
+        from subscription_repository import LOCAL_OWNER_ID, SubscriptionRepository
 
         path = Path(path_text)
-        web_form.SUBSCRIPTIONS_PATH = path
         barrier.wait(timeout=10)
-        web_form.save_subscription(replacement, index)
+        SubscriptionRepository(path).update(
+            LOCAL_OWNER_ID,
+            subscription_id,
+            replacement,
+        )
         result_queue.put(None)
     except BaseException as exc:  # pragma: no cover - 子进程错误由父进程断言
         result_queue.put(f"{type(exc).__name__}: {exc}")
@@ -193,8 +196,8 @@ class AtomicJsonStoreTest(unittest.TestCase):
             processes, alive, errors = _run_processes(
                 _subscription_edit_worker,
                 [
-                    (str(path), 0, _subscription("replacement-a", 3000)),
-                    (str(path), 1, _subscription("replacement-b", 4000)),
+                    (str(path), "sub-a", _subscription("replacement-a", 3000)),
+                    (str(path), "sub-b", _subscription("replacement-b", 4000)),
                 ],
             )
             saved = json.loads(path.read_text(encoding="utf-8"))
