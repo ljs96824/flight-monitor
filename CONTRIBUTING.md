@@ -17,7 +17,7 @@
 
 零真实 API 的实际隔离来自四层：mock `start_background_collection`、mock `load_calendar`、临时数据目录和临时端口。`NO_LIVE_API=1` 只是明示合同，不能单独作为零 API 证据；验收还必须确认生产三库与配额台账哈希不变。
 
-`scripts/ui_smoke.py` 的临时服务器运行完整 `web_form.app`，并非只挂载少数路由。当前 CDP 驱动覆盖 `/`、`/settings`（含编辑回填与提交）、`/price_hint`、`/feedback`、`/subscriptions` 以及删除确认 GET/POST；它仍不覆盖暂停等其余 CRUD 路由。smoke 绿不等于 Web 全绿：需要验证新的或尚未覆盖的 CRUD 行为时，必须单独扩展 smoke 驱动与交互断言，不能把路由可访问等同于已经验证。
+`scripts/ui_smoke.py` 的临时服务器运行完整 `web_form.app`，并非只挂载少数路由。当前 CDP 驱动覆盖 `/`、`/settings`（含编辑回填与提交）、`/subscribe`、`/success`、`/subscriptions` 以及删除确认 GET/POST；它尚未覆盖 `/price_hint`、`/feedback`、暂停等其余 CRUD 路由。smoke 绿不等于 Web 全绿：需要验证新的或尚未覆盖的 CRUD 行为时，必须单独扩展 smoke 驱动与交互断言，不能把路由可访问等同于已经验证。
 
 ## F821 未定义名称硬门
 

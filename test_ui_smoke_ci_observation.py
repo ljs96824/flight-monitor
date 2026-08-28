@@ -115,11 +115,11 @@ class UiSmokeCiObservationContractTest(unittest.TestCase):
         required = (
             "完整 `web_form.app`",
             "`/settings`",
-            "`/price_hint`",
-            "`/feedback`",
+            "`/subscribe`",
+            "`/success`",
             "`/subscriptions`",
             "删除确认",
-            "暂停",
+            "尚未覆盖 `/price_hint`、`/feedback`、暂停等其余 CRUD 路由",
             "smoke 绿不等于 Web 全绿",
             "扩展 smoke 驱动",
         )
