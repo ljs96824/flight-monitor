@@ -60,6 +60,7 @@ from notification_config import (
     normalize_notification_goals,
 )
 from price_calendar import load_calendar
+from project_time import SHANGHAI_TZ
 from web_security import configure_session_security, install_csrf_protection
 
 
@@ -941,14 +942,26 @@ def _subscription_scenario_text(sub: dict) -> str:
     return " + ".join(labels) if labels else "未设置"
 
 
-def _relative_time_label(value: str) -> str:
+def _parse_display_time(value: str) -> datetime:
+    parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=SHANGHAI_TZ)
+    return parsed.astimezone(timezone.utc)
+
+
+def _relative_time_label(value: str, *, now: datetime | None = None) -> str:
     if not value:
         return ""
     try:
-        created = datetime.fromisoformat(str(value).replace("Z", "+00:00")).replace(tzinfo=None)
+        created = _parse_display_time(value)
     except ValueError:
         return str(value)
-    minutes = max(0, int((datetime.now() - created).total_seconds() // 60))
+    current = now if now is not None else datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    else:
+        current = current.astimezone(timezone.utc)
+    minutes = max(0, int((current - created).total_seconds() // 60))
     if minutes < 1:
         return "刚刚"
     if minutes < 60:
