@@ -9,20 +9,13 @@
 
 这条规则用于保证代码版本、进程实例和用户看到的页面可以一一对应。遇到页面行为与测试不一致时，先核对页脚 `build ... · 启动 ... · :port` 信标，再排查业务逻辑。
 
-## 浏览器 smoke 观察模式
+## 浏览器 smoke 阻断模式
 
-公开 CI 的 `ui-smoke` job 使用固定版本 Playwright 供应 Chromium，但测试驱动仍是现有 CDP 脚本。该 job 暂以 `continue-on-error` 观察模式运行；观察计数以 Step Summary 中的 `steps.smoke.outcome=success` 为准，不以 workflow 总结论代替。
+公开 CI 的 `ui-smoke` job 使用固定版本 Playwright 供应 Chromium，但测试驱动仍是现有 CDP 脚本。观察期已经完成：连续成功计数达到 `7/7`，并包含 `pull_request`、`workflow_dispatch` 与主分支 push 三类触发，期间未再出现浏览器安装、启动、端口或日期时区类随机失败。
+
+`continue-on-error` 已移除；此后浏览器 smoke 失败会直接阻断 workflow。失败时继续上传浏览器截图、页面 HTML、浏览器控制台和服务日志等现有证据；启动前故障只保存实际能够生成的证据，不伪造不存在的截图或页面产物。
 
 零真实 API 的实际隔离来自四层：mock `start_background_collection`、mock `load_calendar`、临时数据目录和临时端口。`NO_LIVE_API=1` 只是明示合同，不能单独作为零 API 证据；验收还必须确认生产三库与配额台账哈希不变。
-
-观察模式退出必须同时满足：
-
-1. 连续 7 次 `steps.smoke.outcome=success`。
-2. 至少 1 次由 `pull_request` 触发。
-3. 至少 1 次由 `workflow_dispatch` 触发。
-4. 期间没有浏览器安装、启动、端口或日期时区类随机失败。
-
-全部条件满足后，用独立提交删除 `continue-on-error`，让浏览器 smoke 成为阻断性合同。
 
 ## F821 未定义名称硬门
 
