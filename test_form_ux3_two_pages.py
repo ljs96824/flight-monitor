@@ -292,7 +292,7 @@ class FormUx3TwoPagesTest(unittest.TestCase):
             finally:
                 web_form.SUBSCRIPTIONS_PATH = original
 
-    def test_ui_smoke_is_local_edge_contract_and_explicitly_skipped_in_ci(self):
+    def test_ui_smoke_is_local_browser_contract_and_explicitly_skipped_in_ci(self):
         root = Path(__file__).parent
         smoke = (root / "scripts" / "ui_smoke.py").read_text(encoding="utf-8")
         driver = (root / "scripts" / "ui_smoke_driver.mjs").read_text(encoding="utf-8")
@@ -300,7 +300,7 @@ class FormUx3TwoPagesTest(unittest.TestCase):
         self.assertIn("--remote-debugging-port", smoke)
         self.assertIn("Runtime.exceptionThrown", driver)
         self.assertIn("visibleControlCount", driver)
-        self.assertIn("UI smoke (local only, requires Microsoft Edge)", workflow)
+        self.assertIn("UI smoke (browser provisioning pending)", workflow)
         self.assertIn("if: ${{ false }}", workflow)
 
 

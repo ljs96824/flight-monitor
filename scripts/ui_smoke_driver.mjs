@@ -1,4 +1,7 @@
-const [baseUrl, cdpPort] = process.argv.slice(2);
+import {mkdir, writeFile} from "node:fs/promises";
+import {join} from "node:path";
+
+const [baseUrl, cdpPort, artifactDir] = process.argv.slice(2);
 if (!baseUrl || !cdpPort) throw new Error("缺少 baseUrl/cdpPort");
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -27,7 +30,10 @@ ws.addEventListener("message", event => {
     browserErrors.push(message.params.exceptionDetails?.text || "Runtime.exceptionThrown");
   }
   if (message.method === "Runtime.consoleAPICalled" && message.params.type === "error") {
-    browserErrors.push("console.error");
+    const details = (message.params.args || [])
+      .map(argument => argument.value ?? argument.description ?? argument.type)
+      .join(" ");
+    browserErrors.push(details ? `console.error: ${details}` : "console.error");
   }
   if (message.method === "Log.entryAdded" && message.params.entry?.level === "error") {
     browserErrors.push(message.params.entry.text || "Log.error");
@@ -211,6 +217,48 @@ async function setBooleanCheckboxByClick(name, checked) {
   await waitFor(`document.querySelector('[name="${name}"]').checked === ${checked}`, `${name}=${checked}`);
 }
 
+async function captureFailureArtifacts(error) {
+  if (!artifactDir) return;
+  await mkdir(artifactDir, {recursive: true});
+  const captureErrors = [];
+  let html;
+  try {
+    html = await evaluate("document.documentElement.outerHTML");
+  } catch (captureError) {
+    captureErrors.push(`html: ${captureError}`);
+    html = `<!doctype html><meta charset="utf-8"><title>UI smoke failure</title><pre>${String(error?.stack || error)}</pre>`;
+  }
+  await writeFile(join(artifactDir, "failure.html"), html, "utf8");
+
+  try {
+    await command("Page.enable");
+    const screenshot = await command("Page.captureScreenshot", {
+      format: "png",
+      fromSurface: true,
+      captureBeyondViewport: true,
+    });
+    if (!screenshot.data) throw new Error("CDP 未返回截图数据");
+    await writeFile(join(artifactDir, "failure.png"), Buffer.from(screenshot.data, "base64"));
+  } catch (captureError) {
+    captureErrors.push(`screenshot: ${captureError}`);
+  }
+
+  await writeFile(
+    join(artifactDir, "browser-console.json"),
+    JSON.stringify({
+      failure: {
+        name: error?.name || "Error",
+        message: String(error?.message || error),
+        stack: String(error?.stack || ""),
+      },
+      browser_errors: browserErrors,
+      capture_errors: captureErrors,
+    }, null, 2) + "\n",
+    "utf8",
+  );
+}
+
+async function runSmoke() {
 await command("Runtime.enable");
 await command("Page.enable");
 await command("Log.enable");
@@ -256,7 +304,11 @@ const depart = new Date();
 depart.setDate(depart.getDate() + 21);
 const returned = new Date(depart);
 returned.setDate(returned.getDate() + 3);
-const iso = date => date.toISOString().slice(0, 10);
+const localDate = date => [
+  date.getFullYear(),
+  String(date.getMonth() + 1).padStart(2, "0"),
+  String(date.getDate()).padStart(2, "0"),
+].join("-");
 await evaluate(`(() => {
   const set = (name, value) => {
     const element = document.querySelector('[name="' + name + '"]');
@@ -267,8 +319,8 @@ await evaluate(`(() => {
   };
   set('origin_select', '上海');
   set('destination', '北京');
-  set('depart_date', '${iso(depart)}');
-  set('return_date', '${iso(returned)}');
+  set('depart_date', '${localDate(depart)}');
+  set('return_date', '${localDate(returned)}');
   set('round_trip', 'true');
   set('passenger_count', '1');
   return true;
@@ -509,9 +561,9 @@ await evaluate(`(() => {
   };
   set('origin_select', '上海');
   set('destination', '北京');
-  set('depart_date', '${iso(depart)}');
+  set('depart_date', '${localDate(depart)}');
   set('round_trip', 'true');
-  set('return_date', '${iso(depart)}');
+  set('return_date', '${localDate(depart)}');
   set('adult_count', '2');
   set('child_count', '1');
   set('elderly_count', '2');
@@ -611,9 +663,9 @@ await evaluate(`(() => {
   };
   set('origin_select', '上海');
   set('destination', '北京');
-  set('depart_date', '${iso(depart)}');
+  set('depart_date', '${localDate(depart)}');
   set('round_trip', 'true');
-  set('return_date', '${iso(returned)}');
+  set('return_date', '${localDate(returned)}');
   document.querySelector('form[data-page-mode="full"]').requestSubmit();
   return true;
 })()`);
@@ -679,4 +731,17 @@ console.log("[UI smoke] 服务端删除确认=PASS GET零写入；POST含CSRF+co
 await sleep(350);
 if (browserErrors.length) throw new Error(`浏览器错误: ${browserErrors.join(' | ')}`);
 console.log("[UI smoke] console error=0");
-ws.close();
+}
+
+try {
+  await runSmoke();
+} catch (error) {
+  try {
+    await captureFailureArtifacts(error);
+  } catch (artifactError) {
+    console.error(`[UI smoke] 失败产物写入失败: ${artifactError}`);
+  }
+  throw error;
+} finally {
+  ws.close();
+}

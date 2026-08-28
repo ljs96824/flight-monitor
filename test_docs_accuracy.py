@@ -78,6 +78,7 @@ ACTIVE_ENV_VARIABLES = ACTIVE_SECRET_VARIABLES | {
     "HOLIDAY_SHOULDER_DAYS",
     "SNAPSHOT_DEPART_DATE",
     "SNAPSHOT_RETURN_DATE",
+    "BROWSER_PATH",
     "EDGE_PATH",
 }
 
@@ -336,7 +337,7 @@ class DocsAccuracyTest(unittest.TestCase):
             "python -X utf8 -m unittest discover": [
                 cli_python, "-X", "utf8", "-m", "unittest", "-h",
             ],
-            "python -X utf8 scripts/ui_smoke.py": [
+            "python -X utf8 scripts/ui_smoke.py --log-path data/ui-smoke-artifacts/ui-smoke.log --artifact-dir data/ui-smoke-artifacts": [
                 cli_python, "-X", "utf8", "-m", "py_compile", "scripts/ui_smoke.py",
             ],
             "git pull --ff-only": ["git", "pull", "-h"],

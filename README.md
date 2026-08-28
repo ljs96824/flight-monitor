@@ -92,7 +92,7 @@ Flight Monitor 是一个本地优先的航班采集、约束过滤与通知系�
 ### 6.1 环境
 
 - Python 3.13。
-- Windows 或 Linux；本地 UI smoke 额外需要 Microsoft Edge。
+- Windows 或 Linux；本地 UI smoke 需要 Edge、Chrome 或 Chromium，并需要 Node.js 22+。
 - 在项目根目录执行：
 
 ```bash
@@ -180,10 +180,10 @@ python -X utf8 -m pytest -q
 python -X utf8 -m unittest discover
 ```
 
-真实浏览器交互只在本机 Edge 验收，CI 明确跳过该项：
+真实浏览器交互目前在本机验收，CI 的浏览器供应接线尚未启用。启动器自动探测 Edge、Chrome 与 Chromium；也可用 `BROWSER_PATH` 指定，Windows 继续兼容 `EDGE_PATH`。失败时才写入所给日志与产物目录，成功不落盘：
 
 ```bash
-python -X utf8 scripts/ui_smoke.py
+python -X utf8 scripts/ui_smoke.py --log-path data/ui-smoke-artifacts/ui-smoke.log --artifact-dir data/ui-smoke-artifacts
 ```
 
 ### 6.5 手动采集与篮子定时
