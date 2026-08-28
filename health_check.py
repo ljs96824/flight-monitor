@@ -1,6 +1,8 @@
-import json
 from datetime import datetime
 from pathlib import Path
+
+from atomic_json_store import JsonStoreReadError, read_json, update_json
+from log_utils import safe_log
 
 
 BASE_DIR = Path(__file__).parent
@@ -17,18 +19,10 @@ ENRICHMENT_SOURCES = {"duffel"}
 def _load_source_health() -> dict:
     if not SOURCE_HEALTH_PATH.exists():
         return {}
-    try:
-        return json.loads(SOURCE_HEALTH_PATH.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {}
-
-
-def _save_source_health(history: dict) -> None:
-    SOURCE_HEALTH_PATH.parent.mkdir(exist_ok=True)
-    SOURCE_HEALTH_PATH.write_text(
-        json.dumps(history, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    history = read_json(SOURCE_HEALTH_PATH)
+    if not isinstance(history, dict):
+        raise JsonStoreReadError("source_health 根节点必须是对象")
+    return history
 
 
 def _is_success(status) -> bool:
@@ -44,13 +38,18 @@ def _source_entries(source_stats: dict | None) -> dict:
     }
 
 
-def _update_source_history(source_stats: dict | None) -> tuple[dict, list[str]]:
-    history = _load_source_health()
+def _apply_source_history_updates(
+    history: dict,
+    entries: dict,
+    *,
+    now: str,
+) -> tuple[dict, list[str]]:
     warnings = []
-    now = datetime.now().isoformat()
 
-    for source, info in _source_entries(source_stats).items():
+    for source, info in entries.items():
         record = history.get(source, {"consecutive_failures": 0})
+        if not isinstance(record, dict):
+            record = {"consecutive_failures": 0}
         if _is_success(info.get("status")):
             record["consecutive_failures"] = 0
         else:
@@ -64,7 +63,48 @@ def _update_source_history(source_stats: dict | None) -> tuple[dict, list[str]]:
         if record["consecutive_failures"] >= 3:
             warnings.append(f"数据源异常：{source}连续{record['consecutive_failures']}次失败")
 
-    _save_source_health(history)
+    return history, warnings
+
+
+def _update_source_history(source_stats: dict | None) -> tuple[dict, list[str]]:
+    entries = _source_entries(source_stats)
+    now = datetime.now().isoformat()
+
+    if not entries:
+        try:
+            return _load_source_health(), []
+        except JsonStoreReadError as exc:
+            safe_log(
+                "[源健康] source_health_state_degraded "
+                f"原因={type(exc).__name__}:{exc}; 本轮仅使用当前source_stats"
+            )
+            return {}, []
+
+    warnings: list[str] = []
+
+    def mutate(payload):
+        nonlocal warnings
+        if payload is None:
+            history = {}
+        elif isinstance(payload, dict):
+            history = payload
+        else:
+            raise JsonStoreReadError("source_health 根节点必须是对象")
+        history, warnings = _apply_source_history_updates(
+            history,
+            entries,
+            now=now,
+        )
+        return history
+
+    try:
+        history = update_json(SOURCE_HEALTH_PATH, mutate)
+    except JsonStoreReadError as exc:
+        safe_log(
+            "[源健康] source_health_state_degraded "
+            f"原因={type(exc).__name__}:{exc}; 本轮仅使用当前source_stats"
+        )
+        history, warnings = _apply_source_history_updates({}, entries, now=now)
     return history, warnings
 
 
