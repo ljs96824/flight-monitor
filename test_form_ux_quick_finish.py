@@ -89,6 +89,7 @@ class FormUxQuickFinishTest(unittest.TestCase):
 
     def test_edit_entry_redirects_to_full_static_page_with_all_sections_visible(self):
         subscription = {
+            "subscription_id": "123e4567-e89b-12d3-a456-426614174132",
             "monitor_mode": "precise",
             "origin": "PVG",
             "destination": "KIX",

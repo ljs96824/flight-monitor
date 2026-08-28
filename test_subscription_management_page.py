@@ -69,6 +69,7 @@ class SubscriptionManagementPageTest(unittest.TestCase):
         records = [
             {
                 "id": ACTIVE_ID,
+                "subscription_id": ACTIVE_ID,
                 "status": "active",
                 "round_trip": True,
                 "basic": {
@@ -82,6 +83,7 @@ class SubscriptionManagementPageTest(unittest.TestCase):
             },
             {
                 "id": PAUSED_ID,
+                "subscription_id": PAUSED_ID,
                 "status": "paused",
                 "round_trip": False,
                 "basic": {

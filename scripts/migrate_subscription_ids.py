@@ -1,4 +1,4 @@
-"""为订阅补发稳定 UUID；默认只读，--execute 才写入。"""
+"""为订阅补发稳定 UUID；默认只读，--write 才写入。"""
 
 from __future__ import annotations
 
@@ -107,7 +107,7 @@ def run(
     else:
         _emit(
             f"[身份迁移预览] 总数={len(subscriptions)} 待补发={len(migrated)} "
-            "未修改文件；确认后使用 --execute。",
+            "未修改文件；确认后使用 --write。",
             stream,
         )
 
@@ -118,15 +118,17 @@ def run(
     }
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--path", type=Path, default=DEFAULT_SUBSCRIPTIONS_PATH)
     parser.add_argument(
+        "--write",
         "--execute",
+        dest="execute",
         action="store_true",
-        help="显式执行：先备份，再为缺失身份的订阅补 UUID",
+        help="显式执行：先备份，再为缺失身份的订阅补 UUID（--execute 为兼容别名）",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")

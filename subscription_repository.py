@@ -12,7 +12,7 @@ from pathlib import Path
 
 from atomic_json_store import read_json, update_json
 from local_file_lock import file_lock
-from subscription_identity import ensure_subscription_id, subscription_id
+from subscription_identity import ensure_subscription_id
 
 
 LOCAL_OWNER_ID = "local-owner"
@@ -22,12 +22,46 @@ class SubscriptionOwnerScopeError(ValueError):
     """A caller attempted to create data outside this repository's owner scope."""
 
 
+class SubscriptionIdentityMigrationRequired(RuntimeError):
+    """Existing records must receive a persisted subscription_id before M0."""
+
+
 def _subscription_array(payload, *, allow_missing: bool = False) -> list[dict]:
     if payload is None and allow_missing:
         return []
     if not isinstance(payload, list):
         raise ValueError("subscriptions.json 格式错误，应为订阅数组")
     return payload
+
+
+def _persisted_subscription_id(subscription: dict) -> str:
+    return str(subscription.get("subscription_id") or "").strip()
+
+
+def _require_persisted_identities(subscriptions: list[dict]) -> None:
+    missing = [
+        index
+        for index, item in enumerate(subscriptions)
+        if not isinstance(item, dict) or not _persisted_subscription_id(item)
+    ]
+    if missing:
+        raise SubscriptionIdentityMigrationRequired(
+            "订阅缺少持久 subscription_id；"
+            "请先运行 scripts/migrate_subscription_ids.py --write "
+            f"(indexes={missing})"
+        )
+
+
+def _merge_subscription_patch(current: dict, patch: dict) -> dict:
+    """Merge a field patch into the record read inside the JSON file lock."""
+
+    merged = deepcopy(current)
+    for key, value in patch.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _merge_subscription_patch(merged[key], value)
+        else:
+            merged[key] = deepcopy(value)
+    return merged
 
 
 class SubscriptionRepository:
@@ -59,38 +93,31 @@ class SubscriptionRepository:
         if not self._owns(owner_id):
             return None
         target = str(subscription_id_value)
+        subscriptions = self.list_for_owner(owner_id)
+        _require_persisted_identities(subscriptions)
         return next(
             (
                 deepcopy(item)
-                for item in self.list_for_owner(owner_id)
-                if isinstance(item, dict) and subscription_id(item) == target
+                for item in subscriptions
+                if isinstance(item, dict)
+                and _persisted_subscription_id(item) == target
             ),
             None,
         )
 
     def resolve_legacy_index(self, owner_id: str, index: int) -> dict | None:
-        """M0 only: assign/read stable identity before leaving index semantics."""
+        """M0 only: resolve a full-table position without mutating storage."""
 
         if not self._owns(owner_id):
             return None
-        resolved: dict = {}
-        matched = False
-
-        def mutate(payload):
-            nonlocal matched
-            subscriptions = _subscription_array(payload, allow_missing=True)
-            if not 0 <= index < len(subscriptions):
-                return subscriptions
-            candidate = subscriptions[index]
-            if not isinstance(candidate, dict):
-                return subscriptions
-            ensure_subscription_id(candidate)
-            resolved.update(deepcopy(candidate))
-            matched = True
-            return subscriptions
-
-        update_json(self.path, mutate)
-        return resolved if matched else None
+        subscriptions = self.list_for_owner(owner_id)
+        _require_persisted_identities(subscriptions)
+        if not 0 <= index < len(subscriptions):
+            return None
+        candidate = subscriptions[index]
+        if not isinstance(candidate, dict):
+            return None
+        return deepcopy(candidate)
 
     def create(self, owner_id: str, subscription: dict) -> dict:
         if not self._owns(owner_id):
@@ -102,6 +129,7 @@ class SubscriptionRepository:
 
         def mutate(payload):
             subscriptions = _subscription_array(payload, allow_missing=True)
+            _require_persisted_identities(subscriptions)
             ensure_subscription_id(candidate)
             subscriptions.append(candidate)
             saved.update(deepcopy(candidate))
@@ -116,11 +144,11 @@ class SubscriptionRepository:
         subscription_id_value: str,
         subscription: dict,
     ) -> dict | None:
-        replacement = deepcopy(subscription)
+        patch = deepcopy(subscription)
         return self.mutate(
             owner_id,
             subscription_id_value,
-            lambda _current: deepcopy(replacement),
+            lambda current: _merge_subscription_patch(current, patch),
         )
 
     def mutate(
@@ -140,8 +168,12 @@ class SubscriptionRepository:
         def mutate_payload(payload):
             nonlocal matched
             subscriptions = _subscription_array(payload, allow_missing=True)
+            _require_persisted_identities(subscriptions)
             for index, existing in enumerate(subscriptions):
-                if not isinstance(existing, dict) or subscription_id(existing) != target:
+                if (
+                    not isinstance(existing, dict)
+                    or _persisted_subscription_id(existing) != target
+                ):
                     continue
                 replacement = mutator(deepcopy(existing))
                 if not isinstance(replacement, dict):
@@ -170,12 +202,13 @@ class SubscriptionRepository:
         def mutate(payload):
             nonlocal deleted
             subscriptions = _subscription_array(payload, allow_missing=True)
+            _require_persisted_identities(subscriptions)
             retained = []
             for item in subscriptions:
                 if (
                     not deleted
                     and isinstance(item, dict)
-                    and subscription_id(item) == target
+                    and _persisted_subscription_id(item) == target
                 ):
                     deleted = True
                     continue

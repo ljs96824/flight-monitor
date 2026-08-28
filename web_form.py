@@ -50,6 +50,7 @@ from log_utils import safe_log
 from subscription_identity import subscription_id as stable_subscription_id
 from subscription_repository import (
     LOCAL_OWNER_ID,
+    SubscriptionIdentityMigrationRequired,
     SubscriptionRepository,
 )
 from subscription_attempts import attempt_time as _attempt_time, record_subscription_attempt
@@ -777,23 +778,45 @@ def _resolve_edit_subscription_id(
     return resolved or None
 
 
-def _ensure_subscription_list_identities(subscriptions: list[dict]) -> list[dict]:
-    """M0 upgrade path: list links must leave index identity behind."""
+def _require_persisted_subscription_identities(
+    subscriptions: list[dict],
+) -> list[dict]:
+    """Fail closed when the deployment preflight migration was skipped."""
 
-    repository = _subscription_repository()
-    for index, subscription in enumerate(subscriptions):
-        if stable_subscription_id(subscription):
-            continue
-        resolved = repository.resolve_legacy_index(LOCAL_OWNER_ID, index)
-        resolved_id = stable_subscription_id(resolved or {})
-        if not resolved_id:
-            continue
-        subscription["subscription_id"] = resolved_id
+    missing = [
+        index
+        for index, subscription in enumerate(subscriptions)
+        if not isinstance(subscription, dict)
+        or not str(subscription.get("subscription_id") or "").strip()
+    ]
+    if missing:
         safe_log(
-            "[身份迁移] 列表路径 "
-            f"index={index} subscription_id={resolved_id}"
+            "[身份迁移] 阻断读取 "
+            f"缺少subscription_id数量={len(missing)} indexes={missing}"
+        )
+        raise SubscriptionIdentityMigrationRequired(
+            "订阅身份迁移未完成；"
+            "请先运行 scripts/migrate_subscription_ids.py --write"
         )
     return subscriptions
+
+
+def _identity_migration_required_response(
+    error: SubscriptionIdentityMigrationRequired,
+):
+    safe_log(f"[身份迁移] {error}")
+    return (
+        "订阅身份迁移未完成。请先运行 "
+        "scripts/migrate_subscription_ids.py --write，再重试。",
+        503,
+    )
+
+
+@app.errorhandler(SubscriptionIdentityMigrationRequired)
+def _handle_identity_migration_required(
+    error: SubscriptionIdentityMigrationRequired,
+):
+    return _identity_migration_required_response(error)
 
 
 def load_feedback() -> list[dict]:
@@ -2559,7 +2582,10 @@ def settings():
     edit_index = None
     edit_arg = request.args.get("edit")
     if edit_arg not in (None, ""):
-        edit_subscription_id = _resolve_edit_subscription_id(edit_arg)
+        try:
+            edit_subscription_id = _resolve_edit_subscription_id(edit_arg)
+        except SubscriptionIdentityMigrationRequired as exc:
+            return _identity_migration_required_response(exc)
         if edit_subscription_id is None:
             abort(404)
         subscription = _subscription_repository().get(
@@ -2741,6 +2767,8 @@ def subscribe():
             edit_index=edit_index,
             form_error=str(exc),
         ), 400
+    except SubscriptionIdentityMigrationRequired as exc:
+        return _identity_migration_required_response(exc)
     except Exception as exc:
         print(f"[表单] 提交订阅失败: {exc}")
         traceback.print_exc()
@@ -2749,7 +2777,12 @@ def subscribe():
 
 @app.get("/subscriptions")
 def subscription_list():
-    subscriptions = _ensure_subscription_list_identities(load_subscriptions())
+    try:
+        subscriptions = _require_persisted_subscription_identities(
+            load_subscriptions()
+        )
+    except SubscriptionIdentityMigrationRequired as exc:
+        return _identity_migration_required_response(exc)
     return render_template_string(
         LIST_TEMPLATE,
         items=build_subscription_list_items(subscriptions),

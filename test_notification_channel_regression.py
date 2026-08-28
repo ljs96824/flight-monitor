@@ -110,6 +110,9 @@ class NotificationChannelRegressionTest(unittest.TestCase):
 
     def test_edit_projection_and_route_keep_existing_email_and_method(self):
         subscription = _fixture_case()["normalized_subscription"]
+        subscription["subscription_id"] = (
+            "123e4567-e89b-12d3-a456-426614174133"
+        )
         subscription["notification_goals"].update(
             {"method": "email", "email": "saved@example.com"}
         )

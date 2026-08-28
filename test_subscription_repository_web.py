@@ -6,7 +6,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 import web_form
-from subscription_identity import ensure_subscription_id
 from web_test_utils import enable_csrf
 
 
@@ -63,40 +62,79 @@ class SubscriptionRepositoryWebContractTest(unittest.TestCase):
         self.assertNotIn("/?edit=0", body)
         self.assertNotIn("/subscriptions/0/toggle", body)
 
-    def test_list_assigns_identity_before_rendering_links_for_legacy_record(self):
+    def test_list_fails_closed_without_persisted_identity_and_does_not_write(self):
         legacy = _stored_subscription()
         legacy.pop("subscription_id")
         self.path.write_text(
             json.dumps([legacy], ensure_ascii=False),
             encoding="utf-8",
         )
+        original = self.path.read_bytes()
 
-        generated_id = "0aec3430-5248-4e02-903d-dd9e31d89459"
+        with patch.object(web_form, "safe_log") as log_mock:
+            response = self.client.get("/subscriptions")
 
-        def assign_deterministic_identity(subscription):
-            return ensure_subscription_id(
-                subscription,
-                id_factory=lambda: generated_id,
-            )
-
-        with (
-            patch(
-                "subscription_repository.ensure_subscription_id",
-                side_effect=assign_deterministic_identity,
-            ),
-            patch.object(web_form, "safe_log") as log_mock,
-        ):
-            body = self.client.get("/subscriptions").get_data(as_text=True)
-
-        saved_id = self._saved()[0]["subscription_id"]
-        self.assertEqual(saved_id, generated_id)
-        self.assertIn(f"/?edit={saved_id}", body)
-        self.assertIn(f"/subscriptions/{saved_id}/toggle", body)
-        self.assertNotIn('href="/?edit=0"', body)
-        self.assertNotIn('action="/subscriptions/0/toggle"', body)
+        self.assertEqual(response.status_code, 503)
+        self.assertIn(
+            "migrate_subscription_ids.py --write",
+            response.get_data(as_text=True),
+        )
+        self.assertEqual(self.path.read_bytes(), original)
         self.assertTrue(
             any("[身份迁移]" in str(call.args[0]) for call in log_mock.call_args_list)
         )
+
+    def test_list_rejects_non_object_record_without_writing(self):
+        original = json.dumps(
+            [{"subscription_id": SUBSCRIPTION_ID}, None],
+            ensure_ascii=False,
+        ).encode("utf-8")
+        self.path.write_bytes(original)
+
+        response = self.client.get("/subscriptions")
+
+        self.assertEqual(response.status_code, 503)
+        self.assertIn(
+            "migrate_subscription_ids.py --write",
+            response.get_data(as_text=True),
+        )
+        self.assertEqual(self.path.read_bytes(), original)
+
+    def test_m0_numeric_edit_without_persisted_identity_is_read_only_503(self):
+        legacy = _stored_subscription()
+        legacy.pop("subscription_id")
+        self.path.write_text(
+            json.dumps([legacy], ensure_ascii=False),
+            encoding="utf-8",
+        )
+        original = self.path.read_bytes()
+
+        response = self.client.get("/settings?edit=0")
+
+        self.assertEqual(response.status_code, 503)
+        self.assertIn(
+            "migrate_subscription_ids.py --write",
+            response.get_data(as_text=True),
+        )
+        self.assertEqual(self.path.read_bytes(), original)
+
+    def test_direct_id_edit_cannot_bypass_persisted_identity_preflight(self):
+        legacy = _stored_subscription()
+        legacy["id"] = legacy.pop("subscription_id")
+        self.path.write_text(
+            json.dumps([legacy], ensure_ascii=False),
+            encoding="utf-8",
+        )
+        original = self.path.read_bytes()
+
+        response = self.client.get(f"/settings?edit={SUBSCRIPTION_ID}")
+
+        self.assertEqual(response.status_code, 503)
+        self.assertIn(
+            "migrate_subscription_ids.py --write",
+            response.get_data(as_text=True),
+        )
+        self.assertEqual(self.path.read_bytes(), original)
 
     def test_m0_numeric_edit_resolves_to_id_then_logs_migration(self):
         # M1 removes this numeric compatibility entrypoint.
@@ -172,6 +210,31 @@ class SubscriptionRepositoryWebContractTest(unittest.TestCase):
         self.assertEqual(observed[0][0], "start")
         self.assertEqual(observed[0][1], saved)
         self.assertEqual(observed[0][2]["subscription_id"], SUBSCRIPTION_ID)
+
+    def test_edit_deleted_during_locked_update_is_user_visible_and_does_not_start(self):
+        rebuilt = _stored_subscription(budget=2500)
+        rebuilt.pop("subscription_id")
+
+        with (
+            patch.object(web_form, "build_subscription", return_value=rebuilt),
+            patch(
+                "subscription_repository.SubscriptionRepository.update",
+                return_value=None,
+            ),
+            patch.object(web_form, "start_background_collection") as start_mock,
+        ):
+            response = self.client.post(
+                "/subscribe",
+                data={
+                    "form_page": "full",
+                    "subscription_index": SUBSCRIPTION_ID,
+                },
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("订阅已删除", response.get_data(as_text=True))
+        start_mock.assert_not_called()
+        self.assertEqual(len(self._saved()), 1)
 
     def test_toggle_quick_update_and_delete_are_id_scoped_and_csrf_protected(self):
         unauthorized = web_form.app.test_client()
