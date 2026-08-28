@@ -5,6 +5,8 @@
 M0 将 Web 订阅 CRUD 从数组位置改为稳定 `subscription_id`，存储仍为现有
 `subscriptions.json` 数组。所有仓储写入使用 `atomic_json_store.update_json()`，
 完整 read-modify-write 位于同一个跨进程文件锁内。
+读取现有文件也短持同一锁，避免 Windows 在写侧 `os.replace` 窗口产生
+`PermissionError`；文件不存在时仍直接返回空列表。
 
 owner 身份只能由服务端注入。本地部署固定使用 `local-owner`；表单、查询参数、
 请求体和请求头均不能提供或覆盖 owner。M0 只建立边界，不开放多用户、不增加认证、

@@ -11,6 +11,7 @@ from copy import deepcopy
 from pathlib import Path
 
 from atomic_json_store import read_json, update_json
+from local_file_lock import file_lock
 from subscription_identity import ensure_subscription_id, subscription_id
 
 
@@ -49,7 +50,10 @@ class SubscriptionRepository:
             return []
         if not self.path.exists():
             return []
-        return deepcopy(_subscription_array(read_json(self.path)))
+        with file_lock(self.path):
+            if not self.path.exists():
+                return []
+            return deepcopy(_subscription_array(read_json(self.path)))
 
     def get(self, owner_id: str, subscription_id_value: str) -> dict | None:
         if not self._owns(owner_id):

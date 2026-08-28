@@ -2,7 +2,9 @@ import json
 import multiprocessing
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
+from unittest.mock import patch
 
 from subscription_repository import (
     LOCAL_OWNER_ID,
@@ -119,6 +121,42 @@ class SubscriptionRepositoryTest(unittest.TestCase):
 
         self.assertTrue(self.repository.delete(LOCAL_OWNER_ID, SUB_A))
         self.assertEqual(self.repository.list_for_owner(LOCAL_OWNER_ID), [])
+
+    def test_list_for_owner_reads_inside_the_same_file_lock_as_writers(self):
+        payload = [_subscription(SUB_A, 1000)]
+        self.path.write_text(
+            json.dumps(payload, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        lock_entered = False
+
+        @contextmanager
+        def guarded_lock(path):
+            nonlocal lock_entered
+            self.assertEqual(Path(path), self.path)
+            lock_entered = True
+            try:
+                yield
+            finally:
+                lock_entered = False
+
+        def guarded_read(path):
+            self.assertTrue(lock_entered, "read_json 必须位于订阅文件锁内")
+            self.assertEqual(Path(path), self.path)
+            return payload
+
+        with (
+            patch(
+                "subscription_repository.file_lock",
+                side_effect=guarded_lock,
+                create=True,
+            ) as lock_mock,
+            patch("subscription_repository.read_json", side_effect=guarded_read),
+        ):
+            loaded = self.repository.list_for_owner(LOCAL_OWNER_ID)
+
+        self.assertEqual(loaded, payload)
+        lock_mock.assert_called_once_with(self.path)
 
     def test_missing_id_has_explicit_nonexceptional_results(self):
         self.assertIsNone(self.repository.get(LOCAL_OWNER_ID, "missing"))
