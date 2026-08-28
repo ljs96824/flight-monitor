@@ -17,14 +17,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 # contract. New or resolved triples must be reviewed and this set changed explicitly.
 KNOWN_F821_DEBT = frozenset(
     {
-        ("notifier.py", "_append_detailed_analysis_section", "_append_multi_window_analysis"),
-        ("notifier.py", "_append_detailed_analysis_section", "_append_price_anomaly_lines"),
-        ("notifier.py", "_append_detailed_analysis_section", "_append_price_references"),
-        ("notifier.py", "_append_detailed_analysis_section", "_append_purchase_checklist"),
-        ("notifier.py", "_append_detailed_analysis_section", "_append_system_health_lines"),
-        ("notifier.py", "_format_structured_html_message", "_append_low_option_count_notice"),
-        ("notifier.py", "_format_structured_html_message", "_append_price_explanation_lines"),
-        ("notifier.py", "_format_structured_html_message", "_append_push_trend_linechart"),
         ("notifier.py", "generate_neutral_summary", "_plain_price_position"),
     }
 )

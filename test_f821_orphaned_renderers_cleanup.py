@@ -5,18 +5,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent
-MANUAL_RENDERER_DEBT = frozenset(
-    {
-        ("notifier.py", "_format_structured_html_message", "_append_low_option_count_notice"),
-        ("notifier.py", "_format_structured_html_message", "_append_price_explanation_lines"),
-        ("notifier.py", "_format_structured_html_message", "_append_push_trend_linechart"),
-        ("notifier.py", "_append_detailed_analysis_section", "_append_multi_window_analysis"),
-        ("notifier.py", "_append_detailed_analysis_section", "_append_price_anomaly_lines"),
-        ("notifier.py", "_append_detailed_analysis_section", "_append_price_references"),
-        ("notifier.py", "_append_detailed_analysis_section", "_append_purchase_checklist"),
-        ("notifier.py", "_append_detailed_analysis_section", "_append_system_health_lines"),
-    }
-)
+MANUAL_RENDERER_DEBT = frozenset()
 
 
 def _tracked_python_files():
@@ -72,17 +61,31 @@ class OrphanedRendererCallGraphContractTest(unittest.TestCase):
         symbol = "_append_round_trip" + "_block"
         self.assertEqual(_symbol_references(symbol), [])
 
-    def test_active_legacy_renderer_chain_stays_in_manual_debt(self):
+    def test_retired_legacy_renderer_chain_is_absent_and_diagnostic_is_migrated(self):
         from scripts.check_f821 import KNOWN_F821_DEBT
 
-        self.assertIn(
-            "_format_structured_html_message", _direct_calls("format_html_message")
-        )
-        self.assertIn(
-            "_append_detailed_analysis_section",
-            _direct_calls("_format_structured_html_message"),
-        )
-        self.assertTrue(MANUAL_RENDERER_DEBT <= KNOWN_F821_DEBT)
+        notifier_source = (ROOT / "notifier.py").read_text(encoding="utf-8")
+        notifier_tree = ast.parse(notifier_source)
+        retired = {
+            "_format_structured_html_" + "message",
+            "_append_detailed_analysis_" + "section",
+        }
+        definitions = {
+            node.name
+            for node in ast.walk(notifier_tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            and node.name in retired
+        }
+        loads = {
+            node.id
+            for node in ast.walk(notifier_tree)
+            if isinstance(node, ast.Name)
+            and isinstance(node.ctx, ast.Load)
+            and node.id in retired
+        }
+        self.assertEqual(definitions, set())
+        self.assertEqual(loads, set())
+        self.assertEqual(MANUAL_RENDERER_DEBT, frozenset())
 
         test_full = ast.parse((ROOT / "test_full.py").read_text(encoding="utf-8"))
         imports = {
@@ -91,7 +94,17 @@ class OrphanedRendererCallGraphContractTest(unittest.TestCase):
             if isinstance(node, ast.ImportFrom) and node.module == "notifier"
             for alias in node.names
         }
-        self.assertIn("format_html_message", imports)
+        self.assertTrue(
+            {
+                "build_notification_payload",
+                "render_email",
+                "render_detail_html",
+                "render_pushplus_sections",
+                "format_html_message",
+            }
+            <= imports
+        )
+        self.assertFalse(MANUAL_RENDERER_DEBT & KNOWN_F821_DEBT)
 
 
 if __name__ == "__main__":

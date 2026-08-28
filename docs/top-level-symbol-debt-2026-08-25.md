@@ -220,3 +220,12 @@
 `trend.current_position` 可构造触发 `_plain_price_position` 的 F821；因此保留为
 `needs_manual_adjudication`。另有 8 项位于仍可由 `format_html_message` 兼容入口触达的
 旧 structured renderer 链，同样保留待单独裁决。当前 F821 精确债务集合为 9 项。
+
+## 旧 HTML renderer 退役（2026-08-28）
+
+后续审计确认该链的仓内可执行上游只剩 `test_full.py` 与历史 characterization 测试，
+现行 payload 通知主链没有引用。公共入口 `format_html_message` 现保留原签名并确定性抛出
+`LegacyNotificationRendererUnavailable`；诊断脚本迁移到现行三渠道 renderer，两个私有旧
+renderer 已删除。F821 精确债务由 9 项降为 1 项，仅余
+`generate_neutral_summary::_plain_price_position`，完整调用图与源码指纹见
+`docs/f821-debt-cleanup-2026-08-26.md`。

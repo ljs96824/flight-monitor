@@ -35,12 +35,13 @@ class IsolatedNotificationHelperCleanupTest(unittest.TestCase):
                 {"current_position": "低位"},
             )
 
-    def test_remaining_debt_is_only_reachable_renderer_and_public_compatibility_debt(self):
+    def test_remaining_debt_is_only_public_compatibility_debt(self):
         from test_f821_orphaned_renderers_cleanup import MANUAL_RENDERER_DEBT
 
+        self.assertEqual(MANUAL_RENDERER_DEBT, frozenset())
         self.assertEqual(
             KNOWN_F821_DEBT,
-            MANUAL_RENDERER_DEBT | {PUBLIC_COMPATIBILITY_DEBT},
+            {PUBLIC_COMPATIBILITY_DEBT},
         )
 
 

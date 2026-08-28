@@ -17,7 +17,16 @@ from dotenv import load_dotenv
 
 from analyzer import analyze, analyze_all_flights
 from collector import _normalize_detail_flight, collect_and_classify
-from notifier import format_html_message, format_message
+from notifier import (
+    LegacyNotificationRendererUnavailable,
+    build_notification_payload,
+    format_html_message,
+    format_message,
+    render_detail_html,
+    render_email,
+    render_pushplus_sections,
+)
+from pushplus_sections import render_push_render
 from sources.aggregator import FlightAggregator, build_default_sources
 from storage import DB_PATH, init_db, save_flight_details, save_snapshots
 
@@ -170,14 +179,36 @@ def _run_all_flights(subscription: dict, route: str) -> None:
         "source_stats": data.get("source_stats", {}),
     }
     print(f"DEBUG source_stats: {data.get('source_stats', 'NOT FOUND')}")
-    message = format_html_message(
+    payload = build_notification_payload(
         analysis_result=analysis,
+        outbound_analysis=analysis,
         route_info=route_info,
+        subscription=subscription,
         source_stats=data.get("source_stats"),
         price_insights=data.get("price_insights"),
     )
-    print("\n推送消息：")
-    print(message)
+    subject, email_html = render_email(payload)
+    detail_html = render_detail_html(payload)
+    pushplus = render_pushplus_sections(payload)
+
+    print("\n邮件主题：")
+    print(subject)
+    print("\n完整邮件HTML：")
+    print(email_html)
+    print("\n网页详情HTML：")
+    print(detail_html)
+    print("\nPushPlus分节：")
+    print([section.section_id for section in pushplus.sections])
+    print(render_push_render(pushplus))
+
+
+class FullFlowRendererContractTest(unittest.TestCase):
+    def test_legacy_html_entry_is_explicitly_retired(self):
+        with self.assertRaisesRegex(
+            LegacyNotificationRendererUnavailable,
+            "render_email|render_detail_html|render_pushplus_sections",
+        ):
+            format_html_message()
 
 
 def main() -> None:

@@ -190,3 +190,49 @@ FunctionDef(build_message), Assign, If, Return
 
 它们均标记 `needs_manual_adjudication`；本批不恢复 61b9109 已删除的 helper，也不编造
 替代语义。
+
+## 2026-08-28：旧 HTML 公共入口退役裁决
+
+基线为 `af53478`。本次不是恢复 61b9109 消失的旧 helper，而是把已经无法完整执行的
+兼容入口收口为确定性退役合同。删除前的全仓扫描按可执行代码与历史文档分别统计。
+
+### 删除前调用图
+
+| 符号 | 可执行代码引用 | 动态或间接引用 | 历史文档引用 |
+|---|---|---|---|
+| `format_html_message` | `notifier.py` 定义；`test_full.py` 直接导入并调用；两份 F821 characterization 测试直接调用或检查 | 无 `getattr`、`__all__`、默认参数、注册器、回调或模板引用 | 本文、`format-comparison-message-f821-audit-2026-08-26.md`、`top-level-symbol-debt-2026-08-25.md` |
+| `_format_structured_html_message` | 仅由 `format_html_message` 三处直接调用；测试仅 `patch`/AST 检查 | 无其他动态引用 | 同上 |
+| `_append_detailed_analysis_section` | 仅由 `_format_structured_html_message` 一处直接调用；测试仅 AST 检查 | 无其他动态引用 | 同上 |
+
+现行主链
+`build_notification_payload -> render_email/render_detail_html/render_pushplus_sections`
+对三个旧符号均无引用。`test_full.py` 已迁移为直接构建 payload 并分别渲染完整邮件、
+网页详情与 PushPlus 分节；旧入口仅保留领域异常 characterization。
+
+### 退役合同与删除记录
+
+- `format_html_message` 保留原完整签名：
+  `(analysis_result=None, route_info=None, source_stats=None, price_insights=None, outbound_analysis=None, return_analysis=None, detail_level=None, enforce_pushplus_limit=True)`。
+- 调用时确定性抛出 `LegacyNotificationRendererUnavailable`，消息只给出迁移入口，
+  不插入参数、订阅、邮箱、token 或 payload 内容，也不产生发送、落盘或网络副作用。
+- 删除 `_format_structured_html_message` 与 `_append_detailed_analysis_section`；两者删除前
+  只有上述旧链上游。没有恢复 `_append_push_trend_linechart`、
+  `_append_low_option_count_notice`、`_append_price_explanation_lines`、
+  `_append_multi_window_analysis`、`_append_price_anomaly_lines`、
+  `_append_price_references`、`_append_purchase_checklist`、
+  `_append_system_health_lines`。
+- 其余 helper 未随手清理：多数与现行主链共享；未完成逐符号外部兼容审计者也不以
+  “下划线开头”为删除依据。
+
+四个现行主链函数删除前源码 SHA-256：
+
+| 函数 | SHA-256 |
+|---|---|
+| `build_notification_payload` | `90ffb6aaaa1f4ff097ef9b5c37836cf919e375c58694e890da1168b9c5582690` |
+| `render_email` | `20a5d74990e51f053658439e58dd43bc1b958fb1f51d189f54c8dce610b9bbc5` |
+| `render_detail_html` | `2dbafb52012c71315357a34a5a85138c0456e650e7897b545449322ad21f9aa1` |
+| `render_pushplus_sections` | `ff947c33193f28ca1a3d695144126afa0592f053c983e3a9229130a98047f368` |
+
+本次 F821 精确债务由 9 个 scope triple 降为 1 个，仅保留：
+`("notifier.py", "generate_neutral_summary", "_plain_price_position")`。
+该剩余项仍为 `needs_manual_adjudication`，不属于本次旧 HTML renderer 子图。

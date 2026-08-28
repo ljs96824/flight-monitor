@@ -1,12 +1,9 @@
 import ast
-import hashlib
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parent
-ACTIVE_PREFIX_SHA256 = "b3868a6da7ad7c54d5f9dc74a51a46683c9582ac78bebed7fcfea0cd4dec63eb"
 
 
 def _find_module_function(path: Path, function: str):
@@ -23,95 +20,33 @@ def _find_module_function(path: Path, function: str):
     return source, matches[0]
 
 
-def _outer_scope_yields(function_node):
-    found = []
-
-    class Visitor(ast.NodeVisitor):
-        def visit_FunctionDef(self, node):
-            if node is function_node:
-                self.generic_visit(node)
-
-        def visit_AsyncFunctionDef(self, node):
-            if node is function_node:
-                self.generic_visit(node)
-
-        def visit_ClassDef(self, node):
-            return
-
-        def visit_Lambda(self, node):
-            return
-
-        def visit_Yield(self, node):
-            found.append(node.lineno)
-
-        def visit_YieldFrom(self, node):
-            found.append(node.lineno)
-
-    Visitor().visit(function_node)
-    return found
-
-
-def assert_no_statements_after_terminal_return(
-    module="notifier.py", function="format_html_message"
-):
-    path = ROOT / module
-    source, function_node = _find_module_function(path, function)
-    direct_returns = [
-        (index, node)
-        for index, node in enumerate(function_node.body)
-        if isinstance(node, ast.Return)
-    ]
-    if not direct_returns:
-        raise AssertionError(f"{function} has no direct terminal return")
-    return_index, return_node = direct_returns[0]
-    trailing = function_node.body[return_index + 1 :]
-    if trailing:
-        locations = [f"{type(node).__name__}@{node.lineno}" for node in trailing]
-        raise AssertionError(
-            f"{function} has statements after terminal return: {locations}"
-        )
-    lines = source.splitlines(keepends=True)
-    active_prefix = "".join(lines[function_node.lineno - 1 : return_node.end_lineno])
-    return {
-        "return_is_direct_child": return_node in function_node.body,
-        "outer_yield_lines": _outer_scope_yields(function_node),
-        "active_prefix_sha256": hashlib.sha256(active_prefix.encode()).hexdigest(),
-    }
-
-
 class DeadTailStructureContractTest(unittest.TestCase):
-    def test_format_html_message_ends_at_its_unconditional_return(self):
-        evidence = assert_no_statements_after_terminal_return()
-
-        self.assertTrue(evidence["return_is_direct_child"])
-        self.assertEqual(evidence["outer_yield_lines"], [])
-        self.assertEqual(evidence["active_prefix_sha256"], ACTIVE_PREFIX_SHA256)
-
-    def test_format_html_message_keeps_short_and_long_dispatch_behavior(self):
+    def test_format_html_message_is_a_deterministic_raise_stub(self):
         import notifier
 
-        with patch(
-            "notifier._format_structured_html_message", return_value="short-message"
-        ) as renderer:
-            self.assertEqual(notifier.format_html_message(), "short-message")
-        self.assertEqual(
-            [(call.kwargs["compact"], call.kwargs["persist_snapshot"]) for call in renderer.call_args_list],
-            [(False, False), (False, True)],
+        source, function_node = _find_module_function(
+            ROOT / "notifier.py", "format_html_message"
+        )
+        statements = function_node.body
+        self.assertEqual(len(statements), 2)
+        self.assertIsInstance(statements[0], ast.Expr)
+        self.assertIsInstance(statements[1], ast.Raise)
+        self.assertIn(
+            "LegacyNotificationRendererUnavailable",
+            ast.get_source_segment(source, statements[1]),
         )
 
-        long_message = "x" * (notifier.PUSHPLUS_COMPACT_CHARS + 1)
+    def test_format_html_message_rejects_all_old_compaction_modes(self):
+        import notifier
 
-        def render_by_mode(**kwargs):
-            return "compact-message" if kwargs["compact"] else long_message
-
-        with patch(
-            "notifier._format_structured_html_message", side_effect=render_by_mode
-        ) as renderer:
-            self.assertEqual(notifier.format_html_message(), "compact-message")
-        self.assertEqual(
-            [(call.kwargs["compact"], call.kwargs["persist_snapshot"]) for call in renderer.call_args_list],
-            [(False, False), (True, True)],
-        )
+        for enforce_limit in (False, True):
+            with self.subTest(enforce_pushplus_limit=enforce_limit):
+                with self.assertRaises(notifier.LegacyNotificationRendererUnavailable):
+                    notifier.format_html_message(
+                        analysis_result={"text": "x" * 30001},
+                        detail_level="short",
+                        enforce_pushplus_limit=enforce_limit,
+                    )
 
 
 if __name__ == "__main__":
