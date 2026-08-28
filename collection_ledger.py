@@ -137,7 +137,7 @@ def _skip_reason(source_status: str, cache_status: str, explicit: str | None) ->
     return None
 
 
-def _terminal_values(
+def classify_collection_result(
     result,
     *,
     cache_status: str,
@@ -194,6 +194,9 @@ def _terminal_values(
         "cache_status": str(cache_status or ""),
         "quota_status": quota_status,
     }
+
+
+_terminal_values = classify_collection_result
 
 
 class CollectionLedgerSession:
@@ -303,7 +306,7 @@ class CollectionLedgerSession:
         if self.degraded:
             return
         try:
-            values = _terminal_values(
+            values = classify_collection_result(
                 result,
                 cache_status=cache_status,
                 reuse_kind=reuse_kind,

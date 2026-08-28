@@ -22,6 +22,7 @@ from request_cache import (
     record_planned_source_skip,
 )
 from source_profiles import source_supports_cabin
+from subscription_identity import subscription_id
 from subscription_preflight import shanghai_today
 
 
@@ -97,6 +98,39 @@ class PlannedRequest:
 
 
 @dataclass(frozen=True)
+class RequestOutcome:
+    """Per-request evidence; result is a borrowed read-only view.
+
+    Frozen fields prevent reassignment but do not freeze nested payloads. Consumers
+    must copy result before mutation.
+    """
+
+    request_key: tuple
+    source: str
+    origin: str
+    destination: str
+    depart_date: str
+    cabin_class: str
+    execution_status: str
+    cache_status: str
+    reuse_kind: str | None
+    skip_reason_code: str | None
+    error_type: str | None
+    error_code: str | None
+    quota_status: str | None
+    raw_result_count: int
+    valid_result_count: int
+    route_type: str
+    cohort_id: str | None
+    sample_role: str
+    consumers: tuple[str, ...]
+    groups: tuple[str, ...]
+    reasons: tuple[str, ...]
+    # Borrowed read-only view of CollectionPlan._results. Copy before mutation.
+    result: object = field(repr=False, compare=False)
+
+
+@dataclass(frozen=True)
 class PlanExecutionReport:
     actual_requests: int
     retries: int
@@ -105,6 +139,7 @@ class PlanExecutionReport:
     source_skips: int
     conditional_skipped: int
     ledger_degraded: bool = False
+    outcomes: tuple[RequestOutcome, ...] = ()
 
 
 _SAMPLE_ROLE_PRIORITY = {
@@ -128,6 +163,54 @@ def _positive_flights(result) -> list[dict]:
         except (TypeError, ValueError):
             continue
     return flights
+
+
+def _build_request_outcome(
+    request: PlannedRequest,
+    result,
+    *,
+    cache_status,
+    reuse_kind=None,
+    skip_reason_code=None,
+) -> RequestOutcome:
+    from collection_ledger import classify_collection_result
+
+    classified = classify_collection_result(
+        result,
+        cache_status=cache_status,
+        reuse_kind=reuse_kind,
+        skip_reason_code=skip_reason_code,
+    )
+    return RequestOutcome(
+        request_key=request.key,
+        source=str(
+            getattr(request.source, "name", type(request.source).__name__)
+        ).lower(),
+        origin=request.origin,
+        destination=request.dest,
+        depart_date=request.date_str,
+        cabin_class=request.cabin_class,
+        execution_status=classified["execution_status"],
+        cache_status=classified["cache_status"],
+        reuse_kind=classified["reuse_kind"],
+        skip_reason_code=classified["skip_reason_code"],
+        error_type=classified["error_type"],
+        error_code=classified["error_code"],
+        quota_status=classified["quota_status"],
+        raw_result_count=classified["raw_result_count"],
+        valid_result_count=classified["valid_result_count"],
+        route_type=str(
+            request.route_type
+            or getattr(request.source, "route_type", None)
+            or "unknown"
+        ),
+        cohort_id=request.cohort_id,
+        sample_role=request.sample_role,
+        consumers=tuple(sorted(request.consumers)),
+        groups=tuple(sorted(request.groups)),
+        reasons=tuple(sorted(request.reasons)),
+        result=result,
+    )
 
 
 class CollectionPlan:
@@ -380,6 +463,7 @@ class CollectionPlan:
 
         before = get_request_cache_stats()
         conditional_skipped = 0
+        outcomes_by_key: dict[tuple, RequestOutcome] = {}
 
         ordered = list(self._requests.values())
         round_id, db_path = get_current_round()
@@ -409,6 +493,12 @@ class CollectionPlan:
                         cache_status="skipped",
                         skip_reason_code="quota",
                     )
+                outcomes_by_key[request.key] = _build_request_outcome(
+                    request,
+                    result,
+                    cache_status="skipped",
+                    skip_reason_code="quota",
+                )
                 return result
             if ledger:
                 ledger.start(request)
@@ -439,6 +529,12 @@ class CollectionPlan:
                     cache_status=cache_status,
                     reuse_kind=reuse_kind,
                 )
+            outcomes_by_key[request.key] = _build_request_outcome(
+                request,
+                result,
+                cache_status=cache_status,
+                reuse_kind=reuse_kind,
+            )
             return result
 
         try:
@@ -472,17 +568,25 @@ class CollectionPlan:
                         f"{prefix} 原因=无列表候选 类型={reason_label} "
                         f"航线={request.origin}->{request.dest} 日期={request.date_str}"
                     )
+                    result = {
+                        "flights": [],
+                        "source_status": "skipped_conditional",
+                        "skipped_reason": "无列表候选",
+                    }
                     if ledger:
                         ledger.finish(
                             request,
-                            {
-                                "flights": [],
-                                "source_status": "skipped_conditional",
-                                "skipped_reason": "无列表候选",
-                            },
+                            result,
                             cache_status="skipped",
                             skip_reason_code="conditional",
                         )
+                    self._results[request.key] = result
+                    outcomes_by_key[request.key] = _build_request_outcome(
+                        request,
+                        result,
+                        cache_status="skipped",
+                        skip_reason_code="conditional",
+                    )
                     continue
                 self._results[request.key] = execute_request(request)
         finally:
@@ -490,6 +594,10 @@ class CollectionPlan:
                 ledger.finalize()
 
         after = get_request_cache_stats()
+        ordered_outcomes = tuple(
+            outcomes_by_key[request.key]
+            for request in ordered
+        )
         report = PlanExecutionReport(
             actual_requests=int(after.get("actual", 0)) - int(before.get("actual", 0)),
             retries=int(after.get("retries", 0)) - int(before.get("retries", 0)),
@@ -499,6 +607,7 @@ class CollectionPlan:
             source_skips=int(after.get("skipped", 0)) - int(before.get("skipped", 0)),
             conditional_skipped=conditional_skipped,
             ledger_degraded=bool(ledger and ledger.degraded),
+            outcomes=ordered_outcomes,
         )
         accounted = (
             report.actual_requests
@@ -606,6 +715,16 @@ def _calendar_dates(target_date: str, origin: str, dest: str, cache_hours: int =
 
 def _source_name(source) -> str:
     return str(getattr(source, "name", type(source).__name__)).lower()
+
+
+def _subscription_consumer_ref(subscription: dict, index: int) -> str:
+    stable_id = subscription_id(subscription)
+    if stable_id:
+        return f"subscription:{stable_id}"
+    legacy_index = subscription.get("_index")
+    if legacy_index in (None, ""):
+        legacy_index = index
+    return f"subscription-legacy:{legacy_index}"
 
 
 def _add_direction_requests(
@@ -756,7 +875,7 @@ def build_collection_plan(
             continue
         cabins = _cabin_classes(subscription)
         passengers = _passengers(subscription)
-        consumer = str(subscription.get("_index", subscription.get("id", index)))
+        consumer = _subscription_consumer_ref(subscription, index)
         domestic_calendar = bool(include_calendars and route_type == "domestic")
         _add_direction_requests(
             plan,
@@ -831,6 +950,12 @@ def build_collection_plan(
         if required:
             search_sources = [source for source in search_sources if _source_name(source) in required]
         for source in search_sources:
+            cohort_id = str(item.get("cohort_id") or "").strip()
+            consumer = (
+                f"research:{cohort_id}"
+                if cohort_id
+                else f"basket:legacy-{index}"
+            )
             plan.add_request(
                 source,
                 origin,
@@ -839,7 +964,7 @@ def build_collection_plan(
                 {"adult": 1},
                 cabin_class,
                 force_fresh=True,
-                consumer=f"basket:{item.get('queue', index)}",
+                consumer=consumer,
                 reason="固定篮子",
                 route_type=str(route_type or "unknown"),
                 cohort_id=item.get("cohort_id"),
