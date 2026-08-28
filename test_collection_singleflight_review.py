@@ -316,7 +316,7 @@ class CollectionBusySideEffectContractTest(unittest.TestCase):
                     return_value=self._busy_gate(),
                 ),
                 patch("basket_collect.load_or_create_state", effects["state_read"]),
-                patch("basket_collect._write_state", effects["state_write"]),
+                patch("basket_collect._persist_state", effects["state_write"]),
                 patch("basket_collect.start_request_cache_round", effects["request_round"]),
                 patch("basket_collect.activate_collection_plan", effects["activate_plan"]),
                 patch("basket_collect.set_current_round", effects["round_context"]),

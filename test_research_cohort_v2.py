@@ -846,7 +846,93 @@ subscriptions: []
                 for anchor in state["research_cohort_v2"]["anchors"].values()
             )
         )
-        self.assertIn("研究进度未推进", output.getvalue())
+
+    def test_operator_disable_wins_over_stale_collection_progress_writeback(self):
+        from api_usage import initialize_usage_ledger
+        from basket_collect import run_basket
+        from research_cohort import apply_research_round_outcomes
+        from scripts.research_control import disable_research
+        from test_basket_collect import FakeAggregator, fake_source_builder
+
+        settings = {
+            "source_quota_budget": {"juhe": 550},
+            "source_quota_low_remaining_threshold": 50,
+            "freshness_hours": 6,
+            "sub_round_fresh_scope": "primary_only",
+            "research_basket_enabled": True,
+            "research_basket_strategy": "cohort_v2",
+            "research_cohort_v2_gates": {"backup_evidence_max_age_days": 30},
+            "paused_research_routes": [],
+        }
+        ready = {
+            "timestamp_ready": True,
+            "lineage_ready": True,
+            "old_data_readable": True,
+        }
+        quota = {
+            "complete": True,
+            "expected_days_remaining": 30,
+            "worst_case_days_remaining": 20,
+            "remaining_after_research": 500,
+            "monitoring_reserve": 400,
+            "quota_remaining": 500,
+            "research_available": 100,
+        }
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root = Path(tmp)
+            state_path = root / "basket_state.json"
+            initialize_usage_ledger(root / "api_usage.json")
+
+            def apply_then_disable(state, **kwargs):
+                outcomes = apply_research_round_outcomes(state, **kwargs)
+                disable_research(
+                    state_path,
+                    reason="operator pause during collection",
+                    now="2026-08-28T09:31:00+08:00",
+                )
+                return outcomes
+
+            output = StringIO()
+            with (
+                patch("basket_collect.load_collection_settings", return_value=settings),
+                patch("basket_collect._load_active_subscriptions_for_research", return_value=[]),
+                patch("basket_collect.inspect_research_migrations", return_value=ready),
+                patch(
+                    "basket_collect.load_backup_evidence",
+                    return_value=_ready_backup_evidence(),
+                ),
+                patch("basket_collect._simulate_runtime_quota", return_value=quota),
+                patch(
+                    "basket_collect.apply_research_round_outcomes",
+                    side_effect=apply_then_disable,
+                ),
+                patch("basket_collect.count_observations_for_round", return_value=6),
+                redirect_stdout(output),
+            ):
+                summary = run_basket(
+                    today=date(2026, 8, 28),
+                    state_path=state_path,
+                    db_path=root / "observations.sqlite3",
+                    usage_path=root / "api_usage.json",
+                    source_builder=fake_source_builder,
+                    aggregator_factory=FakeAggregator,
+                    singleflight_lock_path=root / "collection.lock",
+                )
+            persisted = json.loads(state_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(summary["status"], "partial")
+        self.assertTrue(summary["research_state_conflict"])
+        self.assertFalse(summary["research_progress_applied"])
+        self.assertFalse(persisted["research_cohort_v2"]["runtime_enabled"])
+        self.assertTrue(
+            all(
+                probe["probe_valid_n"] == 0
+                for probe in persisted["research_cohort_v2"]["probes"].values()
+            )
+        )
+        self.assertIn("[研究状态冲突]", output.getvalue())
+        self.assertIn("本轮研究进度不推进", output.getvalue())
 
     def test_enabled_basket_with_missing_gate_makes_no_source_call(self):
         from basket_collect import run_basket

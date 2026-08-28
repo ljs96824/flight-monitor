@@ -11,9 +11,14 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from atomic_json_store import JsonStoreReadError, read_json, update_json  # noqa: E402
+from atomic_json_store import JsonStoreReadError  # noqa: E402
 from config_loader import DEFAULT_CONFIG_PATH, RUNTIME_CONFIG_PATH  # noqa: E402
 from project_time import SHANGHAI_TZ  # noqa: E402
+from research_state_store import (  # noqa: E402
+    ResearchStateConflict,
+    load_research_state,
+    update_research_state,
+)
 from scripts.research_quota_simulation import build_report  # noqa: E402
 from subscription_preflight import shanghai_today  # noqa: E402
 
@@ -29,10 +34,7 @@ def _load_state(path: str | Path) -> dict:
     target = Path(path)
     if not target.exists():
         return {}
-    payload = read_json(target)
-    if not isinstance(payload, dict):
-        raise JsonStoreReadError(f"研究运行态根节点不是对象: {target}")
-    return payload
+    return load_research_state(target)
 
 
 def _cohort_for_update(payload, *, state_path: Path) -> tuple[dict, dict]:
@@ -46,6 +48,16 @@ def _cohort_for_update(payload, *, state_path: Path) -> tuple[dict, dict]:
             f"research_cohort_v2不是对象: {state_path}"
         )
     return payload, cohort
+
+
+def _update_control_state(target: Path, mutator, *, attempts: int = 5) -> dict:
+    for _attempt in range(attempts):
+        current = load_research_state(target)
+        try:
+            return update_research_state(target, current["revision"], mutator)
+        except ResearchStateConflict:
+            continue
+    raise ResearchStateConflict(f"研究运行态连续{attempts}次发生并发冲突: {target}")
 
 
 def runtime_control_status(state_path: str | Path, readiness_report: dict) -> dict:
@@ -95,7 +107,7 @@ def disable_research(
         }
         return payload
 
-    update_json(target, mutate)
+    _update_control_state(target, mutate)
     return {
         "status": "disabled",
         "runtime_enabled": False,
@@ -148,7 +160,7 @@ def enable_research(
         }
         return payload
 
-    update_json(target, mutate)
+    _update_control_state(target, mutate)
     return {
         "status": "enabled",
         "runtime_enabled": True,

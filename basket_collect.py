@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 from copy import deepcopy
-import json
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Callable
@@ -45,6 +44,12 @@ from research_cohort import (
     prepare_research_requests,
     research_runtime_enabled,
     simulate_research_quota,
+)
+from research_state_store import (
+    ResearchStateConflict,
+    initialize_research_state,
+    load_research_state,
+    update_research_state,
 )
 from source_profiles import retired_listing_sources
 from sources.aggregator import FlightAggregator, build_default_sources
@@ -101,7 +106,8 @@ def _initial_queue_a(route: dict, today: date) -> str:
 def build_initial_state(today: date) -> dict:
     queue_b = (today + timedelta(days=60)).isoformat()
     return {
-        "version": 1,
+        "version": 2,
+        "revision": 0,
         "created_on": today.isoformat(),
         "routes": {
             _route_name(route): {
@@ -113,29 +119,20 @@ def build_initial_state(today: date) -> dict:
     }
 
 
-def _write_state(path: Path, state: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(path.suffix + ".tmp")
-    temp_path.write_text(
-        json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
-    temp_path.replace(path)
-
-
 def load_or_create_state(state_path: str | Path, today: date) -> dict:
     path = Path(state_path)
     if path.exists():
-        try:
-            state = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise RuntimeError(f"篮子状态文件不可读: {path}: {exc}") from exc
+        state = load_research_state(path)
         if not isinstance(state.get("routes"), dict):
             raise RuntimeError(f"篮子状态文件缺少routes: {path}")
         return state
     state = build_initial_state(today)
-    _write_state(path, state)
-    return state
+    return initialize_research_state(path, state)
+
+
+def _persist_state(path: Path, state: dict, expected_revision: int) -> dict:
+    snapshot = deepcopy(state)
+    return update_research_state(path, expected_revision, lambda _current: snapshot)
 
 
 def renew_expired_queues(state: dict, today: date) -> list[dict]:
@@ -603,6 +600,7 @@ def _run_basket_locked(
         require_runtime=True,
     )
     state = load_or_create_state(state_path, today)
+    state_revision = int(state["revision"])
     research_strategy = str(settings.get("research_basket_strategy") or "cohort_v2")
     cohort_enabled = (
         research_runtime_enabled(state, True)
@@ -623,50 +621,68 @@ def _run_basket_locked(
             "failed": 0,
             "written": 0,
         }
-    if cohort_enabled:
-        notifier = quota_guard_notifier or (
-            lambda title, content: _default_quota_guard_notifier(
-                state_path, title, content
+    try:
+        if cohort_enabled:
+            notifier = quota_guard_notifier or (
+                lambda title, content: _default_quota_guard_notifier(
+                    state_path, title, content
+                )
             )
-        )
-        state, basket_requests, research_gate, quota = _prepare_research_basket(
-            state,
-            today=today,
-            state_path=state_path,
-            db_path=db_path,
-            usage_path=usage_path,
-            settings=settings,
-            source_builder=source_builder,
-            quota_guard_notifier=notifier,
-        )
-        if not research_gate["ready"]:
-            if quota.get("guard_triggered"):
-                _write_state(Path(state_path), state)
-            safe_log("[篮子跳过] 原因=研究采样硬门未通过")
-            if round_archive_started:
-                try:
-                    end_round_log_archive(status="blocked")
-                except Exception as exc:
-                    safe_log(
-                        f"[轮档失败] round_id={round_id} "
-                        f"关闭失败={type(exc).__name__}:{exc}"
-                    )
-            return {
-                "status": "blocked",
-                "reason": "research_hard_gate",
-                "user_monitoring_enabled": True,
-                "round_id": round_id,
-                "queues": 0,
-                "success": 0,
-                "failed": 0,
-                "written": 0,
-            }
-        _write_state(Path(state_path), state)
-    else:
-        safe_log("[研究篮子] strategy=legacy 明示启用legacy策略")
-        if renew_expired_queues(state, today):
-            _write_state(Path(state_path), state)
-        basket_requests = _basket_requests(state)
+            state, basket_requests, research_gate, quota = _prepare_research_basket(
+                state,
+                today=today,
+                state_path=state_path,
+                db_path=db_path,
+                usage_path=usage_path,
+                settings=settings,
+                source_builder=source_builder,
+                quota_guard_notifier=notifier,
+            )
+            if not research_gate["ready"]:
+                if quota.get("guard_triggered"):
+                    state = _persist_state(Path(state_path), state, state_revision)
+                    state_revision = int(state["revision"])
+                safe_log("[篮子跳过] 原因=研究采样硬门未通过")
+                if round_archive_started:
+                    try:
+                        end_round_log_archive(status="blocked")
+                    except Exception as exc:
+                        safe_log(
+                            f"[轮档失败] round_id={round_id} "
+                            f"关闭失败={type(exc).__name__}:{exc}"
+                        )
+                return {
+                    "status": "blocked",
+                    "reason": "research_hard_gate",
+                    "user_monitoring_enabled": True,
+                    "round_id": round_id,
+                    "queues": 0,
+                    "success": 0,
+                    "failed": 0,
+                    "written": 0,
+                }
+            state = _persist_state(Path(state_path), state, state_revision)
+            state_revision = int(state["revision"])
+        else:
+            safe_log("[研究篮子] strategy=legacy 明示启用legacy策略")
+            if renew_expired_queues(state, today):
+                state = _persist_state(Path(state_path), state, state_revision)
+                state_revision = int(state["revision"])
+            basket_requests = _basket_requests(state)
+    except ResearchStateConflict as exc:
+        safe_log(f"[研究状态冲突] round={round_id} {exc} 本轮研究进度不推进")
+        if round_archive_started:
+            end_round_log_archive(status="blocked")
+        return {
+            "status": "blocked",
+            "reason": "research_state_conflict",
+            "user_monitoring_enabled": True,
+            "round_id": round_id,
+            "queues": 0,
+            "success": 0,
+            "failed": 0,
+            "written": 0,
+        }
 
     reset_request_cache()
     round_context_tokens = None
@@ -686,6 +702,7 @@ def _run_basket_locked(
     plan_active = False
     execution_report = None
     ledger_degraded = False
+    research_state_conflict = False
     research_progress_applied = False
     try:
         round_context_tokens = set_current_round(round_id, db_path=db_path)
@@ -722,7 +739,14 @@ def _run_basket_locked(
                 today=today,
                 actual_requests=execution_report.actual_requests,
             )
-            _write_state(Path(state_path), state)
+            try:
+                state = _persist_state(Path(state_path), state, state_revision)
+                state_revision = int(state["revision"])
+            except ResearchStateConflict as exc:
+                research_state_conflict = True
+                safe_log(
+                    f"[研究状态冲突] round={round_id} {exc} 本轮研究进度不推进"
+                )
             safe_log(
                 f"[研究采样告警] round={round_id} collection ledger降级,"
                 f"研究进度未推进 实际请求={execution_report.actual_requests}"
@@ -735,8 +759,15 @@ def _run_basket_locked(
                 today=today,
                 db_path=db_path,
             )
-            research_progress_applied = True
-            _write_state(Path(state_path), state)
+            try:
+                state = _persist_state(Path(state_path), state, state_revision)
+                state_revision = int(state["revision"])
+                research_progress_applied = True
+            except ResearchStateConflict as exc:
+                research_state_conflict = True
+                safe_log(
+                    f"[研究状态冲突] round={round_id} {exc} 本轮研究进度不推进"
+                )
             for outcome in outcomes:
                 safe_log(
                     f"[研究采样结果] slot={outcome['slot']} state={outcome['state']}"
@@ -817,7 +848,11 @@ def _run_basket_locked(
         if plan_active:
             deactivate_collection_plan()
 
-        round_status = "ok" if failed == 0 and not ledger_degraded else "partial"
+        round_status = (
+            "ok"
+            if failed == 0 and not ledger_degraded and not research_state_conflict
+            else "partial"
+        )
         safe_log(f"[篮子完成] 队列={queues} 成功={success} 失败={failed} 总写入={written}")
         log_retention_dry_run(BASE_DIR, config_path=CONFIG_PATH)
         if round_archive_started:
@@ -839,6 +874,7 @@ def _run_basket_locked(
                 "status": round_status,
                 "ledger_degraded": ledger_degraded,
                 "research_progress_applied": research_progress_applied,
+                "research_state_conflict": research_state_conflict,
                 "plan_actual_requests": (
                     int(execution_report.actual_requests)
                     if execution_report is not None

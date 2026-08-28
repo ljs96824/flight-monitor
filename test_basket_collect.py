@@ -120,6 +120,20 @@ class BasketCollectTest(unittest.TestCase):
         self.assertEqual(first["routes"]["PVG->HKG"], {"A": "2026-08-24", "B": "2026-09-08"})
         self.assertEqual(first["routes"]["PVG->KIX"], {"A": "2026-10-01", "B": "2026-09-08"})
 
+    def test_corrupt_state_fails_closed_without_overwriting_bytes(self):
+        from atomic_json_store import JsonStoreReadError
+        from basket_collect import load_or_create_state
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            state_path = Path(tmp) / "basket_state.json"
+            state_path.write_bytes(b'{"research_cohort_v2":')
+            before = state_path.read_bytes()
+            with self.assertRaises(JsonStoreReadError):
+                load_or_create_state(state_path, date(2026, 8, 28))
+            after = state_path.read_bytes()
+
+        self.assertEqual(before, after)
+
     def test_expired_queue_is_renewed_to_today_plus_60(self):
         from basket_collect import renew_expired_queues
 
