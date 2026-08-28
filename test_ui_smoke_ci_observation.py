@@ -110,6 +110,21 @@ class UiSmokeCiObservationContractTest(unittest.TestCase):
         self.assertEqual([item for item in required if item not in text], [])
         self.assertIn("浏览器安装、启动、端口或日期时区", text)
 
+    def test_contributing_documents_smoke_route_coverage_boundary(self):
+        text = CONTRIBUTING.read_text(encoding="utf-8")
+        required = (
+            "完整 `web_form.app`",
+            "`/settings`",
+            "`/price_hint`",
+            "`/feedback`",
+            "`/subscriptions`",
+            "删除确认",
+            "暂停",
+            "smoke 绿不等于 Web 全绿",
+            "扩展 smoke 驱动",
+        )
+        self.assertEqual([item for item in required if item not in text], [])
+
 
 if __name__ == "__main__":
     unittest.main()
