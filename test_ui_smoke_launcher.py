@@ -100,6 +100,31 @@ class BrowserDiscoveryTest(unittest.TestCase):
         self.assertIn("chromium-browser", posix_names)
 
 
+class BrowserLaunchContractTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.smoke = _load_smoke_module()
+
+    def test_playwright_chromium_on_linux_disables_unavailable_runner_sandbox(self):
+        command = self.smoke._browser_command(
+            Path("/tmp/chromium"),
+            cdp_port=9222,
+            profile_dir=Path("/tmp/profile"),
+            base_url="http://127.0.0.1:5001",
+            platform_name="linux",
+        )
+        self.assertIn("--no-sandbox", command)
+
+        windows = self.smoke._browser_command(
+            Path("browser.exe"),
+            cdp_port=9222,
+            profile_dir=Path("profile"),
+            base_url="http://127.0.0.1:5001",
+            platform_name="win32",
+        )
+        self.assertNotIn("--no-sandbox", windows)
+
+
 class UiSmokeArtifactContractTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

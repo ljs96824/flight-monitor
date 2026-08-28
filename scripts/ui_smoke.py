@@ -122,6 +122,29 @@ def _node_path() -> str:
     return node
 
 
+def _browser_command(
+    browser: Path,
+    *,
+    cdp_port: int,
+    profile_dir: Path,
+    base_url: str,
+    platform_name: str | None = None,
+) -> list[str]:
+    command = [
+        str(browser),
+        "--headless=new",
+        "--disable-gpu",
+        "--no-first-run",
+        "--no-default-browser-check",
+        f"--remote-debugging-port={cdp_port}",
+        f"--user-data-dir={profile_dir}",
+        base_url + "/",
+    ]
+    if (platform_name or sys.platform).startswith("linux"):
+        command.insert(2, "--no-sandbox")
+    return command
+
+
 def _serve(port: int, data_dir: Path) -> None:
     sys.path.insert(0, str(ROOT))
     import web_form
@@ -199,16 +222,12 @@ def run_smoke(*, log_path: Path | None = None, artifact_dir: Path | None = None)
         try:
             _wait_http(base_url + "/")
             edge_process = subprocess.Popen(
-                [
-                    str(browser),
-                    "--headless=new",
-                    "--disable-gpu",
-                    "--no-first-run",
-                    "--no-default-browser-check",
-                    f"--remote-debugging-port={cdp_port}",
-                    f"--user-data-dir={tmp / 'browser-profile'}",
-                    base_url + "/",
-                ],
+                _browser_command(
+                    browser,
+                    cdp_port=cdp_port,
+                    profile_dir=tmp / "browser-profile",
+                    base_url=base_url,
+                ),
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
