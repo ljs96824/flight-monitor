@@ -755,6 +755,10 @@ subscriptions: []
         self.assertTrue(all(call[0] == "juhe" and call[1:3] == ("PVG", "KIX") for call in FakeSource.calls))
         self.assertIn("research_cohort_v2", state)
         self.assertIn("[研究采样] 已暂停 route=SHA->PEK", output.getvalue())
+        self.assertIn(
+            "[篮子结果复用] queues=6 outcome_reads=6 second_cache_reads=0",
+            output.getvalue(),
+        )
 
     def test_ledger_degraded_round_keeps_api_usage_but_freezes_research_progress(self):
         from api_usage import initialize_usage_ledger, load_usage_strict, usage_snapshot
