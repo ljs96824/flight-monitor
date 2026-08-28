@@ -30,10 +30,25 @@ class FakeAggregator:
         self.search_sources = search_sources
         self.enrichment_sources = enrichment_sources
         self.route_type = route_type
+        self.last_outcome_reads = 0
         self.__class__.instances.append(self)
 
     def collect(self, origin, dest, depart_date, **kwargs):
-        self.__class__.collect_calls.append((origin, dest, depart_date, kwargs))
+        raise AssertionError("basket must consume PlanExecutionReport.outcomes")
+
+    def collect_from_outcomes(self, origin, dest, depart_date, outcomes, **kwargs):
+        cabin_classes = set(kwargs.get("cabin_classes") or ("economy",))
+        self.last_outcome_reads = sum(
+            1
+            for outcome in outcomes
+            if outcome.origin == origin
+            and outcome.destination == dest
+            and outcome.depart_date == depart_date
+            and outcome.cabin_class in cabin_classes
+        )
+        self.__class__.collect_calls.append(
+            (origin, dest, depart_date, tuple(outcomes), kwargs)
+        )
         if (origin, dest) == ("PVG", "HKG"):
             raise RuntimeError("provider unavailable")
         return {"flights": [{"flight_combo": "TEST1", "price": 100}]}
@@ -89,6 +104,21 @@ def fresh_source_builder(origin, dest, route_type=None):
     return [FreshObservationSource(name) for name in names], [FreshObservationSource("duffel")]
 
 
+class EmptyObservationSource:
+    calls = []
+
+    def __init__(self, name):
+        self.name = name
+
+    def fetch(self, origin, dest, date_str, cabin_class="economy"):
+        self.__class__.calls.append((self.name, origin, dest, date_str, cabin_class))
+        return {"source_status": "empty", "flights": []}
+
+
+def empty_source_builder(origin, dest, route_type=None):
+    return [EmptyObservationSource("juhe")], []
+
+
 class BasketCollectTest(unittest.TestCase):
     def setUp(self):
         from request_cache import reset_for_tests
@@ -100,6 +130,7 @@ class BasketCollectTest(unittest.TestCase):
         FakeAggregator.collect_calls.clear()
         FakeSource.calls.clear()
         FreshObservationSource.calls.clear()
+        EmptyObservationSource.calls.clear()
 
     def _cleanup_request_cache(self):
         from request_cache import reset_for_tests
@@ -188,7 +219,14 @@ class BasketCollectTest(unittest.TestCase):
                     )
 
         self.assertEqual(summary, {"round_id": "basket_20260710T093000", "queues": 6, "success": 4, "failed": 2, "written": 123})
-        self.assertTrue(all(call[3]["force_fresh"] is False for call in FakeAggregator.collect_calls))
+        self.assertEqual(len(FakeAggregator.collect_calls), 6)
+        self.assertTrue(
+            all(
+                outcome.consumers
+                for call in FakeAggregator.collect_calls
+                for outcome in call[3]
+            )
+        )
         self.assertEqual(len(FakeSource.calls), 10)
         self.assertTrue(all(instance.enrichment_sources == [] for instance in FakeAggregator.instances))
         self.assertEqual(
@@ -198,6 +236,11 @@ class BasketCollectTest(unittest.TestCase):
         log = output.getvalue()
         self.assertIn("strategy=legacy 明示启用legacy策略", log)
         self.assertEqual(log.count("[篮子失败] route=PVG->HKG"), 2)
+        self.assertIn(
+            "[篮子结果复用] queues=6 outcome_reads=10 second_cache_reads=0",
+            log,
+        )
+        self.assertIn("本轮总调用=10, 缓存命中=0", log)
         self.assertIn("[篮子完成] 队列=6 成功=4 失败=2 总写入=123", log)
 
     def test_real_aggregator_writes_each_fresh_source_without_duffel(self):
@@ -252,6 +295,129 @@ class BasketCollectTest(unittest.TestCase):
         self.assertEqual(sum(1 for call in FreshObservationSource.calls if call[0] == "duffel"), 0)
         self.assertIn("[采集计划] 唯一请求=10", output.getvalue())
         self.assertIn("[篮子完成] 队列=6 成功=6 失败=0 总写入=10", output.getvalue())
+
+    def test_shared_physical_request_is_replayed_for_each_legacy_consumer(self):
+        from api_usage import initialize_usage_ledger
+        from basket_collect import run_basket
+
+        settings = {
+            "source_quota_budget": {"juhe": 550},
+            "source_quota_low_remaining_threshold": 50,
+            "freshness_hours": 6,
+            "sub_round_fresh_scope": "primary_only",
+            "research_basket_enabled": True,
+            "research_basket_strategy": "legacy",
+            "research_cohort_v2_gates": {},
+            "paused_research_routes": [],
+        }
+        duplicate_requests = [
+            {
+                "origin": "SHA",
+                "dest": "PEK",
+                "depart_date": "2026-09-08",
+                "route_type": "domestic",
+                "sources": ("juhe",),
+                "queue": f"SHA->PEK:{queue}",
+                "cabin_class": "economy",
+            }
+            for queue in ("A", "B")
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            initialize_usage_ledger(root / "api_usage.json")
+            output = StringIO()
+            with (
+                patch("basket_collect.load_collection_settings", return_value=settings),
+                patch("basket_collect._basket_requests", return_value=duplicate_requests),
+                patch("basket_collect.count_observations_for_round", return_value=1),
+            ):
+                with redirect_stdout(output):
+                    summary = run_basket(
+                        today=date(2026, 7, 10),
+                        now=datetime(2026, 7, 10, 9, 30, 0),
+                        state_path=root / "basket_state.json",
+                        db_path=root / "observations.sqlite3",
+                        usage_path=root / "api_usage.json",
+                        source_builder=fake_source_builder,
+                        aggregator_factory=FakeAggregator,
+                        singleflight_lock_path=root / "collection.lock",
+                    )
+
+        self.assertEqual(summary["queues"], 2)
+        self.assertEqual(summary["success"], 2)
+        self.assertEqual(summary["failed"], 0)
+        self.assertEqual(len(FakeSource.calls), 1)
+        self.assertEqual(len(FakeAggregator.collect_calls), 2)
+        first_outcome = FakeAggregator.collect_calls[0][3][0]
+        second_outcome = FakeAggregator.collect_calls[1][3][0]
+        self.assertIs(first_outcome, second_outcome)
+        self.assertEqual(
+            first_outcome.consumers,
+            ("basket:legacy-0", "basket:legacy-1"),
+        )
+        log = output.getvalue()
+        self.assertIn(
+            "[篮子结果复用] queues=2 outcome_reads=2 second_cache_reads=0",
+            log,
+        )
+        self.assertIn("本轮总调用=1, 缓存命中=0", log)
+
+    def test_empty_outcome_keeps_queue_failed_without_a_second_cache_read(self):
+        from api_usage import initialize_usage_ledger
+        from basket_collect import run_basket
+        from sources.aggregator import FlightAggregator
+
+        settings = {
+            "source_quota_budget": {"juhe": 550},
+            "source_quota_low_remaining_threshold": 50,
+            "freshness_hours": 6,
+            "sub_round_fresh_scope": "primary_only",
+            "research_basket_enabled": True,
+            "research_basket_strategy": "legacy",
+            "research_cohort_v2_gates": {},
+            "paused_research_routes": [],
+        }
+        request = {
+            "origin": "SHA",
+            "dest": "PEK",
+            "depart_date": "2026-09-08",
+            "route_type": "domestic",
+            "sources": ("juhe",),
+            "queue": "SHA->PEK:A",
+            "cabin_class": "economy",
+        }
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root = Path(tmp)
+            initialize_usage_ledger(root / "api_usage.json")
+            output = StringIO()
+            with (
+                patch("basket_collect.load_collection_settings", return_value=settings),
+                patch("basket_collect._basket_requests", return_value=[request]),
+                patch("basket_collect.count_observations_for_round", return_value=0),
+            ):
+                with redirect_stdout(output):
+                    summary = run_basket(
+                        today=date(2026, 7, 10),
+                        now=datetime(2026, 7, 10, 9, 30, 0),
+                        state_path=root / "basket_state.json",
+                        db_path=root / "observations.sqlite3",
+                        usage_path=root / "api_usage.json",
+                        source_builder=empty_source_builder,
+                        aggregator_factory=FlightAggregator,
+                        singleflight_lock_path=root / "collection.lock",
+                    )
+
+        self.assertEqual(summary["queues"], 1)
+        self.assertEqual(summary["success"], 0)
+        self.assertEqual(summary["failed"], 1)
+        self.assertEqual(len(EmptyObservationSource.calls), 1)
+        log = output.getvalue()
+        self.assertIn(
+            "[篮子结果复用] queues=1 outcome_reads=1 second_cache_reads=0",
+            log,
+        )
+        self.assertIn("本轮总调用=1, 缓存命中=0", log)
+        self.assertIn("原因=未返回有效航班", log)
 
 
 if __name__ == "__main__":

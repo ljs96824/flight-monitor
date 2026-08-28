@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import re
@@ -15,7 +16,7 @@ from source_profiles import (
     normalize_route_type,
     source_supports_cabin,
 )
-from request_cache import cached_fetch
+from request_cache import cache_key, cached_fetch
 from sources.base import FlightSource
 
 OPTIONAL_SOURCE_THRESHOLD = 8
@@ -69,6 +70,40 @@ GREATER_CHINA_AIRPORTS = {
     "MZG",
     "KNH",
 }
+
+
+class MissingRequestOutcome(RuntimeError):
+    """Raised when an outcomes replay lacks the exact planned request."""
+
+
+class DuplicateRequestOutcome(ValueError):
+    """Raised when outcomes contain the same request key more than once."""
+
+
+class InvalidRequestOutcomeStatus(ValueError):
+    """Raised when replay receives a non-terminal request outcome."""
+
+
+def _aggregator_replay_cache_status(outcome) -> str:
+    """Return the status a second in-round cache read would have observed.
+
+    This does not redefine the collection terminal state. The factual state
+    remains RequestOutcome.execution_status; this mapping only preserves the
+    legacy aggregator replay view after removing its second cache read.
+    """
+
+    status = str(getattr(outcome, "execution_status", "") or "")
+    if status in {"success", "reused"}:
+        return "cache"
+    if status == "empty":
+        return "round_empty"
+    if status == "failed":
+        return "round_failed"
+    if status == "skipped":
+        return "skipped"
+    raise InvalidRequestOutcomeStatus(
+        f"unsupported RequestOutcome execution_status={status!r}"
+    )
 
 
 
@@ -698,6 +733,7 @@ class FlightAggregator:
         self.route_type = normalize_route_type(route_type)
         self.last_request_cache_status = None
         self.last_source_errors: list[dict] = []
+        self.last_outcome_reads = 0
 
     def collect(
         self,
@@ -710,6 +746,137 @@ class FlightAggregator:
         passengers: dict | None = None,
         force_fresh: bool = False,
         request_reason: str | None = None,
+    ) -> dict | None:
+        self.last_outcome_reads = 0
+
+        def resolve_source_result(source, cabin_class, *, include_cache_status):
+            return self._resolve_from_cache(
+                source,
+                origin,
+                dest,
+                date_str,
+                passengers,
+                cabin_class,
+                include_cache_status=include_cache_status,
+                force_fresh=force_fresh,
+                request_reason=request_reason,
+            )
+
+        return self._collect_with_resolver(
+            origin,
+            dest,
+            date_str,
+            target_combo=target_combo,
+            cabin_classes=cabin_classes,
+            route_type=route_type,
+            passengers=passengers,
+            resolve_source_result=resolve_source_result,
+            allow_source_injection=True,
+        )
+
+    def collect_from_outcomes(
+        self,
+        origin: str,
+        dest: str,
+        date_str: str,
+        outcomes,
+        *,
+        cabin_classes=None,
+        route_type: str | None = None,
+        passengers: dict | None = None,
+        target_combo: str | None = None,
+    ) -> dict | None:
+        self.last_outcome_reads = 0
+        outcomes_by_key = {}
+        for outcome in outcomes:
+            outcome_key = tuple(outcome.request_key)
+            if outcome_key in outcomes_by_key:
+                raise DuplicateRequestOutcome(
+                    "duplicate RequestOutcome "
+                    f"source={outcome_key[0]} route={outcome_key[1]}->{outcome_key[2]} "
+                    f"date={outcome_key[3]} cabin={outcome_key[5]}"
+                )
+            outcomes_by_key[outcome_key] = outcome
+
+        outcome_reads = 0
+
+        def resolve_source_result(source, cabin_class, *, include_cache_status):
+            nonlocal outcome_reads
+            request_key = cache_key(
+                source,
+                origin,
+                dest,
+                date_str,
+                passengers,
+                cabin_class,
+            )
+            outcome = outcomes_by_key.get(request_key)
+            if outcome is None:
+                raise MissingRequestOutcome(
+                    "missing RequestOutcome "
+                    f"source={request_key[0]} route={request_key[1]}->{request_key[2]} "
+                    f"date={request_key[3]} cabin={request_key[5]}"
+                )
+            outcome_reads += 1
+            result = copy.deepcopy(outcome.result)
+            replay_status = _aggregator_replay_cache_status(outcome)
+            if include_cache_status:
+                return result, replay_status
+            return result
+
+        try:
+            return self._collect_with_resolver(
+                origin,
+                dest,
+                date_str,
+                target_combo=target_combo,
+                cabin_classes=cabin_classes,
+                route_type=route_type,
+                passengers=passengers,
+                resolve_source_result=resolve_source_result,
+                allow_source_injection=False,
+            )
+        finally:
+            self.last_outcome_reads = outcome_reads
+
+    @staticmethod
+    def _resolve_from_cache(
+        source,
+        origin: str,
+        dest: str,
+        date_str: str,
+        passengers,
+        cabin_class: str,
+        *,
+        include_cache_status: bool,
+        force_fresh: bool,
+        request_reason: str | None,
+    ):
+        return cached_fetch(
+            source,
+            origin,
+            dest,
+            date_str,
+            passengers,
+            cabin_class,
+            ttl_seconds=15 * 60,
+            force_fresh=force_fresh,
+            include_cache_status=include_cache_status,
+            request_reason=request_reason,
+        )
+
+    def _collect_with_resolver(
+        self,
+        origin: str,
+        dest: str,
+        date_str: str,
+        *,
+        target_combo: str | None = None,
+        cabin_classes=None,
+        route_type: str | None = None,
+        passengers: dict | None = None,
+        resolve_source_result,
+        allow_source_injection: bool,
     ) -> dict | None:
         cabin_classes = _normalize_cabin_classes(cabin_classes)
         self.last_request_cache_status = None
@@ -726,7 +893,12 @@ class FlightAggregator:
         resolved_route_type, route_rule = route_type_for_with_rule(
             origin, dest, route_type or self.route_type
         )
-        search_sources = self._ordered_search_sources(origin, dest, resolved_route_type)
+        search_sources = self._ordered_search_sources(
+            origin,
+            dest,
+            resolved_route_type,
+            allow_source_injection=allow_source_injection,
+        )
         domestic_route = resolved_route_type == "domestic"
         safe_log(f"[\u8def\u7531\u5206\u7c7b] origin={origin} dest={dest} route_type={resolved_route_type} \u547d\u4e2d\u89c4\u5219={route_rule}")
         safe_log(f"[source-route] {origin}->{dest} route_type={resolved_route_type}")
@@ -755,17 +927,10 @@ class FlightAggregator:
 
             for cabin_class in applicable_cabins:
                 try:
-                    cached_response = cached_fetch(
+                    cached_response = resolve_source_result(
                         source,
-                        origin,
-                        dest,
-                        date_str,
-                        passengers,
                         cabin_class,
-                        ttl_seconds=15 * 60,
-                        force_fresh=force_fresh,
                         include_cache_status=True,
-                        request_reason=request_reason,
                     )
                     if (
                         isinstance(cached_response, tuple)
@@ -903,6 +1068,8 @@ class FlightAggregator:
                     if not price_insights and result.get("price_insights"):
                         price_insights = result["price_insights"]
 
+                except (MissingRequestOutcome, InvalidRequestOutcomeStatus):
+                    raise
                 except Exception as exc:
                     error = _redact_api_key(str(exc))
                     if not source_optional:
@@ -1035,16 +1202,10 @@ class FlightAggregator:
 
             for cabin_class in applicable_cabins:
                 try:
-                    result = cached_fetch(
+                    result = resolve_source_result(
                         source,
-                        origin,
-                        dest,
-                        date_str,
-                        passengers,
                         cabin_class,
-                        ttl_seconds=15 * 60,
-                        force_fresh=force_fresh,
-                        request_reason=request_reason,
+                        include_cache_status=False,
                     )
                     enrichment_flights = result.get("flights", []) or []
                     enrichment_count += len(enrichment_flights)
@@ -1061,6 +1222,8 @@ class FlightAggregator:
                         if combo and flight.get("extra"):
                             enrichment_data[combo] = flight["extra"]
 
+                except (MissingRequestOutcome, InvalidRequestOutcomeStatus):
+                    raise
                 except Exception as exc:
                     error = _redact_api_key(str(exc))
                     source_errors.append(
@@ -1156,11 +1319,16 @@ class FlightAggregator:
         }
 
     def _ordered_search_sources(
-        self, origin: str, dest: str, route_type: str | None = None
+        self,
+        origin: str,
+        dest: str,
+        route_type: str | None = None,
+        *,
+        allow_source_injection: bool = True,
     ) -> list[FlightSource]:
         sources = list(self.search_sources)
         resolved_route_type = route_type_for(origin, dest, route_type or self.route_type)
-        if resolved_route_type == "domestic" and not any(
+        if allow_source_injection and resolved_route_type == "domestic" and not any(
             _source_name(source) == "juhe" for source in sources
         ):
             source = _instantiate_source("juhe")

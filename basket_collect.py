@@ -11,7 +11,11 @@ from typing import Callable
 from api_usage import load_usage_strict, usage_ledger_health, usage_snapshot
 from backup_status import load_backup_evidence
 from atomic_json_store import JsonStoreReadError, read_json
-from collection_plan import build_collection_plan, load_collection_settings
+from collection_plan import (
+    basket_consumer_ref,
+    build_collection_plan,
+    load_collection_settings,
+)
 from config_loader import DEFAULT_CONFIG_PATH, RUNTIME_CONFIG_PATH
 from collection_singleflight import (
     acquire_collection_singleflight,
@@ -684,6 +688,10 @@ def _run_basket_locked(
             "written": 0,
         }
 
+    basket_requests = [
+        {**item, "_consumer_ref": basket_consumer_ref(item, index)}
+        for index, item in enumerate(basket_requests)
+    ]
     reset_request_cache()
     round_context_tokens = None
     start_request_cache_round(
@@ -704,6 +712,7 @@ def _run_basket_locked(
     ledger_degraded = False
     research_state_conflict = False
     research_progress_applied = False
+    outcome_reads = 0
     try:
         round_context_tokens = set_current_round(round_id, db_path=db_path)
         plan = build_collection_plan(
@@ -818,15 +827,26 @@ def _run_basket_locked(
                 try:
                     if route_error is not None:
                         raise route_error
-                    result = aggregator.collect(
-                        route["origin"],
-                        route["dest"],
-                        depart_date,
-                        cabin_classes=["economy"],
-                        route_type=route["route_type"],
-                        passengers={"adult": 1, "child": 0, "elderly": 0, "infant": 0},
-                        force_fresh=False,
+                    consumer_id = str(item["_consumer_ref"])
+                    consumer_outcomes = tuple(
+                        outcome
+                        for outcome in execution_report.outcomes
+                        if consumer_id in outcome.consumers
                     )
+                    try:
+                        result = aggregator.collect_from_outcomes(
+                            route["origin"],
+                            route["dest"],
+                            depart_date,
+                            consumer_outcomes,
+                            cabin_classes=["economy"],
+                            route_type=route["route_type"],
+                            passengers={"adult": 1, "child": 0, "elderly": 0, "infant": 0},
+                        )
+                    finally:
+                        outcome_reads += int(
+                            getattr(aggregator, "last_outcome_reads", 0) or 0
+                        )
                     if not result or not result.get("flights"):
                         raise RuntimeError("未返回有效航班")
                     success += 1
@@ -836,6 +856,10 @@ def _run_basket_locked(
                         f"[篮子失败] route={route_name} queue={queue_name} "
                         f"date={depart_date} 原因={exc}"
                     )
+        safe_log(
+            f"[篮子结果复用] queues={queues} outcome_reads={outcome_reads} "
+            "second_cache_reads=0"
+        )
     finally:
         if round_context_tokens is not None:
             reset_current_round(round_context_tokens)

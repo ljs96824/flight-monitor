@@ -727,6 +727,13 @@ def _subscription_consumer_ref(subscription: dict, index: int) -> str:
     return f"subscription-legacy:{legacy_index}"
 
 
+def basket_consumer_ref(item: dict, index: int) -> str:
+    cohort_id = str(item.get("cohort_id") or "").strip()
+    if cohort_id:
+        return f"research:{cohort_id}"
+    return f"basket:legacy-{index}"
+
+
 def _add_direction_requests(
     plan: CollectionPlan,
     *,
@@ -950,11 +957,8 @@ def build_collection_plan(
         if required:
             search_sources = [source for source in search_sources if _source_name(source) in required]
         for source in search_sources:
-            cohort_id = str(item.get("cohort_id") or "").strip()
-            consumer = (
-                f"research:{cohort_id}"
-                if cohort_id
-                else f"basket:legacy-{index}"
+            consumer = str(
+                item.get("_consumer_ref") or basket_consumer_ref(item, index)
             )
             plan.add_request(
                 source,

@@ -1022,7 +1022,7 @@ class CollectionPlanTest(unittest.TestCase):
         self.assertNotIn("subscription_id", legacy)
 
     def test_collection_plan_consumer_refs_are_opaque_stable_and_privacy_safe(self):
-        from collection_plan import build_collection_plan
+        from collection_plan import basket_consumer_ref, build_collection_plan
 
         source = FakeSource("juhe", [{"flight_combo": "MU1", "price": 800}])
 
@@ -1102,6 +1102,69 @@ class CollectionPlanTest(unittest.TestCase):
             any("PVG->KIX:A" in consumer for consumer in consumers)
         )
         self.assertNotIn("subscription_id", subscriptions[1])
+
+        legacy_requests = [
+            {
+                "origin": origin,
+                "dest": dest,
+                "depart_date": f"2026-09-{index + 1:02d}",
+                "route_type": route_type,
+            }
+            for index, (origin, dest, route_type) in enumerate(
+                (
+                    ("SHA", "PEK", "domestic"),
+                    ("SHA", "PEK", "domestic"),
+                    ("PVG", "HKG", "greater_china"),
+                    ("PVG", "HKG", "greater_china"),
+                    ("PVG", "KIX", "international"),
+                    ("PVG", "KIX", "international"),
+                )
+            )
+        ]
+        normalized = [
+            {**item, "_consumer_ref": basket_consumer_ref(item, index)}
+            for index, item in enumerate(legacy_requests)
+        ]
+        grouped = {
+            route: [
+                item
+                for item in normalized
+                if f"{item['origin']}->{item['dest']}" == route
+            ]
+            for route in ("SHA->PEK", "PVG->HKG", "PVG->KIX")
+        }
+        self.assertEqual(
+            [item["_consumer_ref"] for item in normalized],
+            [f"basket:legacy-{index}" for index in range(6)],
+        )
+        self.assertEqual(
+            [
+                item["_consumer_ref"]
+                for route in ("SHA->PEK", "PVG->HKG", "PVG->KIX")
+                for item in grouped[route]
+            ],
+            [f"basket:legacy-{index}" for index in range(6)],
+        )
+
+        cohort = {"cohort_id": "pvg-kix.probe-14"}
+        self.assertEqual(
+            basket_consumer_ref(cohort, 99),
+            "research:pvg-kix.probe-14",
+        )
+
+        legacy_plan = build_collection_plan(
+            basket_requests=normalized,
+            source_builder=source_builder,
+            include_calendars=False,
+        )
+        self.assertEqual(
+            sorted(
+                consumer
+                for request in legacy_plan._requests.values()
+                for consumer in request.consumers
+            ),
+            [f"basket:legacy-{index}" for index in range(6)],
+        )
 
     def test_source_builder_failure_does_not_block_other_subscriptions(self):
         from collection_plan import build_collection_plan
