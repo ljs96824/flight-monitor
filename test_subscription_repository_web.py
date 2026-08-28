@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import web_form
+from subscription_identity import ensure_subscription_id
 from web_test_utils import enable_csrf
 
 
@@ -70,14 +71,29 @@ class SubscriptionRepositoryWebContractTest(unittest.TestCase):
             encoding="utf-8",
         )
 
-        with patch.object(web_form, "safe_log") as log_mock:
+        generated_id = "0aec3430-5248-4e02-903d-dd9e31d89459"
+
+        def assign_deterministic_identity(subscription):
+            return ensure_subscription_id(
+                subscription,
+                id_factory=lambda: generated_id,
+            )
+
+        with (
+            patch(
+                "subscription_repository.ensure_subscription_id",
+                side_effect=assign_deterministic_identity,
+            ),
+            patch.object(web_form, "safe_log") as log_mock,
+        ):
             body = self.client.get("/subscriptions").get_data(as_text=True)
 
         saved_id = self._saved()[0]["subscription_id"]
-        self.assertTrue(saved_id)
+        self.assertEqual(saved_id, generated_id)
         self.assertIn(f"/?edit={saved_id}", body)
         self.assertIn(f"/subscriptions/{saved_id}/toggle", body)
-        self.assertNotIn("/?edit=0", body)
+        self.assertNotIn('href="/?edit=0"', body)
+        self.assertNotIn('action="/subscriptions/0/toggle"', body)
         self.assertTrue(
             any("[身份迁移]" in str(call.args[0]) for call in log_mock.call_args_list)
         )
