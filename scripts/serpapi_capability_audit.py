@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Mapping
+from uuid import uuid4
 
 import requests
 from dotenv import load_dotenv
@@ -39,6 +40,11 @@ from serpapi_credentials import (
     dotenv_variable_names,
     resolve_serpapi_key,
 )
+from scripts.manual_live_guard import (
+    no_live_api_enabled,
+    prepare_manual_live_execution,
+)
+from workload_class import MANUAL_LIVE
 
 
 SERPAPI_URL = "https://serpapi.com/search.json"
@@ -48,6 +54,7 @@ DEFAULT_DEPART_DATE = "2026-10-01"
 MAX_TOTAL_CALLS = 6
 MAX_SERPAPI_CALLS = 3
 CABIN_REQUESTS = (("business", 3), ("economy", 1))
+ENTRYPOINT = "serpapi_capability_audit"
 
 
 class AuditBudgetExceeded(RuntimeError):
@@ -216,101 +223,142 @@ def run_audit(
     environment = env if env is not None else os.environ
     get = http_get or requests.get
     audit_round = round_id or (
-        "audit_serpapi_" + datetime.now().astimezone().strftime("%Y%m%dT%H%M%S")
+        "audit_serpapi_"
+        + datetime.now().astimezone().strftime("%Y%m%dT%H%M%S")
+        + "_"
+        + uuid4().hex[:8]
     )
+    planned = [
+        public_parameters(origin, dest, depart_date, travel_class)
+        for _, travel_class in CABIN_REQUESTS
+    ]
     report = {
         "round_id": audit_round,
         "mode": "execute" if execute else "dry_run",
         "route": f"{origin.upper()}->{dest.upper()}",
         "depart_date": depart_date,
         "budget": {"total": MAX_TOTAL_CALLS, "serpapi": MAX_SERPAPI_CALLS},
-        "ledger_before": _usage_brief(usage_path, strict=execute),
         "actual_calls": {},
         "calls": [],
         "results": {},
     }
-    planned = [
-        public_parameters(origin, dest, depart_date, travel_class)
-        for _, travel_class in CABIN_REQUESTS
-    ]
     if not execute:
+        report["ledger_before"] = _usage_brief(usage_path, strict=False)
         report["planned_calls"] = planned
         report["ledger_after"] = report["ledger_before"]
         report["production_gate_passed"] = False
         report["gate_reason"] = "dry-run 未产生商务舱能力证据"
         return report
 
-    api_key, _ = resolve_serpapi_key(environment)
-    if not api_key:
-        report["ledger_after"] = report["ledger_before"]
+    gate = prepare_manual_live_execution(
+        environment=environment,
+        depart_date=depart_date,
+        planned_counts={"serpapi": len(CABIN_REQUESTS)},
+        usage_path=usage_path,
+        round_id=audit_round,
+    )
+    report.update(gate.report_fields())
+    report["ledger_before"] = gate.ledger_snapshot
+    if not gate.allowed:
+        report["ledger_after"] = gate.ledger_snapshot
         report["production_gate_passed"] = False
-        aliases = "/".join(SERPAPI_KEY_ALIASES)
-        available_names = ", ".join(dotenv_variable_names(env_path))
-        report["gate_reason"] = (
-            f"缺少 SerpAPI 密钥（已检查 {aliases}）；"
-            f".env 实际变量名=[{available_names}]；未发起请求"
-        )
         return report
 
-    budget = AuditBudget()
-    for cabin_name, travel_class in CABIN_REQUESTS:
-        params = public_parameters(origin, dest, depart_date, travel_class)
-        call = {"source": "serpapi", "cabin": cabin_name, "parameters": params}
-        budget.reserve("serpapi")
-        report["actual_calls"]["serpapi"] = (
-            report["actual_calls"].get("serpapi", 0) + 1
+    print(
+        f"[审计计划] entrypoint={ENTRYPOINT} 计划调用={len(CABIN_REQUESTS)} "
+        f"明细=serpapi:{len(CABIN_REQUESTS)} 总上限={MAX_TOTAL_CALLS} "
+        f"源上限={MAX_SERPAPI_CALLS}"
+    )
+    try:
+        api_key, _ = resolve_serpapi_key(environment)
+        if not api_key:
+            report["ledger_after"] = report["ledger_before"]
+            report["production_gate_passed"] = False
+            aliases = "/".join(SERPAPI_KEY_ALIASES)
+            available_names = ", ".join(dotenv_variable_names(env_path))
+            report.update(
+                {
+                    "status": "blocked",
+                    "gate_code": "missing_credentials",
+                    "gate_reason": (
+                        f"缺少 SerpAPI 密钥（已检查 {aliases}）；"
+                        f".env 实际变量名=[{available_names}]；未发起请求"
+                    ),
+                    "exit_code": 2,
+                }
+            )
+            return report
+
+        budget = AuditBudget()
+        for cabin_name, travel_class in CABIN_REQUESTS:
+            params = public_parameters(origin, dest, depart_date, travel_class)
+            call = {"source": "serpapi", "cabin": cabin_name, "parameters": params}
+            budget.reserve("serpapi")
+            report["actual_calls"]["serpapi"] = (
+                report["actual_calls"].get("serpapi", 0) + 1
+            )
+            try:
+                response = get(
+                    SERPAPI_URL,
+                    params={**params, "api_key": api_key},
+                    timeout=timeout,
+                )
+                call["http_status"] = int(response.status_code)
+                response.raise_for_status()
+                payload = response.json()
+                if payload.get("error"):
+                    raise RuntimeError(str(payload["error"]))
+                summary = summarize_response(payload, requested_cabin=cabin_name)
+                call.update({"status": "completed", "response": summary})
+                report["results"][cabin_name] = summary
+            except Exception as exc:
+                error = _redact_error(exc, api_key)
+                call.update({"status": "failed", "error": error})
+                report["results"][cabin_name] = {
+                    "requested_cabin": cabin_name,
+                    "capability": "unavailable",
+                    "production_gate_passed": False,
+                    "error": error,
+                }
+            finally:
+                record_actual_requests(
+                    {"serpapi": 1},
+                    path=usage_path,
+                    round_id=audit_round,
+                    workload_class=MANUAL_LIVE,
+                    entrypoint=ENTRYPOINT,
+                )
+                report["calls"].append(call)
+
+        business = report["results"].get("business") or {}
+        report["production_gate_passed"] = bool(
+            business.get("production_gate_passed")
         )
-        try:
-            response = get(
-                SERPAPI_URL,
-                params={**params, "api_key": api_key},
-                timeout=timeout,
-            )
-            call["http_status"] = int(response.status_code)
-            response.raise_for_status()
-            payload = response.json()
-            if payload.get("error"):
-                raise RuntimeError(str(payload["error"]))
-            summary = summarize_response(payload, requested_cabin=cabin_name)
-            call.update({"status": "completed", "response": summary})
-            report["results"][cabin_name] = summary
-        except Exception as exc:
-            error = _redact_error(exc, api_key)
-            call.update({"status": "failed", "error": error})
-            report["results"][cabin_name] = {
-                "requested_cabin": cabin_name,
-                "capability": "unavailable",
-                "production_gate_passed": False,
-                "error": error,
-            }
-        finally:
-            record_actual_requests(
-                {"serpapi": 1}, path=usage_path, round_id=audit_round
-            )
-            report["calls"].append(call)
-
-    business = report["results"].get("business") or {}
-    report["production_gate_passed"] = bool(
-        business.get("production_gate_passed")
-    )
-    report["gate_reason"] = (
-        "商务舱返回真实航司、正价与 Business 舱位字段，可进入生产适配"
-        if report["production_gate_passed"]
-        else "商务舱未返回可核验的真实航司正价，按协议停止生产接线"
-    )
-    report["separate_call_required"] = (
-        "是。travel_class 是请求级参数，经济舱与商务舱需分别调用。"
-    )
-    report["codeshare_note"] = (
-        "响应可通过 plane_and_crew_by 表示实际提供飞机与机组的航司；"
-        "缺失时只能按市场承运回退。"
-    )
-    report["budget_used"] = {"total": budget.total, "serpapi": budget.counts["serpapi"]}
-    report["ledger_after"] = _usage_brief(usage_path, strict=True)
-    return report
+        report["gate_reason"] = (
+            "商务舱返回真实航司、正价与 Business 舱位字段，可进入生产适配"
+            if report["production_gate_passed"]
+            else "商务舱未返回可核验的真实航司正价，按协议停止生产接线"
+        )
+        report["separate_call_required"] = (
+            "是。travel_class 是请求级参数，经济舱与商务舱需分别调用。"
+        )
+        report["codeshare_note"] = (
+            "响应可通过 plane_and_crew_by 表示实际提供飞机与机组的航司；"
+            "缺失时只能按市场承运回退。"
+        )
+        report["budget_used"] = {
+            "total": budget.total,
+            "serpapi": budget.counts["serpapi"],
+        }
+        report["ledger_after"] = _usage_brief(usage_path, strict=True)
+        report["status"] = "completed"
+        report["exit_code"] = 0 if report["production_gate_passed"] else 2
+        return report
+    finally:
+        gate.release()
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--execute", action="store_true", help="显式允许真实 API 审计")
     parser.add_argument("--origin", default=DEFAULT_ORIGIN)
@@ -320,9 +368,9 @@ def main() -> int:
     parser.add_argument("--round-id")
     parser.add_argument("--timeout", type=float, default=60)
     parser.add_argument("--output")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
-    if args.execute:
+    if args.execute and not no_live_api_enabled(os.environ):
         load_dotenv(ROOT / ".env", override=False)
     report = run_audit(
         execute=args.execute,
@@ -337,9 +385,7 @@ def main() -> int:
     print(rendered)
     if args.output:
         Path(args.output).write_text(rendered + "\n", encoding="utf-8")
-    if args.execute and not report.get("production_gate_passed"):
-        return 2
-    return 0
+    return int(report.get("exit_code") or 0)
 
 
 if __name__ == "__main__":

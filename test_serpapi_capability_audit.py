@@ -4,7 +4,7 @@ import sys
 import tempfile
 import types
 import unittest
-from contextlib import redirect_stdout
+from contextlib import contextmanager, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -58,6 +58,38 @@ def _fixture(travel_class, price):
     }
 
 
+class _FakeGate:
+    acquired = True
+    holder = {}
+
+    def release(self):
+        return None
+
+
+def _audit_config():
+    return {
+        "source_quota_budget": {
+            "serpapi": {"monthly": 250, "reserve": 30}
+        }
+    }
+
+
+def _acquire_ok(*_args, **_kwargs):
+    return _FakeGate()
+
+
+@contextmanager
+def _guarded_audit():
+    with patch(
+        "scripts.manual_live_guard.config_loader.load_merged_config",
+        return_value=_audit_config(),
+    ), patch(
+        "scripts.manual_live_guard._acquire_singleflight",
+        side_effect=_acquire_ok,
+    ):
+        yield
+
+
 class SerpApiCapabilityAuditTest(unittest.TestCase):
     def test_summary_requires_real_business_airline_and_positive_price(self):
         from scripts.serpapi_capability_audit import summarize_response
@@ -98,13 +130,14 @@ class SerpApiCapabilityAuditTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             usage_path = Path(tmp) / "api_usage.json"
             initialize_usage_ledger(usage_path)
-            report = run_audit(
-                execute=True,
-                env={"SERPAPI_KEY": "secret"},
-                usage_path=usage_path,
-                http_get=fake_get,
-                round_id="audit-serpapi-test",
-            )
+            with _guarded_audit():
+                report = run_audit(
+                    execute=True,
+                    env={"SERPAPI_KEY": "secret"},
+                    usage_path=usage_path,
+                    http_get=fake_get,
+                    round_id="audit-serpapi-test",
+                )
             usage = load_usage_strict(usage_path)
 
         self.assertEqual([call["travel_class"] for call in calls], [3, 1])
@@ -131,7 +164,7 @@ class SerpApiCapabilityAuditTest(unittest.TestCase):
                     usage_path = Path(tmp) / f"{alias}.json"
                     initialize_usage_ledger(usage_path)
                     output = io.StringIO()
-                    with redirect_stdout(output):
+                    with redirect_stdout(output), _guarded_audit():
                         report = run_audit(
                             execute=True,
                             env={alias: secret},
@@ -190,13 +223,14 @@ class SerpApiCapabilityAuditTest(unittest.TestCase):
             )
             usage_path = Path(tmp) / "api_usage.json"
             initialize_usage_ledger(usage_path)
-            report = run_audit(
-                execute=True,
-                env={},
-                env_path=env_path,
-                usage_path=usage_path,
-                http_get=fail,
-            )
+            with _guarded_audit():
+                report = run_audit(
+                    execute=True,
+                    env={},
+                    env_path=env_path,
+                    usage_path=usage_path,
+                    http_get=fail,
+                )
 
         reason = report["gate_reason"]
         self.assertIn("SERPAPI_KEY/SERPAPI_API_KEY/SERP_API_KEY", reason)
