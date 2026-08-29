@@ -5,6 +5,10 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -18,9 +22,12 @@ jobs:
     timeout-minutes: 20
     env:
       MPLBACKEND: Agg
+      NO_LIVE_API: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
           cache: "pip"
@@ -45,18 +52,21 @@ jobs:
       MPLBACKEND: Agg
       NO_LIVE_API: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
           cache: "pip"
           cache-dependency-path: requirements.txt
       - run: python -m pip install --upgrade pip
       - run: pip install -r requirements.txt
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: "npm"
+          cache-dependency-path: package-lock.json
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - name: Export Playwright Chromium path
@@ -66,7 +76,7 @@ jobs:
         run: python -X utf8 scripts/ui_smoke.py --log-path "${{ runner.temp }}/ui-smoke/ui-smoke.log" --artifact-dir "${{ runner.temp }}/ui-smoke"
       - name: Upload UI smoke failure artifacts
         if: ${{ always() && steps.smoke.outcome == 'failure' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ui-smoke-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/ui-smoke

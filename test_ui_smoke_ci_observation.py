@@ -3,12 +3,15 @@ import re
 import unittest
 from pathlib import Path
 
+import yaml
+
 
 ROOT = Path(__file__).parent
 WORKFLOW = ROOT / ".github" / "workflows" / "tests.yml"
 PACKAGE_JSON = ROOT / "package.json"
 PACKAGE_LOCK = ROOT / "package-lock.json"
 CONTRIBUTING = ROOT / "CONTRIBUTING.md"
+ACTIONS_POLICY_ADR = ROOT / "docs" / "github-actions-version-policy.md"
 
 
 class UiSmokeCiObservationContractTest(unittest.TestCase):
@@ -30,15 +33,16 @@ class UiSmokeCiObservationContractTest(unittest.TestCase):
             "timeout-minutes: 20",
             "MPLBACKEND: Agg",
             'NO_LIVE_API: "1"',
-            "actions/checkout@v4",
-            "actions/setup-python@v5",
+            "actions/checkout@v7",
+            "actions/setup-python@v7",
             'python-version: "3.13"',
             'cache: "pip"',
             "cache-dependency-path: requirements.txt",
             "pip install -r requirements.txt",
-            "actions/setup-node@v4",
+            "actions/setup-node@v7",
             'node-version: "22"',
             'cache: "npm"',
+            "cache-dependency-path: package-lock.json",
             "npm ci",
             "npx playwright install --with-deps chromium",
         )
@@ -60,7 +64,7 @@ class UiSmokeCiObservationContractTest(unittest.TestCase):
         self.assertIn(
             "if: ${{ always() && steps.smoke.outcome == 'failure' }}", job
         )
-        self.assertIn("uses: actions/upload-artifact@v4", job)
+        self.assertIn("uses: actions/upload-artifact@v7", job)
         self.assertIn(
             "name: ui-smoke-${{ github.run_id }}-${{ github.run_attempt }}", job
         )
@@ -72,6 +76,168 @@ class UiSmokeCiObservationContractTest(unittest.TestCase):
         self.assertIn("github.event_name", job)
         self.assertIn("github.sha", job)
         self.assertIn("GITHUB_STEP_SUMMARY", job)
+
+    def test_official_actions_permissions_credentials_and_caches_are_exact(self):
+        workflow = yaml.safe_load(self.workflow)
+        self.assertEqual(workflow["permissions"], {"contents": "read"})
+        self.assertEqual(set(workflow["jobs"]), {"tests", "ui-smoke"})
+        self.assertEqual(
+            workflow["jobs"]["tests"]["strategy"]["matrix"]["os"],
+            ["ubuntu-latest", "windows-latest"],
+        )
+        for job_name in ("tests", "ui-smoke"):
+            self.assertEqual(
+                workflow["jobs"][job_name]["env"]["NO_LIVE_API"], "1"
+            )
+
+        action_steps = []
+        checkout_steps = []
+        for job in workflow["jobs"].values():
+            for step in job["steps"]:
+                action = step.get("uses", "")
+                if action.startswith("actions/"):
+                    action_steps.append(action)
+                if action == "actions/checkout@v7":
+                    checkout_steps.append(step)
+
+        self.assertEqual(
+            action_steps,
+            [
+                "actions/checkout@v7",
+                "actions/setup-python@v7",
+                "actions/checkout@v7",
+                "actions/setup-python@v7",
+                "actions/setup-node@v7",
+                "actions/upload-artifact@v7",
+            ],
+        )
+        self.assertEqual(len(checkout_steps), 2)
+        for step in checkout_steps:
+            self.assertIs(step["with"]["persist-credentials"], False)
+
+        tests_steps = workflow["jobs"]["tests"]["steps"]
+        ui_steps = workflow["jobs"]["ui-smoke"]["steps"]
+        tests_python = next(
+            step for step in tests_steps if step.get("uses") == "actions/setup-python@v7"
+        )
+        ui_python = next(
+            step for step in ui_steps if step.get("uses") == "actions/setup-python@v7"
+        )
+        setup_node = next(
+            step for step in ui_steps if step.get("uses") == "actions/setup-node@v7"
+        )
+        self.assertEqual(
+            tests_python["with"]["cache-dependency-path"],
+            "requirements.txt\nrequirements-dev.txt\n",
+        )
+        self.assertEqual(
+            ui_python["with"]["cache-dependency-path"], "requirements.txt"
+        )
+        self.assertEqual(setup_node["with"]["node-version"], "22")
+        self.assertEqual(setup_node["with"]["cache"], "npm")
+        self.assertEqual(
+            setup_node["with"]["cache-dependency-path"], "package-lock.json"
+        )
+
+        artifact = next(
+            step for step in ui_steps if step.get("name") == "Upload UI smoke failure artifacts"
+        )
+        self.assertEqual(artifact["uses"], "actions/upload-artifact@v7")
+        self.assertEqual(
+            artifact["if"], "${{ always() && steps.smoke.outcome == 'failure' }}"
+        )
+        self.assertEqual(artifact["with"]["if-no-files-found"], "warn")
+        self.assertEqual(artifact["with"]["retention-days"], 7)
+
+    def test_workflow_triggers_jobs_commands_and_concurrency_remain_exact(self):
+        workflow = yaml.safe_load(self.workflow)
+        triggers = workflow.get("on", workflow.get(True))
+        self.assertEqual(
+            triggers,
+            {
+                "push": {"branches": ["main"]},
+                "pull_request": {"branches": ["main"]},
+                "workflow_dispatch": None,
+            },
+        )
+        self.assertEqual(
+            workflow["concurrency"],
+            {
+                "group": "ci-${{ github.ref }}",
+                "cancel-in-progress": True,
+            },
+        )
+
+        tests_job = workflow["jobs"]["tests"]
+        ui_job = workflow["jobs"]["ui-smoke"]
+        for job in (tests_job, ui_job):
+            self.assertNotIn("permissions", job)
+            self.assertNotIn("name", job)
+            self.assertEqual(job["timeout-minutes"], 20)
+
+        self.assertEqual(tests_job["runs-on"], "${{ matrix.os }}")
+        self.assertEqual(
+            tests_job["strategy"],
+            {
+                "fail-fast": False,
+                "matrix": {"os": ["ubuntu-latest", "windows-latest"]},
+            },
+        )
+        self.assertEqual(ui_job["runs-on"], "ubuntu-latest")
+
+        tests_steps = tests_job["steps"]
+        ui_steps = ui_job["steps"]
+        for steps in (tests_steps, ui_steps):
+            setup_python = next(
+                step
+                for step in steps
+                if step.get("uses") == "actions/setup-python@v7"
+            )
+            self.assertEqual(setup_python["with"]["python-version"], "3.13")
+
+        test_commands = [step["run"] for step in tests_steps if "run" in step]
+        self.assertIn(
+            "python -X utf8 -m pytest -q -p no:cacheprovider", test_commands
+        )
+        self.assertIn("python -X utf8 -m unittest discover", test_commands)
+
+        artifact = next(
+            step
+            for step in ui_steps
+            if step.get("name") == "Upload UI smoke failure artifacts"
+        )
+        self.assertEqual(
+            artifact["with"]["name"],
+            "ui-smoke-${{ github.run_id }}-${{ github.run_attempt }}",
+        )
+        self.assertEqual(
+            artifact["with"]["path"], "${{ runner.temp }}/ui-smoke"
+        )
+
+    def test_actions_version_policy_adr_records_movable_major_tradeoff(self):
+        text = ACTIONS_POLICY_ADR.read_text(encoding="utf-8")
+        self.assertIn(
+            "官方大版本标签可移动；同一个仓库提交在不同日期运行时，"
+            "Action底层提交可能发生变化。本仓选择自动接收同主版本安全补丁，"
+            "不宣称Action执行代码完全可复现。",
+            text,
+        )
+        for release, workflow_tag in (
+            ("actions/checkout v7.0.1", "actions/checkout@v7"),
+            ("actions/setup-python v7.0.0", "actions/setup-python@v7"),
+            ("actions/setup-node v7.0.0", "actions/setup-node@v7"),
+            ("actions/upload-artifact v7.0.1", "actions/upload-artifact@v7"),
+        ):
+            self.assertIn(release, text)
+            self.assertIn(workflow_tag, text)
+        for forbidden in (
+            "supply-chain lock",
+            "immutable Actions",
+            "fully reproducible Actions",
+            "完全锁定供应链",
+        ):
+            self.assertNotIn(forbidden, text)
+
 
     def test_disabled_matrix_step_is_removed(self):
         self.assertNotIn("UI smoke (browser provisioning pending)", self.workflow)
