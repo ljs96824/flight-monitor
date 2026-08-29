@@ -3,15 +3,22 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import sys
 from pathlib import Path
 from typing import TextIO
-from uuid import UUID
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from subscription_identity import (
+    mask_subscription_id as _masked_id,
+    persisted_subscription_id as _persisted_subscription_id,
+)
+
+
 DEFAULT_SUBSCRIPTIONS_PATH = ROOT / "data" / "subscriptions.json"
 
 
@@ -32,27 +39,6 @@ def _load_subscriptions(path: Path) -> list:
     if not isinstance(payload, list):
         raise ValueError("subscriptions.json 顶层必须是数组")
     return payload
-
-
-def _persisted_subscription_id(record) -> str:
-    if not isinstance(record, dict):
-        return ""
-    value = record.get("subscription_id")
-    if not isinstance(value, str):
-        return ""
-    return value.strip()
-
-
-def _masked_id(stable_id: str) -> str:
-    try:
-        canonical_uuid = str(UUID(stable_id))
-    except ValueError:
-        canonical_uuid = ""
-    if stable_id.lower() == canonical_uuid:
-        prefix = stable_id[:8]
-    else:
-        prefix = f"sha256:{hashlib.sha256(stable_id.encode('utf-8')).hexdigest()[:8]}"
-    return f"{prefix}********"
 
 
 def audit_subscription_ids(subscriptions: list) -> dict:
