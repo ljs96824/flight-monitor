@@ -216,6 +216,7 @@ class SubscriptionDefaultsMigrationTest(unittest.TestCase):
         legacy = [
             {
                 "id": "legacy",
+                "subscription_id": "123e4567-e89b-12d3-a456-426614174211",
                 "origin": "PVG",
                 "destination": "KIX",
                 "hard_constraints": {},

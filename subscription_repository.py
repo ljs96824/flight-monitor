@@ -12,7 +12,11 @@ from pathlib import Path
 
 from atomic_json_store import read_json, update_json
 from local_file_lock import file_lock
-from subscription_identity import ensure_subscription_id
+from subscription_identity import (
+    ensure_subscription_id,
+    mask_subscription_id,
+    persisted_subscription_id,
+)
 
 
 LOCAL_OWNER_ID = "local-owner"
@@ -26,6 +30,29 @@ class SubscriptionIdentityMigrationRequired(RuntimeError):
     """Existing records must receive a persisted subscription_id before M0."""
 
 
+class DuplicateSubscriptionIdError(RuntimeError):
+    """The persisted subscription array contains a duplicate identity."""
+
+    def __init__(
+        self,
+        masked_id: str,
+        first_index: int,
+        second_index: int,
+    ) -> None:
+        self.masked_id = str(masked_id)
+        self.first_index = int(first_index)
+        self.second_index = int(second_index)
+        super().__init__(
+            "订阅 subscription_id 重复: "
+            f"id={self.masked_id} "
+            f"indexes=[{self.first_index}, {self.second_index}]"
+        )
+
+
+class _SubscriptionFileMissing(RuntimeError):
+    """Abort a write RMW without creating a missing subscription file."""
+
+
 def _subscription_array(payload, *, allow_missing: bool = False) -> list[dict]:
     if payload is None and allow_missing:
         return []
@@ -34,8 +61,7 @@ def _subscription_array(payload, *, allow_missing: bool = False) -> list[dict]:
     return payload
 
 
-def _persisted_subscription_id(subscription: dict) -> str:
-    return str(subscription.get("subscription_id") or "").strip()
+_persisted_subscription_id = persisted_subscription_id
 
 
 def _require_persisted_identities(subscriptions: list[dict]) -> None:
@@ -50,6 +76,24 @@ def _require_persisted_identities(subscriptions: list[dict]) -> None:
             "请先运行 scripts/migrate_subscription_ids.py --write "
             f"(indexes={missing})"
         )
+
+
+def _validated_id_index(subscriptions: list[dict]) -> dict[str, int]:
+    """Validate migration first, then build the unique full-array ID index."""
+
+    _require_persisted_identities(subscriptions)
+    positions: dict[str, int] = {}
+    for index, subscription in enumerate(subscriptions):
+        stable_id = persisted_subscription_id(subscription)
+        first_index = positions.get(stable_id)
+        if first_index is not None:
+            raise DuplicateSubscriptionIdError(
+                mask_subscription_id(stable_id),
+                first_index,
+                index,
+            )
+        positions[stable_id] = index
+    return positions
 
 
 def _merge_subscription_patch(current: dict, patch: dict) -> dict:
@@ -79,45 +123,40 @@ class SubscriptionRepository:
     def _owns(self, owner_id: str) -> bool:
         return str(owner_id) == self.local_owner_id
 
+    def _load_validated_locked(self) -> tuple[list[dict], dict[str, int]]:
+        """Read and validate while the caller holds this repository's file lock."""
+
+        if not self.path.exists():
+            return [], {}
+        subscriptions = _subscription_array(read_json(self.path))
+        return subscriptions, _validated_id_index(subscriptions)
+
     def list_for_owner(self, owner_id: str) -> list[dict]:
         if not self._owns(owner_id):
             return []
-        if not self.path.exists():
-            return []
         with file_lock(self.path):
-            if not self.path.exists():
-                return []
-            return deepcopy(_subscription_array(read_json(self.path)))
+            subscriptions, _positions = self._load_validated_locked()
+            return deepcopy(subscriptions)
 
     def get(self, owner_id: str, subscription_id_value: str) -> dict | None:
         if not self._owns(owner_id):
             return None
         target = str(subscription_id_value)
-        subscriptions = self.list_for_owner(owner_id)
-        _require_persisted_identities(subscriptions)
-        return next(
-            (
-                deepcopy(item)
-                for item in subscriptions
-                if isinstance(item, dict)
-                and _persisted_subscription_id(item) == target
-            ),
-            None,
-        )
+        with file_lock(self.path):
+            subscriptions, positions = self._load_validated_locked()
+            index = positions.get(target)
+            return deepcopy(subscriptions[index]) if index is not None else None
 
     def resolve_legacy_index(self, owner_id: str, index: int) -> dict | None:
         """M0 only: resolve a full-table position without mutating storage."""
 
         if not self._owns(owner_id):
             return None
-        subscriptions = self.list_for_owner(owner_id)
-        _require_persisted_identities(subscriptions)
-        if not 0 <= index < len(subscriptions):
-            return None
-        candidate = subscriptions[index]
-        if not isinstance(candidate, dict):
-            return None
-        return deepcopy(candidate)
+        with file_lock(self.path):
+            subscriptions, _positions = self._load_validated_locked()
+            if not 0 <= index < len(subscriptions):
+                return None
+            return deepcopy(subscriptions[index])
 
     def create(self, owner_id: str, subscription: dict) -> dict:
         if not self._owns(owner_id):
@@ -129,9 +168,17 @@ class SubscriptionRepository:
 
         def mutate(payload):
             subscriptions = _subscription_array(payload, allow_missing=True)
-            _require_persisted_identities(subscriptions)
+            positions = _validated_id_index(subscriptions)
             ensure_subscription_id(candidate)
+            candidate_id = persisted_subscription_id(candidate)
+            if candidate_id in positions:
+                raise DuplicateSubscriptionIdError(
+                    mask_subscription_id(candidate_id),
+                    positions[candidate_id],
+                    len(subscriptions),
+                )
             subscriptions.append(candidate)
+            _validated_id_index(subscriptions)
             saved.update(deepcopy(candidate))
             return subscriptions
 
@@ -167,30 +214,33 @@ class SubscriptionRepository:
 
         def mutate_payload(payload):
             nonlocal matched
-            subscriptions = _subscription_array(payload, allow_missing=True)
-            _require_persisted_identities(subscriptions)
-            for index, existing in enumerate(subscriptions):
-                if (
-                    not isinstance(existing, dict)
-                    or _persisted_subscription_id(existing) != target
-                ):
-                    continue
-                replacement = mutator(deepcopy(existing))
-                if not isinstance(replacement, dict):
-                    raise TypeError("subscription mutator 必须返回 dict")
-                for identity_field in ("id", "subscription_id", "created_at"):
-                    if identity_field in existing:
-                        replacement[identity_field] = existing[identity_field]
-                    else:
-                        replacement.pop(identity_field, None)
-                ensure_subscription_id(replacement)
-                subscriptions[index] = replacement
-                saved.update(deepcopy(replacement))
-                matched = True
-                break
+            if payload is None:
+                raise _SubscriptionFileMissing
+            subscriptions = _subscription_array(payload)
+            positions = _validated_id_index(subscriptions)
+            index = positions.get(target)
+            if index is None:
+                return subscriptions
+            existing = subscriptions[index]
+            replacement = mutator(deepcopy(existing))
+            if not isinstance(replacement, dict):
+                raise TypeError("subscription mutator 必须返回 dict")
+            for identity_field in ("id", "subscription_id", "created_at"):
+                if identity_field in existing:
+                    replacement[identity_field] = existing[identity_field]
+                else:
+                    replacement.pop(identity_field, None)
+            ensure_subscription_id(replacement)
+            subscriptions[index] = replacement
+            _validated_id_index(subscriptions)
+            saved.update(deepcopy(replacement))
+            matched = True
             return subscriptions
 
-        update_json(self.path, mutate_payload)
+        try:
+            update_json(self.path, mutate_payload)
+        except _SubscriptionFileMissing:
+            return None
         return saved if matched else None
 
     def delete(self, owner_id: str, subscription_id_value: str) -> bool:
@@ -201,19 +251,20 @@ class SubscriptionRepository:
 
         def mutate(payload):
             nonlocal deleted
-            subscriptions = _subscription_array(payload, allow_missing=True)
-            _require_persisted_identities(subscriptions)
-            retained = []
-            for item in subscriptions:
-                if (
-                    not deleted
-                    and isinstance(item, dict)
-                    and _persisted_subscription_id(item) == target
-                ):
-                    deleted = True
-                    continue
-                retained.append(item)
+            if payload is None:
+                raise _SubscriptionFileMissing
+            subscriptions = _subscription_array(payload)
+            positions = _validated_id_index(subscriptions)
+            index = positions.get(target)
+            if index is None:
+                return subscriptions
+            retained = subscriptions[:index] + subscriptions[index + 1 :]
+            _validated_id_index(retained)
+            deleted = True
             return retained
 
-        update_json(self.path, mutate)
+        try:
+            update_json(self.path, mutate)
+        except _SubscriptionFileMissing:
+            return False
         return deleted

@@ -1,4 +1,5 @@
 import ast
+import hashlib
 import json
 import tempfile
 import unittest
@@ -235,6 +236,49 @@ class SubscriptionRepositoryWebContractTest(unittest.TestCase):
         self.assertIn("订阅已删除", response.get_data(as_text=True))
         start_mock.assert_not_called()
         self.assertEqual(len(self._saved()), 1)
+
+    def test_duplicate_identity_returns_safe_503_with_zero_side_effects(self):
+        duplicate = _stored_subscription()
+        duplicate["email"] = "private-owner@example.com"
+        self.path.write_text(
+            json.dumps([_stored_subscription(), duplicate], ensure_ascii=False),
+            encoding="utf-8",
+        )
+        before = self.path.read_bytes()
+        before_hash = hashlib.sha256(before).hexdigest()
+        rebuilt = _stored_subscription(budget=2500)
+        rebuilt.pop("subscription_id")
+
+        with (
+            patch.object(web_form, "build_subscription", return_value=rebuilt),
+            patch.object(web_form, "start_background_collection") as start_mock,
+            patch.object(web_form, "record_last_attempt") as attempt_mock,
+            patch.object(web_form, "_remember_startup_handshake") as handshake_mock,
+            patch.object(web_form, "save_feedback") as feedback_mock,
+            patch.object(web_form, "safe_log") as log_mock,
+        ):
+            response = self.client.post(
+                "/subscribe",
+                data={"form_page": "full"},
+            )
+
+        body = response.get_data(as_text=True)
+        logs = "\n".join(str(call.args[0]) for call in log_mock.call_args_list)
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("订阅身份状态异常", body)
+        self.assertNotIn(SUBSCRIPTION_ID, body)
+        self.assertNotIn("private-owner@example.com", body)
+        self.assertIn("operation=subscribe", logs)
+        self.assertIn("123e4567********", logs)
+        self.assertNotIn(SUBSCRIPTION_ID, logs)
+        self.assertNotIn("private-owner@example.com", logs)
+        start_mock.assert_not_called()
+        attempt_mock.assert_not_called()
+        handshake_mock.assert_not_called()
+        feedback_mock.assert_not_called()
+        after = self.path.read_bytes()
+        self.assertEqual(after, before)
+        self.assertEqual(hashlib.sha256(after).hexdigest(), before_hash)
 
     def test_toggle_quick_update_and_delete_are_id_scoped_and_csrf_protected(self):
         unauthorized = web_form.app.test_client()
