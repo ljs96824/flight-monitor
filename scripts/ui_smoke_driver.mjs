@@ -1,14 +1,19 @@
-import {mkdir, writeFile} from "node:fs/promises";
+import {mkdir, readFile, writeFile} from "node:fs/promises";
 import {join} from "node:path";
+import {isDeepStrictEqual} from "node:util";
 
-const [baseUrl, cdpPort, artifactDir] = process.argv.slice(2);
-if (!baseUrl || !cdpPort) throw new Error("缺少 baseUrl/cdpPort");
+const [baseUrl, cdpPort, artifactDir, subscriptionsPath] = process.argv.slice(2);
+if (!baseUrl || !cdpPort || !subscriptionsPath) {
+  throw new Error("缺少 baseUrl/cdpPort/subscriptionsPath");
+}
+
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const targets = await fetch(`http://127.0.0.1:${cdpPort}/json/list`).then(r => r.json());
 const target = targets.find(item => item.type === "page");
 if (!target) throw new Error("CDP 未找到 page target");
-
+const pageTargetId = target.id;
 const ws = new WebSocket(target.webSocketDebuggerUrl);
 await new Promise((resolve, reject) => {
   ws.addEventListener("open", resolve, {once: true});
@@ -17,7 +22,9 @@ await new Promise((resolve, reject) => {
 let nextId = 1;
 const pending = new Map();
 const browserErrors = [];
-ws.addEventListener("message", event => {
+let pageLoadGeneration = 0;
+
+function handleCdpMessage(event) {
   const message = JSON.parse(event.data);
   if (message.id && pending.has(message.id)) {
     const {resolve, reject} = pending.get(message.id);
@@ -25,6 +32,9 @@ ws.addEventListener("message", event => {
     if (message.error) reject(new Error(JSON.stringify(message.error)));
     else resolve(message.result || {});
     return;
+  }
+  if (message.method === "Page.loadEventFired") {
+    pageLoadGeneration += 1;
   }
   if (message.method === "Runtime.exceptionThrown") {
     browserErrors.push(message.params.exceptionDetails?.text || "Runtime.exceptionThrown");
@@ -38,12 +48,42 @@ ws.addEventListener("message", event => {
   if (message.method === "Log.entryAdded" && message.params.entry?.level === "error") {
     browserErrors.push(message.params.entry.text || "Log.error");
   }
-});
+}
 
-function command(method, params = {}) {
+ws.addEventListener("message", handleCdpMessage);
+
+function command(method, params = {}, timeout = 12000) {
   const id = nextId++;
-  ws.send(JSON.stringify({id, method, params}));
-  return new Promise((resolve, reject) => pending.set(id, {resolve, reject}));
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pending.delete(id);
+      reject(new Error(`CDP命令超时: ${method}`));
+    }, timeout);
+    pending.set(id, {
+      resolve: value => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      reject: error => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    });
+    try {
+      ws.send(JSON.stringify({id, method, params}));
+    } catch (error) {
+      clearTimeout(timer);
+      pending.delete(id);
+      reject(error);
+    }
+  });
+}
+
+async function reattachPage(label, expectedPath, previousLoadGeneration) {
+  const expectedUrl = new URL(expectedPath, baseUrl).href;
+  await waitForPageLoad(previousLoadGeneration, `${label}加载事件`, 15000);
+  await waitForTargetUrl(expectedUrl, `${label}导航`, 15000);
+  await waitFor("document.readyState === 'complete'", `${label}加载`);
 }
 
 async function evaluate(expression) {
@@ -65,8 +105,37 @@ async function waitFor(expression, label, timeout = 12000) {
   throw new Error(`等待超时: ${label}`);
 }
 
+async function waitForTargetUrl(expectedUrl, label, timeout = 12000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    const currentTargets = await fetch(`http://127.0.0.1:${cdpPort}/json/list`).then(response => response.json());
+    if (currentTargets.some(item =>
+      item.type === "page"
+      && item.id === pageTargetId
+      && item.url === expectedUrl
+    )) {
+      return;
+    }
+    await sleep(100);
+  }
+  throw new Error(`等待超时: ${label}`);
+}
+
+async function waitForPageLoad(previousGeneration, label, timeout = 12000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    if (pageLoadGeneration > previousGeneration) return;
+    await sleep(100);
+  }
+  throw new Error(`等待超时: ${label}`);
+}
+
 async function navigate(path) {
-  await command("Page.navigate", {url: new URL(path, baseUrl).href});
+  const expectedUrl = new URL(path, baseUrl).href;
+  const previousLoadGeneration = pageLoadGeneration;
+  await command("Page.navigate", {url: expectedUrl});
+  await waitForPageLoad(previousLoadGeneration, `加载事件${path}`);
+  await waitForTargetUrl(expectedUrl, `导航${path}`);
   await waitFor("document.readyState === 'complete'", `加载${path}`);
 }
 
@@ -77,6 +146,7 @@ async function pressKey(key, code, windowsVirtualKeyCode) {
 }
 
 async function clickSelector(selector) {
+  const previousLoadGeneration = pageLoadGeneration;
   const point = await evaluate(`(() => {
     const element = document.querySelector(${JSON.stringify(selector)});
     if (!element) throw new Error('missing ' + ${JSON.stringify(selector)});
@@ -86,6 +156,201 @@ async function clickSelector(selector) {
   })()`);
   await command("Input.dispatchMouseEvent", {type: "mousePressed", x: point.x, y: point.y, button: "left", clickCount: 1});
   await command("Input.dispatchMouseEvent", {type: "mouseReleased", x: point.x, y: point.y, button: "left", clickCount: 1});
+  return previousLoadGeneration;
+}
+
+async function clickFormButton(action, expectedFields = {}) {
+  const previousLoadGeneration = pageLoadGeneration;
+  const scheduled = await evaluate(`(() => {
+    const action = ${JSON.stringify(action)};
+    const expectedFields = ${JSON.stringify(expectedFields)};
+    const forms = [...document.querySelectorAll('form')];
+    const form = forms.find(candidate => {
+      if (candidate.getAttribute('action') !== action) return false;
+      return Object.entries(expectedFields).every(([name, value]) =>
+        candidate.querySelector('[name="' + name + '"][value="' + value + '"]')
+      );
+    });
+    if (!form) throw new Error('missing form ' + action);
+    const button = form.querySelector('button[type="submit"], input[type="submit"]');
+    if (!button) throw new Error('missing submit button ' + action);
+    button.scrollIntoView({block: 'center'});
+    setTimeout(() => button.click(), 0);
+    return true;
+  })()`);
+  if (!scheduled) throw new Error(`未能点击表单按钮: ${action}`);
+  return previousLoadGeneration;
+}
+
+async function captureSuccessSubscriptionId(label) {
+  const locationState = await evaluate(`(() => {
+    const url = new URL(location.href);
+    return {
+      pathname: url.pathname,
+      search: url.search,
+      keys: [...url.searchParams.keys()],
+      subscriptionId: url.searchParams.get('subscription_id') || '',
+    };
+  })()`);
+  if (
+    locationState.pathname !== "/success"
+    || !uuidPattern.test(locationState.subscriptionId)
+    || locationState.search !== `?subscription_id=${locationState.subscriptionId}`
+    || JSON.stringify(locationState.keys) !== JSON.stringify(["subscription_id"])
+  ) {
+    throw new Error(`${label} success UUID合同失败: ${JSON.stringify(locationState)}`);
+  }
+  return locationState.subscriptionId;
+}
+
+async function readSubscriptions() {
+  const payload = JSON.parse(await readFile(subscriptionsPath, "utf8"));
+  if (!Array.isArray(payload)) throw new Error("临时subscriptions根节点不是数组");
+  return payload;
+}
+
+function subscriptionById(subscriptions, subscriptionId, label) {
+  const matches = subscriptions.filter(item => item?.subscription_id === subscriptionId);
+  if (matches.length !== 1) {
+    throw new Error(`${label} subscription_id匹配数=${matches.length}`);
+  }
+  return matches[0];
+}
+
+function assertDeepEqual(actual, expected, label) {
+  if (!isDeepStrictEqual(actual, expected)) {
+    throw new Error(`${label}逐字段不一致`);
+  }
+}
+
+function withOnlyChange(baseline, mutate) {
+  const expected = structuredClone(baseline);
+  mutate(expected);
+  return expected;
+}
+
+async function subscriptionCardState(subscriptionId) {
+  const toggleAction = `/subscriptions/${subscriptionId}/toggle`;
+  return evaluate(`(() => {
+    const subscriptionId = ${JSON.stringify(subscriptionId)};
+    const toggleAction = ${JSON.stringify(toggleAction)};
+    const toggleForm = [...document.querySelectorAll('form')]
+      .find(form => form.getAttribute('action') === toggleAction);
+    const card = toggleForm?.closest('.card');
+    if (!card) throw new Error('missing subscription card ' + subscriptionId);
+    return {
+      editHref: card.querySelector('a[href^="/?edit="]')?.getAttribute('href') || '',
+      toggleAction: toggleForm.getAttribute('action') || '',
+      toggleText: toggleForm.querySelector('button[type="submit"]')?.textContent.trim() || '',
+      deleteHref: card.querySelector('a.danger')?.getAttribute('href') || '',
+      statusClass: card.querySelector('.status')?.className || '',
+      statusText: card.querySelector('.status')?.textContent.trim() || '',
+    };
+  })()`);
+}
+
+async function assertSubscriptionCardActions(subscriptionId) {
+  const state = await subscriptionCardState(subscriptionId);
+  const expected = {
+    editHref: `/?edit=${subscriptionId}`,
+    toggleAction: `/subscriptions/${subscriptionId}/toggle`,
+    deleteHref: `/subscription/${subscriptionId}/delete`,
+  };
+  for (const [field, value] of Object.entries(expected)) {
+    if (state[field] !== value) {
+      throw new Error(`UUID action错误: ${field} expected=${value} actual=${state[field]}`);
+    }
+  }
+  return state;
+}
+
+async function openSubscriptionEditorFromCard(subscriptionId) {
+  await navigate("/subscriptions");
+  const state = await assertSubscriptionCardActions(subscriptionId);
+  await assertNoNumericSubscriptionActions();
+  const previousLoadGeneration = await clickSelector(`a[href="${state.editHref}"]`);
+  await reattachPage(
+    `UUID编辑重定向${subscriptionId.slice(0, 8)}`,
+    `/settings?edit=${subscriptionId}`,
+    previousLoadGeneration,
+  );
+}
+
+async function assertNoNumericSubscriptionActions() {
+  const violations = await evaluate(`(() => {
+    const values = [...document.querySelectorAll('a[href], form[action]')]
+      .map(element => element.getAttribute('href') || element.getAttribute('action') || '');
+    const patterns = [
+      /^\\/(settings)?\\?edit=\\d+$/,
+      /^\\/subscriptions\\/\\d+\\/(toggle|quick-update)$/,
+      /^\\/subscription\\/\\d+\\/delete$/,
+      /^\\/success\\?index=\\d+$/,
+    ];
+    return values.filter(value => patterns.some(pattern => pattern.test(value)));
+  })()`);
+  if (violations.length) {
+    throw new Error(`新控件仍使用数字index: ${JSON.stringify(violations)}`);
+  }
+}
+
+async function waitForSubscriptions(predicate, label, timeout = 12000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    const subscriptions = await readSubscriptions();
+    if (predicate(subscriptions)) return subscriptions;
+    await sleep(100);
+  }
+  throw new Error(`等待超时: ${label}`);
+}
+
+async function deleteSubscriptionThroughConfirmation(subscriptionId, label, expectedBeforeCount) {
+  await navigate("/subscriptions");
+  const card = await assertSubscriptionCardActions(subscriptionId);
+  await assertNoNumericSubscriptionActions();
+  const before = await readSubscriptions();
+  if (before.length !== expectedBeforeCount) {
+    throw new Error(`${label}删除前记录数 expected=${expectedBeforeCount} actual=${before.length}`);
+  }
+
+  await navigate(card.deleteHref);
+  const deleteConfirmation = await evaluate(`(() => ({
+    pathname: location.pathname,
+    title: document.body.textContent.includes('确认删除这条监控'),
+    csrfToken: Boolean(document.querySelector('form input[name="csrf_token"][type="hidden"]')?.value),
+    explicitConfirmation: document.querySelector('input[name="confirm_delete"]')?.value === 'yes',
+  }))()`);
+  if (
+    deleteConfirmation.pathname !== `/subscription/${subscriptionId}/delete`
+    || !deleteConfirmation.title
+    || !deleteConfirmation.csrfToken
+    || !deleteConfirmation.explicitConfirmation
+  ) {
+    throw new Error(`${label}删除确认页契约失败: ${JSON.stringify(deleteConfirmation)}`);
+  }
+  assertDeepEqual(await readSubscriptions(), before, `${label}删除GET产生副作用`);
+
+  await navigate("/subscriptions");
+  const afterGetCount = await evaluate("document.querySelectorAll('.card').length");
+  if (afterGetCount !== expectedBeforeCount) {
+    throw new Error(`${label}删除GET页面计数错误: before=${expectedBeforeCount} after=${afterGetCount}`);
+  }
+
+  await navigate(card.deleteHref);
+  const previousLoadGeneration = await clickSelector('form button[type="submit"]');
+  await reattachPage(`${label}删除POST完成`, "/subscriptions", previousLoadGeneration);
+  const after = await waitForSubscriptions(
+    subscriptions => subscriptions.length === expectedBeforeCount - 1,
+    `${label}删除落盘`,
+  );
+  if (await evaluate("location.pathname") !== "/subscriptions") {
+    throw new Error(`${label}删除POST未返回/subscriptions`);
+  }
+  const afterPostCount = await evaluate("document.querySelectorAll('.card').length");
+  if (afterPostCount !== expectedBeforeCount - 1) {
+    throw new Error(`${label}删除POST页面计数错误: before=${expectedBeforeCount} after=${afterPostCount}`);
+  }
+  console.log(`[UI smoke] 服务端删除确认=PASS ${label}；GET零写入；POST含CSRF+confirm_delete=yes后删除`);
+  return after;
 }
 function checkboxSelector(name, value) {
   return `input[name="${name}"][value="${value}"]`;
@@ -331,14 +596,16 @@ await waitFor("document.querySelector('[data-route-type-badge=\"true\"]').datase
 console.log("[UI smoke] 航线类型徽章=PASS 上海→北京识别为国内");
 await evaluate(`document.querySelector('form[data-page-mode="quick"]').requestSubmit(); true`);
 await waitFor("location.pathname === '/success'", "快速页提交确认", 15000);
+const quickId = await captureSuccessSubscriptionId("快速页订阅");
 console.log("[UI smoke] 页1提交=PASS 已抵达/success");
+console.log("[UI smoke] 页1 success UUID=PASS");
 
 const quickConfirmation = await evaluate(`(() => {
   const text = document.body.textContent;
   return text.includes('旅游 + 家庭/亲子');
 })()`);
 if (!quickConfirmation) throw new Error('页1确认页未完整回读场景');
-await navigate("/settings?edit=0");
+await openSubscriptionEditorFromCard(quickId);
 await assertPersistedCheckboxValues(
   "travel_scenario",
   ["tourism", "family"],
@@ -588,6 +855,7 @@ await evaluate(`(() => {
 })()`);
 await evaluate(`document.querySelector('form[data-page-mode="full"]').requestSubmit(); true`);
 await waitFor("location.pathname === '/success'", "完整页提交确认", 15000);
+const fullId = await captureSuccessSubscriptionId("完整页订阅");
 const confirmation = await evaluate(`(() => {
   const text = document.body.textContent;
   return {
@@ -613,8 +881,9 @@ console.log("[UI smoke] 分方向时间窗回读=PASS 去程06:30-08:30 返程18
 console.log("[UI smoke] 中转细节回读=PASS 价格优先态验证过夜+自行中转；提交态合理中转+总时长18小时");
 console.log("[UI smoke] 同行派生=PASS 飞行偏好→旧schema");
 console.log("[UI smoke] 混舱分配回读=PASS 商务:成人×2 / 经济:儿童×1+老人×2");
+console.log("[UI smoke] 页2 success UUID=PASS");
 
-await navigate("/settings?edit=1");
+await openSubscriptionEditorFromCard(fullId);
 const editGroups = await evaluate(`(() => ({
   business: document.getElementById('group-business-travel')?.hasAttribute('open') || false,
   feasibility: document.getElementById('group-feasibility')?.hasAttribute('open') || false,
@@ -670,6 +939,7 @@ await evaluate(`(() => {
   return true;
 })()`);
 await waitFor("location.pathname === '/success'", "直飞隐藏态提交确认", 15000);
+const directId = await captureSuccessSubscriptionId("直飞隐藏态订阅");
 const hiddenConfirmation = await evaluate(`(() => {
   const text = document.body.textContent;
   return {
@@ -680,7 +950,8 @@ const hiddenConfirmation = await evaluate(`(() => {
 if (!hiddenConfirmation.directOnly || !hiddenConfirmation.noStaleDetails) {
   throw new Error(`中转隐藏提交确认失败: ${JSON.stringify(hiddenConfirmation)}`);
 }
-await navigate("/settings?edit=2");
+console.log("[UI smoke] 直飞隐藏态 success UUID=PASS");
+await openSubscriptionEditorFromCard(directId);
 const hiddenPersisted = await evaluate(`(() => {
   const wrapper = document.querySelector('[data-visibility-contract="transfer-details"]');
   return {
@@ -698,35 +969,191 @@ if (hiddenPersisted.policy !== 'direct_only' || !hiddenPersisted.hidden || !hidd
 console.log("[UI smoke] 中转隐藏提交默认=PASS 直飞态不提交细节；服务端回填extra_6/false/false");
 
 await navigate("/subscriptions");
-const deleteProbe = await evaluate(`(() => ({
-  beforeCount: document.querySelectorAll('.card').length,
-  deleteHref: document.querySelector('a.danger')?.getAttribute('href') || '',
-}))()`);
-if (deleteProbe.beforeCount < 1 || !/^\/subscription\/[0-9a-f-]{36}\/delete$/i.test(deleteProbe.deleteHref)) {
-  throw new Error(`删除入口契约失败: ${JSON.stringify(deleteProbe)}`);
+const createdCardCount = await evaluate("document.querySelectorAll('.card').length");
+if (createdCardCount !== 3) {
+  throw new Error(`三条fixture页面计数错误: ${createdCardCount}`);
 }
-await navigate(deleteProbe.deleteHref);
-const deleteConfirmation = await evaluate(`(() => ({
-  title: document.body.textContent.includes('确认删除这条监控'),
-  csrfToken: Boolean(document.querySelector('form input[name="csrf_token"][type="hidden"]')?.value),
-  explicitConfirmation: document.querySelector('input[name="confirm_delete"]')?.value === 'yes',
-}))()`);
-if (!deleteConfirmation.title || !deleteConfirmation.csrfToken || !deleteConfirmation.explicitConfirmation) {
-  throw new Error(`删除确认页契约失败: ${JSON.stringify(deleteConfirmation)}`);
+for (const subscriptionId of [quickId, fullId, directId]) {
+  await assertSubscriptionCardActions(subscriptionId);
 }
+await assertNoNumericSubscriptionActions();
+console.log("[UI smoke] UUID action合同=PASS edit入口/?edit=<uuid>→/settings?edit=<uuid>；toggle/quick-update/delete精确路由；数字index控件=0");
+
+const remainingAfterDirectDelete = await deleteSubscriptionThroughConfirmation(
+  directId,
+  "直飞隐藏态订阅C",
+  3,
+);
+if (remainingAfterDirectDelete.length !== 2) {
+  throw new Error(`删除C后记录数错误: ${remainingAfterDirectDelete.length}`);
+}
+const aBaseline = structuredClone(
+  subscriptionById(remainingAfterDirectDelete, quickId, "A baseline"),
+);
+const bBaseline = structuredClone(
+  subscriptionById(remainingAfterDirectDelete, fullId, "B baseline"),
+);
+if (remainingAfterDirectDelete.some(item => item?.subscription_id === directId)) {
+  throw new Error("删除C后临时JSON仍含directId");
+}
+if (aBaseline.status !== "active") {
+  throw new Error(`A初始status不是active: ${String(aBaseline.status)}`);
+}
+console.log("[UI smoke] 临时JSON oracle=PASS 删除C后仅余A/B并保存完整基线");
+
 await navigate("/subscriptions");
-const afterGetCount = await evaluate("document.querySelectorAll('.card').length");
-if (afterGetCount !== deleteProbe.beforeCount) {
-  throw new Error(`删除GET产生副作用: before=${deleteProbe.beforeCount} after=${afterGetCount}`);
+const initialAState = await assertSubscriptionCardActions(quickId);
+if (!initialAState.statusClass.includes("active") || !initialAState.statusText.includes("监控中") || initialAState.toggleText !== "暂停") {
+  throw new Error(`A暂停前页面状态错误: ${JSON.stringify(initialAState)}`);
 }
-await navigate(deleteProbe.deleteHref);
-await clickSelector('form button[type="submit"]');
-await waitFor("location.pathname === '/subscriptions'", "删除POST完成");
-const afterPostCount = await evaluate("document.querySelectorAll('.card').length");
-if (afterPostCount !== deleteProbe.beforeCount - 1) {
-  throw new Error(`删除POST计数错误: before=${deleteProbe.beforeCount} after=${afterPostCount}`);
+const toggleAction = `/subscriptions/${quickId}/toggle`;
+const pauseLoadGeneration = await clickFormButton(toggleAction);
+await reattachPage("A暂停", "/subscriptions", pauseLoadGeneration);
+const pausedSubscriptions = await waitForSubscriptions(
+  subscriptions => subscriptionById(subscriptions, quickId, "A paused").status === "paused",
+  "A暂停落盘",
+);
+await waitFor(`(() => {
+  const form = [...document.querySelectorAll('form')].find(item => item.getAttribute('action') === ${JSON.stringify(`/subscriptions/${quickId}/toggle`)});
+  const card = form?.closest('.card');
+  return location.pathname === '/subscriptions'
+    && card?.querySelector('.status.paused')?.textContent.includes('已暂停')
+    && form?.querySelector('button[type="submit"]')?.textContent.trim() === '恢复';
+})()`, "A暂停页面回读");
+if (pausedSubscriptions.length !== 2) {
+  throw new Error(`A暂停后总数错误: ${pausedSubscriptions.length}`);
 }
-console.log("[UI smoke] 服务端删除确认=PASS GET零写入；POST含CSRF+confirm_delete=yes后删除");
+assertDeepEqual(
+  subscriptionById(pausedSubscriptions, quickId, "A paused"),
+  withOnlyChange(aBaseline, record => { record.status = "paused"; }),
+  "A暂停仅status变化",
+);
+assertDeepEqual(
+  subscriptionById(pausedSubscriptions, fullId, "B during A pause"),
+  bBaseline,
+  "A暂停时B",
+);
+console.log("[UI smoke] UUID暂停A=PASS 页面已暂停/恢复按钮；JSON仅status active→paused；B不变");
+
+const pausedAState = await assertSubscriptionCardActions(quickId);
+if (!pausedAState.statusClass.includes("paused") || !pausedAState.statusText.includes("已暂停") || pausedAState.toggleText !== "恢复") {
+  throw new Error(`A恢复前页面状态错误: ${JSON.stringify(pausedAState)}`);
+}
+const resumeLoadGeneration = await clickFormButton(toggleAction);
+await reattachPage("A恢复", "/subscriptions", resumeLoadGeneration);
+const resumedSubscriptions = await waitForSubscriptions(
+  subscriptions => subscriptionById(subscriptions, quickId, "A resumed").status === "active",
+  "A恢复落盘",
+);
+await waitFor(`(() => {
+  const form = [...document.querySelectorAll('form')].find(item => item.getAttribute('action') === ${JSON.stringify(`/subscriptions/${quickId}/toggle`)});
+  const card = form?.closest('.card');
+  return location.pathname === '/subscriptions'
+    && card?.querySelector('.status.active')?.textContent.includes('监控中')
+    && form?.querySelector('button[type="submit"]')?.textContent.trim() === '暂停';
+})()`, "A恢复页面回读");
+if (resumedSubscriptions.length !== 2) {
+  throw new Error(`A恢复后总数错误: ${resumedSubscriptions.length}`);
+}
+assertDeepEqual(
+  subscriptionById(resumedSubscriptions, quickId, "A resumed"),
+  aBaseline,
+  "A恢复完整基线",
+);
+assertDeepEqual(
+  subscriptionById(resumedSubscriptions, fullId, "B after A resume"),
+  bBaseline,
+  "A恢复时B",
+);
+console.log("[UI smoke] UUID恢复A=PASS 页面监控中/暂停按钮；A/B逐字段回归基线");
+
+if (aBaseline.soft_preferences?.airline_policy !== "any") {
+  throw new Error(`A quick-update前airline_policy不是any: ${String(aBaseline.soft_preferences?.airline_policy)}`);
+}
+await navigate(`/success?subscription_id=${quickId}`);
+if (await captureSuccessSubscriptionId("A quick-update入口") !== quickId) {
+  throw new Error("A quick-update入口subscription_id漂移");
+}
+const quickUpdateAction = `/subscriptions/${quickId}/quick-update`;
+const quickUpdateContract = await evaluate(`(() => {
+  const action = ${JSON.stringify(quickUpdateAction)};
+  const forms = [...document.querySelectorAll('form')].filter(form => form.getAttribute('action') === action);
+  const target = forms.find(form =>
+    form.querySelector('[name="field"][value="airline_policy"]')
+    && form.querySelector('[name="value"][value="prefer_full_service"]')
+  );
+  return {
+    action: target?.getAttribute('action') || '',
+    csrfToken: Boolean(target?.querySelector('[name="csrf_token"]')?.value),
+    field: target?.querySelector('[name="field"]')?.value || '',
+    value: target?.querySelector('[name="value"]')?.value || '',
+  };
+})()`);
+if (
+  quickUpdateContract.action !== quickUpdateAction
+  || !quickUpdateContract.csrfToken
+  || quickUpdateContract.field !== "airline_policy"
+  || quickUpdateContract.value !== "prefer_full_service"
+) {
+  throw new Error(`A quick-update表单合同失败: ${JSON.stringify(quickUpdateContract)}`);
+}
+const quickUpdateLoadGeneration = await clickFormButton(quickUpdateAction, {
+  field: "airline_policy",
+  value: "prefer_full_service",
+});
+await reattachPage(
+  "A quick-update",
+  `/success?subscription_id=${quickId}`,
+  quickUpdateLoadGeneration,
+);
+const quickUpdatedSubscriptions = await waitForSubscriptions(
+  subscriptions => subscriptionById(subscriptions, quickId, "A quick-updated").soft_preferences?.airline_policy === "prefer_full_service",
+  "A quick-update落盘",
+);
+await waitFor(`location.pathname === '/success' && location.search === ${JSON.stringify(`?subscription_id=${quickId}`)}`, "A quick-update重定向");
+const expectedQuickUpdatedA = withOnlyChange(aBaseline, record => {
+  record.soft_preferences.airline_policy = "prefer_full_service";
+});
+if (quickUpdatedSubscriptions.length !== 2) {
+  throw new Error(`A quick-update后总数错误: ${quickUpdatedSubscriptions.length}`);
+}
+assertDeepEqual(
+  subscriptionById(quickUpdatedSubscriptions, quickId, "A quick-updated"),
+  expectedQuickUpdatedA,
+  "A quick-update仅soft_preferences.airline_policy变化",
+);
+assertDeepEqual(
+  subscriptionById(quickUpdatedSubscriptions, fullId, "B after A quick-update"),
+  bBaseline,
+  "A quick-update时B",
+);
+console.log("[UI smoke] UUID quick-update A=PASS 真实按钮；总数不变；仅airline_policy any→prefer_full_service；B不变");
+
+const remainingAfterADelete = await deleteSubscriptionThroughConfirmation(
+  quickId,
+  "快速页订阅A",
+  2,
+);
+if (remainingAfterADelete.length !== 1) {
+  throw new Error(`最终记录数错误: ${remainingAfterADelete.length}`);
+}
+assertDeepEqual(
+  subscriptionById(remainingAfterADelete, fullId, "final B"),
+  bBaseline,
+  "最终唯一记录B",
+);
+await assertSubscriptionCardActions(fullId);
+await assertNoNumericSubscriptionActions();
+const finalPageState = await evaluate(`(() => ({
+  cardCount: document.querySelectorAll('.card').length,
+  hasA: Boolean(document.querySelector('form[action="/subscriptions/${quickId}/toggle"]')),
+  hasC: Boolean(document.querySelector('form[action="/subscriptions/${directId}/toggle"]')),
+  hasB: Boolean(document.querySelector('form[action="/subscriptions/${fullId}/toggle"]')),
+}))()`);
+if (finalPageState.cardCount !== 1 || finalPageState.hasA || finalPageState.hasC || !finalPageState.hasB) {
+  throw new Error(`最终页面唯一B合同失败: ${JSON.stringify(finalPageState)}`);
+}
+console.log("[UI smoke] UUID删除A=PASS 最终临时JSON与页面均仅余B且逐字段不变");
 
 await sleep(350);
 if (browserErrors.length) throw new Error(`浏览器错误: ${browserErrors.join(' | ')}`);
@@ -743,5 +1170,5 @@ try {
   }
   throw error;
 } finally {
-  ws.close();
+  if (ws.readyState === WebSocket.OPEN) ws.close();
 }

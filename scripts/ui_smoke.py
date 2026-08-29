@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -75,11 +76,26 @@ def _default_browser_candidates(
 
 BROWSER_CANDIDATES = _default_browser_candidates()
 
+_BROWSER_BLOCKED_PORTS = frozenset(
+    {
+        1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53,
+        69, 77, 79, 87, 95, 101, 102, 103, 104, 109, 110, 111, 113, 115,
+        117, 119, 123, 135, 137, 139, 143, 161, 179, 389, 427, 465, 512,
+        513, 514, 515, 526, 530, 531, 532, 540, 548, 554, 556, 563, 587,
+        601, 636, 989, 990, 993, 995, 1719, 1720, 1723, 2049, 3659, 4045,
+        4190, 5060, 5061, 6000, 6566, 6665, 6666, 6667, 6668, 6669, 6697,
+        10080,
+    }
+)
+
 
 def _free_port() -> int:
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
+    while True:
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = int(sock.getsockname()[1])
+        if port not in _BROWSER_BLOCKED_PORTS:
+            return port
 
 
 def _wait_http(url: str, *, timeout: float = 15.0) -> None:
@@ -120,6 +136,12 @@ def _node_path() -> str:
     if not node:
         raise RuntimeError("未找到 Node.js；CDP 驱动需要 Node 22+ 内置 WebSocket")
     return node
+
+
+def _file_presence_and_sha256(path: Path) -> tuple[bool, str | None]:
+    if not path.exists():
+        return False, None
+    return True, hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def _browser_command(
@@ -180,6 +202,10 @@ def _write_failure_logs(
 def run_smoke(*, log_path: Path | None = None, artifact_dir: Path | None = None) -> int:
     artifact_dir = artifact_dir or DEFAULT_ARTIFACT_DIR
     log_path = log_path or artifact_dir / "ui-smoke.log"
+    production_subscriptions = ROOT / "data" / "subscriptions.json"
+    production_subscriptions_before = _file_presence_and_sha256(
+        production_subscriptions
+    )
     try:
         browser = _browser_path()
     except Exception as exc:
@@ -199,6 +225,13 @@ def run_smoke(*, log_path: Path | None = None, artifact_dir: Path | None = None)
 
     with tempfile.TemporaryDirectory(prefix="flight-ui-smoke-", ignore_cleanup_errors=True) as tmpdir:
         tmp = Path(tmpdir)
+        server_log_path = tmp / "server-process.log"
+        server_log_stream = server_log_path.open(
+            "w",
+            encoding="utf-8",
+            errors="replace",
+            newline="",
+        )
         server = subprocess.Popen(
             [
                 sys.executable,
@@ -212,11 +245,8 @@ def run_smoke(*, log_path: Path | None = None, artifact_dir: Path | None = None)
                 str(tmp / "data"),
             ],
             cwd=ROOT,
-            stdout=subprocess.PIPE,
+            stdout=server_log_stream,
             stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
         )
         edge_process = None
         try:
@@ -232,16 +262,37 @@ def run_smoke(*, log_path: Path | None = None, artifact_dir: Path | None = None)
                 stderr=subprocess.DEVNULL,
             )
             _wait_http(f"http://127.0.0.1:{cdp_port}/json/version")
-            completed = subprocess.run(
-                [node, str(DRIVER), base_url, str(cdp_port), str(artifact_dir)],
-                cwd=ROOT,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=60,
-                check=False,
-            )
+            driver_command = [
+                node,
+                str(DRIVER),
+                base_url,
+                str(cdp_port),
+                str(artifact_dir),
+                str(tmp / "data" / "subscriptions.json"),
+            ]
+            try:
+                completed = subprocess.run(
+                    driver_command,
+                    cwd=ROOT,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=60,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired as exc:
+                partial_stdout = exc.stdout or ""
+                partial_stderr = exc.stderr or ""
+                if isinstance(partial_stdout, bytes):
+                    partial_stdout = partial_stdout.decode("utf-8", errors="replace")
+                if isinstance(partial_stderr, bytes):
+                    partial_stderr = partial_stderr.decode("utf-8", errors="replace")
+                if partial_stdout.strip():
+                    lines.extend(partial_stdout.strip().splitlines())
+                if partial_stderr.strip():
+                    lines.extend(partial_stderr.strip().splitlines())
+                raise
             if completed.stdout.strip():
                 lines.extend(completed.stdout.strip().splitlines())
             if completed.stderr.strip():
@@ -262,13 +313,33 @@ def run_smoke(*, log_path: Path | None = None, artifact_dir: Path | None = None)
                     edge_process.kill()
             server.terminate()
             try:
-                server_output, _ = server.communicate(timeout=5)
+                server.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 server.kill()
-                server_output, _ = server.communicate()
+                server.wait(timeout=5)
+            server_log_stream.close()
+            server_output = server_log_path.read_text(
+                encoding="utf-8",
+                errors="replace",
+            )
             if server_output.strip():
                 lines.append("[UI smoke] 本地服务日志:")
                 lines.extend(server_output.strip().splitlines()[-20:])
+
+    production_subscriptions_after = _file_presence_and_sha256(
+        production_subscriptions
+    )
+    if production_subscriptions_after != production_subscriptions_before:
+        lines.append(
+            "[UI smoke] 结果=FAIL 原因=生产subscriptions存在性或SHA发生变化"
+        )
+        return_code = 1
+    else:
+        exists, digest = production_subscriptions_after
+        lines.append(
+            "[UI smoke] 生产subscriptions状态=PASS "
+            f"exists={exists} sha256={digest or 'not-applicable'}"
+        )
 
     output = "\n".join(lines) + "\n"
     print(output, end="")
