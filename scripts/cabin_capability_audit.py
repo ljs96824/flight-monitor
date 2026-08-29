@@ -17,6 +17,7 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Callable, Mapping
+from uuid import uuid4
 
 import requests
 from dotenv import load_dotenv
@@ -32,6 +33,11 @@ from api_usage import (
     record_actual_requests,
     usage_snapshot,
 )
+from scripts.manual_live_guard import (
+    no_live_api_enabled,
+    prepare_manual_live_execution,
+)
+from workload_class import MANUAL_LIVE
 
 
 JUHE_URL = "https://apis.juhe.cn/flight/query"
@@ -42,6 +48,7 @@ DEFAULT_DEPART_DATE = "2026-10-01"
 DEFAULT_CABIN = "business"
 MAX_TOTAL_CALLS = 6
 SOURCE_CALL_LIMITS = {"juhe": 3, "duffel": 3}
+ENTRYPOINT = "cabin_capability_audit"
 OFFICIAL_DOCS = {
     "juhe": "https://www.juhe.cn/docs/api/id/818",
     "duffel_offer_requests": "https://duffel.com/docs/api/v2/offer-requests",
@@ -345,7 +352,10 @@ def run_audit(
         raise ValueError(f"未知审计源: {unknown}")
 
     audit_round = round_id or (
-        "audit_cabin_" + datetime.now().astimezone().strftime("%Y%m%dT%H%M%S")
+        "audit_cabin_"
+        + datetime.now().astimezone().strftime("%Y%m%dT%H%M%S")
+        + "_"
+        + uuid4().hex[:8]
     )
     report = {
         "round_id": audit_round,
@@ -355,12 +365,12 @@ def run_audit(
         "requested_cabin": DEFAULT_CABIN,
         "budget": {"total": MAX_TOTAL_CALLS, "per_source": SOURCE_CALL_LIMITS},
         "official_docs": OFFICIAL_DOCS,
-        "ledger_before": _usage_brief(usage_path, strict=execute),
         "calls": [],
         "results": {},
         "actual_calls": {},
     }
     if not execute:
+        report["ledger_before"] = _usage_brief(usage_path, strict=False)
         report["planned_calls"] = [
             _public_parameters(source, origin, dest, depart_date) for source in selected
         ]
@@ -371,97 +381,138 @@ def run_audit(
         }
         return report
 
-    budget = AuditBudget()
-    secrets = (
-        environment.get("JUHE_FLIGHT_KEY"),
-        environment.get("DUFFEL_TOKEN"),
+    planned_counts = {source: 1 for source in selected}
+    gate = prepare_manual_live_execution(
+        environment=environment,
+        depart_date=depart_date,
+        planned_counts=planned_counts,
+        usage_path=usage_path,
+        round_id=audit_round,
     )
-    for source in selected:
-        credential_name = "JUHE_FLIGHT_KEY" if source == "juhe" else "DUFFEL_TOKEN"
-        credential = environment.get(credential_name)
-        public_params = _public_parameters(source, origin, dest, depart_date)
-        call_record = {"source": source, "parameters": public_params}
-        if not credential:
-            call_record.update(
-                {"status": "skipped", "reason": f"缺少 {credential_name}"}
-            )
-            report["calls"].append(call_record)
-            continue
+    report.update(gate.report_fields())
+    report["ledger_before"] = gate.ledger_snapshot
+    if not gate.allowed:
+        report["ledger_after"] = gate.ledger_snapshot
+        report["recommendation"] = {
+            "route": "blocked",
+            "reason": gate.gate_reason,
+        }
+        return report
 
-        budget.reserve(source)
-        report["actual_calls"][source] = report["actual_calls"].get(source, 0) + 1
-        try:
-            if source == "juhe":
-                response = get(
-                    JUHE_URL,
-                    params={
-                        "key": credential,
-                        "departure": origin.upper(),
-                        "arrival": dest.upper(),
-                        "departureDate": depart_date,
-                        "flightNo": "",
-                        "maxSegments": "0",
-                    },
-                    timeout=timeout,
+    plan_text = ",".join(f"{source}:1" for source in selected) or "none"
+    print(
+        f"[审计计划] entrypoint={ENTRYPOINT} 计划调用={len(selected)} "
+        f"明细={plan_text} 总上限={MAX_TOTAL_CALLS} "
+        f"源上限=juhe:{SOURCE_CALL_LIMITS['juhe']},"
+        f"duffel:{SOURCE_CALL_LIMITS['duffel']}"
+    )
+    try:
+        budget = AuditBudget()
+        secrets = (
+            environment.get("JUHE_FLIGHT_KEY"),
+            environment.get("DUFFEL_TOKEN"),
+        )
+        for source in selected:
+            credential_name = (
+                "JUHE_FLIGHT_KEY" if source == "juhe" else "DUFFEL_TOKEN"
+            )
+            credential = environment.get(credential_name)
+            public_params = _public_parameters(source, origin, dest, depart_date)
+            call_record = {"source": source, "parameters": public_params}
+            if not credential:
+                call_record.update(
+                    {"status": "skipped", "reason": f"缺少 {credential_name}"}
                 )
-            else:
-                response = post(
-                    DUFFEL_URL,
-                    params={"return_offers": "true"},
-                    json={
-                        "data": {
-                            "slices": [
-                                {
-                                    "origin": origin.upper(),
-                                    "destination": dest.upper(),
-                                    "departure_date": depart_date,
-                                }
-                            ],
-                            "passengers": [{"type": "adult"}],
-                            "cabin_class": DEFAULT_CABIN,
-                        }
-                    },
-                    headers={
-                        "Authorization": f"Bearer {credential}",
-                        "Duffel-Version": "v2",
-                        "Accept": "application/json",
-                        "Content-Type": "application/json",
-                    },
-                    timeout=timeout,
+                report["calls"].append(call_record)
+                continue
+
+            budget.reserve(source)
+            report["actual_calls"][source] = (
+                report["actual_calls"].get(source, 0) + 1
+            )
+            try:
+                if source == "juhe":
+                    response = get(
+                        JUHE_URL,
+                        params={
+                            "key": credential,
+                            "departure": origin.upper(),
+                            "arrival": dest.upper(),
+                            "departureDate": depart_date,
+                            "flightNo": "",
+                            "maxSegments": "0",
+                        },
+                        timeout=timeout,
+                    )
+                else:
+                    response = post(
+                        DUFFEL_URL,
+                        params={"return_offers": "true"},
+                        json={
+                            "data": {
+                                "slices": [
+                                    {
+                                        "origin": origin.upper(),
+                                        "destination": dest.upper(),
+                                        "departure_date": depart_date,
+                                    }
+                                ],
+                                "passengers": [{"type": "adult"}],
+                                "cabin_class": DEFAULT_CABIN,
+                            }
+                        },
+                        headers={
+                            "Authorization": f"Bearer {credential}",
+                            "Duffel-Version": "v2",
+                            "Accept": "application/json",
+                            "Content-Type": "application/json",
+                        },
+                        timeout=timeout,
+                    )
+
+                call_record["http_status"] = int(response.status_code)
+                response.raise_for_status()
+                payload = response.json()
+                summary = (
+                    summarize_juhe_response(payload)
+                    if source == "juhe"
+                    else summarize_duffel_response(payload)
                 )
+                call_record.update({"status": "completed", "response": summary})
+                report["results"][source] = summary
+            except Exception as exc:
+                message = _redact_error(exc, secrets)
+                call_record.update({"status": "failed", "error": message})
+                report["results"][source] = {
+                    "capability": "unavailable",
+                    "conclusion": f"探测失败: {message}",
+                }
+            finally:
+                record_actual_requests(
+                    {source: 1},
+                    path=usage_path,
+                    round_id=audit_round,
+                    workload_class=MANUAL_LIVE,
+                    entrypoint=ENTRYPOINT,
+                )
+                report["calls"].append(call_record)
 
-            call_record["http_status"] = int(response.status_code)
-            response.raise_for_status()
-            payload = response.json()
-            summary = (
-                summarize_juhe_response(payload)
-                if source == "juhe"
-                else summarize_duffel_response(payload)
-            )
-            call_record.update({"status": "completed", "response": summary})
-            report["results"][source] = summary
-        except Exception as exc:
-            message = _redact_error(exc, secrets)
-            call_record.update({"status": "failed", "error": message})
-            report["results"][source] = {
-                "capability": "unavailable",
-                "conclusion": f"探测失败: {message}",
-            }
-        finally:
-            record_actual_requests(
-                {source: 1},
-                path=usage_path,
-                round_id=audit_round,
-            )
-            report["calls"].append(call_record)
-
-    report["ledger_after"] = _usage_brief(usage_path, strict=True)
-    report["recommendation"] = _recommend_route(report["results"])
-    report["budget_used"] = {"total": budget.total, "per_source": dict(budget.counts)}
-    return report
+        report["ledger_after"] = _usage_brief(usage_path, strict=True)
+        report["recommendation"] = _recommend_route(report["results"])
+        report["budget_used"] = {
+            "total": budget.total,
+            "per_source": dict(budget.counts),
+        }
+        report["status"] = "completed"
+        report["exit_code"] = (
+            1 if any(call.get("status") == "failed" for call in report["calls"]) else 0
+        )
+        return report
+    finally:
+        gate.release()
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--execute", action="store_true", help="显式允许真实 API 探测")
     parser.add_argument("--source", action="append", choices=sorted(SOURCE_CALL_LIMITS))
@@ -471,9 +522,10 @@ def main() -> int:
     parser.add_argument("--usage-path", default=str(DEFAULT_USAGE_PATH))
     parser.add_argument("--round-id")
     parser.add_argument("--timeout", type=float, default=45)
-    args = parser.parse_args()
+    parser.add_argument("--output")
+    args = parser.parse_args(argv)
 
-    if args.execute:
+    if args.execute and not no_live_api_enabled(os.environ):
         load_dotenv(ROOT / ".env", override=False)
     report = run_audit(
         execute=args.execute,
@@ -485,8 +537,11 @@ def main() -> int:
         round_id=args.round_id,
         timeout=args.timeout,
     )
-    print(json.dumps(report, ensure_ascii=False, indent=2))
-    return 0 if all(call.get("status") != "failed" for call in report["calls"]) else 1
+    rendered = json.dumps(report, ensure_ascii=False, indent=2)
+    print(rendered)
+    if args.output:
+        Path(args.output).write_text(rendered + "\n", encoding="utf-8")
+    return int(report.get("exit_code") or 0)
 
 
 if __name__ == "__main__":

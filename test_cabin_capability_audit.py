@@ -1,6 +1,8 @@
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
+from unittest.mock import patch
 
 
 class _FakeResponse:
@@ -14,6 +16,38 @@ class _FakeResponse:
     def raise_for_status(self):
         if self.status_code >= 400:
             raise RuntimeError(f"HTTP {self.status_code}")
+
+
+class _FakeGate:
+    acquired = True
+    holder = {}
+
+    def release(self):
+        return None
+
+
+def _audit_config():
+    return {
+        "source_quota_budget": {
+            "juhe": 100,
+        }
+    }
+
+
+def _acquire_ok(*_args, **_kwargs):
+    return _FakeGate()
+
+
+@contextmanager
+def _guarded_audit():
+    with patch(
+        "scripts.manual_live_guard.config_loader.load_merged_config",
+        return_value=_audit_config(),
+    ), patch(
+        "scripts.manual_live_guard._acquire_singleflight",
+        side_effect=_acquire_ok,
+    ):
+        yield
 
 
 class CabinCapabilityAuditTest(unittest.TestCase):
@@ -183,14 +217,18 @@ class CabinCapabilityAuditTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             usage_path = Path(tmp) / "api_usage.json"
             initialize_usage_ledger(usage_path)
-            report = run_audit(
-                execute=True,
-                env={"JUHE_FLIGHT_KEY": "secret-key", "DUFFEL_TOKEN": "secret-token"},
-                usage_path=usage_path,
-                http_get=fake_get,
-                http_post=fake_post,
-                round_id="audit-test",
-            )
+            with _guarded_audit():
+                report = run_audit(
+                    execute=True,
+                    env={
+                        "JUHE_FLIGHT_KEY": "secret-key",
+                        "DUFFEL_TOKEN": "secret-token",
+                    },
+                    usage_path=usage_path,
+                    http_get=fake_get,
+                    http_post=fake_post,
+                    round_id="audit-test",
+                )
             usage = load_usage_strict(usage_path)
 
         self.assertEqual(report["actual_calls"], {"juhe": 1, "duffel": 1})
