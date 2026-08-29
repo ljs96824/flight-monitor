@@ -50,6 +50,7 @@ from log_utils import safe_log
 from subscription_identity import subscription_id as stable_subscription_id
 from subscription_repository import (
     LOCAL_OWNER_ID,
+    DuplicateSubscriptionIdError,
     SubscriptionIdentityMigrationRequired,
     SubscriptionRepository,
 )
@@ -818,6 +819,25 @@ def _handle_identity_migration_required(
     error: SubscriptionIdentityMigrationRequired,
 ):
     return _identity_migration_required_response(error)
+
+
+def _duplicate_subscription_id_response(error: DuplicateSubscriptionIdError):
+    operation = str(request.endpoint or "unknown")
+    safe_log(
+        "[订阅身份冲突] "
+        f"operation={operation} id={error.masked_id} "
+        f"indexes=[{error.first_index}, {error.second_index}]"
+    )
+    return (
+        "订阅身份状态异常，当前操作已安全阻断。"
+        "请先运行只读订阅身份审计并人工处理重复记录。",
+        503,
+    )
+
+
+@app.errorhandler(DuplicateSubscriptionIdError)
+def _handle_duplicate_subscription_id(error: DuplicateSubscriptionIdError):
+    return _duplicate_subscription_id_response(error)
 
 
 def load_feedback() -> list[dict]:
@@ -2782,6 +2802,8 @@ def subscribe():
         ), 400
     except SubscriptionIdentityMigrationRequired as exc:
         return _identity_migration_required_response(exc)
+    except DuplicateSubscriptionIdError as exc:
+        return _duplicate_subscription_id_response(exc)
     except Exception as exc:
         print(f"[表单] 提交订阅失败: {exc}")
         traceback.print_exc()
