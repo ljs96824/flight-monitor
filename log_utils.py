@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import atexit
 from datetime import datetime
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -108,49 +109,214 @@ _SECRET_KEYS = {
     "apikey",
     "access_token",
     "authorization",
+    "client_secret",
+    "duffel_token",
+    "flask_secret_key",
     "key",
     "password",
+    "pushplus_token",
+    "refresh_token",
+    "serp_api_key",
+    "serpapi_api_key",
+    "serpapi_key",
     "secret",
+    "shared_detail_token",
     "token",
 }
-_EMAIL_KEYS = {"email", "recipient", "recipient_email", "author_email"}
+_EMAIL_KEYS = {
+    "author_email",
+    "contact_email",
+    "email",
+    "notification_email",
+    "recipient",
+    "recipient_email",
+}
+_PHONE_KEYS = {
+    "contact_mobile",
+    "contact_phone",
+    "mobile",
+    "mobile_number",
+    "phone",
+    "phone_number",
+    "recipient_mobile",
+    "recipient_phone",
+    "tel",
+    "telephone",
+}
 EMAIL_PATTERN = re.compile(
     r"(?i)(?<![A-Z0-9._%+-])"
     r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}"
     r"(?![A-Z0-9._%+-])"
 )
 _SECRET_ASSIGNMENT_PATTERN = re.compile(
-    r"(?i)(api[_-]?key|access[_-]?token|token|authorization|password|secret|key)=([^&\s]+)"
+    r"(?i)(?<![A-Z0-9_-])"
+    r"(api[_-]?key|access[_-]?token|token|authorization|password|secret|key)"
+    r"=([^&\s]+)"
 )
+_AUTHORIZATION_BEARER_PATTERN = re.compile(
+    r"(?i)(authorization\s*:\s*bearer\s+)([^\s,;]+)"
+)
+_QUOTED_SECRET_PATTERN = re.compile(
+    r"(?i)([\"'](?:api[_-]?key|access[_-]?token|refresh[_-]?token|"
+    r"pushplus[_-]?token|token|authorization|password|secret|key)[\"']"
+    r"\s*:\s*[\"'])(.*?)([\"'])"
+)
+_CAMEL_ACRONYM_PATTERN = re.compile(r"([A-Z]+)([A-Z][a-z])")
+_CAMEL_BOUNDARY_PATTERN = re.compile(r"([a-z0-9])([A-Z])")
+_NON_KEY_CHARACTER_PATTERN = re.compile(r"[^A-Za-z0-9]+")
+_CYCLE_MARKER = "<CYCLE>"
+_MAX_DEPTH_MARKER = "<MAX_DEPTH>"
+DEFAULT_REDACTION_MAX_DEPTH = 12
+
+
+def _normalize_sensitive_key(key: object) -> str:
+    if not isinstance(key, str):
+        return ""
+    normalized = _CAMEL_ACRONYM_PATTERN.sub(r"\1_\2", key.strip())
+    normalized = _CAMEL_BOUNDARY_PATTERN.sub(r"\1_\2", normalized)
+    normalized = _NON_KEY_CHARACTER_PATTERN.sub("_", normalized)
+    return normalized.strip("_").lower()
+
+
+def _sensitive_key_kind(key: object) -> str:
+    normalized = _normalize_sensitive_key(key)
+    if (
+        normalized in _SECRET_KEYS
+        or normalized.endswith("_token")
+        or normalized.endswith("_password")
+        or normalized.endswith("_secret")
+    ):
+        return "credential"
+    if normalized in _EMAIL_KEYS or normalized.endswith("_email"):
+        return "email"
+    if (
+        normalized in _PHONE_KEYS
+        or normalized.endswith("_phone")
+        or normalized.endswith("_mobile")
+        or normalized.endswith("_phone_number")
+        or normalized.endswith("_mobile_number")
+    ):
+        return "phone"
+    return ""
 
 
 def redact_text(value: object) -> str:
     """脱敏可能进入控制台、运行日志或轮档的自由文本。"""
-    text = str(value)
+    if isinstance(value, str):
+        text = value
+    elif value is None or isinstance(value, (bool, int, float)):
+        text = str(value)
+    else:
+        return f"<OBJECT:{type(value).__name__}>"
     text = _SECRET_ASSIGNMENT_PATTERN.sub(r"\1=***", text)
+    text = _AUTHORIZATION_BEARER_PATTERN.sub(r"\1***", text)
+    text = _QUOTED_SECRET_PATTERN.sub(r"\1***\3", text)
     return EMAIL_PATTERN.sub("<EMAIL>", text)
 
 
-def redact_value(value):
-    """递归脱敏结构化证据中的密钥与邮箱。"""
+def _redact_value(value, *, depth: int, max_depth: int, active_ids: set[int]):
+    if depth > max_depth:
+        return _MAX_DEPTH_MARKER
     if isinstance(value, dict):
-        redacted = {}
-        for key, item in value.items():
-            normalized = str(key).strip().lower().replace("-", "_")
-            if normalized in _SECRET_KEYS:
-                redacted[key] = "***"
-            elif normalized in _EMAIL_KEYS:
-                redacted[key] = "<EMAIL>" if item else item
-            else:
-                redacted[key] = redact_value(item)
-        return redacted
-    if isinstance(value, list):
-        return [redact_value(item) for item in value]
-    if isinstance(value, tuple):
-        return tuple(redact_value(item) for item in value)
+        identity = id(value)
+        if identity in active_ids:
+            return _CYCLE_MARKER
+        active_ids.add(identity)
+        try:
+            redacted = {}
+            for key, item in value.items():
+                kind = _sensitive_key_kind(key)
+                if kind == "credential":
+                    redacted[key] = "***"
+                elif kind == "email":
+                    redacted[key] = "<EMAIL>" if item else item
+                elif kind == "phone":
+                    redacted[key] = "<PHONE>" if item else item
+                else:
+                    redacted[key] = _redact_value(
+                        item,
+                        depth=depth + 1,
+                        max_depth=max_depth,
+                        active_ids=active_ids,
+                    )
+            return redacted
+        finally:
+            active_ids.remove(identity)
+    if isinstance(value, (list, tuple)):
+        identity = id(value)
+        if identity in active_ids:
+            return _CYCLE_MARKER
+        active_ids.add(identity)
+        try:
+            redacted_items = [
+                _redact_value(
+                    item,
+                    depth=depth + 1,
+                    max_depth=max_depth,
+                    active_ids=active_ids,
+                )
+                for item in value
+            ]
+            return tuple(redacted_items) if isinstance(value, tuple) else redacted_items
+        finally:
+            active_ids.remove(identity)
     if isinstance(value, str):
         return redact_text(value)
-    return value
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return f"<OBJECT:{type(value).__name__}>"
+
+
+def redact_value(value, *, max_depth: int = DEFAULT_REDACTION_MAX_DEPTH):
+    """递归脱敏结构化证据，不读取未知对象的字符串表示。"""
+    if max_depth < 0:
+        raise ValueError("max_depth must be non-negative")
+    return _redact_value(value, depth=0, max_depth=max_depth, active_ids=set())
+
+
+def _json_safe_value(value):
+    if isinstance(value, dict):
+        safe = {}
+        for key, item in value.items():
+            if isinstance(key, str):
+                safe_key = key
+            elif key is None or isinstance(key, (bool, int, float)):
+                safe_key = str(key)
+            else:
+                safe_key = f"<OBJECT:{type(key).__name__}>"
+            safe[safe_key] = _json_safe_value(item)
+        return safe
+    if isinstance(value, (list, tuple)):
+        return [_json_safe_value(item) for item in value]
+    if value is None or isinstance(value, (str, bool, int, float)):
+        return value
+    return f"<OBJECT:{type(value).__name__}>"
+
+
+def render_redacted_json(payload, max_chars: int = 4096) -> str:
+    """Render deterministic one-line JSON after structured redaction."""
+    if max_chars < 0:
+        raise ValueError("max_chars must be non-negative")
+    redacted = _json_safe_value(redact_value(payload))
+    encoded = json.dumps(
+        redacted,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    if len(encoded) <= max_chars:
+        return encoded
+    metadata = {
+        "chars": len(encoded),
+        "redacted_sha256": hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
+        "truncated": True,
+    }
+    return json.dumps(
+        metadata,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
 
 def _redact_round_evidence(value):
@@ -199,10 +365,9 @@ def append_round_evidence(prefix: str, payload) -> bool:
     if not state:
         return False
     encoded = json.dumps(
-        _redact_round_evidence(payload),
+        _json_safe_value(_redact_round_evidence(payload)),
         ensure_ascii=False,
         sort_keys=True,
-        default=str,
     )
     with state["lock"]:
         state["file"].write(f"{redact_text(prefix)}{encoded}\\n")
@@ -248,3 +413,8 @@ def safe_log(msg: object = "") -> None:
             print(degraded)
         except Exception:
             pass
+
+
+def safe_log_json(label: object, payload, max_chars: int = 4096) -> None:
+    """Write one deterministic redacted JSON diagnostic through ``safe_log``."""
+    safe_log(f"{redact_text(label)}{render_redacted_json(payload, max_chars=max_chars)}")

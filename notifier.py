@@ -33,7 +33,7 @@ from domestic_fare_rules import get_aircraft_name
 from detail_access import canonical_detail_uuid
 from airlines import classify_itinerary, classify_segment
 from flight_combo_utils import normalize_combo
-from log_utils import safe_log
+from log_utils import safe_log, safe_log_json
 from analyzer import (
     MIN_SAMPLE_FOR_PRICE_SIGNAL,
     build_execution_advice,
@@ -76,6 +76,7 @@ from pricing import assert_same_caliber, budget_to_pp, caliber_label, itinerary_
 from subscription_preflight import shanghai_today
 from project_time import SHANGHAI_TZ
 from source_profiles import normalize_route_type, retired_listing_sources
+from subscription_identity import mask_subscription_id, subscription_id
 from provenance import (
     attach_payload_provenance,
     format_dual_source_agreement,
@@ -3487,6 +3488,41 @@ def _notification_subscription_id(route_info: dict, subscription: dict):
         (subscription or {}).get("subscription_id"),
         (subscription or {}).get("_index"),
     )
+
+
+def _subscription_log_summary(subscription):
+    if not isinstance(subscription, dict):
+        return {
+            "summary_unavailable": True,
+            "input_type": type(subscription).__name__,
+        }
+    basic = subscription.get("basic")
+    basic = basic if isinstance(basic, dict) else {}
+
+    def _field(name: str):
+        value = subscription.get(name)
+        return basic.get(name) if value in (None, "") else value
+
+    stable_id = subscription_id(subscription)
+    goals = subscription.get("notification_goals")
+    goals = goals if isinstance(goals, dict) else {}
+    raw_method = goals.get("method")
+    method = raw_method.strip().lower() if isinstance(raw_method, str) else ""
+    if raw_method not in (None, "") and not method:
+        method = "unknown"
+    if method not in {"email", "pushplus", "both"}:
+        method = "unknown" if method else ""
+    passenger_count, _ = get_total_passengers(subscription)
+    return {
+        "subscription_id": mask_subscription_id(stable_id) if stable_id else "",
+        "origin": _field("origin"),
+        "destination": _field("destination"),
+        "depart_date": _field("depart_date"),
+        "return_date": _field("return_date"),
+        "route_type": _field("route_type"),
+        "passenger_count": passenger_count,
+        "notification_method": method,
+    }
 
 
 def _price_history_for_push(price_insights: dict | None, analysis_result: dict, is_round_trip: bool):
@@ -7475,9 +7511,9 @@ def build_notification_payload(
         "[人数调试] preferences.passengers = "
         f"{((subscription or {}).get('preferences') or {}).get('passengers')}"
     )
-    print(
-        "[人数定位] 完整订阅: "
-        f"{json.dumps(subscription or {}, ensure_ascii=False, default=str)}"
+    safe_log_json(
+        "[人数定位] 完整订阅: ",
+        _subscription_log_summary(subscription),
     )
     print(f"[人数调试] 推送将显示总数 = {travel_profile.get('passenger_count') or total_passengers}")
     print(
@@ -10864,6 +10900,50 @@ def _email_plan_flight_text(flight: dict | None) -> str:
     return html.escape(text)
 
 
+def _flight_log_summary(flight, missing_fields=None):
+    if not isinstance(flight, dict):
+        return {
+            "summary_unavailable": True,
+            "input_type": type(flight).__name__,
+        }
+    missing = [
+        item.strip()
+        for item in (missing_fields or [])
+        if isinstance(item, str) and item.strip()
+    ]
+    return {
+        "flight_combo": (
+            flight.get("flight_combo")
+            or flight.get("flight_no")
+            or flight.get("flight_number")
+        ),
+        "source": (
+            flight.get("source")
+            or flight.get("data_source")
+            or flight.get("price_source")
+        ),
+        "price": (
+            flight.get("price")
+            if flight.get("price") is not None
+            else flight.get("total_price")
+        ),
+        "origin": (
+            flight.get("origin")
+            or flight.get("departure_airport")
+            or flight.get("dep_airport")
+        ),
+        "destination": (
+            flight.get("destination")
+            or flight.get("arrival_airport")
+            or flight.get("arr_airport")
+        ),
+        "departure_time": flight.get("departure_time") or flight.get("dep_time"),
+        "arrival_time": flight.get("arrival_time") or flight.get("arr_time"),
+        "stops": flight.get("stops"),
+        "missing_fields": missing,
+    }
+
+
 def _email_plan_leg_group(title: str, flight: dict | None, fallback: str = "") -> str:
     flight = flight or {}
     segments = _email_plan_segments(flight)
@@ -10875,7 +10955,15 @@ def _email_plan_leg_group(title: str, flight: dict | None, fallback: str = "") -
     )
     if needs_debug:
         print(f"[航班调试] 航班号={flight.get('flight_no') or flight.get('flight_number') or flight.get('flight_combo')}")
-        print(f"[航班调试] 完整字段: {json.dumps(flight, ensure_ascii=False, default=str)}")
+        missing_fields = []
+        if not segments:
+            missing_fields.append("segments")
+        if _email_plan_aircraft_text(flight) == "机型待确认":
+            missing_fields.append("aircraft")
+        safe_log_json(
+            "[航班调试] 完整字段: ",
+            _flight_log_summary(flight, missing_fields=missing_fields),
+        )
     heading = (
         f'<div style="{EMAIL_LEG_TITLE_STYLE}">✈ {html.escape(str(title or "航程"))}</div>'
     )

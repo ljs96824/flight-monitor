@@ -16,7 +16,8 @@ EXPECTED_SIGNATURE = (
     "detail_level=None, enforce_pushplus_limit=True)"
 )
 EXPECTED_MAIN_CHAIN_SHA256 = {
-    "build_notification_payload": "90ffb6aaaa1f4ff097ef9b5c37836cf919e375c58694e890da1168b9c5582690",
+    # Authorized 2026-08-29 log-only change: full subscription dump -> whitelist summary.
+    "build_notification_payload": "2ff5638b581d5b1ab48743b3e2602a796da94c5086fd65114a718042f4c616a3",
     "render_email": "20a5d74990e51f053658439e58dd43bc1b958fb1f51d189f54c8dce610b9bbc5",
     "render_detail_html": "2dbafb52012c71315357a34a5a85138c0456e650e7897b545449322ad21f9aa1",
     "render_pushplus_sections": "ff947c33193f28ca1a3d695144126afa0592f053c983e3a9229130a98047f368",
