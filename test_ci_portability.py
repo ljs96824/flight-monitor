@@ -5,6 +5,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parent
 EXCLUDED_PARTS = {".git", "data", "__pycache__", ".pytest_cache"}
@@ -106,11 +108,21 @@ class CiPortabilityTest(unittest.TestCase):
             "requirements-dev.txt",
             "pip install -r requirements.txt -r requirements-dev.txt",
             "python -X utf8 -m pytest -q",
-            "python -X utf8 -m unittest discover",
+            "python -X utf8 -m unittest discover -b",
         ]
         missing = [item for item in required if item not in text]
 
+        workflow_config = yaml.safe_load(text)
+        run_commands = [
+            step["run"]
+            for job in workflow_config["jobs"].values()
+            for step in job["steps"]
+            if "run" in step
+        ]
+
         self.assertEqual(missing, [])
+        self.assertIn("python -X utf8 -m unittest discover -b", run_commands)
+        self.assertNotIn("python -X utf8 -m unittest discover", run_commands)
         self.assertNotIn("secrets.", text)
         self.assertFalse(legacy.exists(), "SerpAPI 时代 monitor.yml 仍存在")
         self.assertIn(
