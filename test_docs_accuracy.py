@@ -258,6 +258,13 @@ class DocsAccuracyTest(unittest.TestCase):
             "scripts/list_unresolvable_subs.py": [sys.executable, "-X", "utf8", "scripts/list_unresolvable_subs.py", "--help"],
             "scripts/list_incomplete_notification_subs.py": [sys.executable, "-X", "utf8", "scripts/list_incomplete_notification_subs.py", "--help"],
             "scripts/ui_smoke.py": [sys.executable, "-X", "utf8", "-m", "py_compile", "scripts/ui_smoke.py"],
+            "scripts/migrate_runtime_config.py": [
+                sys.executable,
+                "-X",
+                "utf8",
+                "scripts/migrate_runtime_config.py",
+                "--help",
+            ],
             "scripts/initialize_api_usage.py": [
                 sys.executable,
                 "-X",
@@ -361,6 +368,13 @@ class DocsAccuracyTest(unittest.TestCase):
             ],
             "python -X utf8 scripts/forecast_report.py --help": [
                 cli_python, "-X", "utf8", "scripts/forecast_report.py", "--help",
+            ],
+            "python -X utf8 scripts/migrate_runtime_config.py --source <path-to-legacy-config>": [
+                cli_python,
+                "-X",
+                "utf8",
+                "scripts/migrate_runtime_config.py",
+                "--help",
             ],
             "python -X utf8 scripts/snapshot_run.py --output data/snapshot_check.json": [
                 cli_python, "-X", "utf8", "scripts/snapshot_run.py", "--help",

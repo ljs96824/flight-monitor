@@ -1,4 +1,7 @@
+import ast
+import inspect
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -121,7 +124,7 @@ class RuntimeConfigLoaderTest(unittest.TestCase):
         start_cache.assert_not_called()
         build_plan.assert_not_called()
 
-    def test_tracked_config_contract_contains_no_runtime_facts(self):
+    def test_tracked_config_contract_has_no_deprecated_root_copy_or_runtime_facts(self):
         import yaml
 
         root = Path(__file__).resolve().parent
@@ -140,8 +143,8 @@ class RuntimeConfigLoaderTest(unittest.TestCase):
             encoding="utf-8",
         ).stdout.splitlines()
         self.assertEqual(
-            set(tracked),
-            {"config.yaml", "config.defaults.yaml", "config.example.yaml"},
+            tracked,
+            ["config.defaults.yaml", "config.example.yaml"],
         )
         forbidden_keys = {
             "console_used",
@@ -160,16 +163,191 @@ class RuntimeConfigLoaderTest(unittest.TestCase):
                 .get("target_date")
             )
             self.assertIn(target_date, (None, "YYYY-MM-DD", "<YYYY-MM-DD>"), relative)
-        legacy_policy = yaml.safe_load(
-            (root / "config.yaml").read_text(encoding="utf-8")
+        self.assertFalse((root / "config.yaml").exists())
+
+    def test_production_python_does_not_reference_deprecated_root_config(self):
+        root = Path(__file__).resolve().parent
+        tracked_python = subprocess.run(
+            ["git", "ls-files", "*.py"],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        ).stdout.splitlines()
+        findings = []
+        for relative in tracked_python:
+            path = Path(relative)
+            if path.parts[0] == "scripts" or path.name.startswith("test_"):
+                continue
+            tree = ast.parse((root / path).read_text(encoding="utf-8-sig"))
+            if any(
+                isinstance(node, ast.Constant) and node.value == "config.yaml"
+                for node in ast.walk(tree)
+            ):
+                findings.append(relative)
+        self.assertEqual(findings, [])
+
+    def test_default_loader_paths_are_the_two_formal_sources(self):
+        from config_loader import (
+            DEFAULT_CONFIG_PATH,
+            PROJECT_ROOT,
+            RUNTIME_CONFIG_PATH,
+            load_merged_config,
         )
-        defaults_policy = yaml.safe_load(
-            (root / "config.defaults.yaml").read_text(encoding="utf-8")
+
+        self.assertEqual(DEFAULT_CONFIG_PATH, PROJECT_ROOT / "config.defaults.yaml")
+        self.assertEqual(
+            RUNTIME_CONFIG_PATH,
+            PROJECT_ROOT / "data" / "runtime_config.yaml",
         )
-        self.assertEqual(legacy_policy, defaults_policy)
+        parameters = inspect.signature(load_merged_config).parameters
+        self.assertEqual(parameters["defaults_path"].default, DEFAULT_CONFIG_PATH)
+        self.assertEqual(parameters["runtime_path"].default, RUNTIME_CONFIG_PATH)
+
+    def test_current_docs_name_formal_sources_and_explicit_legacy_source(self):
+        root = Path(__file__).resolve().parent
+        current_docs = (
+            root / "README.md",
+            root / "CONTRIBUTING.md",
+            root / "docs" / "runtime-config-separation-2026-08-27.md",
+        )
+        retired_copy_phrase = "\u653f\u7b56\u517c\u5bb9\u526f\u672c"
+        for path in current_docs:
+            text = path.read_text(encoding="utf-8")
+            with self.subTest(path=path.relative_to(root)):
+                self.assertIn("config.defaults.yaml", text)
+                self.assertIn("data/runtime_config.yaml", text)
+                self.assertNotIn(retired_copy_phrase, text)
+
+        explicit_command = (
+            "python -X utf8 scripts/migrate_runtime_config.py "
+            "--source <path-to-legacy-config>"
+        )
+        for relative in (
+            "README.md",
+            "CONTRIBUTING.md",
+            "docs/runtime-config-separation-2026-08-27.md",
+        ):
+            text = (root / relative).read_text(encoding="utf-8")
+            self.assertIn(explicit_command, text, relative)
+
+        historical = (
+            root
+            / "docs"
+            / "superpowers"
+            / "plans"
+            / "2026-08-26-tcurve-maturity-acceleration.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("config.yaml", historical)
 
 
 class RuntimeConfigMigrationTest(unittest.TestCase):
+    def test_parser_requires_explicit_legacy_source(self):
+        from scripts.migrate_runtime_config import build_parser
+
+        action = next(
+            item for item in build_parser()._actions if item.dest == "source"
+        )
+        self.assertTrue(action.required)
+        self.assertIsNone(action.default)
+        self.assertEqual(action.metavar, "LEGACY_CONFIG")
+
+    def test_cli_without_source_is_argparse_error_and_has_no_file_side_effects(self):
+        root = Path(__file__).resolve().parent
+        script = root / "scripts" / "migrate_runtime_config.py"
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
+            temporary = Path(directory)
+            defaults_path = temporary / "config.defaults.yaml"
+            runtime_path = temporary / "data" / "runtime_config.yaml"
+            before = sorted(path.relative_to(temporary) for path in temporary.rglob("*"))
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-X",
+                    "utf8",
+                    str(script),
+                    "--defaults-output",
+                    str(defaults_path),
+                    "--runtime-output",
+                    str(runtime_path),
+                ],
+                cwd=temporary,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+            )
+            after = sorted(path.relative_to(temporary) for path in temporary.rglob("*"))
+
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("usage:", result.stderr.lower())
+        self.assertIn("--source", result.stderr)
+        self.assertEqual(after, before)
+
+    def test_cli_explicit_source_preserves_dry_run_write_backup_and_merge(self):
+        import yaml
+
+        from config_loader import load_merged_config
+
+        root = Path(__file__).resolve().parent
+        script = root / "scripts" / "migrate_runtime_config.py"
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
+            temporary = Path(directory)
+            source = temporary / "legacy-config.yaml"
+            defaults_path = temporary / "config.defaults.yaml"
+            runtime_path = temporary / "data" / "runtime_config.yaml"
+            source.write_text(
+                yaml.safe_dump(LEGACY_FIXTURE, allow_unicode=True, sort_keys=False),
+                encoding="utf-8",
+            )
+            source_bytes = source.read_bytes()
+            command = [
+                sys.executable,
+                "-X",
+                "utf8",
+                str(script),
+                "--source",
+                str(source),
+                "--defaults-output",
+                str(defaults_path),
+                "--runtime-output",
+                str(runtime_path),
+            ]
+
+            dry_run = subprocess.run(
+                command,
+                cwd=temporary,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+            )
+            self.assertEqual(dry_run.returncode, 0, dry_run.stderr)
+            self.assertIn("mode=dry-run status=dry-run", dry_run.stdout)
+            self.assertFalse(defaults_path.exists())
+            self.assertFalse(runtime_path.exists())
+
+            written = subprocess.run(
+                [*command, "--write"],
+                cwd=temporary,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+            )
+            backups = list(temporary.glob("legacy-config.yaml.pre-runtime-split-*.bak"))
+
+            self.assertEqual(written.returncode, 0, written.stderr)
+            self.assertIn("mode=write status=written", written.stdout)
+            self.assertEqual(load_merged_config(defaults_path, runtime_path), LEGACY_FIXTURE)
+            self.assertEqual(len(backups), 1)
+            self.assertEqual(backups[0].read_bytes(), source_bytes)
+
     def test_migration_is_dry_run_by_default_and_write_is_idempotent(self):
         import yaml
 

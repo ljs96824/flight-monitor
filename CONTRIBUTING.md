@@ -29,3 +29,17 @@ request CI 失败，并打印文件、所在作用域和符号。仓库不再维
 `extend-per-file-ignores` 隐藏命中。确有静态分析无法识别的动态场景时，必须先单独
 审计并在精确三元组中说明文件、符号和原因；当前允许集合为空。CI 顺序固定为
 F821 零门、模块导入、pytest、unittest，未定义名称应在行为测试之前失败。
+
+## 运行配置事实源
+
+生产配置只由 Git 跟踪的 `config.defaults.yaml` 与本机的
+`data/runtime_config.yaml` 严格合并。仓库根目录不保留兼容 `config.yaml`，也不得把本机额度、
+控制台对账、研究开关或订阅复制回跟踪文件。
+
+迁移用户持有的 legacy 单文件配置时必须显式给出源路径：
+
+```bash
+python -X utf8 scripts/migrate_runtime_config.py --source <path-to-legacy-config>
+```
+
+命令默认 dry-run；只有显式增加 `--write` 才会先备份源文件并写入两层配置。

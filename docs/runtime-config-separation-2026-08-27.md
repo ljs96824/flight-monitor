@@ -5,12 +5,12 @@
 代码版本、长期政策与实时运行证据不再共存于一个跟踪文件：
 
 - `config.defaults.yaml`：Git 跟踪的阈值、保留窗、硬门和占位值；
-- `config.yaml`：政策兼容副本，不再被生产入口读取，映射必须与 defaults 完全相同；
 - `data/runtime_config.yaml`：Git 忽略的额度包、控制台对账、储备纪元、
   研究开关、暂停路线和本地订阅；
 - `config.example.yaml`：新环境初始化模板，不含控制台实值或真实订阅。
 
-生产采集、篮子、通知配额展示、readiness 与研究控制统一严格合并前两层。
+生产采集、篮子、通知配额展示、readiness 与研究控制统一严格合并
+`config.defaults.yaml + data/runtime_config.yaml`。
 `data/runtime_config.yaml` 缺失、YAML 损坏、根节点错误或关键额度事实不完整时，
 在获取采集单飞锁、打开轮档或调用任何外部源之前抛出 `RuntimeConfigError`。
 诊断夹具仍可显式传入一个完整的单文件配置，避免测试依赖真实运行状态。
@@ -19,10 +19,13 @@
 
 入口：
 
-`python -X utf8 scripts/migrate_runtime_config.py`
+```bash
+python -X utf8 scripts/migrate_runtime_config.py --source <path-to-legacy-config>
+```
 
-默认只计算拆分结果与 SHA，不写文件。明确加 `--write` 时，脚本先生成带 UTC
-时间戳的旧配置备份，再以临时文件、`fsync` 和 `os.replace` 写入 defaults 与 runtime。
+`--source` 是必填参数；脚本不再假定仓库根目录存在 `config.yaml`。默认只计算拆分结果与
+SHA，不写文件。明确加 `--write` 时，脚本先为显式指定的旧配置生成带 UTC 时间戳的备份，
+再以临时文件、`fsync` 和 `os.replace` 写入 defaults 与 runtime。
 重复执行相同输入返回 `status=unchanged`。
 
 本次迁移记录：
@@ -52,13 +55,22 @@
 
 - 跟踪配置不得出现控制台使用量、控制台余量、未入账调整或真实订阅数组；
 - 跟踪配置中的目标日期只能是空值或占位；
-- `config.yaml` 与 `config.defaults.yaml` 的 YAML 映射必须一致；
+- 根目录 `config.yaml` 兼容副本已退役，不得重新加入 Git 跟踪文件；
 - 运行配置不存在或损坏时，生产采集禁止真实 API；
 - 迁移 dry-run 无副作用，write 前备份且重复执行幂等；
 - runtime backup 缺少 `runtime_config.yaml` 必须失败。
 
 ## 部署
 
+### 2026-08-27 分层部署
+
 本次修改触及 `main.py`、`basket_collect.py`、`notifier.py` 及其常驻 import 链。
 PythonAnywhere pull 后需要 Reload，并先在部署机创建、核对
 `data/runtime_config.yaml`；否则严格加载会按设计阻断采集。
+
+### 2026-08-30 兼容副本退役
+
+本次只修改迁移 CLI、合同与当前文档，并删除不被生产入口读取的跟踪副本；
+`config.defaults.yaml`、`data/runtime_config.yaml` 及常驻 import 链均未改变。
+因此 PA 不要求立即 pull；若为同步 checkout 而 pull，干净的跟踪副本被删除属于预期，
+不需要 Reload。若 PA 的 `config.yaml` 有本地修改，必须先备份并人工裁决后再 pull。
