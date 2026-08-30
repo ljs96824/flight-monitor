@@ -213,7 +213,8 @@ class UiSmokeCiObservationContractTest(unittest.TestCase):
         self.assertIn(
             "python -X utf8 -m pytest -q -p no:cacheprovider", test_commands
         )
-        self.assertIn("python -X utf8 -m unittest discover", test_commands)
+        self.assertIn("python -X utf8 -m unittest discover -b", test_commands)
+        self.assertNotIn("python -X utf8 -m unittest discover", test_commands)
 
         artifact = next(
             step
