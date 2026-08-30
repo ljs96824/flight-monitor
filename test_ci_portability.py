@@ -94,7 +94,7 @@ class CiPortabilityTest(unittest.TestCase):
             "branches: [main]",
             "pull_request:",
             "workflow_dispatch:",
-            "group: ci-${{ github.ref }}",
+            "group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}",
             "cancel-in-progress: true",
             "fail-fast: false",
             "os: [ubuntu-latest, windows-latest]",

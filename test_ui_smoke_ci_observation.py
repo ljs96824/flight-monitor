@@ -150,7 +150,9 @@ class UiSmokeCiObservationContractTest(unittest.TestCase):
         self.assertEqual(artifact["with"]["retention-days"], 7)
 
     def test_workflow_triggers_jobs_commands_and_concurrency_remain_exact(self):
+        # TODO: 合并本合同与 test_ci_portability.py 的重复 workflow 断言，建立单一事实源。
         workflow = yaml.safe_load(self.workflow)
+        self.assertEqual(workflow["name"], "tests")
         triggers = workflow.get("on", workflow.get(True))
         self.assertEqual(
             triggers,
@@ -160,12 +162,24 @@ class UiSmokeCiObservationContractTest(unittest.TestCase):
                 "workflow_dispatch": None,
             },
         )
+        concurrency = workflow["concurrency"]
         self.assertEqual(
-            workflow["concurrency"],
+            concurrency,
             {
-                "group": "ci-${{ github.ref }}",
+                "group": (
+                    "ci-${{ github.workflow }}-${{ github.event_name }}-"
+                    "${{ github.event.pull_request.number || github.run_id }}"
+                ),
                 "cancel-in-progress": True,
             },
+        )
+        self.assertNotIn("queue", concurrency)
+        group = concurrency["group"]
+        self.assertNotIn("github.ref", group)
+        self.assertNotIn("github.head_ref", group)
+        self.assertIn(
+            "github.event.pull_request.number || github.run_id",
+            group,
         )
 
         tests_job = workflow["jobs"]["tests"]
