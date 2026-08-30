@@ -1,4 +1,4 @@
-"""Split legacy config.yaml into tracked policy defaults and local runtime facts."""
+"""迁移用户显式提供的 legacy 单文件配置。"""
 
 from __future__ import annotations
 
@@ -149,7 +149,12 @@ def migrate_runtime_config(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source", type=Path, default=ROOT / "config.yaml")
+    parser.add_argument(
+        "--source",
+        type=Path,
+        required=True,
+        metavar="LEGACY_CONFIG",
+    )
     parser.add_argument(
         "--defaults-output", type=Path, default=ROOT / "config.defaults.yaml"
     )

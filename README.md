@@ -116,15 +116,19 @@ python -m piptools compile --allow-unsafe --generate-hashes --no-emit-index-url 
 将 [config.example.yaml](config.example.yaml) 复制为
 `data/runtime_config.yaml`，再在本机填写已购额度包、控制台核对时刻与余量、储备纪元、
 目标日期、研究开关及本地订阅。示例文件故意不携带任何控制台实值；缺字段、损坏或缺失
-都会在真实请求前失败，不会回退成空预算。升级旧单文件配置时使用
-[scripts/migrate_runtime_config.py](scripts/migrate_runtime_config.py)，默认仅 dry-run，
-明确加 `--write` 才会先备份旧文件并原子写入两层配置。
-其中本地 `reconciliation` 对象至少需要 `checked_at` 与
+都会在真实请求前失败，不会回退成空预算。其中本地 `reconciliation` 对象至少需要 `checked_at` 与
 `console_remaining`；它们只写入被忽略的 runtime 文件，避免把控制台证据模板化进
 公开配置。
 
-`config.yaml` 仅保留为政策兼容副本；生产入口读取
-`config.defaults.yaml + data/runtime_config.yaml`，两份跟踪政策文件由契约锁定为同一映射。
+生产配置事实源固定为 Git 跟踪的 `config.defaults.yaml` 与本机的
+`data/runtime_config.yaml`，加载器严格合并这两层。升级用户持有的 legacy 单文件配置时，
+必须显式提供源文件路径：
+
+```bash
+python -X utf8 scripts/migrate_runtime_config.py --source <path-to-legacy-config>
+```
+
+该命令默认仅 dry-run；明确加 `--write` 才会先备份显式指定的旧文件，再原子写入两层配置。
 
 ### 6.3 创建 `.env`
 
