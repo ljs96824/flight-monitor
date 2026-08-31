@@ -2,7 +2,7 @@ import json
 import re
 import tempfile
 import unittest
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -35,8 +35,11 @@ def _legacy_success(price: float, *, updated_at: str) -> dict:
 
 
 class PriceCalendarFreshnessTest(unittest.TestCase):
-    NOW = datetime(2026, 8, 28, 9, 0, tzinfo=SHANGHAI_TZ)
-    DATE = date(2026, 8, 30)
+    FIXED_TODAY = date(2026, 8, 28)
+    NOW = datetime.combine(
+        FIXED_TODAY, time(9), tzinfo=SHANGHAI_TZ
+    )
+    DATE = FIXED_TODAY + timedelta(days=2)
 
     def _write_calendar(self, root: Path, record: dict) -> Path:
         path = root / "PVG-KIX.json"
@@ -61,6 +64,10 @@ class PriceCalendarFreshnessTest(unittest.TestCase):
         with (
             patch("price_calendar._query_dates", return_value=[self.DATE]),
             patch("price_calendar._shanghai_now", return_value=self.NOW),
+            patch(
+                "price_calendar.shanghai_today",
+                return_value=self.FIXED_TODAY,
+            ),
             patch("request_cache.DEFAULT_CACHE_DIR", root / "request_cache"),
         ):
             return update_calendar(
@@ -96,16 +103,18 @@ class PriceCalendarFreshnessTest(unittest.TestCase):
         self.assertEqual(record["last_attempt_at"], self.NOW.isoformat())
         self.assertEqual(record["error_type"], "PermissionError")
         self.assertEqual(record["round_id"], "round-freshness")
-        self.assertEqual(
-            analyze_date_savings(
+        with patch(
+            "price_calendar.shanghai_today",
+            return_value=self.FIXED_TODAY,
+        ):
+            savings = analyze_date_savings(
                 calendar,
                 (self.DATE + timedelta(days=1)).isoformat(),
                 900,
                 threshold=1,
-            ),
-            [],
-        )
-        rows = calendar_rows(calendar, self.DATE.isoformat())
+            )
+            rows = calendar_rows(calendar, self.DATE.isoformat())
+        self.assertEqual(savings, [])
         self.assertEqual(rows[0]["status"], "failed")
         self.assertFalse(rows[0]["eligible_for_recommendation"])
         self.assertFalse(build_price_hint_from_calendar(calendar)["has_data"])
@@ -143,14 +152,17 @@ class PriceCalendarFreshnessTest(unittest.TestCase):
         self.assertEqual(record["last_success_at"], previous_success)
         self.assertIsNone(record["error_type"])
         self.assertIsNone(calendar_price_on_date(calendar, self.DATE.isoformat()))
-        self.assertEqual(
-            analyze_weekday_pattern(calendar, min_samples=1),
-            {"data_insufficient": True},
-        )
+        with patch(
+            "price_calendar.shanghai_today",
+            return_value=self.FIXED_TODAY,
+        ):
+            weekday_pattern = analyze_weekday_pattern(calendar, min_samples=1)
+            rows = calendar_rows(calendar, self.DATE.isoformat())
+        self.assertEqual(weekday_pattern, {"data_insufficient": True})
         body = _email_price_calendar_body(
             {
                 "price_calendar": {
-                    "rows": calendar_rows(calendar, self.DATE.isoformat()),
+                    "rows": rows,
                     "scope": "oneway",
                     "savings": [],
                     "weekday_pattern": {"data_insufficient": True},
@@ -178,7 +190,13 @@ class PriceCalendarFreshnessTest(unittest.TestCase):
                     "round_id": "old-round",
                 },
             )
-            with patch("price_calendar._shanghai_now", return_value=self.NOW):
+            with (
+                patch("price_calendar._shanghai_now", return_value=self.NOW),
+                patch(
+                    "price_calendar.shanghai_today",
+                    return_value=self.FIXED_TODAY,
+                ),
+            ):
                 calendar = load_calendar("PVG-KIX", root)
                 rows = calendar_rows(calendar, self.DATE.isoformat())
                 savings = analyze_date_savings(
@@ -204,6 +222,69 @@ class PriceCalendarFreshnessTest(unittest.TestCase):
         )
         self.assertIn("历史参考", body)
         self.assertIn("color:#888", body)
+
+    def test_relative_failed_calendar_semantics_follow_injected_today(self):
+        from price_calendar import calendar_rows
+
+        normalized = []
+        expected = {
+            "status": "failed",
+            "relative_days": 2,
+            "eligible_for_recommendation": False,
+            "historical_reference": True,
+            "selected": True,
+            "scope": "oneway",
+        }
+        for fixed_today in (
+            date(2026, 8, 29),
+            date(2026, 8, 30),
+            date(2026, 8, 31),
+        ):
+            target = fixed_today + timedelta(days=2)
+            attempt_at = datetime.combine(
+                fixed_today, time(9), tzinfo=SHANGHAI_TZ
+            ).isoformat()
+            calendar = {
+                "route": "PVG-KIX",
+                "dates": {
+                    target.isoformat(): {
+                        "status": "failed",
+                        "min_price": 500,
+                        "last_attempt_at": attempt_at,
+                        "last_success_at": attempt_at,
+                        "error_type": "PermissionError",
+                        "round_id": "round-relative-clock",
+                    }
+                },
+            }
+
+            with self.subTest(fixed_today=fixed_today.isoformat()):
+                with patch(
+                    "price_calendar.shanghai_today",
+                    return_value=fixed_today,
+                ):
+                    rows = calendar_rows(calendar, target.isoformat())
+
+                self.assertEqual(len(rows), 1)
+                row = rows[0]
+                normalized_result = (
+                    {
+                        "status": row["status"],
+                        "relative_days": (
+                            date.fromisoformat(row["date"]) - fixed_today
+                        ).days,
+                        "eligible_for_recommendation": row[
+                            "eligible_for_recommendation"
+                        ],
+                        "historical_reference": row["historical_reference"],
+                        "selected": row["selected"],
+                        "scope": row["scope"],
+                    }
+                )
+                self.assertEqual(normalized_result, expected)
+                normalized.append(normalized_result)
+
+        self.assertEqual(normalized, [expected] * 3)
 
     def test_corrupt_calendar_raises_instead_of_becoming_empty(self):
         from atomic_json_store import JsonStoreReadError
