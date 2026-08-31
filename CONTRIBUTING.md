@@ -45,3 +45,69 @@ python -X utf8 scripts/migrate_runtime_config.py --source <path-to-legacy-config
 ```
 
 命令默认 dry-run；只有显式增加 `--write` 才会先备份源文件并写入两层配置。
+
+## 交付声明与证据要求
+
+本节是未来交付声明的规范性合同。`docs/codex-operational-evidence-audit-2026-08-30.md`
+仅作本合同形成过程的历史出处；后续规则更新只改 `CONTRIBUTING.md`，不回写历史审计报告。
+真实输出属于每次交付报告，不写进静态规范。
+
+### 1. 声明：已创建 PR
+
+- 命令：`gh pr view <N> --repo ljs96824/flight-monitor --json number,state,url,baseRefOid,headRefOid,headRefName,commits,files`
+- 必填字段：`number`、`state`、`url`、`baseRefOid`、`headRefOid`、`headRefName`、`commits`、`files`、任务基线、本地提交 SHA。
+- **通过条件**：`state=OPEN`、`baseRefOid == 任务基线`、`headRefOid == 本地提交 SHA`、`len(commits) == 1`。
+
+### 2. 声明：已推送
+
+- 命令：`LOCAL=$(git rev-parse HEAD)`；`REMOTE=$(git ls-remote --heads origin refs/heads/<branch> | awk '{print $1}')`。
+- 必填字段：`LOCAL`、`REMOTE`、`branch`。
+- **通过条件**：`LOCAL == REMOTE`；命令有输出不等于声明成立，必须比较两个 SHA。
+
+### 3. 声明：main 为 X
+
+- 命令：依次执行 `git fetch --prune origin`、`git branch --show-current`、`git rev-parse refs/heads/main`、`git rev-parse origin/main`。
+- 必填字段：当前分支、`refs/heads/main` SHA、`origin/main` SHA、声明值 `X`。
+- **通过条件**：当前分支为 `main`，且 `refs/heads/main == origin/main == X`。
+
+### 4. 声明：CI 全绿
+
+- 命令：`gh run view <RUN_ID> --repo ljs96824/flight-monitor --json databaseId,event,headBranch,headSha,status,conclusion,jobs`。
+- 必填字段：`run_id`、`event`、`head_branch`、`head_sha`、`status`、`conclusion`、`jobs[].name/status/conclusion`、被验收提交 SHA、required job 清单。
+- **通过条件**：`run.head_sha == 被验收提交 SHA`，且全部 required jobs 为 `completed/success`。PR 分支 checks 不等于 main post-merge checks，两类声明必须分别取证。
+
+### 5. 声明：哈希不变
+
+- 命令：在同一静默窗口开始和结束时，分别用 `Get-FileHash -Algorithm SHA256 <path>` 或 `sha256sum <path>` 生成本轮 `before` 与 `after`。
+- 必填字段：静默窗口起止、每个文件的存在状态、字节数、`before` SHA、`after` SHA；运行态至少关注 `prices.db`、`observations.sqlite3`、`api_usage.json`。
+- **通过条件**：本轮同一文件存在状态、字节数与 `before/after` SHA 一致；不与历史数值比较，因为 cohort 运行会合法改变 `prices.db`、`observations.sqlite3`、`api_usage.json`。
+
+### 6. 声明：某文件无消费者
+
+- 命令：执行 `rg -n "<symbol-or-path>" .` 及任务所需的 import、subprocess、workflow、文档与动态引用扫描；仓库外消费者由维护者另行核验。
+- 必填字段：扫描命令、仓库内命中数与分类、仓库外核验范围、维护者确认、`evidence_level`。
+- **通过条件**：仓库内可执行消费者命中数为 0，仓库外由维护者确认并标为 `user_reported`；两类证据必须分开记录，任一未核验都不能声明“无消费者”。
+
+### 7. 声明：worktree 合规
+
+- 命令：任务开始和结束均执行 `git worktree list --porcelain`，并记录任务 worktree 的绝对规范化路径。
+- 必填字段：固定路径、`HEAD`、分支、项目目录、`data/` 目录、结束时清理结果。
+- **通过条件**：worktree 位于项目目录与 `data/` 目录之外的固定路径；任务结束清理，并附结束后的 `git worktree list --porcelain`。
+
+### 8. 声明：提交身份已核对
+
+- 命令：提交前执行 `git config --get user.name` 与 `git config --get user.email`。
+- 必填字段：`user.name`、`user.email`、预期身份、核对时刻。
+- **通过条件**：提交前已确认两项配置与预期提交身份一致；公开报告只记录匹配或不匹配，不复述真实邮箱值。
+
+### 9. 声明：可以删除远端 PR 分支
+
+- 命令：执行 `gh pr view <N> --repo ljs96824/flight-monitor --json state,mergeCommit,headRefName,headRefOid`、`git fetch --prune origin`、`git merge-base --is-ancestor <MERGE_SHA> origin/main`、`git ls-remote --heads origin refs/heads/<branch>`，并用 `gh pr list --repo ljs96824/flight-monitor --state open --head <branch> --json number,state,headRefName` 检查其他 PR。
+- 必填字段：PR `state`、`MERGE_SHA`、`origin/main`、已验收 head、远端分支 SHA、使用该分支的 open PR 数量。
+- **通过条件**：`state=MERGED`，`git merge-base --is-ancestor <MERGE_SHA> origin/main` 返回 0，远端分支仍等于已验收 head，且无其他 open PR 使用该分支。不得以网页提示语或本地 `git pull` 单独作为依据；本地 `main` 同步是独立收尾动作。
+
+### 10. 声明：冻结 SHA 未漂移
+
+- 命令：执行该 fixture 的生成命令，再以 `Get-Item <output>` 或等价命令取字节数，并以 `Get-FileHash -Algorithm SHA256 <output>` 或 `sha256sum <output>` 计算 SHA-256。
+- 必填字段：fixture 路径、生成命令、字节数、完整 64 位 SHA、期望 SHA。
+- **通过条件**：实跑值与同一 fixture 的期望值一致；不同时先判定是 fixture 不同还是基线漂移，不得直接更新期望值。
