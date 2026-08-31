@@ -12,6 +12,7 @@ from serpapi_credentials import SERPAPI_KEY_ALIASES
 
 ROOT = Path(__file__).resolve().parent
 README = ROOT / "README.md"
+CONTRIBUTING = ROOT / "CONTRIBUTING.md"
 ENV_EXAMPLE = ROOT / ".env.example"
 LICENSE = ROOT / "LICENSE"
 REQUIREMENTS_INPUT = ROOT / "requirements.in"
@@ -318,6 +319,114 @@ class DocsAccuracyTest(unittest.TestCase):
             test_section,
             "missing-contract: README缺少ui-smoke阻断语义",
         )
+
+    def test_contributing_delivery_evidence_contract_is_normative_and_complete(self):
+        section = _markdown_section(
+            CONTRIBUTING.read_text(encoding="utf-8"),
+            "## 交付声明与证据要求",
+        )
+        normative_terms = (
+            "未来交付声明的规范性合同",
+            "docs/codex-operational-evidence-audit-2026-08-30.md",
+            "形成过程的历史出处",
+            "后续规则更新只改 `CONTRIBUTING.md`",
+            "不回写历史审计报告",
+            "真实输出属于每次交付报告",
+            "不写进静态规范",
+        )
+        self.assertEqual(
+            [item for item in normative_terms if item not in section],
+            [],
+            "missing-contract: CONTRIBUTING缺少规范源与真实输出边界",
+        )
+
+        claims = {
+            "### 1. 声明：已创建 PR": (
+                "gh pr view <N> --repo ljs96824/flight-monitor --json number,state,url,baseRefOid,headRefOid,headRefName,commits,files",
+                "state=OPEN",
+                "baseRefOid == 任务基线",
+                "headRefOid == 本地提交 SHA",
+                "len(commits) == 1",
+            ),
+            "### 2. 声明：已推送": (
+                "LOCAL=$(git rev-parse HEAD)",
+                "git ls-remote --heads origin refs/heads/<branch>",
+                "LOCAL == REMOTE",
+                "命令有输出不等于声明成立",
+            ),
+            "### 3. 声明：main 为 X": (
+                "git fetch --prune origin",
+                "git branch --show-current",
+                "git rev-parse refs/heads/main",
+                "git rev-parse origin/main",
+                "当前分支为 `main`",
+                "refs/heads/main == origin/main == X",
+            ),
+            "### 4. 声明：CI 全绿": (
+                "run_id",
+                "head_sha",
+                "jobs[].name/status/conclusion",
+                "run.head_sha == 被验收提交 SHA",
+                "completed/success",
+                "PR 分支 checks 不等于 main post-merge checks",
+            ),
+            "### 5. 声明：哈希不变": (
+                "before",
+                "after",
+                "静默窗口起止",
+                "不与历史数值比较",
+                "prices.db",
+                "observations.sqlite3",
+                "api_usage.json",
+            ),
+            "### 6. 声明：某文件无消费者": (
+                "扫描命令",
+                "命中数",
+                "仓库内",
+                "仓库外",
+                "user_reported",
+            ),
+            "### 7. 声明：worktree 合规": (
+                "git worktree list --porcelain",
+                "项目目录与 `data/` 目录之外",
+                "固定路径",
+                "任务结束清理",
+            ),
+            "### 8. 声明：提交身份已核对": (
+                "git config --get user.name",
+                "git config --get user.email",
+                "提交前",
+            ),
+            "### 9. 声明：可以删除远端 PR 分支": (
+                "state=MERGED",
+                "git merge-base --is-ancestor <MERGE_SHA> origin/main",
+                "git ls-remote --heads origin refs/heads/<branch>",
+                "已验收 head",
+                "无其他 open PR 使用该分支",
+                "不得以网页提示语或本地 `git pull` 单独作为依据",
+                "本地 `main` 同步是独立收尾动作",
+            ),
+            "### 10. 声明：冻结 SHA 未漂移": (
+                "完整 64 位",
+                "fixture 路径",
+                "生成命令",
+                "字节数",
+                "不得直接更新期望值",
+            ),
+        }
+        self.assertEqual(len(claims), 10)
+        for heading, required_terms in claims.items():
+            with self.subTest(claim=heading):
+                claim_section = _markdown_section(section, heading)
+                self.assertIn("声明", claim_section)
+                self.assertIn("命令", claim_section)
+                self.assertIn("必填字段", claim_section)
+                self.assertIn("**通过条件**", claim_section)
+                self.assertEqual(
+                    [item for item in required_terms if item not in claim_section],
+                    [],
+                    f"missing-contract: {heading} 证据合同不完整",
+                )
 
     def test_documented_python_entrypoints_have_offline_help_or_import_probe(self):
         probes = {
