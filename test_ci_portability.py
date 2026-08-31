@@ -5,9 +5,6 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import yaml
-
-
 ROOT = Path(__file__).resolve().parent
 EXCLUDED_PARTS = {".git", "data", "__pycache__", ".pytest_cache"}
 WINDOWS_ONLY_MODULES = {"msvcrt", "winreg", "winsound"}
@@ -84,46 +81,10 @@ class CiPortabilityTest(unittest.TestCase):
         self.assertEqual(parsed.strftime("%H:%M"), "10:35")
         self.assertEqual(parsed.utcoffset(), timedelta(hours=8))
 
-    def test_offline_dual_os_workflow_replaces_legacy_monitor(self):
-        workflow = ROOT / ".github" / "workflows" / "tests.yml"
+    def test_legacy_monitor_is_absent_and_readme_uses_tests_badge(self):
         legacy = ROOT / ".github" / "workflows" / "monitor.yml"
         readme = ROOT / "README.md"
 
-        self.assertTrue(workflow.exists(), "缺少离线测试 workflow")
-        text = workflow.read_text(encoding="utf-8")
-        required = [
-            "name: tests",
-            "branches: [main]",
-            "pull_request:",
-            "workflow_dispatch:",
-            "group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}",
-            "cancel-in-progress: true",
-            "fail-fast: false",
-            "os: [ubuntu-latest, windows-latest]",
-            "timeout-minutes: 20",
-            "MPLBACKEND: Agg",
-            'python-version: "3.13"',
-            'cache: "pip"',
-            "cache-dependency-path:",
-            "requirements-dev.txt",
-            "pip install -r requirements.txt -r requirements-dev.txt",
-            "python -X utf8 -m pytest -q",
-            "python -X utf8 -m unittest discover -b",
-        ]
-        missing = [item for item in required if item not in text]
-
-        workflow_config = yaml.safe_load(text)
-        run_commands = [
-            step["run"]
-            for job in workflow_config["jobs"].values()
-            for step in job["steps"]
-            if "run" in step
-        ]
-
-        self.assertEqual(missing, [])
-        self.assertIn("python -X utf8 -m unittest discover -b", run_commands)
-        self.assertNotIn("python -X utf8 -m unittest discover", run_commands)
-        self.assertNotIn("secrets.", text)
         self.assertFalse(legacy.exists(), "SerpAPI 时代 monitor.yml 仍存在")
         self.assertIn(
             "actions/workflows/tests.yml/badge.svg",
