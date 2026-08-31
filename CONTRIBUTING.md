@@ -11,13 +11,15 @@
 
 ## 浏览器 smoke 阻断模式
 
-公开 CI 的 `ui-smoke` job 使用固定版本 Playwright 供应 Chromium，但测试驱动仍是现有 CDP 脚本。观察期已经完成：连续成功计数达到 `7/7`，并包含 `pull_request`、`workflow_dispatch` 与主分支 push 三类触发，期间未再出现浏览器安装、启动、端口或日期时区类随机失败。
+截至 2026-08-31，`main` 分支保护将 `ui-smoke` 列为 required check。公开 CI 使用固定版本 Playwright 供应 Chromium，但测试驱动仍是现有 CDP 脚本。
 
-`continue-on-error` 已移除；此后浏览器 smoke 失败会直接阻断 workflow。失败时继续上传浏览器截图、页面 HTML、浏览器控制台和服务日志等现有证据；启动前故障只保存实际能够生成的证据，不伪造不存在的截图或页面产物。
+workflow 不使用 `continue-on-error`；浏览器 smoke 失败会直接阻断 workflow。失败时继续上传浏览器截图、页面 HTML、浏览器控制台和服务日志等现有证据；启动前故障只保存实际能够生成的证据，不伪造不存在的截图或页面产物。
 
 零真实 API 的实际隔离来自四层：mock `start_background_collection`、mock `load_calendar`、临时数据目录和临时端口。`NO_LIVE_API=1` 只是明示合同，不能单独作为零 API 证据；验收还必须确认生产三库与配额台账哈希不变。
 
-`scripts/ui_smoke.py` 的临时服务器运行完整 `web_form.app`，并非只挂载少数路由。当前 CDP 驱动覆盖 `/`、`/settings`（含编辑回填与提交）、`/subscribe`、`/success`、`/subscriptions` 以及删除确认 GET/POST；它尚未覆盖 `/price_hint`、`/feedback`、暂停等其余 CRUD 路由。smoke 绿不等于 Web 全绿：需要验证新的或尚未覆盖的 CRUD 行为时，必须单独扩展 smoke 驱动与交互断言，不能把路由可访问等同于已经验证。
+`scripts/ui_smoke.py` 的临时服务器运行完整 `web_form.app`，并非只挂载少数路由。当前 CDP 驱动覆盖 `/`、`/settings`（含编辑回填与提交）、POST `/subscribe`、`/success`、`/subscriptions`、GET/POST `/subscription/<subscription_id>/delete`、POST `/subscriptions/<subscription_id>/toggle` 的暂停与恢复，以及 POST `/subscriptions/<subscription_id>/quick-update`。
+
+2026-08-31 的本机 smoke 服务日志还显示页面间接访问 `/price_hint` 并返回 200；当前驱动只证明这次间接访问，没有专项业务语义断言。`/feedback` 在该次 smoke 中未访问。smoke 绿不等于 Web 全绿：需要验证新的或尚未覆盖的行为时，必须单独扩展 smoke 驱动与交互断言，不能把路由可访问等同于已经验证。
 
 ## F821 未定义名称硬门
 
