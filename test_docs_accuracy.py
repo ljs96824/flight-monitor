@@ -145,6 +145,22 @@ def _fenced_blocks(text: str, language: str) -> list[str]:
     )
 
 
+def _markdown_section(text: str, heading: str) -> str:
+    lines = text.splitlines()
+    try:
+        start = lines.index(heading)
+    except ValueError as exc:
+        raise AssertionError(f"missing-contract: Markdown缺少章节 {heading}") from exc
+    level = len(heading) - len(heading.lstrip("#"))
+    end = len(lines)
+    for index in range(start + 1, len(lines)):
+        match = re.match(r"^(#+)\s", lines[index])
+        if match and len(match.group(1)) <= level:
+            end = index
+            break
+    return "\n".join(lines[start:end])
+
+
 class DocsAccuracyTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -172,7 +188,10 @@ class DocsAccuracyTest(unittest.TestCase):
 
     def test_readme_has_no_unresolved_placeholders(self):
         self.assertNotIn("待定", self.readme)
-        self.assertNotIn("占位", self.readme)
+        self.assertNotRegex(
+            self.readme,
+            r"(?im)^\s*(?:TODO|TBD)(?:\s|:|$)",
+        )
 
     def test_all_linked_paths_and_python_script_references_exist(self):
         missing = []
@@ -244,6 +263,61 @@ class DocsAccuracyTest(unittest.TestCase):
         ):
             self.assertIn(phrase, self.readme)
         self.assertNotIn("monitor.yml", self.readme)
+
+    def test_readme_documents_blocking_smoke_and_subscription_fact_sources(self):
+        source_section = _markdown_section(
+            self.readme,
+            "## 5. 数据源与配额经济学",
+        )
+        runtime_section = _markdown_section(
+            self.readme,
+            "### 6.2 创建本地运行配置",
+        )
+        test_section = _markdown_section(
+            self.readme,
+            "### 6.4 运行离线测试",
+        )
+
+        self.assertNotRegex(
+            source_section,
+            r"本地订阅\s*属于运行事实.*data/runtime_config\.yaml",
+            "stale-lock: README仍把现行订阅写成runtime_config运行事实",
+        )
+        self.assertNotIn(
+            "目标日期、研究开关及本地订阅",
+            runtime_section,
+            "stale-lock: README运行配置步骤仍要求把真实订阅写入runtime_config",
+        )
+        self.assertNotIn(
+            "观察模式",
+            test_section,
+            "stale-lock: README仍把ui-smoke描述为观察模式",
+        )
+
+        required = (
+            "现行 Web CRUD、订阅采集、尝试状态与 PA 同步",
+            "`data/subscriptions.json`",
+            "权威持久化源",
+            "`data/runtime_config.yaml`",
+            "`subscriptions: []`",
+            "配置校验",
+            "legacy 迁移",
+            "6b 完成前必须保持为空数组",
+            "不得写入真实订阅",
+            "不得提前删除该字段",
+            "`validate_runtime_config`",
+        )
+        combined = "\n".join((source_section, runtime_section))
+        self.assertEqual(
+            [item for item in required if item not in combined],
+            [],
+            "missing-contract: README缺少订阅事实源与兼容占位边界",
+        )
+        self.assertIn(
+            "阻断",
+            test_section,
+            "missing-contract: README缺少ui-smoke阻断语义",
+        )
 
     def test_documented_python_entrypoints_have_offline_help_or_import_probe(self):
         probes = {

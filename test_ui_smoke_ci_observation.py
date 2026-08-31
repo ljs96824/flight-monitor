@@ -14,6 +14,22 @@ CONTRIBUTING = ROOT / "CONTRIBUTING.md"
 ACTIONS_POLICY_ADR = ROOT / "docs" / "github-actions-version-policy.md"
 
 
+def _markdown_section(text: str, heading: str) -> str:
+    lines = text.splitlines()
+    try:
+        start = lines.index(heading)
+    except ValueError as exc:
+        raise AssertionError(f"missing-contract: Markdown缺少章节 {heading}") from exc
+    level = len(heading) - len(heading.lstrip("#"))
+    end = len(lines)
+    for index in range(start + 1, len(lines)):
+        match = re.match(r"^(#+)\s", lines[index])
+        if match and len(match.group(1)) <= level:
+            end = index
+            break
+    return "\n".join(lines[start:end])
+
+
 class UiSmokeCiObservationContractTest(unittest.TestCase):
     def setUp(self):
         self.workflow = WORKFLOW.read_text(encoding="utf-8")
@@ -274,13 +290,22 @@ class UiSmokeCiObservationContractTest(unittest.TestCase):
         )
 
     def test_contributing_documents_blocking_gate_and_zero_api_evidence(self):
-        text = CONTRIBUTING.read_text(encoding="utf-8")
+        section = _markdown_section(
+            CONTRIBUTING.read_text(encoding="utf-8"),
+            "## 浏览器 smoke 阻断模式",
+        )
+        self.assertNotIn(
+            "观察期已经完成",
+            section,
+            "stale-lock: CONTRIBUTING仍以观察期描述当前ui-smoke",
+        )
         required = (
             "阻断模式",
-            "7/7",
-            "pull_request",
-            "workflow_dispatch",
-            "continue-on-error",
+            "截至 2026-08-31",
+            "`main` 分支保护",
+            "required check",
+            "workflow 不使用 `continue-on-error`",
+            "失败会直接阻断 workflow",
             "NO_LIVE_API=1",
             "start_background_collection",
             "load_calendar",
@@ -288,23 +313,46 @@ class UiSmokeCiObservationContractTest(unittest.TestCase):
             "临时端口",
             "三库与配额台账哈希不变",
         )
-        self.assertEqual([item for item in required if item not in text], [])
-        self.assertIn("浏览器安装、启动、端口或日期时区", text)
+        self.assertEqual(
+            [item for item in required if item not in section],
+            [],
+            "missing-contract: CONTRIBUTING缺少带时点的required阻断边界",
+        )
 
     def test_contributing_documents_smoke_route_coverage_boundary(self):
-        text = CONTRIBUTING.read_text(encoding="utf-8")
+        section = _markdown_section(
+            CONTRIBUTING.read_text(encoding="utf-8"),
+            "## 浏览器 smoke 阻断模式",
+        )
+        self.assertNotIn(
+            "尚未覆盖 `/price_hint`、`/feedback`、暂停等其余 CRUD 路由",
+            section,
+            "stale-lock: CONTRIBUTING锁定了已过时的smoke覆盖矩阵",
+        )
         required = (
             "完整 `web_form.app`",
+            "`/`",
             "`/settings`",
             "`/subscribe`",
             "`/success`",
             "`/subscriptions`",
-            "删除确认",
-            "尚未覆盖 `/price_hint`、`/feedback`、暂停等其余 CRUD 路由",
+            "`/subscription/<subscription_id>/delete`",
+            "`/subscriptions/<subscription_id>/toggle`",
+            "暂停与恢复",
+            "`/subscriptions/<subscription_id>/quick-update`",
+            "`/price_hint`",
+            "间接访问",
+            "没有专项业务语义断言",
+            "`/feedback`",
+            "未访问",
             "smoke 绿不等于 Web 全绿",
             "扩展 smoke 驱动",
         )
-        self.assertEqual([item for item in required if item not in text], [])
+        self.assertEqual(
+            [item for item in required if item not in section],
+            [],
+            "missing-contract: CONTRIBUTING缺少实测smoke路径与未覆盖边界",
+        )
 
 
 if __name__ == "__main__":

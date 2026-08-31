@@ -73,8 +73,12 @@ Flight Monitor 是一个本地优先的航班采集、约束过滤与通知系�
 ## 5. 数据源与配额经济学
 
 当前源策略的单一真值见 [source_profiles.py](source_profiles.py)。阈值与硬门政策见
-[config.defaults.yaml](config.defaults.yaml)；额度包、控制台对账、研究运行态和本地订阅
-属于运行事实，只保存在被 Git 忽略的 `data/runtime_config.yaml`。
+[config.defaults.yaml](config.defaults.yaml)；额度包、控制台对账和研究运行态属于运行事实，
+只保存在被 Git 忽略的 `data/runtime_config.yaml`。
+
+现行 Web CRUD、订阅采集、尝试状态与 PA 同步的权威持久化源为 `data/subscriptions.json`。
+`data/runtime_config.yaml` 中的 `subscriptions: []` 目前仍是配置校验与 legacy 迁移所需的空兼容占位；
+在 6b 完成前必须保持为空数组，不得写入真实订阅，也不得提前删除该字段（删除会导致 `validate_runtime_config` 失败）。
 
 | 数据源 | 当前职责 | 本地额度口径 | 明确限制 |
 | --- | --- | --- | --- |
@@ -115,7 +119,7 @@ python -m piptools compile --allow-unsafe --generate-hashes --no-emit-index-url 
 
 将 [config.example.yaml](config.example.yaml) 复制为
 `data/runtime_config.yaml`，再在本机填写已购额度包、控制台核对时刻与余量、储备纪元、
-目标日期、研究开关及本地订阅。示例文件故意不携带任何控制台实值；缺字段、损坏或缺失
+目标日期与研究开关。示例文件故意不携带任何控制台实值；缺字段、损坏或缺失
 都会在真实请求前失败，不会回退成空预算。其中本地 `reconciliation` 对象至少需要 `checked_at` 与
 `console_remaining`；它们只写入被忽略的 runtime 文件，避免把控制台证据模板化进
 公开配置。
@@ -184,7 +188,7 @@ python -X utf8 -m pytest -q
 python -X utf8 -m unittest discover
 ```
 
-真实浏览器交互同时在本机验收，并由公开 CI 的独立 `ui-smoke` job 以观察模式运行。CI 用锁定版本的 Playwright 供应 Chromium，测试驱动仍是现有 CDP 脚本；退出观察模式的判据见 [CONTRIBUTING.md](CONTRIBUTING.md)。启动器自动探测 Edge、Chrome 与 Chromium；也可用 `BROWSER_PATH` 指定，Windows 继续兼容 `EDGE_PATH`。失败时才写入所给日志与产物目录，成功不落盘：
+真实浏览器交互同时在本机验收，并由公开 CI 的独立阻断式 `ui-smoke` job 运行。CI 用锁定版本的 Playwright 供应 Chromium，测试驱动仍是现有 CDP 脚本；覆盖边界见 [CONTRIBUTING.md](CONTRIBUTING.md)。启动器自动探测 Edge、Chrome 与 Chromium；也可用 `BROWSER_PATH` 指定，Windows 继续兼容 `EDGE_PATH`。失败时才写入所给日志与产物目录，成功不落盘：
 
 ```bash
 python -X utf8 scripts/ui_smoke.py --log-path data/ui-smoke-artifacts/ui-smoke.log --artifact-dir data/ui-smoke-artifacts
