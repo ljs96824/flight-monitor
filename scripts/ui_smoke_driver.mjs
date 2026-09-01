@@ -1,5 +1,6 @@
+import {createHash} from "node:crypto";
 import {mkdir, readFile, writeFile} from "node:fs/promises";
-import {join} from "node:path";
+import {dirname, join} from "node:path";
 import {isDeepStrictEqual} from "node:util";
 
 const [baseUrl, cdpPort, artifactDir, subscriptionsPath] = process.argv.slice(2);
@@ -22,6 +23,7 @@ await new Promise((resolve, reject) => {
 let nextId = 1;
 const pending = new Map();
 const browserErrors = [];
+const priceHintResponses = [];
 let pageLoadGeneration = 0;
 
 function handleCdpMessage(event) {
@@ -35,6 +37,30 @@ function handleCdpMessage(event) {
   }
   if (message.method === "Page.loadEventFired") {
     pageLoadGeneration += 1;
+  }
+  if (message.method === "Network.responseReceived") {
+    const responseUrl = new URL(message.params.response.url);
+    if (responseUrl.origin === new URL(baseUrl).origin && responseUrl.pathname === "/price_hint") {
+      priceHintResponses.push({
+        requestId: message.params.requestId,
+        url: responseUrl.href,
+        status: message.params.response.status,
+        finished: false,
+        failed: false,
+        body: null,
+      });
+    }
+  }
+  if (message.method === "Network.loadingFinished") {
+    const response = priceHintResponses.find(item => item.requestId === message.params.requestId);
+    if (response) response.finished = true;
+  }
+  if (message.method === "Network.loadingFailed") {
+    const response = priceHintResponses.find(item => item.requestId === message.params.requestId);
+    if (response) {
+      response.failed = true;
+      response.failureType = message.params.errorText || "Network.loadingFailed";
+    }
   }
   if (message.method === "Runtime.exceptionThrown") {
     browserErrors.push(message.params.exceptionDetails?.text || "Runtime.exceptionThrown");
@@ -103,6 +129,60 @@ async function waitFor(expression, label, timeout = 12000) {
     await sleep(100);
   }
   throw new Error(`等待超时: ${label}`);
+}
+
+function clearPriceHintTrace() {
+  priceHintResponses.length = 0;
+}
+
+async function waitForPriceHintResponse(origin, dest, timeout = 12000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    const response = priceHintResponses.findLast(item => {
+      const url = new URL(item.url);
+      return url.pathname === "/price_hint"
+        && url.searchParams.get("origin") === origin
+        && url.searchParams.get("dest") === dest;
+    });
+    if (response?.body) return response;
+    if (response?.failed) {
+      throw new Error(`PRICE_HINT_RESPONSE_NOT_CAPTURED: ${response.failureType}`);
+    }
+    if (response?.finished) {
+      const captured = await command("Network.getResponseBody", {
+        requestId: response.requestId,
+      });
+      const bodyText = captured.base64Encoded
+        ? Buffer.from(captured.body, "base64").toString("utf8")
+        : captured.body;
+      response.body = JSON.parse(bodyText);
+      return response;
+    }
+    await sleep(100);
+  }
+  throw new Error(`PRICE_HINT_RESPONSE_NOT_CAPTURED: origin=${origin} dest=${dest}`);
+}
+
+async function filePresenceAndSha256(path) {
+  try {
+    const content = await readFile(path);
+    return {
+      exists: true,
+      sha256: createHash("sha256").update(content).digest("hex"),
+    };
+  } catch (error) {
+    if (error?.code === "ENOENT") return {exists: false, sha256: null};
+    throw error;
+  }
+}
+
+async function priceHintStorageState() {
+  const dataDir = dirname(subscriptionsPath);
+  return {
+    subscriptions: await filePresenceAndSha256(subscriptionsPath),
+    observations: await filePresenceAndSha256(join(dataDir, "observations.sqlite3")),
+    prices: await filePresenceAndSha256(join(dataDir, "prices.db")),
+  };
 }
 
 async function waitForTargetUrl(expectedUrl, label, timeout = 12000) {
@@ -527,6 +607,7 @@ async function runSmoke() {
 await command("Runtime.enable");
 await command("Page.enable");
 await command("Log.enable");
+await command("Network.enable");
 await command("Page.bringToFront");
 await command("Page.navigate", {url: baseUrl});
 await waitFor("document.readyState === 'complete'", "快速页加载");
@@ -574,6 +655,8 @@ const localDate = date => [
   String(date.getMonth() + 1).padStart(2, "0"),
   String(date.getDate()).padStart(2, "0"),
 ].join("-");
+const priceHintStorageBefore = await priceHintStorageState();
+clearPriceHintTrace();
 await evaluate(`(() => {
   const set = (name, value) => {
     const element = document.querySelector('[name="' + name + '"]');
@@ -592,8 +675,37 @@ await evaluate(`(() => {
 })()`);
 await setCheckboxValuesByClick("travel_scenario", ["tourism", "family"]);
 console.log("[UI smoke] 页1多选=PASS 场景2项");
+const priceHintResponse = await waitForPriceHintResponse("PVG", "PEK");
+const priceHintUrl = new URL(priceHintResponse.url);
+const priceHintPayload = priceHintResponse.body;
+if (
+  priceHintResponse.status !== 200
+  || priceHintUrl.pathname !== "/price_hint"
+  || priceHintUrl.searchParams.size !== 2
+  || priceHintUrl.searchParams.get("origin") !== "PVG"
+  || priceHintUrl.searchParams.get("dest") !== "PEK"
+  || priceHintPayload.has_data !== false
+  || priceHintPayload.scope !== "oneway"
+  || priceHintPayload.route_type !== "domestic"
+  || priceHintPayload.route_type_label !== "国内"
+) {
+  throw new Error(`PRICE_HINT_RESPONSE_CONTRACT_MISMATCH: ${JSON.stringify(priceHintResponse)}`);
+}
 await waitFor("document.querySelector('[data-route-type-badge=\"true\"]').dataset.routeType === 'domestic' && document.querySelector('[data-route-type-label]').textContent.trim() === '国内'", "航线类型自动识别");
 console.log("[UI smoke] 航线类型徽章=PASS 上海→北京识别为国内");
+const priceHintDom = await evaluate(`(() => ({
+  text: document.getElementById('price-hint')?.textContent.trim() || '',
+  hiddenRouteType: document.querySelector('[name="route_type"]')?.value || '',
+}))()`);
+if (priceHintDom.text !== "暂无历史价格参考" || priceHintDom.hiddenRouteType !== "domestic") {
+  throw new Error(`PRICE_HINT_FALLBACK_TEXT_NOT_ASSERTED: ${JSON.stringify(priceHintDom)}`);
+}
+assertDeepEqual(
+  await priceHintStorageState(),
+  priceHintStorageBefore,
+  "/price_hint阶段临时subscriptions/observations/prices零写入",
+);
+console.log("[UI smoke] /price_hint请求与无数据回退=PASS URL=/price_hint?origin=PVG&dest=PEK status=200 has_data=false scope=oneway hidden_route_type=domestic");
 await evaluate(`document.querySelector('form[data-page-mode="quick"]').requestSubmit(); true`);
 await waitFor("location.pathname === '/success'", "快速页提交确认", 15000);
 const quickId = await captureSuccessSubscriptionId("快速页订阅");

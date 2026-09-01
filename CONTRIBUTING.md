@@ -19,7 +19,7 @@ workflow 不使用 `continue-on-error`；浏览器 smoke 失败会直接阻断 w
 
 `scripts/ui_smoke.py` 的临时服务器运行完整 `web_form.app`，并非只挂载少数路由。当前 CDP 驱动覆盖 `/`、`/settings`（含编辑回填与提交）、POST `/subscribe`、`/success`、`/subscriptions`、GET/POST `/subscription/<subscription_id>/delete`、POST `/subscriptions/<subscription_id>/toggle` 的暂停与恢复，以及 POST `/subscriptions/<subscription_id>/quick-update`。
 
-2026-08-31 的本机 smoke 服务日志还显示页面间接访问 `/price_hint` 并返回 200；当前驱动只证明这次间接访问，没有专项业务语义断言。`/feedback` 在该次 smoke 中未访问。smoke 绿不等于 Web 全绿：需要验证新的或尚未覆盖的行为时，必须单独扩展 smoke 驱动与交互断言，不能把路由可访问等同于已经验证。
+截至 2026-09-01，CDP 驱动已专项验证 `/price_hint` 的最终请求参数、无数据 JSON 与 DOM 回退，并锁定 route type 徽章、标签及隐藏字段；有数据价格显示文案尚未裁决。`/feedback` 仍未覆盖。smoke 绿不等于 Web 全绿：需要验证新的或尚未覆盖的行为时，必须单独扩展 smoke 驱动与交互断言，不能把路由可访问等同于已经验证。
 
 ## F821 未定义名称硬门
 
