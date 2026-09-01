@@ -20,6 +20,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DRIVER = ROOT / "scripts" / "ui_smoke_driver.mjs"
 DEFAULT_ARTIFACT_DIR = ROOT / "data" / "ui-smoke-artifacts"
+FEEDBACK_NOTIFY_STUB_MARKER = "[UI smoke] feedback notifier stub invoked"
 
 
 def _default_browser_candidates(
@@ -144,6 +145,22 @@ def _file_presence_and_sha256(path: Path) -> tuple[bool, str | None]:
     return True, hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _file_state(path: Path) -> dict[str, bool | int | str | None]:
+    exists, digest = _file_presence_and_sha256(path)
+    return {
+        "exists": exists,
+        "bytes": path.stat().st_size if exists else None,
+        "sha256": digest,
+    }
+
+
+def _protected_production_states() -> dict[str, dict[str, bool | int | str | None]]:
+    return {
+        "subscriptions": _file_state(ROOT / "data" / "subscriptions.json"),
+        "feedback": _file_state(ROOT / "data" / "feedback.json"),
+    }
+
+
 def _browser_command(
     browser: Path,
     *,
@@ -168,6 +185,7 @@ def _browser_command(
 
 
 def _serve(port: int, data_dir: Path) -> None:
+    os.environ["FEEDBACK_NOTIFY_EMAIL"] = ""
     sys.path.insert(0, str(ROOT))
     import web_form
 
@@ -177,6 +195,12 @@ def _serve(port: int, data_dir: Path) -> None:
     web_form.PAGE_PAYLOADS_DIR = data_dir / "payloads"
     web_form.start_background_collection = lambda _subscription: {"status": "started", "entrypoint": "ui_smoke"}
     web_form.load_calendar = lambda _route: []
+
+    def notify_feedback_author_stub(_record: dict) -> bool:
+        print(FEEDBACK_NOTIFY_STUB_MARKER, flush=True)
+        return False
+
+    web_form.notify_feedback_author = notify_feedback_author_stub
     web_form.app.run(
         host="127.0.0.1",
         port=port,
@@ -202,10 +226,7 @@ def _write_failure_logs(
 def run_smoke(*, log_path: Path | None = None, artifact_dir: Path | None = None) -> int:
     artifact_dir = artifact_dir or DEFAULT_ARTIFACT_DIR
     log_path = log_path or artifact_dir / "ui-smoke.log"
-    production_subscriptions = ROOT / "data" / "subscriptions.json"
-    production_subscriptions_before = _file_presence_and_sha256(
-        production_subscriptions
-    )
+    production_states_before = _protected_production_states()
     try:
         browser = _browser_path()
     except Exception as exc:
@@ -322,23 +343,39 @@ def run_smoke(*, log_path: Path | None = None, artifact_dir: Path | None = None)
                 encoding="utf-8",
                 errors="replace",
             )
+            if "UI_SMOKE_FEEDBACK_CANARY" in server_output:
+                lines.append("[UI smoke] 结果=FAIL 原因=FEEDBACK_CANARY_IN_SERVER_LOG")
+                return_code = 1
             if server_output.strip():
                 lines.append("[UI smoke] 本地服务日志:")
                 lines.extend(server_output.strip().splitlines()[-20:])
 
-    production_subscriptions_after = _file_presence_and_sha256(
-        production_subscriptions
-    )
-    if production_subscriptions_after != production_subscriptions_before:
+    feedback_notify_calls = server_output.count(FEEDBACK_NOTIFY_STUB_MARKER)
+    if feedback_notify_calls != 1:
         lines.append(
-            "[UI smoke] 结果=FAIL 原因=生产subscriptions存在性或SHA发生变化"
+            "[UI smoke] 结果=FAIL 原因=FEEDBACK_NOTIFY_NOT_ISOLATED "
+            f"stub_calls={feedback_notify_calls}"
         )
         return_code = 1
     else:
-        exists, digest = production_subscriptions_after
+        lines.append("[UI smoke] feedback notifier隔离=PASS stub_calls=1")
+
+    production_states_after = _protected_production_states()
+    for name in ("subscriptions", "feedback"):
+        state = production_states_after[name]
+        if state != production_states_before[name]:
+            marker = (
+                "PRODUCTION_FEEDBACK_HASH_NOT_GUARDED"
+                if name == "feedback"
+                else "PRODUCTION_SUBSCRIPTIONS_HASH_NOT_GUARDED"
+            )
+            lines.append(f"[UI smoke] 结果=FAIL 原因={marker}")
+            return_code = 1
+            continue
         lines.append(
-            "[UI smoke] 生产subscriptions状态=PASS "
-            f"exists={exists} sha256={digest or 'not-applicable'}"
+            f"[UI smoke] 生产{name}状态=PASS "
+            f"exists={state['exists']} bytes={state['bytes'] if state['bytes'] is not None else 'not-applicable'} "
+            f"sha256={state['sha256'] or 'not-applicable'}"
         )
 
     output = "\n".join(lines) + "\n"

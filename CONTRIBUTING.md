@@ -19,7 +19,7 @@ workflow 不使用 `continue-on-error`；浏览器 smoke 失败会直接阻断 w
 
 `scripts/ui_smoke.py` 的临时服务器运行完整 `web_form.app`，并非只挂载少数路由。当前 CDP 驱动覆盖 `/`、`/settings`（含编辑回填与提交）、POST `/subscribe`、`/success`、`/subscriptions`、GET/POST `/subscription/<subscription_id>/delete`、POST `/subscriptions/<subscription_id>/toggle` 的暂停与恢复，以及 POST `/subscriptions/<subscription_id>/quick-update`。
 
-截至 2026-09-01，CDP 驱动已专项验证 `/price_hint` 的最终请求参数、无数据 JSON 与 DOM 回退，并锁定 route type 徽章、标签及隐藏字段；有数据价格显示文案尚未裁决。`/feedback` 仍未覆盖。smoke 绿不等于 Web 全绿：需要验证新的或尚未覆盖的行为时，必须单独扩展 smoke 驱动与交互断言，不能把路由可访问等同于已经验证。
+截至 2026-09-01，CDP 驱动已专项验证 `/price_hint` 的最终请求参数、无数据 JSON 与 DOM 回退，并锁定 route type 徽章、标签及隐藏字段；有数据价格显示文案尚未裁决。`/feedback` 通知反馈深链已专项验证 GET 表单、浏览器原生必填校验、有效 CSRF POST、临时 `feedback.json` 持久化和“已收到反馈”成功态；smoke 通过替换反馈通知函数保证零真实 SMTP。服务端无效字段校验仍是已登记缺口。普通 Web 页面目前没有反馈导航入口，本合同只验证通知反馈深链，不宣称普通 Web 页面已提供该入口。smoke 绿不等于 Web 全绿：需要验证新的或尚未覆盖的行为时，必须单独扩展 smoke 驱动与交互断言，不能把路由可访问等同于已经验证。
 
 ## F821 未定义名称硬门
 

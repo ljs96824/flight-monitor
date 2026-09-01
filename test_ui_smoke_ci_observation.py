@@ -927,6 +927,11 @@ class UiSmokeDocumentationContractTest(unittest.TestCase):
             section,
             "stale-lock: CONTRIBUTING锁定了已过时的smoke覆盖矩阵",
         )
+        self.assertNotIn(
+            "`/feedback` 仍未覆盖",
+            section,
+            "stale-lock: CONTRIBUTING仍把通知反馈深链记录为未覆盖",
+        )
         for stale_text in ("只证明这次间接访问", "没有专项业务语义断言"):
             self.assertNotIn(
                 stale_text,
@@ -953,7 +958,17 @@ class UiSmokeDocumentationContractTest(unittest.TestCase):
             "有数据价格显示文案",
             "尚未裁决",
             "`/feedback`",
-            "未覆盖",
+            "通知反馈深链",
+            "GET",
+            "原生必填校验",
+            "有效 CSRF POST",
+            "临时 `feedback.json`",
+            "已收到反馈",
+            "零真实 SMTP",
+            "服务端无效字段校验",
+            "已登记缺口",
+            "普通 Web 页面",
+            "不宣称",
             "smoke 绿不等于 Web 全绿",
             "扩展 smoke 驱动",
         )
