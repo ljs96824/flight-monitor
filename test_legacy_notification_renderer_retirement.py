@@ -66,6 +66,11 @@ class LegacyNotificationRendererRetirementTest(unittest.TestCase):
             patch.object(notifier.httpx, "post") as http_post,
             patch.object(email_notifier, "send_email") as email_send,
         ):
+            with self.assertRaisesRegex(
+                exception_type,
+                r"render_email|render_detail_html|render_pushplus_sections",
+            ):
+                notifier.format_html_message()
             with self.assertRaises(exception_type) as raised:
                 notifier.format_html_message(
                     analysis_result=sensitive_values,
