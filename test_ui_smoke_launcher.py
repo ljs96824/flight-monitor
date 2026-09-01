@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
+import inspect
 import os
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -172,6 +175,80 @@ class UiSmokeArtifactContractTest(unittest.TestCase):
         self.assertIn("failure.png", driver)
         self.assertIn("browser-console.json", driver)
         self.assertIn("message.params.args", driver)
+
+
+class UiSmokeFeedbackIsolationContractTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.smoke = _load_smoke_module()
+
+    def test_serve_clears_feedback_recipient_and_installs_no_network_notifier(self):
+        original_notifier = mock.Mock(
+            side_effect=AssertionError("real feedback notifier was called")
+        )
+        observed: dict[str, object] = {}
+        fake_web_form = types.SimpleNamespace(notify_feedback_author=original_notifier)
+
+        def run_app(**kwargs):
+            observed["recipient"] = os.environ.get("FEEDBACK_NOTIFY_EMAIL")
+            observed["notify_result"] = fake_web_form.notify_feedback_author(
+                {"comment": "UI_SMOKE_FEEDBACK_CANARY"}
+            )
+            observed["run_kwargs"] = kwargs
+
+        fake_web_form.app = types.SimpleNamespace(run=run_app)
+        with tempfile.TemporaryDirectory() as tmpdir, mock.patch.dict(
+            os.environ,
+            {"FEEDBACK_NOTIFY_EMAIL": "must-not-survive@example.invalid"},
+            clear=False,
+        ), mock.patch.dict(sys.modules, {"web_form": fake_web_form}):
+            self.smoke._serve(54321, Path(tmpdir))
+
+        self.assertEqual(observed["recipient"], "")
+        self.assertFalse(observed["notify_result"])
+        self.assertEqual(
+            fake_web_form.FEEDBACK_PATH,
+            Path(tmpdir) / "feedback.json",
+        )
+        self.assertEqual(
+            observed["run_kwargs"],
+            {
+                "host": "127.0.0.1",
+                "port": 54321,
+                "debug": False,
+                "use_reloader": False,
+                "threaded": True,
+            },
+        )
+        original_notifier.assert_not_called()
+
+    def test_run_smoke_guards_production_feedback_presence_size_and_sha(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            data_dir = root / "data"
+            data_dir.mkdir()
+            feedback = data_dir / "feedback.json"
+            feedback.write_bytes(b'[{"feedback_type":"synthetic"}]')
+            expected_sha = hashlib.sha256(feedback.read_bytes()).hexdigest()
+
+            with mock.patch.object(self.smoke, "ROOT", root):
+                states = self.smoke._protected_production_states()
+
+        self.assertEqual(
+            states["feedback"],
+            {
+                "exists": True,
+                "bytes": 31,
+                "sha256": expected_sha,
+            },
+        )
+        self.assertEqual(
+            states["subscriptions"],
+            {"exists": False, "bytes": None, "sha256": None},
+        )
+        source = inspect.getsource(self.smoke.run_smoke)
+        self.assertGreaterEqual(source.count("_protected_production_states()"), 2)
+        self.assertIn("PRODUCTION_FEEDBACK_HASH_NOT_GUARDED", source)
 
 
 if __name__ == "__main__":

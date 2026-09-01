@@ -7,6 +7,7 @@ const [baseUrl, cdpPort, artifactDir, subscriptionsPath] = process.argv.slice(2)
 if (!baseUrl || !cdpPort || !subscriptionsPath) {
   throw new Error("缺少 baseUrl/cdpPort/subscriptionsPath");
 }
+const feedbackPath = join(dirname(subscriptionsPath), "feedback.json");
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -183,6 +184,22 @@ async function priceHintStorageState() {
     observations: await filePresenceAndSha256(join(dataDir, "observations.sqlite3")),
     prices: await filePresenceAndSha256(join(dataDir, "prices.db")),
   };
+}
+
+async function feedbackStorageState() {
+  const dataDir = dirname(subscriptionsPath);
+  return {
+    feedback: await filePresenceAndSha256(feedbackPath),
+    subscriptions: await filePresenceAndSha256(subscriptionsPath),
+    observations: await filePresenceAndSha256(join(dataDir, "observations.sqlite3")),
+    prices: await filePresenceAndSha256(join(dataDir, "prices.db")),
+  };
+}
+
+async function readFeedbackRecords() {
+  const payload = JSON.parse(await readFile(feedbackPath, "utf8"));
+  if (!Array.isArray(payload)) throw new Error("临时feedback根节点不是数组");
+  return payload;
 }
 
 async function waitForTargetUrl(expectedUrl, label, timeout = 12000) {
@@ -717,6 +734,164 @@ const quickConfirmation = await evaluate(`(() => {
   return text.includes('旅游 + 家庭/亲子');
 })()`);
 if (!quickConfirmation) throw new Error('页1确认页未完整回读场景');
+const feedbackCanary = "UI_SMOKE_FEEDBACK_CANARY";
+const subscriptionsBeforeFeedback = await readSubscriptions();
+const feedbackStorageBefore = await feedbackStorageState();
+if (feedbackStorageBefore.feedback.exists) {
+  throw new Error("FEEDBACK_WRITE_TARGET_NOT_ASSERTED: GET前临时feedback已存在");
+}
+await navigate(`/feedback?sub=${quickId}`);
+const feedbackEntry = await evaluate(`(() => {
+  const url = new URL(location.href);
+  const form = document.querySelector('form[method="post"]');
+  return {
+    pathname: url.pathname,
+    search: url.search,
+    subscriptionId: form?.querySelector('[name="subscription_id"]')?.value || '',
+    csrfToken: Boolean(form?.querySelector('[name="csrf_token"]')?.value),
+    feedbackTypes: [...document.querySelectorAll('[name="feedback_type"]')]
+      .map(input => input.value)
+      .sort(),
+    validBeforeSelection: form?.checkValidity() ?? true,
+  };
+})()`);
+const expectedFeedbackTypes = [
+  "link_failed",
+  "mismatch",
+  "mute_similar",
+  "no_baggage",
+  "price_changed",
+  "unavailable",
+  "useful",
+];
+if (
+  feedbackEntry.pathname !== "/feedback"
+  || feedbackEntry.search !== `?sub=${quickId}`
+  || feedbackEntry.subscriptionId !== quickId
+  || !feedbackEntry.csrfToken
+  || feedbackEntry.validBeforeSelection
+  || !isDeepStrictEqual(feedbackEntry.feedbackTypes, expectedFeedbackTypes)
+) {
+  throw new Error("FEEDBACK_ENTRY_NOT_REACHED: GET表单合同不匹配");
+}
+assertDeepEqual(
+  await feedbackStorageState(),
+  feedbackStorageBefore,
+  "反馈GET零写入",
+);
+
+const invalidSubmitGeneration = await clickSelector('form button[type="submit"]');
+await sleep(350);
+const invalidSubmitState = await evaluate(`(() => ({
+  pathname: location.pathname,
+  saved: document.querySelector('h1')?.textContent.includes('已收到反馈') || false,
+  invalidFeedbackType: Boolean(document.querySelector('[name="feedback_type"]:invalid')),
+}))()`);
+if (
+  pageLoadGeneration !== invalidSubmitGeneration
+  || invalidSubmitState.pathname !== "/feedback"
+  || invalidSubmitState.saved
+  || !invalidSubmitState.invalidFeedbackType
+) {
+  throw new Error("FEEDBACK_WRITE_TARGET_NOT_ASSERTED: 浏览器原生必填校验未阻止提交");
+}
+assertDeepEqual(
+  await feedbackStorageState(),
+  feedbackStorageBefore,
+  "反馈原生必填校验零写入",
+);
+
+const feedbackFormReady = await evaluate(`(() => {
+  const unavailable = document.querySelector('[name="feedback_type"][value="unavailable"]');
+  const reason = document.querySelector('[name="unavailable_reason"]');
+  const comment = document.querySelector('[name="comment"]');
+  const form = unavailable?.form;
+  if (!unavailable || !reason || !comment || !form) return false;
+  unavailable.click();
+  reason.value = 'sold_out';
+  reason.dispatchEvent(new Event('change', {bubbles: true}));
+  comment.value = ${JSON.stringify("UI_SMOKE_FEEDBACK_CANARY")};
+  comment.dispatchEvent(new Event('input', {bubbles: true}));
+  return form.checkValidity();
+})()`);
+if (!feedbackFormReady) {
+  throw new Error("FEEDBACK_WRITE_TARGET_NOT_ASSERTED: 有效表单未通过浏览器校验");
+}
+const feedbackSubmitGeneration = await clickSelector('form button[type="submit"]');
+await waitForPageLoad(feedbackSubmitGeneration, "反馈POST加载事件", 15000);
+await waitFor("document.readyState === 'complete' && location.pathname === '/feedback'", "反馈POST成功页");
+const feedbackSuccess = await evaluate(`(() => ({
+  pathname: location.pathname,
+  saved: document.querySelector('h1')?.textContent.includes('已收到反馈') || false,
+  returnHref: document.querySelector('a[href="/subscriptions"]')?.getAttribute('href') || '',
+  returnText: document.querySelector('a[href="/subscriptions"]')?.textContent.trim() || '',
+  hasForm: Boolean(document.querySelector('form')),
+}))()`);
+if (
+  feedbackSuccess.pathname !== "/feedback"
+  || !feedbackSuccess.saved
+  || feedbackSuccess.returnHref !== "/subscriptions"
+  || feedbackSuccess.returnText !== "返回我的监控"
+  || feedbackSuccess.hasForm
+) {
+  throw new Error("FEEDBACK_WRITE_TARGET_NOT_ASSERTED: 成功页合同不匹配");
+}
+
+const feedbackRecords = await readFeedbackRecords();
+if (feedbackRecords.length !== 1) {
+  throw new Error(`FEEDBACK_WRITE_TARGET_NOT_ASSERTED: feedback记录数=${feedbackRecords.length}`);
+}
+const feedbackRecord = feedbackRecords[0];
+const feedbackKeys = Object.keys(feedbackRecord).sort();
+const expectedFeedbackKeys = [
+  "comment",
+  "created_at",
+  "feedback_type",
+  "subscription_id",
+  "unavailable_reason",
+  "user_agent",
+];
+if (
+  !isDeepStrictEqual(feedbackKeys, expectedFeedbackKeys)
+  || !Object.values(feedbackRecord).every(value => typeof value === "string")
+  || feedbackRecord.subscription_id !== quickId
+  || feedbackRecord.feedback_type !== "unavailable"
+  || feedbackRecord.unavailable_reason !== "sold_out"
+  || feedbackRecord.comment !== feedbackCanary
+  || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(feedbackRecord.created_at)
+  || Number.isNaN(Date.parse(feedbackRecord.created_at))
+  || !feedbackRecord.user_agent.trim()
+) {
+  throw new Error("FEEDBACK_WRITE_TARGET_NOT_ASSERTED: 持久化记录合同不匹配");
+}
+const feedbackStorageAfter = await feedbackStorageState();
+if (
+  !feedbackStorageAfter.feedback.exists
+  || feedbackStorageAfter.feedback.sha256 === feedbackStorageBefore.feedback.sha256
+) {
+  throw new Error("FEEDBACK_WRITE_TARGET_NOT_ASSERTED: 临时feedback文件未更新");
+}
+assertDeepEqual(
+  feedbackStorageAfter.subscriptions,
+  feedbackStorageBefore.subscriptions,
+  "反馈提交subscriptions零写入",
+);
+assertDeepEqual(
+  feedbackStorageAfter.observations,
+  feedbackStorageBefore.observations,
+  "反馈提交observations零写入",
+);
+assertDeepEqual(
+  feedbackStorageAfter.prices,
+  feedbackStorageBefore.prices,
+  "反馈提交prices零写入",
+);
+assertDeepEqual(
+  await readSubscriptions(),
+  subscriptionsBeforeFeedback,
+  "反馈提交前后订阅记录",
+);
+console.log("[UI smoke] /feedback通知深链=PASS GET零写入；原生必填阻止空提交；有效CSRF POST仅追加1条临时反馈；成功页已收到反馈");
 await openSubscriptionEditorFromCard(quickId);
 await assertPersistedCheckboxValues(
   "travel_scenario",
@@ -1268,6 +1443,9 @@ if (finalPageState.cardCount !== 1 || finalPageState.hasA || finalPageState.hasC
 console.log("[UI smoke] UUID删除A=PASS 最终临时JSON与页面均仅余B且逐字段不变");
 
 await sleep(350);
+if (browserErrors.some(error => error.includes(feedbackCanary))) {
+  throw new Error("FEEDBACK_CANARY_IN_BROWSER_ERRORS");
+}
 if (browserErrors.length) throw new Error(`浏览器错误: ${browserErrors.join(' | ')}`);
 console.log("[UI smoke] console error=0");
 }
