@@ -927,6 +927,12 @@ class UiSmokeDocumentationContractTest(unittest.TestCase):
             section,
             "stale-lock: CONTRIBUTING锁定了已过时的smoke覆盖矩阵",
         )
+        for stale_text in ("只证明这次间接访问", "没有专项业务语义断言"):
+            self.assertNotIn(
+                stale_text,
+                section,
+                "stale-lock: CONTRIBUTING仍把/price_hint记录为仅间接访问",
+            )
         required = (
             "完整 `web_form.app`",
             "`/`",
@@ -939,10 +945,15 @@ class UiSmokeDocumentationContractTest(unittest.TestCase):
             "暂停与恢复",
             "`/subscriptions/<subscription_id>/quick-update`",
             "`/price_hint`",
-            "间接访问",
-            "没有专项业务语义断言",
+            "请求参数",
+            "无数据 JSON",
+            "DOM 回退",
+            "route type",
+            "隐藏字段",
+            "有数据价格显示文案",
+            "尚未裁决",
             "`/feedback`",
-            "未访问",
+            "未覆盖",
             "smoke 绿不等于 Web 全绿",
             "扩展 smoke 驱动",
         )
