@@ -122,6 +122,12 @@ def _smtp_config() -> dict:
 
 def send_email(to_email: str, subject: str, html_content: str, inline_images: dict | None = None) -> bool:
     """Send one HTML email through the configured SMTP account."""
+    # 本笔只保证 email_notifier.send_email() 在 effective NO_LIVE_API 精确等于 "1" 时拒绝 SMTP 发送。
+    # 它不证明 PushPlus、PythonAnywhere Files、Juhe、SerpAPI、Duffel 或任何其他 sink 同样受该变量保护。
+    if os.environ.get("NO_LIVE_API") == "1":
+        safe_log("[邮件] NO_LIVE_API=1，已阻止真实 SMTP 发送")
+        return False
+
     config = _smtp_config()
     smtp_user = os.getenv("SMTP_USER", "")
     smtp_pass = os.getenv("SMTP_PASS", "")
