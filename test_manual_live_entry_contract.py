@@ -12,7 +12,7 @@ import sys
 import tempfile
 import unittest
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
-from datetime import timedelta
+from datetime import date, timedelta
 from unittest.mock import patch
 
 
@@ -28,6 +28,7 @@ AUDIT_MODULES = (
     "scripts.cabin_capability_audit",
 )
 TEST_CANARY_SECRET = "TEST_ONLY_CANARY_SECRET_7f3c91d2"
+ANCHOR_TODAY = date(2026, 8, 30)
 
 
 class _FakeResponse:
@@ -65,6 +66,9 @@ def _guarded_audit(config, *, acquire=_acquire_ok):
     ), patch(
         "scripts.manual_live_guard._acquire_singleflight",
         side_effect=acquire,
+    ), patch(
+        "scripts.manual_live_guard.shanghai_today",
+        return_value=ANCHOR_TODAY,
     ):
         yield
 
@@ -213,6 +217,14 @@ socket.socket.connect = _network_denied
 
 
 class ManualLiveGuardContractTest(unittest.TestCase):
+    def setUp(self):
+        self._clock_patch = patch(
+            "scripts.manual_live_guard.shanghai_today",
+            return_value=ANCHOR_TODAY,
+        )
+        self._clock_patch.start()
+        self.addCleanup(self._clock_patch.stop)
+
     def _initialized_usage(self, directory: Path) -> Path:
         from api_usage import initialize_usage_ledger
 
@@ -434,21 +446,21 @@ class ManualLiveGuardContractTest(unittest.TestCase):
 
     def test_past_shanghai_date_is_rejected_before_http(self):
         from scripts import cabin_capability_audit
-        from subscription_preflight import shanghai_today
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             usage_path = self._initialized_usage(root)
             calls = []
-            report = cabin_capability_audit.run_audit(
-                execute=True,
-                depart_date=(shanghai_today() - timedelta(days=1)).isoformat(),
-                sources=("duffel",),
-                env={"DUFFEL_TOKEN": TEST_CANARY_SECRET},
-                usage_path=usage_path,
-                http_get=lambda *_a, **_k: calls.append(1),
-                http_post=lambda *_a, **_k: calls.append(1),
-            )
+            with patch("scripts.manual_live_guard.shanghai_today", return_value=ANCHOR_TODAY):
+                report = cabin_capability_audit.run_audit(
+                    execute=True,
+                    depart_date=(ANCHOR_TODAY - timedelta(days=1)).isoformat(),
+                    sources=("duffel",),
+                    env={"DUFFEL_TOKEN": TEST_CANARY_SECRET},
+                    usage_path=usage_path,
+                    http_get=lambda *_a, **_k: calls.append(1),
+                    http_post=lambda *_a, **_k: calls.append(1),
+                )
             self.assertEqual(calls, [])
             self.assertEqual(report["gate_code"], "past_departure_date")
 

@@ -10,6 +10,14 @@ from pathlib import Path
 from unittest.mock import patch
 
 
+ANCHOR_TODAY = date(2026, 8, 30)
+TRANSLATION_ANCHORS = (
+    ANCHOR_TODAY - timedelta(days=1),
+    ANCHOR_TODAY,
+    ANCHOR_TODAY + timedelta(days=1),
+)
+
+
 class _DummyFlask:
     def __init__(self, *args, **kwargs):
         pass
@@ -702,42 +710,48 @@ class PassengerPriceScopesTest(unittest.TestCase):
 
 
     def test_no_primary_calendar_uses_quick_mode_passenger_count(self):
-        depart_date = date.today() + timedelta(days=21)
-        return_date = depart_date + timedelta(days=7)
-        weekday_names = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
-        calendar = {
-            "scope": "roundtrip",
-            "return_date": return_date.isoformat(),
-            "return_min_price": 557,
-            "rows": [
-                {
-                    "date": depart_date.isoformat(),
-                    "weekday": weekday_names[depart_date.weekday()],
-                    "outbound_min_price": 547,
+        for anchor in TRANSLATION_ANCHORS:
+            with self.subTest(anchor=anchor):
+                depart_date = anchor + timedelta(days=21)
+                return_date = depart_date + timedelta(days=7)
+                weekday_names = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+                calendar = {
+                    "scope": "roundtrip",
+                    "return_date": return_date.isoformat(),
                     "return_min_price": 557,
-                    "roundtrip_ref_price": 1104,
-                    "min_price": 1104,
-                    "lowest": True,
+                    "rows": [
+                        {
+                            "date": depart_date.isoformat(),
+                            "weekday": weekday_names[depart_date.weekday()],
+                            "outbound_min_price": 547,
+                            "return_min_price": 557,
+                            "roundtrip_ref_price": 1104,
+                            "min_price": 1104,
+                            "lowest": True,
+                        }
+                    ],
                 }
-            ],
-        }
-        payload = build_notification_payload(
-            {"price_calendar": calendar, "round_trip_analysis": {"top_combinations": []}},
-            route_info={
-                "origin": "SHA",
-                "destination": "PEK",
-                "depart_date": depart_date.isoformat(),
-                "return_date": return_date.isoformat(),
-                "price_calendar": calendar,
-            },
-            subscription={"basic": {"passenger_count": 3}, "constraints": {"route_type": "domestic"}},
-        )
+                with patch("notifier.shanghai_today", return_value=anchor):
+                    payload = build_notification_payload(
+                        {"price_calendar": calendar, "round_trip_analysis": {"top_combinations": []}},
+                        route_info={
+                            "origin": "SHA",
+                            "destination": "PEK",
+                            "depart_date": depart_date.isoformat(),
+                            "return_date": return_date.isoformat(),
+                            "price_calendar": calendar,
+                        },
+                        subscription={
+                            "basic": {"passenger_count": 3},
+                            "constraints": {"route_type": "domestic"},
+                        },
+                    )
 
-        body = _email_price_calendar_body(payload)
+                body = _email_price_calendar_body(payload)
 
-        self.assertEqual(payload["passenger_pricing"]["passengers"]["adult"], 3)
-        self.assertIn("3\u6210\u4eba", body)
-        self.assertIn("\u5168\u5458\u7ea6\u00a53,312", body)
+                self.assertEqual(payload["passenger_pricing"]["passengers"]["adult"], 3)
+                self.assertIn("3\u6210\u4eba", body)
+                self.assertIn("\u5168\u5458\u7ea6\u00a53,312", body)
 
     def test_calendar_percentile_uses_all_passenger_price_array(self):
         payload = {

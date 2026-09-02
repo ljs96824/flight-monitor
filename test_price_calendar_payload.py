@@ -14,6 +14,14 @@ sys.modules.setdefault(
 import storage
 
 
+ANCHOR_TODAY = date(2026, 8, 30)
+TRANSLATION_ANCHORS = (
+    ANCHOR_TODAY - timedelta(days=1),
+    ANCHOR_TODAY,
+    ANCHOR_TODAY + timedelta(days=1),
+)
+
+
 class PriceCalendarPayloadTest(unittest.TestCase):
     def setUp(self):
         self._storage_tmp = tempfile.TemporaryDirectory()
@@ -29,10 +37,18 @@ class PriceCalendarPayloadTest(unittest.TestCase):
         self._storage_tmp.cleanup()
 
     def test_payload_carries_price_calendar_and_detail_renders_it(self):
+        normalized_results = []
+        for anchor in TRANSLATION_ANCHORS:
+            with self.subTest(anchor=anchor):
+                normalized_results.append(self._assert_payload_calendar_rendering(anchor))
+
+        self.assertEqual(normalized_results[1:], normalized_results[:1] * 2)
+
+    def _assert_payload_calendar_rendering(self, anchor):
         from notifier import build_notification_payload, render_detail_html
 
-        selected_date = (date.today() + timedelta(days=2)).isoformat()
-        cheaper_date = (date.today() + timedelta(days=1)).isoformat()
+        selected_date = (anchor + timedelta(days=2)).isoformat()
+        cheaper_date = (anchor + timedelta(days=1)).isoformat()
         analysis = {
             "all_flights": [
                 {
@@ -69,21 +85,22 @@ class PriceCalendarPayloadTest(unittest.TestCase):
             },
         }
 
-        payload = build_notification_payload(
-            analysis_result=analysis,
-            route_info={
-                "origin": "PVG",
-                "destination": "PEK",
-                "depart_date": selected_date,
-                "round_trip": False,
-                "subscription_id": "calendar-test",
-                "notification_goals": {
-                    "primary": "cheaper_date",
-                    "secondary": ["nearby_date_cheaper"],
+        with patch("notifier.shanghai_today", return_value=anchor):
+            payload = build_notification_payload(
+                analysis_result=analysis,
+                route_info={
+                    "origin": "PVG",
+                    "destination": "PEK",
+                    "depart_date": selected_date,
+                    "round_trip": False,
+                    "subscription_id": "calendar-test",
+                    "notification_goals": {
+                        "primary": "cheaper_date",
+                        "secondary": ["nearby_date_cheaper"],
+                    },
                 },
-            },
-            source_stats={"juhe": {"count": 2, "status": "成功", "route_type": "domestic"}},
-        )
+                source_stats={"juhe": {"count": 2, "status": "成功", "route_type": "domestic"}},
+            )
         html = render_detail_html(payload)
 
         self.assertEqual(payload["price_calendar"]["rows"][0]["date"], cheaper_date)
@@ -93,13 +110,26 @@ class PriceCalendarPayloadTest(unittest.TestCase):
         self.assertIn("单程最低参考价", html)
         self.assertIn("提前1天", html)
         self.assertIn("周二", html)
+        return {
+            "push_type": payload["push_type"],
+            "calendar_prices": [row["min_price"] for row in payload["price_calendar"]["rows"]],
+            "has_calendar_heading": "低价日历" in html,
+        }
 
     def test_international_nearby_dates_build_roundtrip_calendar(self):
+        normalized_results = []
+        for anchor in TRANSLATION_ANCHORS:
+            with self.subTest(anchor=anchor):
+                normalized_results.append(self._assert_roundtrip_calendar(anchor))
+
+        self.assertEqual(normalized_results[1:], normalized_results[:1] * 2)
+
+    def _assert_roundtrip_calendar(self, anchor):
         from notifier import _payload_price_calendar
 
-        selected_date = (date.today() + timedelta(days=72)).isoformat()
-        cheaper_date = (date.today() + timedelta(days=71)).isoformat()
-        return_date = (date.today() + timedelta(days=77)).isoformat()
+        selected_date = (anchor + timedelta(days=72)).isoformat()
+        cheaper_date = (anchor + timedelta(days=71)).isoformat()
+        return_date = (anchor + timedelta(days=77)).isoformat()
         analysis = {
             "round_trip": True,
             "nearby_dates": [
@@ -120,13 +150,20 @@ class PriceCalendarPayloadTest(unittest.TestCase):
             "round_trip": True,
         }
 
-        calendar = _payload_price_calendar(route_info, analysis)
+        with patch("notifier.shanghai_today", return_value=anchor):
+            calendar = _payload_price_calendar(route_info, analysis)
         prices = {row["date"]: row["min_price"] for row in calendar["rows"]}
 
         self.assertEqual(calendar["scope"], "roundtrip")
         self.assertEqual(prices[selected_date], 8000)
         self.assertEqual(prices[cheaper_date], 7000)
         self.assertEqual(calendar["return_min_price"], 3000)
+        return {
+            "scope": calendar["scope"],
+            "selected_price": prices[selected_date],
+            "cheaper_price": prices[cheaper_date],
+            "return_min_price": calendar["return_min_price"],
+        }
 
     def test_cheaper_date_email_has_calendar_evidence_and_layered_headline(self):
         from notifier import render_email
@@ -261,31 +298,44 @@ class PriceCalendarPayloadTest(unittest.TestCase):
                 types.SimpleNamespace(name="juhe"),
             ]
         )
-        depart_date = (date.today() + timedelta(days=30)).isoformat()
-        sub = {
-            "route_type": "international",
-            "origin": "PVG",
-            "destination": "KIX",
-            "origin_airports_active": ["PVG"],
-            "destination_airports_active": ["KIX"],
-            "depart_date": depart_date,
-            "date_flexibility": 1,
-        }
+        normalized_results = []
+        for anchor in TRANSLATION_ANCHORS:
+            with self.subTest(anchor=anchor):
+                collect_mock.reset_mock()
+                depart_date = (anchor + timedelta(days=30)).isoformat()
+                sub = {
+                    "route_type": "international",
+                    "origin": "PVG",
+                    "destination": "KIX",
+                    "origin_airports_active": ["PVG"],
+                    "destination_airports_active": ["KIX"],
+                    "depart_date": depart_date,
+                    "date_flexibility": 1,
+                }
 
-        collect_nearby_dates(aggregator, sub, target_min_price=1500)
+                collect_nearby_dates(aggregator, sub, target_min_price=1500)
 
-        used_aggregator = collect_mock.call_args_list[0].args[0]
-        self.assertEqual(
-            [source.name for source in used_aggregator.search_sources],
-            ["hasdata", "juhe"],
-        )
+                used_aggregator = collect_mock.call_args_list[0].args[0]
+                source_names = [source.name for source in used_aggregator.search_sources]
+                normalized_results.append(source_names)
+                self.assertEqual(source_names, ["hasdata", "juhe"])
+
+        self.assertEqual(normalized_results[1:], normalized_results[:1] * 2)
 
     def test_international_payload_wires_nearby_calendar_into_email(self):
+        normalized_results = []
+        for anchor in TRANSLATION_ANCHORS:
+            with self.subTest(anchor=anchor):
+                normalized_results.append(self._assert_international_payload_calendar(anchor))
+
+        self.assertEqual(normalized_results[1:], normalized_results[:1] * 2)
+
+    def _assert_international_payload_calendar(self, anchor):
         from notifier import build_notification_payload, render_email
 
-        selected_date = (date.today() + timedelta(days=72)).isoformat()
-        cheaper_date = (date.today() + timedelta(days=71)).isoformat()
-        return_date = (date.today() + timedelta(days=77)).isoformat()
+        selected_date = (anchor + timedelta(days=72)).isoformat()
+        cheaper_date = (anchor + timedelta(days=71)).isoformat()
+        return_date = (anchor + timedelta(days=77)).isoformat()
         outbound = {
             "flight_no": "MU225",
             "flight_combo": "MU225",
@@ -339,15 +389,16 @@ class PriceCalendarPayloadTest(unittest.TestCase):
             "notification_goals": {"primary": "cheaper_date"},
         }
 
-        payload = build_notification_payload(
-            analysis,
-            return_analysis=return_analysis,
-            route_info=route_info,
-            subscription={
-                "id": "intl-nearby-calendar",
-                "basic": {"route_type": "international"},
-            },
-        )
+        with patch("notifier.shanghai_today", return_value=anchor):
+            payload = build_notification_payload(
+                analysis,
+                return_analysis=return_analysis,
+                route_info=route_info,
+                subscription={
+                    "id": "intl-nearby-calendar",
+                    "basic": {"route_type": "international"},
+                },
+            )
         subject, body = render_email(payload)
 
         self.assertEqual(payload["push_type"], "前后日期更便宜")
@@ -365,6 +416,13 @@ class PriceCalendarPayloadTest(unittest.TestCase):
             body,
         )
         self.assertIn("低价日历", body)
+        return {
+            "push_type": payload["push_type"],
+            "scope": payload["price_calendar"]["scope"],
+            "calendar_prices": sorted(calendar_prices.values()),
+            "subject_prefix": subject.split(" ", 1)[0],
+            "has_calendar_heading": "低价日历" in body,
+        }
 
 
 if __name__ == "__main__":

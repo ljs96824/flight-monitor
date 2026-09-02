@@ -11,6 +11,14 @@ from sources.aggregator import FlightAggregator, build_default_sources, is_domes
 from sources.juhe_source import JuheSource
 
 
+ANCHOR_TODAY = date(2026, 8, 30)
+TRANSLATION_ANCHORS = (
+    ANCHOR_TODAY - timedelta(days=1),
+    ANCHOR_TODAY,
+    ANCHOR_TODAY + timedelta(days=1),
+)
+
+
 class DummySource:
     def __init__(self, name):
         self.name = name
@@ -127,10 +135,11 @@ class JuheIntegrationTest(unittest.TestCase):
 
     def test_juhe_fetch_skips_past_dates_before_request(self):
         source = JuheSource()
-        past = (date.today() - timedelta(days=1)).isoformat()
+        past = (ANCHOR_TODAY - timedelta(days=1)).isoformat()
 
-        with patch.dict(os.environ, {"JUHE_FLIGHT_KEY": "test-key"}, clear=True):
-            result = source.fetch("PVG", "PEK", past)
+        with patch("sources.juhe_source.shanghai_today", return_value=ANCHOR_TODAY):
+            with patch.dict(os.environ, {"JUHE_FLIGHT_KEY": "test-key"}, clear=True):
+                result = source.fetch("PVG", "PEK", past)
 
         self.assertEqual(result["flights"], [])
         self.assertEqual(result["source_status"], "skipped_past_date")
@@ -138,7 +147,6 @@ class JuheIntegrationTest(unittest.TestCase):
 
     def test_juhe_fetch_marks_281801_as_invalid_date(self):
         source = JuheSource()
-        future = (date.today() + timedelta(days=5)).isoformat()
 
         class FakeResponse:
             status_code = 200
@@ -150,25 +158,28 @@ class JuheIntegrationTest(unittest.TestCase):
             def json(self):
                 return {"error_code": 281801, "reason": "行程出发日期格式不正确或为空"}
 
-        calls = []
+        for anchor in TRANSLATION_ANCHORS:
+            with self.subTest(anchor=anchor):
+                future = (anchor + timedelta(days=5)).isoformat()
+                calls = []
 
-        def fake_get(*args, **kwargs):
-            calls.append((args, kwargs))
-            return FakeResponse()
+                def fake_get(*args, **kwargs):
+                    calls.append((args, kwargs))
+                    return FakeResponse()
 
-        fake_requests = types.SimpleNamespace(get=fake_get)
-        with patch.dict(os.environ, {"JUHE_FLIGHT_KEY": "test-key"}, clear=True):
-            with patch.dict(sys.modules, {"requests": fake_requests}):
-                result = source.fetch("PVG", "PEK", future)
+                fake_requests = types.SimpleNamespace(get=fake_get)
+                with patch("sources.juhe_source.shanghai_today", return_value=anchor):
+                    with patch.dict(os.environ, {"JUHE_FLIGHT_KEY": "test-key"}, clear=True):
+                        with patch.dict(sys.modules, {"requests": fake_requests}):
+                            result = source.fetch("PVG", "PEK", future)
 
-        self.assertEqual(len(calls), 1)
-        self.assertEqual(result["flights"], [])
-        self.assertEqual(result["source_status"], "invalid_date")
-        self.assertEqual(result["skipped_reason"], "日期无效或已过期")
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(result["flights"], [])
+                self.assertEqual(result["source_status"], "invalid_date")
+                self.assertEqual(result["skipped_reason"], "日期无效或已过期")
 
     def test_juhe_quota_response_is_source_failure_not_empty_success(self):
         source = JuheSource()
-        future = (date.today() + timedelta(days=5)).isoformat()
 
         class FakeResponse:
             status_code = 200
@@ -184,22 +195,24 @@ class JuheIntegrationTest(unittest.TestCase):
                     "reason": "超过每日可允许请求次数",
                 }
 
-        fake_requests = types.SimpleNamespace(get=lambda *args, **kwargs: FakeResponse())
-        with patch.dict(os.environ, {"JUHE_FLIGHT_KEY": "test-key"}, clear=True):
-            with patch.dict(sys.modules, {"requests": fake_requests}):
-                result = source.fetch("PVG", "PEK", future)
+        for anchor in TRANSLATION_ANCHORS:
+            with self.subTest(anchor=anchor):
+                future = (anchor + timedelta(days=5)).isoformat()
+                fake_requests = types.SimpleNamespace(get=lambda *args, **kwargs: FakeResponse())
+                with patch("sources.juhe_source.shanghai_today", return_value=anchor):
+                    with patch.dict(os.environ, {"JUHE_FLIGHT_KEY": "test-key"}, clear=True):
+                        with patch.dict(sys.modules, {"requests": fake_requests}):
+                            result = source.fetch("PVG", "PEK", future)
 
-        self.assertEqual(result["flights"], [])
-        self.assertEqual(result["source_status"], "failed_quota")
-        self.assertEqual(result["error"], "配额不足(112)")
-        self.assertEqual(result["resultcode"], "112")
-        self.assertEqual(result["error_code"], "10012")
+                self.assertEqual(result["flights"], [])
+                self.assertEqual(result["source_status"], "failed_quota")
+                self.assertEqual(result["error"], "配额不足(112)")
+                self.assertEqual(result["resultcode"], "112")
+                self.assertEqual(result["error_code"], "10012")
 
 
     def test_juhe_http_success_empty_is_explicit_and_not_cached(self):
         source = JuheSource()
-        future = (date.today() + timedelta(days=5)).isoformat()
-        calls = []
 
         class FakeResponse:
             status_code = 200
@@ -215,26 +228,32 @@ class JuheIntegrationTest(unittest.TestCase):
                     "result": {"flightInfo": []},
                 }
 
-        def fake_get(*args, **kwargs):
-            calls.append((args, kwargs))
-            return FakeResponse()
+        for anchor in TRANSLATION_ANCHORS:
+            with self.subTest(anchor=anchor):
+                future = (anchor + timedelta(days=5)).isoformat()
+                calls = []
 
-        fake_requests = types.SimpleNamespace(get=fake_get)
-        with tempfile.TemporaryDirectory() as tmp:
-            cache_dir = Path(tmp)
-            with patch.dict(os.environ, {"JUHE_FLIGHT_KEY": "test-key"}, clear=True):
-                with patch.dict(sys.modules, {"requests": fake_requests}):
-                    with patch("sources.juhe_source._cache_dir", return_value=cache_dir):
-                        first = source.fetch("PVG", "KIX", future)
-                        second = source.fetch("PVG", "KIX", future)
+                def fake_get(*args, **kwargs):
+                    calls.append((args, kwargs))
+                    return FakeResponse()
 
-            self.assertEqual(first["source_status"], "empty")
-            self.assertEqual(second["source_status"], "empty")
-            self.assertEqual(first["raw_result_count"], 0)
-            self.assertEqual(second["raw_result_count"], 0)
-            self.assertEqual(first["reason"], "HTTP成功但空结果")
-            self.assertEqual(len(calls), 2)
-            self.assertEqual(list(cache_dir.glob("juhe_*.json")), [])
+                fake_requests = types.SimpleNamespace(get=fake_get)
+                with tempfile.TemporaryDirectory() as tmp:
+                    cache_dir = Path(tmp)
+                    with patch("sources.juhe_source.shanghai_today", return_value=anchor):
+                        with patch.dict(os.environ, {"JUHE_FLIGHT_KEY": "test-key"}, clear=True):
+                            with patch.dict(sys.modules, {"requests": fake_requests}):
+                                with patch("sources.juhe_source._cache_dir", return_value=cache_dir):
+                                    first = source.fetch("PVG", "KIX", future)
+                                    second = source.fetch("PVG", "KIX", future)
+
+                    self.assertEqual(first["source_status"], "empty")
+                    self.assertEqual(second["source_status"], "empty")
+                    self.assertEqual(first["raw_result_count"], 0)
+                    self.assertEqual(second["raw_result_count"], 0)
+                    self.assertEqual(first["reason"], "HTTP成功但空结果")
+                    self.assertEqual(len(calls), 2)
+                    self.assertEqual(list(cache_dir.glob("juhe_*.json")), [])
 
 
 if __name__ == "__main__":

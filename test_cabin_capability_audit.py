@@ -1,8 +1,12 @@
 import tempfile
 import unittest
 from contextlib import contextmanager
+from datetime import date
 from pathlib import Path
 from unittest.mock import patch
+
+
+ANCHOR_TODAY = date(2026, 8, 30)
 
 
 class _FakeResponse:
@@ -46,6 +50,9 @@ def _guarded_audit():
     ), patch(
         "scripts.manual_live_guard._acquire_singleflight",
         side_effect=_acquire_ok,
+    ), patch(
+        "scripts.manual_live_guard.shanghai_today",
+        return_value=ANCHOR_TODAY,
     ):
         yield
 

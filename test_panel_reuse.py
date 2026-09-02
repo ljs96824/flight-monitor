@@ -1,7 +1,11 @@
 import tempfile
 import unittest
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
+
+
+ANCHOR_TODAY = date(2026, 8, 30)
 
 
 class PanelSource:
@@ -307,16 +311,17 @@ class PanelReuseTest(unittest.TestCase):
             "_index": 1,
             "origin_airports_active": ["PVG"],
             "destination_airports_active": ["KIX"],
-            "depart_date": "2026-10-01",
+            "depart_date": (ANCHOR_TODAY + timedelta(days=32)).isoformat(),
             "date_flexibility": 1,
             "route_type": "international",
         }
-        plan = build_collection_plan(
-            subscriptions=[subscription],
-            source_builder=source_builder,
-            include_calendars=False,
-            fresh_scope="primary_only",
-        )
+        with patch("collection_plan.shanghai_today", return_value=ANCHOR_TODAY):
+            plan = build_collection_plan(
+                subscriptions=[subscription],
+                source_builder=source_builder,
+                include_calendars=False,
+                fresh_scope="primary_only",
+            )
         flex_requests = [
             request for request in plan._requests.values() if "弹性日期" in request.reasons
         ]
@@ -356,16 +361,17 @@ class PanelReuseTest(unittest.TestCase):
             "_index": 1,
             "origin_airports_active": ["PVG"],
             "destination_airports_active": ["KIX"],
-            "depart_date": "2026-10-01",
+            "depart_date": (ANCHOR_TODAY + timedelta(days=32)).isoformat(),
             "date_flexibility": 1,
             "route_type": "international",
         }
-        plan = build_collection_plan(
-            subscriptions=[subscription],
-            source_builder=source_builder,
-            include_calendars=False,
-            fresh_scope="all",
-        )
+        with patch("collection_plan.shanghai_today", return_value=ANCHOR_TODAY):
+            plan = build_collection_plan(
+                subscriptions=[subscription],
+                source_builder=source_builder,
+                include_calendars=False,
+                fresh_scope="all",
+            )
         self.assertFalse(any(request.panel_only for request in plan._requests.values()))
 
         set_current_round("subscription_round", self.db_path)
