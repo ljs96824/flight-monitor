@@ -2,9 +2,17 @@ import sqlite3
 import tempfile
 import unittest
 from contextlib import closing
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
+
+
+ANCHOR_TODAY = date(2026, 8, 30)
+TRANSLATION_ANCHORS = (
+    ANCHOR_TODAY - timedelta(days=1),
+    ANCHOR_TODAY,
+    ANCHOR_TODAY + timedelta(days=1),
+)
 
 
 SCHEMA = """
@@ -877,32 +885,42 @@ class ProvenanceTest(unittest.TestCase):
         self.assertEqual(statistics["calendar.2026-10-01.min"]["sources"], ["juhe"])
 
     def test_weekday_version_is_v2_without_value_change(self):
-        from datetime import date, timedelta
-
         from method_registry import METHOD_VERSIONS
         from price_calendar import analyze_weekday_pattern
 
-        today = date.today()
-        first_monday = today + timedelta(days=(7 - today.weekday()) % 7 or 7)
-        first_tuesday = first_monday + timedelta(days=1)
-        calendar = {
-            "dates": {
-                (first_monday + timedelta(days=7 * week)).isoformat(): {
-                    "min_price": price
+        normalized_results = []
+        for anchor in TRANSLATION_ANCHORS:
+            with self.subTest(anchor=anchor):
+                first_monday = anchor + timedelta(days=(7 - anchor.weekday()) % 7 or 7)
+                first_tuesday = first_monday + timedelta(days=1)
+                calendar = {
+                    "dates": {
+                        (first_monday + timedelta(days=7 * week)).isoformat(): {
+                            "min_price": price
+                        }
+                        for week, price in enumerate((100, 100, 1000))
+                    }
+                    | {
+                        (first_tuesday + timedelta(days=7 * week)).isoformat(): {
+                            "min_price": 200
+                        }
+                        for week in range(3)
+                    }
                 }
-                for week, price in enumerate((100, 100, 1000))
-            }
-            | {
-                (first_tuesday + timedelta(days=7 * week)).isoformat(): {
-                    "min_price": 200
+                with patch("price_calendar.shanghai_today", return_value=anchor):
+                    result = analyze_weekday_pattern(calendar, min_samples=6)
+
+                normalized = {
+                    "monday_median": result["median_by_weekday"]["周一"],
+                    "monday_iqr": result["iqr_by_weekday"]["周一"],
+                    "method_version": result["method_version"],
                 }
-                for week in range(3)
-            }
-        }
-        result = analyze_weekday_pattern(calendar, min_samples=6)
-        self.assertEqual(result["median_by_weekday"]["周一"], 100)
-        self.assertEqual(result["iqr_by_weekday"]["周一"], [100, 550])
-        self.assertEqual(result["method_version"], METHOD_VERSIONS["weekday"])
+                normalized_results.append(normalized)
+                self.assertEqual(normalized["monday_median"], 100)
+                self.assertEqual(normalized["monday_iqr"], [100, 550])
+                self.assertEqual(normalized["method_version"], METHOD_VERSIONS["weekday"])
+
+        self.assertEqual(normalized_results[1:], normalized_results[:1] * 2)
 
 
 if __name__ == "__main__":
