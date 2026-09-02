@@ -1237,6 +1237,11 @@ def _notification_title_from_content(content: str, fallback: str) -> str:
 
 def send(content: str | PushRender, title: str = "航班监控通知") -> bool:
     """发送推送通知；航班消息按小节降级，通用告警保持字符串语义。"""
+    if os.environ.get("NO_LIVE_API") == "1":
+        safe_log(
+            "[推送] NO_LIVE_API=1，已阻止真实 PushPlus 发送"
+        )
+        return False
     structured = isinstance(content, PushRender)
     original_content = render_push_render(content) if structured else str(content or "")
     pushplus_token = os.environ.get("PUSHPLUS_TOKEN", "")
