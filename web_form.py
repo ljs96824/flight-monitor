@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+# 本笔关闭的是仓库自带的 direct script 与 module execution 启动旁路;操作者仍可用 flask CLI / Gunicorn / Waitress 等外部 WSGI 方式自行绑定地址,该行为不在本笔控制范围内,须作为 residual risk 明列。
+if __name__ == "__main__":
+    raise SystemExit(
+        "请使用 python run_web.py 启动本地 Web 服务；"
+        "run_web.py 提供回环默认绑定与显式公网授权门。"
+    )
+
 import json
 import os
 import queue
@@ -2962,7 +2969,3 @@ def detail():
     if matched is None:
         abort(404)
     return render_template_string(DETAIL_TEMPLATE, result=matched)
-
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
