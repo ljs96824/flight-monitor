@@ -19,6 +19,9 @@ REQUIREMENTS_INPUT = ROOT / "requirements.in"
 DEV_REQUIREMENTS_INPUT = ROOT / "requirements-dev.in"
 DEV_REQUIREMENTS_LOCK = ROOT / "requirements-dev.txt"
 RUNTIME_BACKUP_MANUAL = ROOT / "docs" / "runtime-backup-and-restore.md"
+EXTERNAL_NETWORK_COVERAGE = (
+    ROOT / "docs" / "external-network-no-live-api-coverage-2026-09-03.md"
+)
 
 EXPECTED_SECTIONS = (
     "定位",
@@ -427,6 +430,113 @@ class DocsAccuracyTest(unittest.TestCase):
                     [],
                     f"missing-contract: {heading} 证据合同不完整",
                 )
+
+    def test_external_network_no_live_api_coverage_contract(self):
+        self.assertTrue(
+            EXTERNAL_NETWORK_COVERAGE.is_file(),
+            "missing-contract: 缺少外部网络NO_LIVE_API覆盖清单",
+        )
+        text = EXTERNAL_NETWORK_COVERAGE.read_text(encoding="utf-8")
+        snapshot_section = _markdown_section(text, "## 快照与总声明")
+        self.assertEqual(
+            [
+                item
+                for item in (
+                    "c59b8bc16041df97cad8baa7650b5f211a846870",
+                    "Asia/Shanghai",
+                    "静态快照",
+                    "source_profiles",
+                    "新增适配器",
+                    "gateway",
+                    "SMTP",
+                    "PushPlus",
+                    "不是全局网络防火墙",
+                )
+                if item not in snapshot_section
+            ],
+            [],
+            "missing-contract: 快照点、复核触发器或非全局防火墙边界不完整",
+        )
+
+        scan_section = _markdown_section(text, "## 范围完备性扫描")
+        self.assertIn("生产 Python", scan_section)
+        self.assertIn("测试文件", scan_section)
+        self.assertIn("异常项", scan_section)
+
+        active_section = _markdown_section(text, "## 现役网络路径")
+        actual_service_ids = set(
+            re.findall(
+                r"^\|\s*`([a-z][a-z0-9_]*)`\s*\|",
+                active_section,
+                flags=re.MULTILINE,
+            )
+        )
+        self.assertEqual(
+            actual_service_ids,
+            {
+                "smtp_email",
+                "pushplus",
+                "pa_subscription_download",
+                "pa_payload_upload",
+                "juhe",
+                "serpapi",
+                "duffel",
+            },
+        )
+        for term in (
+            "gate_status",
+            "operational_controls",
+            "runtime_contracts",
+            "evidence_basis",
+            "evidence_level",
+        ):
+            self.assertIn(term, active_section)
+
+        inactive_section = _markdown_section(text, "## 非现役或退役适配器")
+        self.assertIn("直接", inactive_section)
+        self.assertIn("NO_LIVE_API", inactive_section)
+        self.assertIn("当前调用方", inactive_section)
+
+        controls_section = _markdown_section(text, "## 控制层分类")
+        for term in ("prevention", "containment", "detection", "不能阻止"):
+            self.assertIn(term, controls_section)
+
+        contracts_section = _markdown_section(
+            text,
+            "## runtime_contracts 与 documentation_contract",
+        )
+        for term in (
+            "SMTP",
+            "PushPlus",
+            "私有 gateway 调用图",
+            "runtime_contracts",
+            "documentation_contract",
+        ):
+            self.assertIn(term, contracts_section)
+
+        gaps_section = _markdown_section(text, "## 当前缺口")
+        for term in (
+            "PA 订阅下载",
+            "PA payload 上传",
+            "Juhe",
+            "SerpAPI",
+            "Duffel",
+            "当前无门，依赖上游控制及调用方测试隔离",
+        ):
+            self.assertIn(term, gaps_section)
+
+        boundaries_section = _markdown_section(text, "## 已知边界")
+        for term in (
+            "process",
+            ".env",
+            "effective",
+            "import",
+            "patch target",
+            "WSGI",
+            "计划任务",
+            "仓库内 Python",
+        ):
+            self.assertIn(term, boundaries_section)
 
     def test_documented_python_entrypoints_have_offline_help_or_import_probe(self):
         probes = {
