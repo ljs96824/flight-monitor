@@ -2,7 +2,6 @@ import json
 import queue
 import tempfile
 import threading
-import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -198,12 +197,41 @@ class WebStartupHandshakeContractTest(unittest.TestCase):
         self.tmpdir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.path = Path(self.tmpdir.name) / "subscriptions.json"
         self.old_path = web_form.SUBSCRIPTIONS_PATH
+        self._thread_class = threading.Thread
+        self._workers = []
         web_form.SUBSCRIPTIONS_PATH = self.path
         self.path.write_text(json.dumps([_subscription()]), encoding="utf-8")
 
     def tearDown(self):
-        web_form.SUBSCRIPTIONS_PATH = self.old_path
-        self.tmpdir.cleanup()
+        try:
+            alive = [worker.name for worker in self._workers if worker.is_alive()]
+            self.assertEqual(alive, [], f"test leaked background workers: {alive}")
+        finally:
+            web_form.SUBSCRIPTIONS_PATH = self.old_path
+            self.tmpdir.cleanup()
+
+    def _thread_factory(self, *args, **kwargs):
+        worker = self._thread_class(*args, **kwargs)
+        self._workers.append(worker)
+        return worker
+
+    def _start_background_collection(self, subscription, *, timeout_seconds):
+        previous_count = len(self._workers)
+        with patch.object(
+            web_form.threading,
+            "Thread",
+            side_effect=self._thread_factory,
+        ):
+            result = web_form.start_background_collection(
+                subscription,
+                timeout_seconds=timeout_seconds,
+            )
+        self.assertEqual(len(self._workers), previous_count + 1)
+        return result, self._workers[-1]
+
+    def _join_worker(self, worker):
+        worker.join(timeout=2)
+        self.assertFalse(worker.is_alive(), f"worker did not exit: {worker.name}")
 
     def _last_attempt(self):
         return web_form.load_subscriptions()[0]["last_attempt"]
@@ -223,24 +251,23 @@ class WebStartupHandshakeContractTest(unittest.TestCase):
             patch.object(main, "_normalize_subscription", side_effect=lambda value: value),
             patch.object(main, "process_subscription", side_effect=fake_process),
         ):
-            result = web_form.start_background_collection(
+            result, worker = self._start_background_collection(
                 _subscription(),
                 timeout_seconds=1,
             )
 
         self.assertEqual(result["status"], "busy")
-        deadline = time.monotonic() + 2
-        attempt = {}
-        while time.monotonic() < deadline:
-            attempt = web_form.load_subscriptions()[0].get("last_attempt") or {}
-            if attempt.get("status") == "busy":
-                break
-            time.sleep(0.01)
+        self._join_worker(worker)
+        attempt = web_form.load_subscriptions()[0].get("last_attempt") or {}
         self.assertEqual(attempt["status"], "busy")
         self.assertEqual(attempt["holder_round_id"], "holder-round")
         self.assertNotIn(attempt["status"], {"success", "failed"})
 
     def test_started_then_completed_overwrites_previous_busy_status(self):
+        process_waiting = threading.Event()
+        release_process = threading.Event()
+        operation_order = []
+        worker = None
         self.path.write_text(
             json.dumps(
                 [
@@ -266,23 +293,35 @@ class WebStartupHandshakeContractTest(unittest.TestCase):
                     "entrypoint": "single_subscription",
                 }
             )
+            process_waiting.set()
+            release_process.wait()
             return True
 
-        with (
-            patch.object(main, "_normalize_subscription", side_effect=lambda value: value),
-            patch.object(main, "process_subscription", side_effect=fake_process),
-        ):
-            result = web_form.start_background_collection(
-                _subscription(),
-                timeout_seconds=1,
-            )
-            deadline = time.monotonic() + 2
-            while self._last_attempt()["status"] != "success" and time.monotonic() < deadline:
-                time.sleep(0.01)
+        try:
+            with (
+                patch.object(main, "_normalize_subscription", side_effect=lambda value: value),
+                patch.object(main, "process_subscription", side_effect=fake_process),
+            ):
+                result, worker = self._start_background_collection(
+                    _subscription(),
+                    timeout_seconds=1,
+                )
 
-        self.assertEqual(result["status"], "started")
-        self.assertEqual(self._last_attempt()["status"], "success")
-        self.assertEqual(self._last_attempt()["holder_round_id"], "new-round")
+            self.assertEqual(result["status"], "started")
+            self.assertTrue(process_waiting.wait(timeout=1))
+            release_process.set()
+            self._join_worker(worker)
+            operation_order.append("worker.join")
+            attempt = self._last_attempt()
+            operation_order.append("last_attempt")
+        finally:
+            release_process.set()
+            if worker is not None and worker.is_alive():
+                self._join_worker(worker)
+
+        self.assertEqual(operation_order, ["worker.join", "last_attempt"])
+        self.assertEqual(attempt["status"], "success")
+        self.assertEqual(attempt["holder_round_id"], "new-round")
 
     def test_web_status_store_failure_does_not_block_started_result_or_success(self):
         startup_results = queue.Queue(maxsize=1)
@@ -333,7 +372,7 @@ class WebStartupHandshakeContractTest(unittest.TestCase):
             release_store.wait(timeout=1)
             return True
 
-        worker = threading.Thread(
+        worker = self._thread_factory(
             target=web_form.run_single_subscription,
             args=(_subscription(), startup_results),
         )
@@ -348,18 +387,20 @@ class WebStartupHandshakeContractTest(unittest.TestCase):
                 result = startup_results.get(timeout=0.05)
         finally:
             release_store.set()
-            worker.join(timeout=2)
+            self._join_worker(worker)
 
         self.assertEqual(result["status"], "started")
+
     def test_timeout_persists_confirming_without_false_time_promise(self):
         release = threading.Event()
+        worker = None
 
         def slow_runner(_subscription, startup_queue=None):
-            release.wait(1)
+            release.wait()
 
         try:
             with patch.object(web_form, "run_single_subscription", side_effect=slow_runner):
-                result = web_form.start_background_collection(
+                result, worker = self._start_background_collection(
                     _subscription(),
                     timeout_seconds=0.01,
                 )
@@ -370,12 +411,18 @@ class WebStartupHandshakeContractTest(unittest.TestCase):
             self.assertNotIn("1-2分钟", text)
         finally:
             release.set()
+            if worker is not None:
+                self._join_worker(worker)
 
     def test_thread_start_failure_persists_startup_error(self):
-        with patch.object(web_form.threading.Thread, "start", side_effect=RuntimeError("boom")):
-            result = web_form.start_background_collection(_subscription(), timeout_seconds=0.01)
+        with patch.object(self._thread_class, "start", side_effect=RuntimeError("boom")):
+            result, worker = self._start_background_collection(
+                _subscription(),
+                timeout_seconds=0.01,
+            )
 
         self.assertEqual(result["status"], "startup_error")
+        self.assertFalse(worker.is_alive())
         self.assertEqual(self._last_attempt()["status"], "startup_error")
         self.assertNotIn("1-2分钟", web_form.startup_status_message("startup_error"))
 
