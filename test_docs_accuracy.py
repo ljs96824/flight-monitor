@@ -86,6 +86,9 @@ ACTIVE_ENV_VARIABLES = ACTIVE_SECRET_VARIABLES | {
     "EDGE_PATH",
 }
 
+SAFETY_ONLY_ENV_VARIABLES = {"NO_LIVE_API"}
+DOCUMENTED_ENV_VARIABLES = ACTIVE_ENV_VARIABLES | SAFETY_ONLY_ENV_VARIABLES
+
 RETIRED_OR_DORMANT_SOURCE_VARIABLES = {
     "HASDATA_KEY",
     "SEARCHAPI_KEY",
@@ -94,15 +97,43 @@ RETIRED_OR_DORMANT_SOURCE_VARIABLES = {
 }
 
 
-def _dotenv_names(text: str) -> set[str]:
-    return {
-        match.group(1)
-        for match in re.finditer(
-            r"^\s*#?\s*([A-Z][A-Z0-9_]*)\s*=",
-            text,
-            flags=re.MULTILINE,
+def _dotenv_entries(text: str) -> list[dict[str, str | bool]]:
+    entries = []
+    for line in text.splitlines():
+        match = re.match(
+            r"^\s*(?P<comment>#\s*)?(?P<name>[A-Z][A-Z0-9_]*)\s*=(?P<value>.*)$",
+            line,
         )
-    }
+        if match:
+            entries.append(
+                {
+                    "variable_name": match.group("name"),
+                    "commented": bool(match.group("comment")),
+                    "raw_value_present": bool(match.group("value").strip()),
+                }
+            )
+    return entries
+
+
+def _dotenv_names(text: str) -> set[str]:
+    return {str(entry["variable_name"]) for entry in _dotenv_entries(text)}
+
+
+def _dotenv_section(text: str, heading: str) -> str:
+    lines = text.splitlines()
+    marker = re.compile(rf"^#\s*=+\s*{re.escape(heading)}\s*=+\s*$")
+    start = next((index for index, line in enumerate(lines) if marker.match(line)), None)
+    if start is None:
+        return ""
+    end = next(
+        (
+            index
+            for index in range(start + 1, len(lines))
+            if re.match(r"^#\s*=+\s*.+?\s*=+\s*$", lines[index])
+        ),
+        len(lines),
+    )
+    return "\n".join(lines[start:end])
 
 
 def _local_markdown_links(text: str) -> list[str]:
@@ -217,11 +248,75 @@ class DocsAccuracyTest(unittest.TestCase):
         self.assertEqual(readme_aliases, aliases)
         self.assertTrue(aliases <= env_names)
         self.assertTrue(ACTIVE_SECRET_VARIABLES <= env_names)
-        self.assertEqual(env_names, ACTIVE_ENV_VARIABLES)
+        self.assertEqual(env_names, DOCUMENTED_ENV_VARIABLES)
         self.assertEqual(RETIRED_OR_DORMANT_SOURCE_VARIABLES & env_names, set())
         self.assertNotIn("ljs96824", self.env_example)
         self.assertNotIn("@", self.env_example)
         self.assertNotRegex(self.env_example, r"(?i)(secret|token|key)_[a-z0-9]{16,}")
+
+    def test_safety_only_env_variables_are_commented(self):
+        entries = _dotenv_entries(self.env_example)
+        by_name = {
+            name: [
+                entry
+                for entry in entries
+                if entry["variable_name"] == name
+            ]
+            for name in SAFETY_ONLY_ENV_VARIABLES
+        }
+        self.assertEqual(
+            [name for name, matching in by_name.items() if not matching],
+            [],
+            "missing-contract: 缺少安全专用变量",
+        )
+        self.assertEqual(
+            [
+                name
+                for name, matching in by_name.items()
+                if not all(entry["commented"] for entry in matching)
+            ],
+            [],
+            "safety-only变量不得默认启用",
+        )
+        no_live_entries = by_name["NO_LIVE_API"]
+        self.assertEqual(len(no_live_entries), 1)
+        self.assertTrue(no_live_entries[0]["raw_value_present"])
+
+    def test_no_live_api_safety_section_contract(self):
+        section = _dotenv_section(self.env_example, "测试与受控审计安全开关")
+        self.assertTrue(section, "missing-contract: 缺少NO_LIVE_API安全开关分区")
+        self.assertEqual(
+            [term for term in ("CI", "离线测试", "受控审计") if term not in section],
+            [],
+        )
+        self.assertRegex(section, r"只有精确值\s*1\s*生效")
+        self.assertIn("不保护", section)
+        self.assertEqual(
+            [
+                term
+                for term in ("PA Files", "Juhe", "SerpAPI", "Duffel")
+                if term not in section
+            ],
+            [],
+        )
+
+    def test_readme_links_no_live_api_coverage_from_env_setup(self):
+        section = _markdown_section(self.readme, "### 6.3 创建 `.env`")
+        self.assertEqual(
+            [
+                term
+                for term in (
+                    "NO_LIVE_API",
+                    "CI",
+                    "受控离线验证",
+                    "不是全局断网开关",
+                    "docs/external-network-no-live-api-coverage-2026-09-03.md",
+                )
+                if term not in section
+            ],
+            [],
+            "missing-contract: README 6.3缺少NO_LIVE_API安全边界导航",
+        )
 
     def test_quick_start_contains_required_install_run_and_scheduler_contracts(self):
         required = (

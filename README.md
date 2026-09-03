@@ -144,6 +144,8 @@ python -c "from pathlib import Path; src=Path('.env.example'); dst=Path('.env');
 
 随后在本地编辑 `.env`。不要把真实值粘贴到 README、Issue、测试或日志。
 
+`NO_LIVE_API` 仅用于 CI 与受控离线验证，不是全局断网开关；各外部网络 gateway 的实际覆盖状态见 [覆盖清单](docs/external-network-no-live-api-coverage-2026-09-03.md)。
+
 **必需层**
 
 | 变量 | 解锁能力 |
