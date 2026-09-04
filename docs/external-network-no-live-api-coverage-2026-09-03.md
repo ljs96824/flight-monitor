@@ -2,7 +2,7 @@
 
 ## 快照与总声明
 
-本清单核实于 `2026-09-03T11:18:26+08:00`（项目统一 `Asia/Shanghai` 口径），依据提交 `c59b8bc16041df97cad8baa7650b5f211a846870`。它是该提交点的静态快照；`source_profiles`、新增适配器或任一 gateway 实现发生变化后，必须重新核实。
+本清单首次核实于 `2026-09-03T11:18:26+08:00`（项目统一 `Asia/Shanghai` 口径），依据提交 `c59b8bc16041df97cad8baa7650b5f211a846870`。本轮网络执行点粒度复核于 `2026-09-04T16:52:43+08:00`，`audited_code_sha=714ccdd6c25e13c85187a2260807cefa04c958d4`。它是该审计提交点的静态快照；`source_profiles`、新增适配器或任一 gateway 实现发生变化后，必须重新核实。
 
 > `NO_LIVE_API` 目前是 SMTP 与 PushPlus 公共发送 gateway 的硬门，不是全局网络防火墙。设置该变量不保证进程内不会发生其他真实外部连接。
 
@@ -12,21 +12,28 @@
 
 扫描范围是该快照下全部受 Git 跟踪的生产 Python 与可执行运维 Python，包括根模块、`sources/` 和 `scripts/`；主扫描覆盖 `httpx`、`requests`、`smtplib`、SerpAPI SDK、`urllib.request`、`socket.create_connection`，并复核 Client/Session/request 形态、第三方 SDK 调用及外部 URL 与调用点的对应关系。测试文件不进入主表；测试中的 mock 目标、socket denial 和合成 URL 也不作为生产出口。
 
-| file | function_scope | network_primitive | destination_or_service | active_status | call_path | credential_source |
-| --- | --- | --- | --- | --- | --- | --- |
-| `email_notifier.py` | `send_email` | `smtplib.SMTP_SSL` / `smtplib.SMTP` / `login` / `sendmail` | SMTP | `active_operational` | `main` 或 Web 通知调用方 -> `send_email` | `SMTP_USER`、`SMTP_PASS` 及 SMTP 配置环境变量 |
-| `notifier.py` | `_post_pushplus` | `httpx.post` | PushPlus | `active_operational` | 公共 `send` -> 私有 `_post_pushplus` | `PUSHPLUS_TOKEN` |
-| `sync_subscriptions.py` | `download_remote_subscriptions` | `httpx.get` | PythonAnywhere Files API | `active_operational` | `main.run` -> `sync_subscriptions` -> download；脚本直接入口也可调用 | `PYTHONANYWHERE_TOKEN`、`PYTHONANYWHERE_USER` |
-| `main.py` | `_upload_payload_to_pythonanywhere` | `httpx.post` | PythonAnywhere Files API | `active_operational` | `_deliver_notification` -> `_save_result_for_page` -> upload | `PYTHONANYWHERE_TOKEN`、`PYTHONANYWHERE_USER` |
-| `sources/juhe_source.py` | `JuheSource.fetch` | `requests.get` | Juhe | `active_operational` | route-aware source profile -> `FlightAggregator` -> `cached_fetch` -> `fetch` | `JUHE_FLIGHT_KEY` |
-| `sources/serpapi_source.py` | `SerpAPISource.fetch` | `GoogleSearch(...).get_dict()` | SerpAPI | `active_operational` | eligible route/cabin source profile -> `FlightAggregator` -> `cached_fetch` -> `fetch` | `SERPAPI_KEY_ALIASES` 经 `resolve_serpapi_key` |
-| `sources/duffel_source.py` | `DuffelSource.fetch` | `httpx.post` | Duffel | `active_operational` | enrichment source profile -> `FlightAggregator` -> `cached_fetch` -> `fetch` | `DUFFEL_TOKEN` |
-| `scripts/serpapi_capability_audit.py` | `run_audit` | injectable `requests.get` | SerpAPI | `active_operational` | 显式 `--execute` -> manual-live guard -> 每项审计尝试 | `SERPAPI_KEY_ALIASES` 经 `resolve_serpapi_key` |
-| `scripts/cabin_capability_audit.py` | `run_audit` | injectable `requests.get` / `requests.post` | Juhe / Duffel | `active_operational` | 显式 `--execute` -> manual-live guard -> 每个显式选择源一次 | `JUHE_FLIGHT_KEY`、`DUFFEL_TOKEN` |
-| `sources/hasdata_source.py` | `HasDataSource.fetch` | `httpx.get` | HasData | `retired` | 已退出 route-aware profile；兼容构造路径和直接调用能力仍在 | `HASDATA_KEY` |
-| `sources/searchapi_source.py` | `SearchAPISource.fetch` | `httpx.get` | SearchAPI | `inactive_by_profile` | 不在当前 route-aware profile；兼容构造路径和直接调用能力仍在 | `SEARCHAPI_KEY` |
-| `sources/skyscanner_source.py` | `SkyscannerSource.fetch` | `httpx.get` | Skyscanner | `inactive_by_profile` | 不在当前 route-aware profile；兼容构造路径和直接调用能力仍在 | `RAPIDAPI_KEY` |
-| `sources/travelpayouts_source.py` | `TravelpayoutsSource.fetch` | `httpx.get` | Travelpayouts | `inactive_by_profile` | 不在当前 route-aware profile；兼容构造路径和直接调用能力仍在 | `TRAVELPAYOUTS_TOKEN` |
+范围完备性扫描表按可区分的网络执行点记录；现役网络路径表按逻辑 service_id 汇总；完整的 gateway 级机器事实源由后续网络出口漂移合同建立。
+
+| gateway_id | file | scope | primitive | endpoint_or_operation | static_callsite_count | runtime_attempt_semantics | active_status | call_path | credential_source |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `smtp_email.transport` | `email_notifier.py` | `send_email` | `smtplib.SMTP_SSL` / `smtplib.SMTP` / `starttls` / `login` / `sendmail` / `quit` | `SMTP transport lifecycle` | `6` | SSL 分支构造客户端后依次登录、发送并退出；非 SSL 分支额外执行 STARTTLS；任一步失败可提前终止后续操作 | `active_operational` | `main` 或 Web 通知调用方 -> `send_email` | `SMTP_USER`、`SMTP_PASS` 及 SMTP 配置环境变量 |
+| `pushplus.delivery` | `notifier.py` | `_post_pushplus` | `httpx.post` | `POST https://www.pushplus.plus/send` | `1` | 公共 `send` 每次调用该静态点一次；结构化内容返回 `None` 且最小内容不同才会再次调用，故运行时至多两次 | `active_operational` | 公共 `send` -> 私有 `_post_pushplus` | `PUSHPLUS_TOKEN` |
+| `pa.subscription_download` | `sync_subscriptions.py` | `download_remote_subscriptions` | `httpx.get` | `GET PythonAnywhere Files API` | `1` | 有用户与 token 时每次同步至多一次；缺配置时不发请求 | `active_operational` | `main.run` -> `sync_subscriptions` -> download；脚本直接入口也可调用 | `PYTHONANYWHERE_TOKEN`、`PYTHONANYWHERE_USER` |
+| `pa.payload_upload` | `main.py` | `_upload_payload_to_pythonanywhere` | `httpx.post` | `POST PythonAnywhere Files API` | `1` | httpx、用户与 token 均可用时每次 payload 保存至多一次；缺配置时不发请求 | `active_operational` | `_deliver_notification` -> `_save_result_for_page` -> upload | `PYTHONANYWHERE_TOKEN`、`PYTHONANYWHERE_USER` |
+| `juhe.flight_query` | `sources/juhe_source.py` | `JuheSource.fetch` | `requests.get` | `GET /flight/query` | `1` | 通过 source 前置条件后每次 `fetch` 一次；缺 key、缓存复用或上游跳过时为零 | `active_operational` | route-aware source profile -> `FlightAggregator` -> `cached_fetch` -> `fetch` | `JUHE_FLIGHT_KEY` |
+| `serpapi.google_flights` | `sources/serpapi_source.py` | `SerpAPISource.fetch` | `GoogleSearch.get_dict` | `GET SerpAPI Google Flights search` | `1` | 有解析后的 key 且进入 source 时每次 `fetch` 一次；缺 key 或上游跳过时为零 | `active_operational` | eligible route/cabin source profile -> `FlightAggregator` -> `cached_fetch` -> `fetch` | `SERPAPI_KEY_ALIASES` 经 `resolve_serpapi_key` |
+| `duffel.offer_request` | `sources/duffel_source.py` | `DuffelSource.fetch` | `httpx.post` | `POST /air/offer_requests` | `1` | 成功构造 source 并进入 `fetch` 后每次一次；缺 token 时构造阶段拒绝 | `active_operational` | enrichment source profile -> `FlightAggregator` -> `cached_fetch` -> `fetch` | `DUFFEL_TOKEN` |
+| `serpapi.capability_audit` | `scripts/serpapi_capability_audit.py` | `run_audit` | injectable `requests.get` | `GET /search.json` | `1` | 默认零请求；显式 `--execute` 且全部 guard 通过后，经济舱与商务舱计划各调用该静态点一次，硬上限为两次 | `active_operational` | 显式 `--execute` -> manual-live guard -> 每项审计尝试 | `SERPAPI_KEY_ALIASES` 经 `resolve_serpapi_key` |
+| `cabin.capability_audit` | `scripts/cabin_capability_audit.py` | `run_audit` | injectable `requests.get` / `requests.post` | `GET /flight/query and POST /air/offer_requests` | `2` | 默认零请求；显式 `--execute` 且 guard 通过后，每个去重后的显式选择源调用对应静态点一次，硬上限合计两次 | `active_operational` | 显式 `--execute` -> manual-live guard -> 每个显式选择源一次 | `JUHE_FLIGHT_KEY`、`DUFFEL_TOKEN` |
+| `hasdata.google_flights` | `sources/hasdata_source.py` | `HasDataSource.fetch` | `httpx.get` | `GET /scrape/google/flights` | `1` | 每次直接 `fetch` 一次；已退出 route-aware profile，默认生产路线不会调度 | `retired` | 已退出 route-aware profile；兼容构造路径和直接调用能力仍在 | `HASDATA_KEY` |
+| `searchapi.primary_query_auth` | `sources/searchapi_source.py` | `SearchAPISource.fetch` | `httpx.get` | `GET /api/v1/search (query api_key)` | `1` | 每次直接 `fetch` 先执行一次 query-parameter 认证主请求 | `inactive_by_profile` | 不在当前 route-aware profile；兼容构造路径和直接调用能力仍在 | `SEARCHAPI_KEY` |
+| `searchapi.header_auth_fallback` | `sources/searchapi_source.py` | `SearchAPISource.fetch` | `httpx.get` | `GET /api/v1/search (Bearer header fallback)` | `1` | 仅主请求返回 400、401 或 403 时，在等待后执行一次 Bearer-header fallback | `inactive_by_profile` | 不在当前 route-aware profile；兼容构造路径和直接调用能力仍在 | `SEARCHAPI_KEY` |
+| `skyscanner.flight_search` | `sources/skyscanner_source.py` | `SkyscannerSource.fetch` | `httpx.get` | `GET /flights/searchFlights` | `1` | 出发地与目的地都解析到 airport ID 后每次 `fetch` 一次；任一解析失败则不执行 | `inactive_by_profile` | 不在当前 route-aware profile；兼容构造路径和直接调用能力仍在 | `RAPIDAPI_KEY` |
+| `skyscanner.airport_lookup` | `sources/skyscanner_source.py` | `SkyscannerSource._get_airport_id` | `httpx.get` | `GET /flights/searchAirport` | `1` | `fetch` 对出发地和目的地各调用 helper 一次；已知机场零请求，未知机场按 IATA 与 fallback 查询词循环并在精确匹配时提前返回；当前映射每个 helper 至多三次、一次 `fetch` 至多六次 | `inactive_by_profile` | 不在当前 route-aware profile；兼容构造路径和直接调用能力仍在 | `RAPIDAPI_KEY` |
+| `travelpayouts.prices_for_dates` | `sources/travelpayouts_source.py` | `TravelpayoutsSource.fetch` | `httpx.get` | `GET /aviasales/v3/prices_for_dates` | `1` | 每次直接 `fetch` 在第一个独立 `try` 中调用一次 | `inactive_by_profile` | 不在当前 route-aware profile；兼容构造路径和直接调用能力仍在 | `TRAVELPAYOUTS_TOKEN` |
+| `travelpayouts.direct_prices` | `sources/travelpayouts_source.py` | `TravelpayoutsSource.fetch` | `httpx.get` | `GET /v1/prices/direct` | `1` | 每次直接 `fetch` 在第二个独立 `try` 中调用一次；第一个端点失败也不会跳过本端点 | `inactive_by_profile` | 不在当前 route-aware profile；兼容构造路径和直接调用能力仍在 | `TRAVELPAYOUTS_TOKEN` |
+
+`static_callsite_count` 是对应记录中 AST 可见的网络操作调用节点数，不等于一次业务调用必然发生的请求数；条件 fallback、循环和 helper 重复调用由 `runtime_attempt_semantics` 单独说明。该表仍有有意的服务级合并：SMTP 一行合并客户端构造、TLS、登录、发送与退出操作；`cabin.capability_audit` 一行合并 Juhe GET 与 Duffel POST。因此不能宣称整份文档已经 gateway 粒度化。
 
 扫描排除项经过语义复核：`scripts/ui_smoke.py` 的 `socket` 与 `urllib.request.urlopen` 只访问临时回环服务器；`collection_singleflight.py` 的 `socket` 只读取主机标识，互斥本体是本地文件锁；`scripts/snapshot_run.py` 注入离线 `httpx.post` 替身；静态资料 URL 与生成给用户的预订链接不是本进程网络执行点。未发现 `socket.create_connection` 或额外 Client/Session 网络调用。
 
