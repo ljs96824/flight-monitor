@@ -1545,6 +1545,143 @@ class DocsAccuracyTest(unittest.TestCase):
         self.assertIn("测试文件", scan_section)
         self.assertIn("异常项", scan_section)
 
+        def parse_markdown_table(section):
+            table_lines = [
+                line.strip()
+                for line in section.splitlines()
+                if line.strip().startswith("|")
+            ]
+            if len(table_lines) < 2:
+                return (), []
+
+            def cells(line):
+                return tuple(cell.strip() for cell in line.strip("|").split("|"))
+
+            headers = cells(table_lines[0])
+            rows = []
+            for line in table_lines[2:]:
+                values = cells(line)
+                if len(values) == len(headers):
+                    rows.append(dict(zip(headers, values)))
+            return headers, rows
+
+        def markdown_code(value):
+            return str(value or "").strip().strip("`")
+
+        headers, gateway_rows = parse_markdown_table(scan_section)
+        required_gateway_columns = {
+            "gateway_id",
+            "file",
+            "scope",
+            "primitive",
+            "endpoint_or_operation",
+            "static_callsite_count",
+            "runtime_attempt_semantics",
+            "active_status",
+        }
+        rows_by_gateway = {
+            markdown_code(row.get("gateway_id")): row for row in gateway_rows
+        }
+        expected_gateway_facts = {
+            "missing_skyscanner_flight_search": (
+                "skyscanner.flight_search",
+                "sources/skyscanner_source.py",
+                "SkyscannerSource.fetch",
+                "GET /flights/searchFlights",
+                "1",
+                "inactive_by_profile",
+            ),
+            "missing_skyscanner_airport_lookup": (
+                "skyscanner.airport_lookup",
+                "sources/skyscanner_source.py",
+                "SkyscannerSource._get_airport_id",
+                "GET /flights/searchAirport",
+                "1",
+                "inactive_by_profile",
+            ),
+            "missing_searchapi_primary_callsite": (
+                "searchapi.primary_query_auth",
+                "sources/searchapi_source.py",
+                "SearchAPISource.fetch",
+                "GET /api/v1/search (query api_key)",
+                "1",
+                "inactive_by_profile",
+            ),
+            "missing_searchapi_fallback_callsite": (
+                "searchapi.header_auth_fallback",
+                "sources/searchapi_source.py",
+                "SearchAPISource.fetch",
+                "GET /api/v1/search (Bearer header fallback)",
+                "1",
+                "inactive_by_profile",
+            ),
+            "missing_travelpayouts_prices_for_dates_endpoint": (
+                "travelpayouts.prices_for_dates",
+                "sources/travelpayouts_source.py",
+                "TravelpayoutsSource.fetch",
+                "GET /aviasales/v3/prices_for_dates",
+                "1",
+                "inactive_by_profile",
+            ),
+            "missing_travelpayouts_direct_endpoint": (
+                "travelpayouts.direct_prices",
+                "sources/travelpayouts_source.py",
+                "TravelpayoutsSource.fetch",
+                "GET /v1/prices/direct",
+                "1",
+                "inactive_by_profile",
+            ),
+            "missing_hasdata_callsite_count": (
+                "hasdata.google_flights",
+                "sources/hasdata_source.py",
+                "HasDataSource.fetch",
+                "GET /scrape/google/flights",
+                "1",
+                "retired",
+            ),
+        }
+        missing_gateway_markers = set()
+        if not required_gateway_columns.issubset(headers):
+            missing_gateway_markers.add("missing_gateway_table_schema")
+        if (
+            "audited_code_sha=714ccdd6c25e13c85187a2260807cefa04c958d4"
+            not in snapshot_section
+        ):
+            missing_gateway_markers.add("missing_audited_code_sha")
+        structure_terms = (
+            "范围完备性扫描表按可区分的网络执行点记录",
+            "现役网络路径表按逻辑 service_id 汇总",
+            "完整的 gateway 级机器事实源由后续网络出口漂移合同建立",
+        )
+        if any(term not in scan_section for term in structure_terms):
+            missing_gateway_markers.add(
+                "missing_gateway_service_structure_statement"
+            )
+        for marker, expected in expected_gateway_facts.items():
+            gateway_id, file_name, scope, operation, callsite_count, status = expected
+            row = rows_by_gateway.get(gateway_id)
+            actual = (
+                markdown_code(row.get("file")) if row else "",
+                markdown_code(row.get("scope")) if row else "",
+                markdown_code(row.get("endpoint_or_operation")) if row else "",
+                markdown_code(row.get("static_callsite_count")) if row else "",
+                markdown_code(row.get("active_status")) if row else "",
+            )
+            if actual != (file_name, scope, operation, callsite_count, status):
+                missing_gateway_markers.add(marker)
+        searchapi_static_calls = sum(
+            int(markdown_code(row.get("static_callsite_count")) or 0)
+            for gateway_id, row in rows_by_gateway.items()
+            if gateway_id.startswith("searchapi.")
+        )
+        if searchapi_static_calls != 2:
+            missing_gateway_markers.add("missing_searchapi_static_callsite_total")
+        self.assertEqual(
+            missing_gateway_markers,
+            set(),
+            f"external_network_gateway_doc_markers={sorted(missing_gateway_markers)}",
+        )
+
         active_section = _markdown_section(text, "## 现役网络路径")
         actual_service_ids = set(
             re.findall(
@@ -1573,11 +1710,45 @@ class DocsAccuracyTest(unittest.TestCase):
             "evidence_level",
         ):
             self.assertIn(term, active_section)
+        active_headers, active_rows = parse_markdown_table(active_section)
+        self.assertIn("gate_status / gate_location", active_headers)
+        actual_gate_statuses = {
+            markdown_code(row.get("service_id")): markdown_code(
+                row.get("gate_status / gate_location")
+            ).split("`")[0]
+            for row in active_rows
+        }
+        self.assertEqual(
+            actual_gate_statuses,
+            {
+                "smtp_email": "gateway_enforced",
+                "pushplus": "gateway_enforced_with_call_graph",
+                "pa_subscription_download": "absent",
+                "pa_payload_upload": "absent",
+                "juhe": "upstream_controls_only",
+                "serpapi": "upstream_controls_only",
+                "duffel": "upstream_controls_only",
+            },
+        )
 
         inactive_section = _markdown_section(text, "## 非现役或退役适配器")
         self.assertIn("直接", inactive_section)
         self.assertIn("NO_LIVE_API", inactive_section)
         self.assertIn("当前调用方", inactive_section)
+        _, inactive_rows = parse_markdown_table(inactive_section)
+        actual_inactive_statuses = {
+            markdown_code(row.get("adapter")): markdown_code(row.get("active_status"))
+            for row in inactive_rows
+        }
+        self.assertEqual(
+            actual_inactive_statuses,
+            {
+                "HasData": "retired",
+                "SearchAPI": "inactive_by_profile",
+                "Skyscanner": "inactive_by_profile",
+                "Travelpayouts": "inactive_by_profile",
+            },
+        )
 
         controls_section = _markdown_section(text, "## 控制层分类")
         for term in ("prevention", "containment", "detection", "不能阻止"):
