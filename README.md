@@ -177,6 +177,26 @@ python -u -X utf8 run_web.py
 
 访问 `http://127.0.0.1:5000`。页脚的 `build ... · 启动 ... · :5000` 是版本信标；若页面行为与代码不一致，先核对该信标。用户的 `:5000` 实例受 [CONTRIBUTING.md](CONTRIBUTING.md) 的端口主权规则保护。
 
+`run_web.main` 会在导入 `web_form`（以及其 `.env` 加载）之前读取 `WEB_HOST`、`WEB_PORT` 与 `ALLOW_PUBLIC_WEB_BIND`。因此，这三个值必须在启动前进入进程环境；项目 `.env` 在标准启动路径中不会影响绑定决策。`ALLOW_PUBLIC_WEB_BIND` 保持 process-only 是有意的安全设计，仅在明确需要非回环监听时启用。
+
+**Bash（只作用于当前命令）**
+
+```bash
+WEB_HOST=0.0.0.0 WEB_PORT=5000 ALLOW_PUBLIC_WEB_BIND=1 python -u -X utf8 run_web.py
+```
+
+**PowerShell（通过子进程启动，不修改父会话环境）**
+
+```powershell
+& cmd.exe /d /c 'set WEB_HOST=0.0.0.0&&set WEB_PORT=5000&&set ALLOW_PUBLIC_WEB_BIND=1&&python -u -X utf8 run_web.py'
+```
+
+停止子进程命令后，在原 PowerShell 父会话中执行以下验证；应输出空，表示变量未外溢：
+
+```powershell
+$env:ALLOW_PUBLIC_WEB_BIND
+```
+
 首个订阅只需三步：
 
 1. 在“快速创建监控”填写出发地、目的地、日期/往返、乘客、预算和场景。
