@@ -118,9 +118,9 @@ def render_readiness_summary(hard_gate: dict) -> str:
         )
     if reserve_details:
         lines.append(
-            f"[配额推导] P90={reserve_details.get('scheduled_daily_p90')} "
+            f"[配额推导] 生效P90={reserve_details.get('scheduled_daily_p90')} "
             f"原始P90={reserve_details.get('observed_raw_p90')} "
-            f"下限{reserve_details.get('minimum_daily_p90')}生效="
+            f"下限={reserve_details.get('minimum_daily_p90')} 托底生效="
             f"{bool(reserve_details.get('minimum_floor_applied'))} "
             f"剩余天数={reserve_details.get('days_remaining')} "
             f"储备={reserve_details.get('monitoring_reserve')} "
@@ -152,7 +152,7 @@ def render_readiness_summary(hard_gate: dict) -> str:
         else:
             lines.append(
                 "冷启动期已结束:最近7个完整日均具备完整工作负载分类,"
-                "储备按实测P90计算。"
+                "冷启动结束仅表示分类完整;下限托底是否生效由 minimum_floor_applied 决定,两者不互斥。"
             )
     missing = ",".join(summary["missing"]) if summary["missing"] else "无"
     lines.append(f"[研究就绪] 还差={missing}")

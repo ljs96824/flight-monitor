@@ -304,6 +304,7 @@ def generate_report(
         )
         component_text = ";".join(
             f"{name}:{component['value']}"
+            + ("(二元门:相关日格非空且全部非退化)" if name == "source_coverage" else "")
             for name, component in reliability["components"].items()
         )
         bottleneck = ",".join(reliability["bottleneck_details"])

@@ -63,7 +63,7 @@ class ResearchReadinessWorkloadTest(unittest.TestCase):
 
         self.assertIn("2026-08-20 scheduled=0 unknown=0 reserve_basis=0", rendered)
         self.assertIn("P90=12", rendered)
-        self.assertIn("下限10生效=False", rendered)
+        self.assertIn("下限=10 托底生效=False", rendered)
         self.assertIn("剩余天数=35", rendered)
         self.assertIn("research_available=71", rendered)
         self.assertIn("下一批可启动=True", rendered)
