@@ -165,7 +165,11 @@ def generate_report(
                     )
                 )
                 or "无"
-            ),
+            )
+            + "；每个日格的每个角色各计一次；"
+            f"角色标签总数={sum((curve.get('sample_role_counts') or {}).values())} / "
+            f"纳入日格总数={curve.get('included_cell_count', 0)} / "
+            f"额外角色归属次数={sum((curve.get('sample_role_counts') or {}).values()) - curve.get('included_cell_count', 0)}",
             "采集日格状态: "
             + (
                 " / ".join(
@@ -178,14 +182,14 @@ def generate_report(
             ),
             f"覆盖范围: T={coverage.get('t_min')} 至 T={coverage.get('t_max')} 天；禁止外推范围外数据。",
             "",
-            "缺失格清单:",
+            "缺失格清单(有向价格统计 + 含反向的 PermissionError 补充诊断):",
             *(
                 [f"- {_quality_line(item)}" for item in sorted(missing_cells, key=_quality_key)]
                 if missing_cells
                 else ["- 无"]
             ),
             "缺失不参与趋势判断。",
-            "degraded格清单:",
+            "degraded格清单(有向价格统计 + 含反向的 PermissionError 补充诊断):",
             *(
                 [
                     f"- {_quality_line(item)}"
