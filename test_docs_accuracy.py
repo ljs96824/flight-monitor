@@ -1154,7 +1154,104 @@ def _markdown_section(text: str, heading: str) -> str:
     return "\n".join(lines[start:end])
 
 
+def _legacy_source_boundary_violations(text: str | None) -> set[str]:
+    """Check the document body only, not adapter reachability or external callers."""
+    if text is None:
+        return {"missing_legacy_source_document"}
+
+    def body(heading: str, parent: str = text) -> str:
+        try:
+            section = _markdown_section(parent, heading)
+        except AssertionError:
+            return ""
+        return "\n".join(line for line in section.splitlines()
+                         if not re.match(r"^#+\s", line)).replace("`", "")
+
+    violations = set()
+    try:
+        boundary = _markdown_section(text, "## 边界结论")
+    except AssertionError:
+        boundary = ""
+    claims = {
+        "missing_active_schedule_statement": (
+            body("### 现役调度边界", boundary),
+            ("audited_code_sha", "当前 profile", "定时订阅", "Web", "篮子",
+             "四个旧密钥", "不会", "现役源集合", "不扩大到", "仓外调用"),
+        ),
+        "missing_compatibility_statement": (
+            body("### 兼容能力边界", boundary),
+            ("兼容工厂", "私有按名称工厂", "环境变量可用", "依赖可导入",
+             "构造成功", "仍可能实例化", "实例化不等于", "fetch", "网络请求",
+             "不等于", "凭据或服务已验证可用"),
+        ),
+        "missing_route_context_boundary": (
+            body("## 分支条件"),
+            ("合法机场上下文或合法显式 route_type", "缺少 origin/dest",
+             "不等于", "只有无法解析出合法 route context", "直接返回",
+             "不自动回退兼容分支"),
+        ),
+        "missing_retirement_or_collector_boundary": (
+            body("## 状态与兼容入口"),
+            ("HasData", "retired_sources", "注释", "其余三者仅为未启用",
+             "无同等退役元数据", "collector.get_aggregator", "转发可空参数",
+             "不套用现役上下文要求"),
+        ),
+        "missing_snapshot_or_evidence_boundary": (
+            body("## 证据与快照限制"),
+            ("audited_code_sha=21e03027f69d3d448d577c2cc0c7367119b4baed",
+             "源码事实", "受控测试覆盖", "第一阶段取证结论",
+             "第一阶段取证支撑本次快照结论", "第二阶段合同持续保护",
+             "两者均不覆盖未经审计的仓外调用方式", "source profile", "工厂",
+             "适配器", "标准入口连接方式", "需重新核实"),
+        ),
+    }
+    for marker, (section, terms) in claims.items():
+        if not all(term in section for term in terms):
+            violations.add(marker)
+
+    mapping = body("## 密钥与适配器映射")
+    expected = {
+        "HASDATA_KEY": "HasDataSource",
+        "SEARCHAPI_KEY": "SearchAPISource",
+        "TRAVELPAYOUTS_TOKEN": "TravelpayoutsSource",
+        "RAPIDAPI_KEY": "SkyscannerSource",
+    }
+    for key, adapter in expected.items():
+        rows = re.findall(rf"^\|\s*{key}\s*\|\s*([^|]+?)\s*\|", mapping, re.MULTILINE)
+        if rows != [adapter]:
+            violations.add(f"adapter_mapping_mismatch:{key}")
+    if not all(term in mapping for term in ("第一阶段扫描", "未发现 RapidAPISource", "本笔不新增扫描")):
+        violations.add("missing_adapter_name_evidence_boundary")
+    return violations
+
+
 class DocsAccuracyTest(unittest.TestCase):
+    def test_legacy_source_boundary_document(self):
+        # Documentation completeness is not proof of a production defect.
+        report = ROOT / "docs" / "legacy-source-reachability-2026-09-08.md"
+        text = report.read_text(encoding="utf-8") if report.is_file() else None
+        self.assertEqual(_legacy_source_boundary_violations(text), set())
+
+    def test_legacy_source_boundary_in_memory_mutations(self):
+        report = ROOT / "docs" / "legacy-source-reachability-2026-09-08.md"
+        text = report.read_text(encoding="utf-8")
+        self.assertEqual(_legacy_source_boundary_violations(text), set())
+        for heading, marker in (
+            ("### 现役调度边界", "missing_active_schedule_statement"),
+            ("### 兼容能力边界", "missing_compatibility_statement"),
+        ):
+            with self.subTest(mutation=marker):
+                section = _markdown_section(text, heading)
+                mutated = text.replace(section, heading, 1)
+                self.assertIn(heading, mutated)
+                self.assertEqual(_legacy_source_boundary_violations(mutated), {marker})
+        with self.subTest(mutation="adapter_mapping_mismatch:RAPIDAPI_KEY"):
+            original = "| `RAPIDAPI_KEY` | `SkyscannerSource` |"
+            self.assertEqual(text.count(original), 1)
+            mutated = text.replace(original, "| `RAPIDAPI_KEY` | `RapidAPISource` |", 1)
+            self.assertEqual(_legacy_source_boundary_violations(mutated),
+                             {"adapter_mapping_mismatch:RAPIDAPI_KEY"})
+
     def test_departure_trajectory_report_structure(self):
         # Structure only; private prices and computation are not replayed in CI.
         report = ROOT / "docs" / "departure-trajectory-2026-09-08.md"
