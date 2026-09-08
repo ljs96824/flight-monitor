@@ -1155,6 +1155,27 @@ def _markdown_section(text: str, heading: str) -> str:
 
 
 class DocsAccuracyTest(unittest.TestCase):
+    def test_departure_trajectory_report_structure(self):
+        # Structure only; private prices and computation are not replayed in CI.
+        report = ROOT / "docs" / "departure-trajectory-2026-09-08.md"
+        self.assertTrue(report.is_file(), "missing_departure_trajectory_report")
+        text = report.read_text(encoding="utf-8")
+        contracts = {
+            "## 输入边界": ("snapshot_manifest", "historical_output", "末日未完结"),
+            "## 完整日历": ("unknown", "null", "sample_roles"),
+            "## 三个筛选序列": ("C1", "C2", "C3", "shape输入池"),
+            "## 精确配对": ("forecast_origin", "target_day", "horizon", "不插值"),
+            "## 分段误差": ("MAPE", "MAE", "有符号", "结构性", "敏感性"),
+            "## 质量覆盖成本": ("共同配对", "空洞", "组成差异"),
+            "## 推断限制": ("描述性", "完整市场真值", "forecast技能门"),
+            "## 私有证据包": ("SHA-256", "两次复算", "合成自检", "CI"),
+        }
+        for heading, terms in contracts.items():
+            with self.subTest(heading=heading):
+                section = _markdown_section(text, heading)
+                for term in terms:
+                    self.assertIn(term, section)
+
     def test_sample_admission_reconciliation_report_structure(self):
         # Structure only: CI does not possess or re-audit the private snapshot.
         report = ROOT / "docs" / "sample-admission-reconciliation-2026-09-08.md"
