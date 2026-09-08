@@ -8,6 +8,7 @@ from typing import Mapping
 READINESS_GROUPS = {
     "quota": (
         "quota_ledger_healthy",
+        "reserve_horizon",
         "expected_days_remaining",
         "worst_case_days_remaining",
         "monitoring_reserve",
@@ -117,6 +118,14 @@ def render_readiness_summary(hard_gate: dict) -> str:
             f"sample_value={int(row.get('sample_value') or 0)}"
         )
     if reserve_details:
+        if "horizon_status" in reserve_details:
+            lines.append(
+                f"[储备周期] horizon_status={reserve_details.get('horizon_status')} "
+                f"as_of={reserve_details.get('as_of')} "
+                f"target_date={reserve_details.get('target_date')} "
+                f"horizon_days={reserve_details.get('horizon_days')} "
+                f"reserve_coverage_days={reserve_details.get('reserve_coverage_days')}"
+            )
         lines.append(
             f"[配额推导] 生效P90={reserve_details.get('scheduled_daily_p90')} "
             f"原始P90={reserve_details.get('observed_raw_p90')} "
