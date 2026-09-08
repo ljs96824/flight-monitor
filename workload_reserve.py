@@ -60,6 +60,48 @@ def _nearest_rank(values: list[int], percentile: float) -> int:
     return ordered[min(rank - 1, len(ordered) - 1)]
 
 
+def _horizon_metadata(target_date: date, as_of: date) -> dict:
+    signed_days = (target_date - as_of).days
+    return {
+        "reserve_kind": "workload_p90",
+        "as_of": as_of.isoformat(),
+        "target_date": target_date.isoformat(),
+        "horizon_days": signed_days,
+        "days_remaining": max(0, signed_days),
+        # Keep the old pre-target basis; the final Shanghai day retains one day.
+        "reserve_coverage_days": max(1, signed_days) if signed_days >= 0 else 0,
+        "horizon_status": "active" if signed_days >= 0 else "expired",
+    }
+
+
+def evaluate_reserve_horizon(reserve_details, *, reserve_kind=None) -> dict:
+    """Validate workload metadata; other reserve policies have no horizon gate."""
+    details = reserve_details if isinstance(reserve_details, Mapping) else {}
+    kind = reserve_kind if reserve_kind is not None else details.get(
+        "reserve_kind", "workload_p90" if details else None
+    )
+    if kind != "workload_p90":
+        if details:
+            return {"eligible": False, "status": "invalid",
+                    "reason_code": "reserve_horizon_metadata_invalid"}
+        return {"eligible": True, "status": "not_applicable", "reason_code": None}
+    try:
+        expected = _horizon_metadata(
+            date.fromisoformat(details["target_date"]),
+            date.fromisoformat(details["as_of"]),
+        )
+        valid = all(type(details.get(key)) is type(value) and details[key] == value
+                    for key, value in expected.items())
+    except (KeyError, TypeError, ValueError):
+        valid = False
+    if not valid:
+        return {"eligible": False, "status": "invalid",
+                "reason_code": "reserve_horizon_metadata_invalid"}
+    expired = expected["horizon_status"] == "expired"
+    return {"eligible": not expired, "status": expected["horizon_status"],
+            "reason_code": "reserve_horizon_expired" if expired else None}
+
+
 def calculate_workload_reserve(
     reserve_config: Mapping,
     *,
@@ -196,13 +238,13 @@ def calculate_workload_reserve(
     ).isoformat()
 
     target_date = date.fromisoformat(str(reserve_config.get("target_date")))
-    days_remaining = max(0, (target_date - as_of).days)
+    horizon = _horizon_metadata(target_date, as_of)
     multiplier = max(0.0, float(reserve_config.get("safety_multiplier") or 1.2))
     manual_buffer = max(0, int(reserve_config.get("manual_live_buffer") or 30))
     canary_buffer = max(0, int(reserve_config.get("canary_buffer") or 12))
     monitoring_reserve = max(
         0,
-        math.ceil(effective_scheduled_p90 * days_remaining * multiplier)
+        math.ceil(effective_scheduled_p90 * horizon["reserve_coverage_days"] * multiplier)
         + manual_buffer,
     )
     anomaly_threshold = max(
@@ -246,8 +288,7 @@ def calculate_workload_reserve(
         "scheduled_daily_p90": effective_scheduled_p90,
         "minimum_daily_p90": scheduled_floor,
         "minimum_floor_applied": effective_scheduled_p90 != observed_raw_p90,
-        "days_remaining": days_remaining,
-        "target_date": target_date.isoformat(),
+        **horizon,
         "safety_multiplier": multiplier,
         "reserve_epoch_started_at": epoch_started_at_raw or None,
         "manual_live_buffer": manual_buffer,

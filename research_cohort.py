@@ -389,7 +389,12 @@ def evaluate_research_hard_gates(
     minimum_expected_days: int = 30,
     minimum_worst_case_days: int = 20,
 ) -> dict:
+    from workload_reserve import evaluate_reserve_horizon
+
     quota = quota_simulation or {}
+    horizon = evaluate_reserve_horizon(
+        quota.get("reserve_details"), reserve_kind=quota.get("reserve_kind")
+    )
     expected_days = quota.get("expected_days_remaining")
     worst_days = quota.get("worst_case_days_remaining")
     remaining_after = quota.get("remaining_after_research")
@@ -435,6 +440,7 @@ def evaluate_research_hard_gates(
     migration = migration_status or {}
     checks = {
         "quota_ledger_healthy": quota_ledger_healthy,
+        "reserve_horizon": horizon["eligible"],
         "expected_days_remaining": (
             quota_complete
             and expected_days is not None
@@ -471,6 +477,7 @@ def evaluate_research_hard_gates(
     }
     missing = [name for name, ready in checks.items() if not ready]
     current = {
+        "reserve_horizon": horizon,
         "quota_ledger_healthy": {
             "healthy": quota_ledger_healthy,
             "pending_reconciliation_count": int(
@@ -508,6 +515,10 @@ def evaluate_research_hard_gates(
         "old_data_readable": bool(migration.get("old_data_readable")),
     }
     reasons = dict(backup.get("reasons") or {})
+    if not horizon["eligible"]:
+        reasons["reserve_horizon"] = (
+            f"{horizon['reason_code']}:储备周期待维护者裁决，本轮研究准入被拒绝"
+        )
     if not quota_ledger_healthy:
         reasons["quota_ledger_healthy"] = (
             quota.get("quota_ledger_error")
@@ -557,10 +568,22 @@ def apply_research_quota_guard(
     now: str | None = None,
 ) -> dict:
     """Disable research only when a workload-aware quota guard is tripped."""
+    from workload_reserve import evaluate_reserve_horizon
+
     quota = quota_simulation or {}
+    horizon = evaluate_reserve_horizon(
+        quota.get("reserve_details"), reserve_kind=quota.get("reserve_kind")
+    )
+    # Horizon refusal is per-round, separate from the existing persistent guard.
+    horizon_refusal = (
+        {"admission_blocked": True, "horizon_status": horizon["status"]}
+        if not horizon["eligible"] else {}
+    )
+    horizon_reasons = [horizon["reason_code"]] if not horizon["eligible"] else []
     required = {"quota_remaining", "monitoring_reserve", "research_available"}
     if not required.issubset(quota):
-        return {"triggered": False, "notified": False, "reason_codes": []}
+        return {"triggered": False, "notified": False,
+                "reason_codes": horizon_reasons, **horizon_refusal}
     remaining_value = max(0, int(quota.get("quota_remaining") or 0))
     reserve_value = max(0, int(quota.get("monitoring_reserve") or 0))
     available_value = int(quota.get("research_available") or 0)
@@ -595,7 +618,8 @@ def apply_research_quota_guard(
     if canary_used > canary_buffer:
         reason_codes.append("canary_buffer_exceeded")
     if not reason_codes:
-        return {"triggered": False, "notified": False, "reason_codes": []}
+        return {"triggered": False, "notified": False,
+                "reason_codes": horizon_reasons, **horizon_refusal}
 
     cohort = _cohort_state(state)
     cohort["runtime_enabled"] = False
@@ -626,7 +650,8 @@ def apply_research_quota_guard(
             except Exception as exc:
                 guard["notification_error"] = f"{type(exc).__name__}:{exc}"
         guard["notified"] = notified
-    return {"triggered": True, "notified": notified, "reason_codes": reason_codes}
+    return {"triggered": True, "notified": notified,
+            "reason_codes": reason_codes + horizon_reasons, **horizon_refusal}
 
 
 def research_runtime_enabled(state: dict, configured: bool) -> bool:

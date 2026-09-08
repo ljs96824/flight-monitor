@@ -15,6 +15,7 @@ class ResearchReadinessTest(unittest.TestCase):
             "ready": False,
             "checks": {
                 "quota_ledger_healthy": True,
+                "reserve_horizon": True,
                 "expected_days_remaining": True,
                 "worst_case_days_remaining": False,
                 "monitoring_reserve": True,
@@ -48,7 +49,8 @@ class ResearchReadinessTest(unittest.TestCase):
         summary = build_readiness_summary(hard_gate)
 
         self.assertEqual(set(summary["groups"]), {"quota", "backup", "migration"})
-        self.assertEqual(len(summary["groups"]["quota"]), 4)
+        self.assertEqual(len(summary["groups"]["quota"]), 5)
+        self.assertEqual(summary["missing"], ["worst_case_days_remaining", "off_disk_copy_fresh"])
         self.assertEqual(len(summary["groups"]["backup"]), 4)
         self.assertEqual(len(summary["groups"]["migration"]), 3)
         self.assertFalse(summary["ready"])

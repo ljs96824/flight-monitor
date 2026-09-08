@@ -7,13 +7,21 @@ import math
 from typing import Mapping
 
 from project_time import SHANGHAI_TZ
-from workload_reserve import calculate_workload_reserve
+from workload_reserve import calculate_workload_reserve, evaluate_reserve_horizon
 
 
 PURCHASED_PACKS = "purchased_packs"
 MONTHLY = "monthly"
 LEGACY_TOTAL = "legacy_total"
 WORKLOAD_P90 = "workload_p90"
+
+
+def configured_reserve_kind(policy) -> str | None:
+    """Read the configured kind independently of computed reserve details."""
+    raw = policy.get("reserve") if isinstance(policy, Mapping) else None
+    if not isinstance(raw, Mapping):
+        return None
+    return str(raw.get("kind") or "").strip().lower() or None
 
 
 def policy_kind(policy) -> str:
@@ -249,6 +257,7 @@ def metrics(
         details["research_available"] = available
         details["next_batch_can_start"] = (
             available >= details["research_batch_calls"]
+            and evaluate_reserve_horizon(details, reserve_kind=WORKLOAD_P90)["eligible"]
         )
         result["reserve_details"] = details
     return result

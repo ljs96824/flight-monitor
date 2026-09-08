@@ -23,6 +23,7 @@ from collection_singleflight import (
 )
 from log_utils import configure_stdio_utf8, end_round_log_archive, safe_log, start_round_log_archive
 from quota_policy import metrics as quota_metrics
+from quota_policy import configured_reserve_kind
 from observations_store import (
     DEFAULT_DB_PATH,
     count_observations_for_round,
@@ -332,6 +333,7 @@ def _simulate_runtime_quota(
             "quota_ledger_error": ledger_health.get("audit_error"),
             "quota_total_limit": policy["total_limit"],
             "quota_used": policy["used"],
+            "reserve_kind": configured_reserve_kind(juhe_policy),
             "research_available": policy["research_available"],
             "research_batch_calls": int(reserve_details.get("research_batch_calls") or 30),
             "scheduled_anomaly": bool(reserve_details.get("scheduled_anomaly")),
@@ -434,8 +436,10 @@ def _prepare_research_basket(
         db_path=db_path,
         today=today,
     )
+    # Persist guard decisions without planner-induced anchor/probe advancement.
+    guarded_state = deepcopy(state)
     guard = apply_research_quota_guard(
-        staged_state,
+        guarded_state,
         quota,
         notifier=quota_guard_notifier,
     )
@@ -485,8 +489,7 @@ def _prepare_research_basket(
         f"missing={','.join(gate['missing']) if gate['missing'] else 'none'}"
     )
     if not gate["ready"]:
-        guarded_state = staged_state if guard.get("triggered") else state
-        return guarded_state, [], gate, quota
+        return guarded_state if guard.get("triggered") else state, [], gate, quota
     for item in settings.get("paused_research_routes") or []:
         safe_log(
             f"[研究采样] 已暂停 route={item.get('route')} "
