@@ -1155,6 +1155,27 @@ def _markdown_section(text: str, heading: str) -> str:
 
 
 class DocsAccuracyTest(unittest.TestCase):
+    def test_sample_admission_reconciliation_report_structure(self):
+        # Structure only: CI does not possess or re-audit the private snapshot.
+        report = ROOT / "docs" / "sample-admission-reconciliation-2026-09-08.md"
+        self.assertTrue(report.is_file(), "missing_sample_admission_report")
+        text = report.read_text(encoding="utf-8")
+        contracts = {
+            "## 输入与复现边界": ("historical_output", "audit_snapshot", "snapshot_manifest"),
+            "## 统计单位": ("origin_city", "dest_city", "sample_roles"),
+            "## 双向差集": ("T-S", "S-T", "T∩S"),
+            "## 多角色计数": ("额外角色归属", "多角色日格"),
+            "## 方向诊断": ("permission_quality_cells", "价格", "反向"),
+            "## 回测归因": ("horizon", "cutoff", "诊断计算", "计数单位"),
+            "## 可靠性语义": ("level_reliability", "shape_reliability", "backtest_skill", "source_coverage", "regime_match"),
+            "## 证据包与局限": ("私有", "SHA-256", "CI", "未完成"),
+        }
+        for heading, terms in contracts.items():
+            with self.subTest(heading=heading):
+                section = _markdown_section(text, heading)
+                for term in terms:
+                    self.assertIn(term, section)
+
     @classmethod
     def setUpClass(cls):
         cls.readme = README.read_text(encoding="utf-8")
