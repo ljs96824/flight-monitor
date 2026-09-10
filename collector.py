@@ -51,7 +51,7 @@ def fetch_flights(origin: str, dest: str, date_str: str, passengers: dict | None
 
 
 def calc_layover_minutes(arr_time_str, dep_time_str) -> int:
-    """计算两个时间字符串之间的分钟数"""
+    """计算等待分钟数；有/无偏移混用、无效输入或负间隔沿用 0 降级值。"""
     def parse_time(value):
         text = str(value or "").strip()
         if not text:
@@ -63,10 +63,10 @@ def calc_layover_minutes(arr_time_str, dep_time_str) -> int:
             except ValueError:
                 pass
 
-        # ISO格式（可能带时区），统一转为naive datetime
+        # 保留 ISO 固定偏移；无偏移输入仍保持 naive。
         try:
             dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
-            return dt.replace(tzinfo=None)
+            return dt
         except (ValueError, TypeError):
             pass
 
@@ -75,6 +75,9 @@ def calc_layover_minutes(arr_time_str, dep_time_str) -> int:
     arr = parse_time(arr_time_str)
     dep = parse_time(dep_time_str)
     if not arr or not dep:
+        return 0
+
+    if (arr.utcoffset() is None) != (dep.utcoffset() is None):
         return 0
 
     try:
