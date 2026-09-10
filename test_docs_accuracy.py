@@ -156,6 +156,18 @@ ENVIRONMENT_CONTRACTS = {
         {"scripts.ui_smoke": "operating_system_process_environment"},
         "current_script", "operating_system_managed", "Windows browser discovery root.",
     ),
+    "MANAGEMENT_TOKEN": _environment_contract(
+        "credential", "dotenv_commented",
+        {"management_access via web_form": "process_environment_after_project_dotenv"},
+        "active", "user_configurable",
+        "Independent maintainer POST-login credential; never a detail-link token.",
+    ),
+    "MANAGEMENT_AUTH_REQUIRED": _environment_contract(
+        "security_runtime", "dotenv_commented",
+        {"management_access via web_form": "process_environment_after_project_dotenv"},
+        "active", "user_configurable",
+        "Explicit protection requirement; invalid configuration must not disable authentication.",
+    ),
     "MIN_BACKTEST_CASES": _environment_contract(
         "runtime_tuning", "dotenv_active",
         {"forecast import": "process_environment_after_entrypoint_dotenv"},
@@ -938,6 +950,19 @@ class EnvironmentSourceContractTest(unittest.TestCase):
         self.assertEqual(no_live["usage_class"], "safety_only")
         self.assertEqual(no_live["documentation_target"], "dotenv_commented")
         self.assertIn("CI", no_live["effective_source_by_entrypoint"])
+
+        entries = _dotenv_entries(self.env_example)
+        for name in ("MANAGEMENT_TOKEN", "MANAGEMENT_AUTH_REQUIRED"):
+            with self.subTest(variable=name):
+                contract = ENVIRONMENT_CONTRACTS[name]
+                self.assertEqual(contract["documentation_target"], "dotenv_commented")
+                self.assertEqual(contract["repository_read_status"], "active")
+                self.assertEqual(contract["effective_source_by_entrypoint"], {
+                    "management_access via web_form": "process_environment_after_project_dotenv",
+                })
+                matching = [entry for entry in entries if entry["variable_name"] == name]
+                self.assertEqual(len(matching), 1)
+                self.assertTrue(matching[0]["commented"])
 
         test_email_reads = [
             item for item in self.discovery.reads if item.variable == "TEST_EMAIL_TO"
