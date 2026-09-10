@@ -70,6 +70,12 @@ from notification_config import (
 from price_calendar import load_calendar
 from project_time import SHANGHAI_TZ
 from web_security import configure_session_security, install_csrf_protection
+from management_access import (
+    clear_management_session,
+    establish_management_session,
+    install_management_access,
+    management_token_authorized,
+)
 
 
 BASE_DIR = Path(__file__).parent
@@ -81,6 +87,7 @@ load_dotenv(BASE_DIR / ".env", encoding="utf-8")
 app = Flask(__name__)
 configure_session_security(app, logger=safe_log)
 install_csrf_protection(app, logger=safe_log)
+install_management_access(app)
 app.config.setdefault(
     "COLLECTION_STARTUP_TIMEOUT_SECONDS",
     float(os.environ.get("COLLECTION_STARTUP_TIMEOUT_SECONDS") or 3.0),
@@ -2606,6 +2613,33 @@ def _submitted_form_values(form) -> dict:
         items = form.getlist(key)
         values[key] = items if len(items) > 1 else (items[0] if items else "")
     return values
+
+
+@app.route("/unlock", methods=["GET", "POST"])
+def unlock():
+    if request.method == "POST":
+        candidates = request.form.getlist("token")
+        if len(candidates) != 1 or not management_token_authorized(candidates[0]):
+            abort(404)
+        establish_management_session()
+        return redirect("/subscriptions")
+    return render_template_string(
+        '<!doctype html><html lang="zh-CN"><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        '<title>维护者登录</title><main><h1>维护者登录</h1>'
+        '<form method="post" action="/unlock">'
+        '<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">'
+        '<label for="management-token">管理令牌</label>'
+        '<input id="management-token" name="token" type="password" '
+        'autocomplete="current-password" maxlength="512" required>'
+        '<button type="submit">登录</button></form></main></html>'
+    )
+
+
+@app.post("/lock")
+def lock():
+    clear_management_session()
+    return redirect("/unlock")
 
 
 @app.get("/")
