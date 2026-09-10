@@ -886,27 +886,53 @@ def _parse_time_minutes(value) -> int | None:
 
 
 def parse_flight_time(time_str, date_str: str | None = None) -> datetime | None:
-    """Parse flight time with a 24-hour clock and optional flight date."""
+    """Return the input's local calendar and clock as a naive datetime."""
     if not time_str:
         return None
     text = str(time_str).strip()
     if not text:
         return None
 
-    day_offset = 0
-    offset_match = re.search(r"\+(\d+)\s*$", text)
-    if offset_match:
-        day_offset = int(offset_match.group(1))
-        text = text[: offset_match.start()].strip()
+    date_match = re.search(r"\d{4}-\d{1,2}-\d{1,2}", text)
+    if date_match:
+        full_match = re.fullmatch(
+            r"\d{4}-\d{1,2}-\d{1,2}[T ]\d{1,2}:\d{1,2}(?::\d{1,2})?"
+            r"(?:Z|[+-](?P<offset_hour>\d{2})(?::?(?P<offset_minute>\d{2}))?)?",
+            text,
+        )
+        if full_match is None:
+            return None
+        if int(full_match.group("offset_hour") or 0) > 23 or int(full_match.group("offset_minute") or 0) > 59:
+            return None
+        normalized = text.replace("T", " ")
+        for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S"):
+            try:
+                parsed = datetime.strptime(normalized, fmt)
+                return parsed
+            except ValueError:
+                pass
+        try:
+            parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        # Project the input's own clock; business windows are naive, not UTC.
+        return parsed.replace(tzinfo=None)
+
+    day_match = re.fullmatch(r"(\d{1,2}):(\d{2})\s*\+(\d{1,2})", text)
+    if day_match:
+        if not date_str:
+            return None
+        try:
+            parsed = datetime.strptime(
+                f"{date_str} {int(day_match.group(1)):02d}:{day_match.group(2)}", "%Y-%m-%d %H:%M"
+            )
+            return parsed + timedelta(days=int(day_match.group(3)))
+        except (ValueError, OverflowError):
+            return None
+    if "+" in text:
+        return None
 
     normalized = text.replace("T", " ")
-    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S"):
-        try:
-            parsed = datetime.strptime(normalized, fmt)
-            return parsed + timedelta(days=day_offset)
-        except ValueError:
-            pass
-
     time_match = re.search(r"(\d{1,2}):(\d{2})", normalized)
     if not time_match or not date_str:
         return None
@@ -915,7 +941,7 @@ def parse_flight_time(time_str, date_str: str | None = None) -> datetime | None:
         parsed = datetime.strptime(f"{date_str} {compact_time}", "%Y-%m-%d %H:%M")
     except ValueError:
         return None
-    return parsed + timedelta(days=day_offset)
+    return parsed
 
 
 def _minutes_datetime(date_str: str | None, minutes: int | float | None) -> datetime | None:
