@@ -32,6 +32,17 @@ REJECTED_CASES = (
     ("residual_suffix", "2026-03-02T01:45:00+08:00 junk"),
     ("non_clock_day_marker", "flight at 01:45 +1"),
 )
+LEGACY_SEPARATOR_CASES = tuple(
+    (marker, precision, f"2026-03-02{separator}{clock}", expected)
+    for marker, separator in (
+        ("double_space", "  "), ("tab", "\t"), ("double_t", "TT"),
+        ("mixed_whitespace", " \t "), ("t_space", "T "),
+    )
+    for precision, clock, expected in (
+        ("minute", "01:45", datetime(2026, 3, 2, 1, 45)),
+        ("second", "01:45:09", datetime(2026, 3, 2, 1, 45, 9)),
+    )
+)
 
 
 class FlightTimeParsingFixesTest(unittest.TestCase):
@@ -95,6 +106,40 @@ class FlightTimeParsingFixesTest(unittest.TestCase):
                                               value, legacy.DEFAULT_DATE, expected, "local_fold_clock")
         self.assertEqual((results[1] - results[0]).total_seconds(), 900)
 
+    def test_legacy_datetime_separator_tolerance(self):
+        for marker, precision, value, expected in LEGACY_SEPARATOR_CASES:
+            for default in (legacy.DEFAULT_DATE, None, "invalid-default-is-not-used"):
+                with self.subTest(case=marker, precision=precision, default=default):
+                    legacy._assert_current_result(self, self.analyzer.parse_flight_time,
+                                                  value, default, expected, marker)
+
+    def test_separator_recovery_preserves_arrival_window_rejection(self):
+        cases = (
+            ("within_window", "2026-03-02  01:45", datetime(2026, 3, 2, 1, 45), True),
+            ("after_window", "2026-03-02 02:01", datetime(2026, 3, 2, 2, 1), False),
+            ("next_day", "2026-03-03 01:45", datetime(2026, 3, 3, 1, 45), False),
+        )
+        for marker, arrival, expected, admitted in cases:
+            with self.subTest(case=marker):
+                flight = {"segments": [{"arr_time": arrival}]}
+                self.assertEqual(self.analyzer._flight_arrival_datetime(flight, "2026-03-02"),
+                                 expected, marker)
+                self.assertIs(self.analyzer._same_day_outbound_passes_window(
+                    flight, {"outbound_arrive_by_minutes": 120}, "2026-03-02"), admitted, marker)
+
+    def test_offset_separator_support_remains_asymmetric(self):
+        cases = (
+            ("single_space", "2026-03-02 01:45", datetime(2026, 3, 2, 1, 45)),
+            ("single_t", "2026-03-02T01:45", datetime(2026, 3, 2, 1, 45)),
+            ("single_tab_offset", "2026-03-02\t01:45+08:00", datetime(2026, 3, 2, 1, 45)),
+            ("double_space_offset", "2026-03-02  01:45+08:00", None),
+            ("double_t_offset", "2026-03-02TT01:45+08:00", None),
+        )
+        for marker, value, expected in cases:
+            with self.subTest(case=marker):
+                legacy._assert_current_result(self, self.analyzer.parse_flight_time,
+                                              value, legacy.DEFAULT_DATE, expected, marker)
+
     def test_correct_dates_change_filters_and_time_tiebreak_without_changing_prices(self):
         a = self.analyzer
         shifted = {"id": "shifted", "price": 520, "segments": [{"dep_time": EXPLICIT_CASES[0][1],
@@ -115,7 +160,18 @@ class FlightTimeParsingFixesTest(unittest.TestCase):
         before = ast.dump(tree)
         body = tree.body[0].body
         matched = 0
-        if mutation == "offset_path_disabled":
+        if mutation == "separator_gate_narrowed":
+            patterns = [node.args[0] for node in ast.walk(tree)
+                        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                        and node.func.attr == "fullmatch" and node.args
+                        and isinstance(node.args[0], ast.Constant)
+                        and isinstance(node.args[0].value, str)
+                        and node.args[0].value.startswith(r"\d{4}-\d{1,2}-\d{1,2}")]
+            self.assertEqual(len(patterns), 1, "full datetime gate must be identified exactly once")
+            self.assertEqual(patterns[0].value.count(r"[T\s]+"), 1, "separator mutation must not be a no-op")
+            patterns[0].value = patterns[0].value.replace(r"[T\s]+", "[T ]", 1)
+            matched = 1
+        elif mutation == "offset_path_disabled":
             blocks = [node for node in ast.walk(tree) if isinstance(node, ast.Try) and any(
                 isinstance(stmt, ast.Assign) and isinstance(stmt.value, ast.Call)
                 and isinstance(stmt.value.func, ast.Attribute) and stmt.value.func.attr == "fromisoformat"
@@ -164,6 +220,14 @@ if legacy_offset_match:
         else:
             self.fail("unknown mutation")
         return legacy._compile_mutation(self, original, tree, before, mutation, matched)
+
+    def test_mutation_separator_gate_narrowed_is_rejected(self):
+        mutant = self._mutated_parser("separator_gate_narrowed")
+        for marker, precision, value, expected in LEGACY_SEPARATOR_CASES:
+            for default in (legacy.DEFAULT_DATE, None, "invalid-default-is-not-used"):
+                with self.subTest(case=marker, precision=precision, default=default):
+                    with self.assertRaisesRegex(AssertionError, marker):
+                        legacy._assert_current_result(self, mutant, value, default, expected, marker)
 
     def test_mutation_offset_path_disabled_is_rejected(self):
         mutant = self._mutated_parser("offset_path_disabled")
