@@ -3,6 +3,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 
+import flight_time
 from sources.aggregator import FlightAggregator, build_default_sources, normalize_combo
 from sources.fare_rules import standardize_fare_rules
 from request_cache import cached_fetch
@@ -52,39 +53,7 @@ def fetch_flights(origin: str, dest: str, date_str: str, passengers: dict | None
 
 def calc_layover_minutes(arr_time_str, dep_time_str) -> int:
     """计算等待分钟数；有/无偏移混用、无效输入或负间隔沿用 0 降级值。"""
-    def parse_time(value):
-        text = str(value or "").strip()
-        if not text:
-            return None
-
-        for fmt in ["%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M"]:
-            try:
-                return datetime.strptime(text, fmt)
-            except ValueError:
-                pass
-
-        # 保留 ISO 固定偏移；无偏移输入仍保持 naive。
-        try:
-            dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
-            return dt
-        except (ValueError, TypeError):
-            pass
-
-        return None
-
-    arr = parse_time(arr_time_str)
-    dep = parse_time(dep_time_str)
-    if not arr or not dep:
-        return 0
-
-    if (arr.utcoffset() is None) != (dep.utcoffset() is None):
-        return 0
-
-    try:
-        diff = (dep - arr).total_seconds() / 60
-        return max(0, int(diff))
-    except Exception:
-        return 0
+    return flight_time.calculate_layover_minutes(arr_time_str, dep_time_str)
 
 
 def make_layover_summary(flight: dict) -> str:
@@ -283,6 +252,9 @@ def _normalize_detail_flight(flight: dict, source_name: str | None = None) -> di
         if index >= len(segments) - 1:
             break
         if layover.get("wait_minutes"):
+            continue
+        if layover.pop("_wait_computed", False) is True and layover.get("wait_minutes") == 0:
+            # Consume internal provenance; do not expose it in delivery payloads.
             continue
 
         arr_time = segments[index].get("arr_time")

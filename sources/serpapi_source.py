@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, time, timedelta
 
+import flight_time
 from serpapi_credentials import SERPAPI_KEY_ALIASES, resolve_serpapi_key
 from sources.base import FlightSource
 
@@ -115,34 +116,11 @@ def _serpapi_stops_value(value) -> str:
 
 
 def _layover_minutes(arr_time: str, dep_time: str) -> int:
-    if not arr_time or not dep_time:
-        return 0
-    try:
-        arr = _parse_datetime(arr_time)
-        dep = _parse_datetime(dep_time)
-    except ValueError:
-        return 0
-    if not arr or not dep:
-        return 0
-    return max(0, int((dep - arr).total_seconds() // 60))
+    return flight_time.calculate_layover_minutes(arr_time, dep_time)
 
 
 def _parse_datetime(value: str) -> datetime | None:
-    text = str(value or "").strip()
-    if not text:
-        return None
-
-    for fmt in ["%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M:%S"]:
-        try:
-            return datetime.strptime(text, fmt)
-        except ValueError:
-            pass
-
-    try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-        return parsed.replace(tzinfo=None)
-    except ValueError:
-        return None
+    return flight_time.parse_flight_datetime(value)
 
 
 def _normalize_airport_time(
@@ -160,6 +138,9 @@ def _normalize_airport_time(
         return text, parsed
 
     if re.fullmatch(r"\d{1,2}:\d{2}(:\d{2})?", text) and date_str:
+        # A prior event's offset does not establish this event's timezone.
+        if previous_dt is not None and previous_dt.utcoffset() is not None:
+            return text, None
         try:
             base_date = (
                 previous_dt.date()

@@ -8,6 +8,7 @@ from datetime import datetime
 
 import httpx
 
+import flight_time
 from sources.base import FlightSource
 
 
@@ -22,6 +23,11 @@ def _format_time(value) -> str:
         dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
     except ValueError:
         return text
+    if dt.utcoffset() is not None and dt.utcoffset().seconds % 60 != 0:
+        # G9: analyzer cannot consume offset seconds; keep the legacy display only.
+        return dt.strftime("%Y-%m-%d %H:%M")
+    if dt.utcoffset() is not None:
+        return dt.isoformat(sep=" ", timespec="minutes")
     return dt.strftime("%Y-%m-%d %H:%M")
 
 
@@ -42,14 +48,7 @@ def _duration_minutes(value) -> int:
 
 
 def _layover_minutes(arr_time: str, dep_time: str) -> int:
-    if not arr_time or not dep_time:
-        return 0
-    try:
-        arr = datetime.strptime(arr_time, "%Y-%m-%d %H:%M")
-        dep = datetime.strptime(dep_time, "%Y-%m-%d %H:%M")
-    except ValueError:
-        return 0
-    return max(0, int((dep - arr).total_seconds() // 60))
+    return flight_time.calculate_layover_minutes(arr_time, dep_time)
 
 
 class DuffelSource(FlightSource):
@@ -104,6 +103,7 @@ class DuffelSource(FlightSource):
 
     def _parse_offer(self, offer: dict, cabin_class: str = "economy") -> dict | None:
         segments = []
+        raw_times = []
         slices = offer.get("slices") or []
 
         for offer_slice in slices:
@@ -118,6 +118,7 @@ class DuffelSource(FlightSource):
                 ).strip()
                 dep_time = _format_time(segment.get("departing_at"))
                 arr_time = _format_time(segment.get("arriving_at"))
+                raw_times.append((segment.get("departing_at"), segment.get("arriving_at")))
 
                 segments.append(
                     {
@@ -142,16 +143,27 @@ class DuffelSource(FlightSource):
         layovers = []
         for index, segment in enumerate(segments[:-1]):
             next_segment = segments[index + 1]
+            calculation_times = (segment.get("arr_time", ""), next_segment.get("dep_time", ""))
+            raw_pair = (raw_times[index][1], raw_times[index + 1][0])
+            raw_parsed = tuple(flight_time.parse_flight_datetime(value) for value in raw_pair)
+            if any(dt is not None and dt.utcoffset() is not None
+                   and dt.utcoffset().seconds % 60 != 0 for dt in raw_parsed):
+                # G9 display loses offsets; elapsed time must still use the original instants.
+                calculation_times = raw_pair
+            parsed = tuple(flight_time.parse_flight_datetime(value) for value in calculation_times)
+            wait = _layover_minutes(*calculation_times)
+            computed_zero = (wait == 0 and all(dt is not None for dt in parsed)
+                             and (parsed[0].utcoffset() is None) == (parsed[1].utcoffset() is None))
             layovers.append(
                 {
                     "city": segment.get("arr_city") or segment.get("arr_airport"),
                     "airport": segment.get("arr_airport", ""),
-                    "wait_minutes": _layover_minutes(
-                        segment.get("arr_time", ""),
-                        next_segment.get("dep_time", ""),
-                    ),
+                    "wait_minutes": wait,
                 }
             )
+            if computed_zero:
+                # Consumed by collector before a flight enters a delivery payload.
+                layovers[-1]["_wait_computed"] = True
 
         total_duration_min = sum(segment.get("duration_min") or 0 for segment in segments)
         total_duration_min += sum(layover.get("wait_minutes") or 0 for layover in layovers)
