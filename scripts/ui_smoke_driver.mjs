@@ -12,9 +12,37 @@ const feedbackPath = join(dirname(subscriptionsPath), "feedback.json");
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-const targets = await fetch(`http://127.0.0.1:${cdpPort}/json/list`).then(r => r.json());
-const target = targets.find(item => item.type === "page");
-if (!target) throw new Error("CDP 未找到 page target");
+async function waitForPageTarget(timeoutMs = 15000, fetchTimeoutMs = 2000) {
+  const started = performance.now();
+  const deadline = started + timeoutMs;
+  let attempts = 0;
+  let lastTargetTypes = "unavailable";
+  while (performance.now() < deadline) {
+    attempts += 1;
+    const requestLimit = Math.max(1, Math.ceil(Math.min(fetchTimeoutMs, deadline - performance.now())));
+    try {
+      const response = await fetch(`http://127.0.0.1:${cdpPort}/json/list`, {
+        signal: AbortSignal.timeout(requestLimit),
+      });
+      const targets = await response.json();
+      if (!Array.isArray(targets)) throw new Error("Invalid CDP target list");
+      const counts = new Map();
+      for (const item of targets) {
+        const type = typeof item?.type === "string" ? item.type : "unknown";
+        counts.set(type, (counts.get(type) || 0) + 1);
+      }
+      lastTargetTypes = JSON.stringify(Object.fromEntries([...counts].sort()));
+      const target = targets.find(item => item?.type === "page"
+        && typeof item.webSocketDebuggerUrl === "string" && item.webSocketDebuggerUrl.trim().length > 0);
+      if (target) return target;
+    } catch {
+      // Browser metadata may be ready before its page target; never log target URLs or fetch errors.
+    }
+    await sleep(150);
+  }
+  throw new Error(`CDP 未找到 page target: attempts=${attempts} elapsed_ms=${Math.round(performance.now() - started)} target_types=${lastTargetTypes}`);
+}
+const target = await waitForPageTarget();
 const pageTargetId = target.id;
 const ws = new WebSocket(target.webSocketDebuggerUrl);
 await new Promise((resolve, reject) => {
