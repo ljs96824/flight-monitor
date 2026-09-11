@@ -200,20 +200,23 @@ class LayoverTimezoneTest(unittest.TestCase):
         self.assertNotEqual(results[0][1]["factors"], results[1][1]["factors"])
 
     def test_offset_discard_mutation_is_rejected(self):
-        tree = ast.parse(textwrap.dedent(inspect.getsource(self.collector.calc_layover_minutes)))
-        inner = next(node for node in tree.body[0].body if isinstance(node, ast.FunctionDef))
-        iso_try = next(node for node in inner.body if isinstance(node, ast.Try))
-        returned = next(node for node in iso_try.body if isinstance(node, ast.Return))
-        returned.value = ast.Call(func=ast.Attribute(value=ast.Name(id="dt", ctx=ast.Load()),
+        shared = importlib.import_module("flight_time")
+        tree = ast.parse(textwrap.dedent(inspect.getsource(shared.parse_flight_datetime)))
+        before = ast.dump(tree)
+        returns = [node for node in ast.walk(tree) if isinstance(node, ast.Return)
+                   and isinstance(node.value, ast.Name) and node.value.id == "parsed"]
+        self.assertEqual(len(returns), 1)
+        returns[0].value = ast.Call(func=ast.Attribute(value=ast.Name(id="parsed", ctx=ast.Load()),
                                                     attr="replace", ctx=ast.Load()),
                                   args=[], keywords=[ast.keyword(arg="tzinfo", value=ast.Constant(None))])
-        namespace = {"datetime": datetime}
+        self.assertNotEqual(ast.dump(tree), before)
+        namespace = dict(shared.parse_flight_datetime.__globals__)
         exec(compile(ast.fix_missing_locations(copy.deepcopy(tree)), "<offset-discard-mutation>", "exec"), namespace)
-        mutant = namespace["calc_layover_minutes"]
-        for case in OFFSET_CASES:
-            with self.subTest(case=case[0]):
-                with self.assertRaisesRegex(AssertionError, case[0]):
-                    _assert_minutes(self, mutant, case)
+        with patch.object(shared, "parse_flight_datetime", namespace["parse_flight_datetime"]):
+            for case in OFFSET_CASES:
+                with self.subTest(case=case[0]):
+                    with self.assertRaisesRegex(AssertionError, case[0]):
+                        _assert_minutes(self, self.collector.calc_layover_minutes, case)
 
 
 if __name__ == "__main__":
