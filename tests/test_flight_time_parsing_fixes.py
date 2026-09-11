@@ -16,6 +16,13 @@ EXPLICIT_CASES = (
     ("compact_eight", "2026-03-02T01:45:00+0800"),
     ("hour_offset", "2026-03-02T01:45:00+08"),
 )
+DAY_MARKER_SEPARATOR_CASES = (
+    ("unseparated", "01:45+1"),
+    ("single_space", "01:45 +1"),
+    ("multiple_spaces", "01:45   +1"),
+    ("tab", "01:45\t+1"),
+    ("trailing_whitespace", "01:45+1 \t"),
+)
 REJECTED_CASES = (
     ("date_only", "2026-03-02"),
     ("hour_only", "2026-03-02T01"),
@@ -82,6 +89,13 @@ class FlightTimeParsingFixesTest(unittest.TestCase):
                 with self.subTest(case=marker, default=default):
                     legacy._assert_current_result(self, self.analyzer.parse_flight_time,
                                                   value, default, None, marker)
+
+    def test_day_marker_separator_tolerance(self):
+        for marker, value in DAY_MARKER_SEPARATOR_CASES:
+            with self.subTest(case=marker):
+                legacy._assert_current_result(self, self.analyzer.parse_flight_time,
+                                              value, legacy.DEFAULT_DATE,
+                                              datetime(2026, 3, 2, 1, 45), marker)
 
     def test_confirmed_legacy_format_tolerance_is_preserved(self):
         cases = (
@@ -179,6 +193,19 @@ class FlightTimeParsingFixesTest(unittest.TestCase):
             self.assertEqual(len(blocks), 1, "offset parse path must be identified")
             blocks[0].body = [ast.Return(value=ast.Constant(None))]
             matched = 1
+        elif mutation == "day_marker_separator_narrowed":
+            assignments = [node for node in body if isinstance(node, ast.Assign)
+                           and isinstance(node.targets[0], ast.Name) and node.targets[0].id == "day_match"]
+            self.assertEqual(len(assignments), 1, "the pure-clock day match must be identified")
+            call = assignments[0].value
+            self.assertIsInstance(call, ast.Call)
+            self.assertIsInstance(call.func, ast.Attribute)
+            self.assertEqual(call.func.attr, "fullmatch")
+            pattern = call.args[0]
+            self.assertIsInstance(pattern, ast.Constant)
+            self.assertEqual(pattern.value.count(r"\s*"), 1, "one whitespace separator must change")
+            pattern.value = pattern.value.replace(r"\s*", " ?", 1)
+            matched = 1
         elif mutation == "historical_broad_day_extraction":
             positions = [i for i, node in enumerate(body) if isinstance(node, ast.Assign)
                          and isinstance(node.targets[0], ast.Name) and node.targets[0].id == "date_match"]
@@ -235,6 +262,18 @@ if legacy_offset_match:
             with self.subTest(case=marker), self.assertRaisesRegex(AssertionError, marker):
                 legacy._assert_current_result(self, mutant, value, legacy.DEFAULT_DATE,
                                               datetime(2026, 3, 2, 1, 45), marker)
+
+    def test_mutation_narrowed_day_marker_separator_is_rejected(self):
+        mutant = self._mutated_parser("day_marker_separator_narrowed")
+        for marker, value in DAY_MARKER_SEPARATOR_CASES:
+            with self.subTest(case=marker):
+                if marker in {"multiple_spaces", "tab"}:
+                    with self.assertRaisesRegex(AssertionError, marker):
+                        legacy._assert_current_result(self, mutant, value, legacy.DEFAULT_DATE,
+                                                      datetime(2026, 3, 2, 1, 45), marker)
+                else:
+                    legacy._assert_current_result(self, mutant, value, legacy.DEFAULT_DATE,
+                                                  datetime(2026, 3, 2, 1, 45), marker)
 
     def test_mutation_historical_broad_day_extraction_is_rejected(self):
         mutant = self._mutated_parser("historical_broad_day_extraction")
