@@ -896,7 +896,7 @@ def parse_flight_time(time_str, date_str: str | None = None) -> datetime | None:
     date_match = re.search(r"\d{4}-\d{1,2}-\d{1,2}", text)
     if date_match:
         full_match = re.fullmatch(
-            r"\d{4}-\d{1,2}-\d{1,2}[T ]\d{1,2}:\d{1,2}(?::\d{1,2})?"
+            r"\d{4}-\d{1,2}-\d{1,2}[T\s]+\d{1,2}:\d{1,2}(?::\d{1,2})?"
             r"(?:Z|[+-](?P<offset_hour>\d{2})(?::?(?P<offset_minute>\d{2}))?)?",
             text,
         )
