@@ -1,4 +1,4 @@
-"""Current local-clock behavior, including defects; changes require adjudication."""
+"""Adjudicated local-clock behavior; historical test IDs retain their lineage."""
 
 import ast
 from contextlib import ExitStack
@@ -18,10 +18,10 @@ COLON_AND_Z = (
     "2026-03-02T01:45:00+08:00",
     "2026-03-02T01:45:00Z",
 )
-# Independent calendar expectations: these pin the defects, not correct UTC parsing.
+# Independent local-calendar expectations, with no conversion to UTC.
 COMPACT_CASES = (
-    ("compact_800_days", "2026-03-02T01:45:00+0800", datetime(2028, 5, 10, 1, 45)),
-    ("compact_8_days", "2026-03-02T01:45:00+08", datetime(2026, 3, 10, 1, 45)),
+    ("compact_offset_0800", "2026-03-02T01:45:00+0800", datetime(2026, 3, 2, 1, 45)),
+    ("compact_offset_08", "2026-03-02T01:45:00+08", datetime(2026, 3, 2, 1, 45)),
 )
 LEGACY_CASES = (
     ("full_minutes", "2026-03-02 01:45", DEFAULT_DATE, datetime(2026, 3, 2, 1, 45)),
@@ -44,6 +44,18 @@ def _assert_current_result(test, parse, value, date_str, expected, marker):
     if actual is not None:
         test.assertIs(type(actual), datetime, marker)
         test.assertIsNone(actual.tzinfo, marker)
+
+
+def _compile_mutation(test, original, tree, before, mutation, matched):
+    test.assertGreater(matched, 0, "mutation must identify its intended nodes")
+    test.assertNotEqual(ast.dump(tree), before, "mutation must change the actual source AST")
+    code = compile(ast.fix_missing_locations(tree), "<parse-flight-time-mutation>", "exec")
+    namespace = dict(original.__globals__)
+    exec(code, namespace)
+    mutant = namespace[original.__name__]
+    mutant.mutation_evidence = {"mutation": mutation, "matched_nodes": matched,
+                               "source_changed": True, "compiled": True}
+    return mutant
 
 
 class ParseFlightTimeCharacterizationTest(unittest.TestCase):
@@ -69,10 +81,11 @@ class ParseFlightTimeCharacterizationTest(unittest.TestCase):
 
     def test_colon_offsets_and_z_override_date_or_return_none(self):
         for value in COLON_AND_Z:
-            for date_str, expected in ((DEFAULT_DATE, DEFAULT_CLOCK), (None, None)):
+            for date_str, expected in ((DEFAULT_DATE, datetime(2026, 3, 2, 1, 45)),
+                                       (None, datetime(2026, 3, 2, 1, 45))):
                 with self.subTest(value=value, date_str=date_str):
                     _assert_current_result(self, self.analyzer.parse_flight_time, value,
-                                           date_str, expected, "colon_or_z_current_fallback")
+                                           date_str, expected, "explicit_local_date_preserved")
 
     def test_compact_offsets_are_currently_day_counts(self):
         for marker, value, expected in COMPACT_CASES:
@@ -109,35 +122,36 @@ class ParseFlightTimeCharacterizationTest(unittest.TestCase):
         flight = {"segments": [{"arr_time": COLON_AND_Z[0]}]}
         arrival = self.analyzer._flight_arrival_datetime(flight, DEFAULT_DATE)
         window = self.analyzer._minutes_datetime(DEFAULT_DATE, 120)
-        self.assertEqual(arrival, DEFAULT_CLOCK)
+        self.assertEqual(arrival, datetime(2026, 3, 2, 1, 45))
         self.assertEqual(window, datetime(2026, 3, 1, 2))
         self.assertIsNone(arrival.tzinfo)
         self.assertIsNone(window.tzinfo)
-        self.assertLess(arrival, window)
-        self.assertEqual((window - arrival).total_seconds(), 900)
+        self.assertGreater(arrival, window)
+        self.assertEqual((window - arrival).total_seconds(), -85500)
 
     def _mutated_parser(self, mutation):
         original = self.analyzer.parse_flight_time
         tree = ast.parse(textwrap.dedent(inspect.getsource(original)))
+        before = ast.dump(tree)
         body = tree.body[0].body
         if mutation == "full_formats_fail":
-            loop = next(node for node in body if isinstance(node, ast.For))
-            self.assertEqual(loop.target.id, "fmt")
-            loop.iter = ast.Tuple(elts=[], ctx=ast.Load())
+            blocks = [node for node in body if isinstance(node, ast.If)
+                      and isinstance(node.test, ast.Name) and node.test.id == "date_match"]
+            self.assertEqual(len(blocks), 1, "the whole explicit-date path must be identified")
+            blocks[0].body = [ast.Return(value=ast.Constant(None))]
         elif mutation == "day_offset_removed":
-            block = next(node for node in body if isinstance(node, ast.If)
-                         and isinstance(node.test, ast.Name) and node.test.id == "offset_match")
-            block.test = ast.Constant(False)
+            blocks = [node for node in body if isinstance(node, ast.If)
+                      and isinstance(node.test, ast.Name) and node.test.id == "day_match"]
+            self.assertEqual(len(blocks), 1, "the pure-clock day branch must be identified")
+            blocks[0].test = ast.Constant(False)
         elif mutation == "clock_fallback_none":
-            assignment = next(node for node in body if isinstance(node, ast.Assign)
-                              and isinstance(node.targets[0], ast.Name)
-                              and node.targets[0].id == "compact_time")
-            body.insert(body.index(assignment), ast.Return(value=ast.Constant(None)))
+            assignments = [node for node in body if isinstance(node, ast.Assign)
+                           and isinstance(node.targets[0], ast.Name) and node.targets[0].id == "compact_time"]
+            self.assertEqual(len(assignments), 1, "the plain-clock fallback must be identified")
+            body.insert(body.index(assignments[0]), ast.Return(value=ast.Constant(None)))
         else:
             self.fail("unknown mutation")
-        namespace = dict(original.__globals__)
-        exec(compile(ast.fix_missing_locations(tree), "<parse-flight-time-mutation>", "exec"), namespace)
-        return namespace[original.__name__]
+        return _compile_mutation(self, original, tree, before, mutation, 1)
 
     def test_mutation_full_formats_fail_is_rejected(self):
         mutant = self._mutated_parser("full_formats_fail")
@@ -147,18 +161,19 @@ class ParseFlightTimeCharacterizationTest(unittest.TestCase):
 
     def test_mutation_day_offset_removed_is_rejected(self):
         mutant = self._mutated_parser("day_offset_removed")
-        cases = [(marker, value, DEFAULT_DATE, expected) for marker, value, expected in COMPACT_CASES]
-        cases.append(LEGACY_CASES[2])
+        cases = [LEGACY_CASES[2],
+                 ("day_marker_unspaced", "01:45+1", DEFAULT_DATE, datetime(2026, 3, 2, 1, 45)),
+                 ("day_marker_two_digits", "01:45+08", DEFAULT_DATE, datetime(2026, 3, 9, 1, 45))]
         for marker, value, date_str, expected in cases:
             with self.subTest(case=marker), self.assertRaisesRegex(AssertionError, marker):
                 _assert_current_result(self, mutant, value, date_str, expected, marker)
 
     def test_mutation_clock_fallback_none_is_rejected(self):
         mutant = self._mutated_parser("clock_fallback_none")
-        for value in COLON_AND_Z:
-            with self.subTest(value=value), self.assertRaisesRegex(AssertionError, "colon_or_z_current_fallback"):
-                _assert_current_result(self, mutant, value, DEFAULT_DATE, DEFAULT_CLOCK,
-                                       "colon_or_z_current_fallback")
+        for value, expected in (("01:45", DEFAULT_CLOCK), ("1:45", DEFAULT_CLOCK),
+                                ("23:59", datetime(2026, 3, 1, 23, 59))):
+            with self.subTest(value=value), self.assertRaisesRegex(AssertionError, "plain_clock_fallback"):
+                _assert_current_result(self, mutant, value, DEFAULT_DATE, expected, "plain_clock_fallback")
 
 
 if __name__ == "__main__":
