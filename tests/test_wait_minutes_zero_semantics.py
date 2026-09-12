@@ -102,7 +102,10 @@ class WaitMinutesZeroSemanticsTest(unittest.TestCase):
                 self.assertIs(type(actual), dict)
                 if name == "direct":
                     expected = {"level": "none", "label": "直飞", "score": 0, "factors": []}
-                elif name in {"transfer_missing", "transfer_empty", "positive", "only_120"}:
+                elif name in {"transfer_missing", "transfer_empty", "missing_key", "none", "missing_120"}:
+                    expected = {"level": "medium", "label": "中风险", "score": 40,
+                                "factors": ["中转等待时间资料不完整，无法核实衔接时间，请核对航段详情。"]}
+                elif name in {"positive", "only_120"}:
                     expected = {"level": "low", "label": "低风险", "score": 0, "factors": []}
                 else:
                     number = {"negative": "-5", "float_half": "0.5"}.get(name, "0")

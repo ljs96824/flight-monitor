@@ -186,7 +186,8 @@ class TransferRiskCharacterizationTest(unittest.TestCase):
     def test_missing_information_and_invalid_inputs(self):
         self.assert_risk(
             {"flight_combo": "UNKNOWN", "stops": 1},
-            {"level": "low", "label": "低风险", "score": 0, "factors": []},
+            {"level": "medium", "label": "中风险", "score": 40,
+             "factors": ["中转等待时间资料不完整，无法核实衔接时间，请核对航段详情。"]},
         )
         self.assert_risk(
             {},

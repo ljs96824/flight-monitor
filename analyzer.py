@@ -5411,7 +5411,13 @@ def calc_transfer_risk(flight: dict) -> dict:
         risk_score += 30
         risk_factors.append("多次中转")
 
+    missing_wait = not layovers
     for layover in layovers:
+        if isinstance(layover, dict) and (
+            "wait_minutes" not in layover or layover["wait_minutes"] is None
+        ):
+            missing_wait = True
+            continue
         wait = layover.get("wait_minutes", 0) or 0
         if wait < 90:
             risk_score += 40
@@ -5422,6 +5428,10 @@ def calc_transfer_risk(flight: dict) -> dict:
         elif wait > 480:
             risk_score += 10
             risk_factors.append(f"中转等待{wait // 60}小时，较长")
+
+    if missing_wait:
+        risk_score += 40
+        risk_factors.append("中转等待时间资料不完整，无法核实衔接时间，请核对航段详情。")
 
     airlines = list(flight.get("airlines") or [])
     for segment in segments:
