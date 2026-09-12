@@ -41,6 +41,8 @@ def detail_token_authorized(candidate, *, configured: str | None = None) -> bool
     if not expected:
         return True
     supplied = str(candidate or "")
+    if not supplied.isascii() or not expected.isascii():
+        return False
     return bool(supplied) and hmac.compare_digest(supplied, expected)
 
 
