@@ -138,6 +138,7 @@ class ManagementGateTest(unittest.TestCase):
 
     def test_complete_endpoint_method_matrix(self):
         expected = {
+            "robots_txt": {"GET", "HEAD", "OPTIONS"},
             "index": {"GET", "HEAD", "OPTIONS"},
             "favicon": {"GET", "HEAD", "OPTIONS"},
             "price_hint": {"GET", "HEAD", "OPTIONS"},

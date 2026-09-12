@@ -85,6 +85,14 @@ PAGE_PAYLOADS_DIR = BASE_DIR / "data" / "payloads"
 load_dotenv(BASE_DIR / ".env", encoding="utf-8")
 
 app = Flask(__name__)
+
+
+@app.after_request
+def _indexing_noindex(response):
+    response.headers["X-Robots-Tag"] = "noindex"
+    return response
+
+
 configure_session_security(app, logger=safe_log)
 install_csrf_protection(app, logger=safe_log)
 install_management_access(app)
@@ -2678,6 +2686,20 @@ def settings():
 @app.get("/favicon.ico")
 def favicon():
     return "", 204
+
+@app.get("/robots.txt")
+def robots_txt():
+    return app.response_class(
+        "User-agent: *\n"
+        "Disallow: /detail\n"
+        "Disallow: /subscriptions\n"
+        "Disallow: /subscription/\n"
+        "Disallow: /settings\n"
+        "Disallow: /success\n"
+        "Disallow: /feedback\n",
+        mimetype="text/plain",
+    )
+
 
 @app.post("/defaults_preview")
 def defaults_preview():
