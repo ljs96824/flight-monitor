@@ -21,6 +21,7 @@ SESSION_KEY = "_management_auth"
 
 # Methods are explicit: safe HTTP methods do not imply public authorization.
 PUBLIC_METHODS = {
+    "robots_txt": frozenset({"GET", "HEAD", "OPTIONS"}),
     "index": frozenset({"GET", "HEAD", "OPTIONS"}),
     "favicon": frozenset({"GET", "HEAD", "OPTIONS"}),
     "price_hint": frozenset({"GET", "HEAD", "OPTIONS"}),
