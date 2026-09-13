@@ -184,6 +184,42 @@ def _browser_command(
     return command
 
 
+def _server_environment() -> dict[str, str]:
+    # Only run_smoke's server gets these overrides; keep the launcher unchanged.
+    server_env = dict(os.environ)
+    server_env.update({
+        "PYTHON_DOTENV_DISABLED": "1",
+        "MANAGEMENT_TOKEN": "",
+        "MANAGEMENT_AUTH_REQUIRED": "0",
+        "SHARED_DETAIL_TOKEN": "",
+        "FLASK_SECRET_KEY": "ui-smoke-test-only-session-key",
+        "NO_LIVE_API": "1",
+        "FEEDBACK_NOTIFY_EMAIL": "",
+        "SESSION_COOKIE_SECURE": "0",
+        "CSRF_TOKEN_TTL_SECONDS": "7200",
+        "COLLECTION_STARTUP_TIMEOUT_SECONDS": "3.0",
+        "JUHE_FLIGHT_KEY": "",
+        "SERPAPI_KEY": "",
+        "SERPAPI_API_KEY": "",
+        "SERP_API_KEY": "",
+        "HASDATA_KEY": "",
+        "SEARCHAPI_KEY": "",
+        "TRAVELPAYOUTS_TOKEN": "",
+        "RAPIDAPI_KEY": "",
+        "DUFFEL_TOKEN": "",
+        "PUSHPLUS_TOKEN": "",
+        "SMTP_PROVIDER": "qq",
+        "SMTP_HOST": "",
+        "SMTP_PORT": "",
+        "SMTP_SSL": "",
+        "SMTP_USER": "",
+        "SMTP_PASS": "",
+        "PYTHONANYWHERE_TOKEN": "",
+        "PYTHONANYWHERE_USER": "",
+    })
+    return server_env
+
+
 def _serve(port: int, data_dir: Path) -> None:
     os.environ["FEEDBACK_NOTIFY_EMAIL"] = ""
     sys.path.insert(0, str(ROOT))
@@ -253,6 +289,7 @@ def run_smoke(*, log_path: Path | None = None, artifact_dir: Path | None = None)
             errors="replace",
             newline="",
         )
+        server_env = _server_environment()
         server = subprocess.Popen(
             [
                 sys.executable,
@@ -266,6 +303,7 @@ def run_smoke(*, log_path: Path | None = None, artifact_dir: Path | None = None)
                 str(tmp / "data"),
             ],
             cwd=ROOT,
+            env=server_env,
             stdout=server_log_stream,
             stderr=subprocess.STDOUT,
         )

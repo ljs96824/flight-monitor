@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import ast
+import contextlib
 import hashlib
 import importlib.util
 import inspect
+import io
+import json
 import os
+import subprocess
 import sys
 import tempfile
 import types
@@ -249,6 +254,254 @@ class UiSmokeFeedbackIsolationContractTest(unittest.TestCase):
         source = inspect.getsource(self.smoke.run_smoke)
         self.assertGreaterEqual(source.count("_protected_production_states()"), 2)
         self.assertIn("PRODUCTION_FEEDBACK_HASH_NOT_GUARDED", source)
+
+
+SERVER_TEST_SETTINGS = {
+    "PYTHON_DOTENV_DISABLED": "1",
+    "MANAGEMENT_TOKEN": "",
+    "MANAGEMENT_AUTH_REQUIRED": "0",
+    "SHARED_DETAIL_TOKEN": "",
+    "FLASK_SECRET_KEY": "ui-smoke-test-only-session-key",
+    "NO_LIVE_API": "1",
+    "FEEDBACK_NOTIFY_EMAIL": "",
+    "SESSION_COOKIE_SECURE": "0",
+    "CSRF_TOKEN_TTL_SECONDS": "7200",
+    "COLLECTION_STARTUP_TIMEOUT_SECONDS": "3.0",
+    "JUHE_FLIGHT_KEY": "",
+    "SERPAPI_KEY": "",
+    "SERPAPI_API_KEY": "",
+    "SERP_API_KEY": "",
+    "HASDATA_KEY": "",
+    "SEARCHAPI_KEY": "",
+    "TRAVELPAYOUTS_TOKEN": "",
+    "RAPIDAPI_KEY": "",
+    "DUFFEL_TOKEN": "",
+    "PUSHPLUS_TOKEN": "",
+    "SMTP_PROVIDER": "qq",
+    "SMTP_HOST": "",
+    "SMTP_PORT": "",
+    "SMTP_SSL": "",
+    "SMTP_USER": "",
+    "SMTP_PASS": "",
+    "PYTHONANYWHERE_TOKEN": "",
+    "PYTHONANYWHERE_USER": "",
+}
+
+# Executed by a fresh interpreter, before the application's equivalent dotenv load.
+DOTENV_PROBE = r'''
+import builtins
+import importlib.metadata
+import json
+import os
+from pathlib import Path
+import sys
+from unittest.mock import patch
+from dotenv import load_dotenv
+
+path = Path(sys.argv[1])
+assert path.is_absolute()
+before = dict(os.environ)
+with patch("builtins.open", wraps=builtins.open) as opened:
+    returned = load_dotenv(path, encoding="utf-8")
+count = sum(Path(call.args[0]) == path for call in opened.call_args_list)
+print(json.dumps({
+    "version": importlib.metadata.version("python-dotenv"),
+    "disabled_before_load": before.get("PYTHON_DOTENV_DISABLED"),
+    "returned": returned,
+    "file_opens": count,
+    "file_only_present": "UI_SMOKE_FILE_ONLY" in os.environ,
+    "preset_preserved": os.environ.get("FLASK_SECRET_KEY") == before.get("FLASK_SECRET_KEY"),
+    "parent_only_preserved": os.environ.get("UI_SMOKE_PARENT_ONLY") == "parent-only",
+}))
+'''
+
+
+class UiSmokeServerEnvironmentContractTest(unittest.TestCase):
+    def setUp(self):
+        self.smoke = _load_smoke_module()
+        self.parent = {key: value for key, value in os.environ.items() if key.upper() in {
+            "PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "COMSPEC", "PATHEXT",
+            "LOCALAPPDATA", "APPDATA", "USERPROFILE", "HOME",
+        }}
+        self.parent.update({key: "synthetic-parent-conflict" for key in SERVER_TEST_SETTINGS})
+        self.parent.update(PYTHON_DOTENV_DISABLED="0", UI_SMOKE_PARENT_ONLY="parent-only")
+        self.parent.setdefault("PATH", os.defpath)
+
+    def _build(self, smoke=None):
+        smoke = smoke or self.smoke
+        self.assertTrue(callable(getattr(smoke, "_server_environment", None)),
+                        "SERVER_ENV_BUILDER_MISSING")
+        return smoke._server_environment()
+
+    def _assert_mapping(self, smoke=None):
+        with mock.patch.dict(os.environ, self.parent, clear=True):
+            before = dict(os.environ)
+            result = self._build(smoke)
+            self.assertEqual(dict(os.environ), before, "LAUNCHER_ENV_MUTATED")
+            self.assertIsNot(result, os.environ, "SERVER_ENV_NOT_INDEPENDENT")
+            for name, value in SERVER_TEST_SETTINGS.items():
+                self.assertEqual(result.get(name), value, "SERVER_SETTING:" + name)
+            for name, value in before.items():
+                if name not in SERVER_TEST_SETTINGS:
+                    self.assertIn(name, result, "PARENT_VALUE_DROPPED:" + name)
+                    self.assertEqual(result[name], value, "PARENT_VALUE_CHANGED:" + name)
+            result["UI_SMOKE_PARENT_ONLY"] = "child-copy-only"
+            self.assertEqual(dict(os.environ), before, "LAUNCHER_ENV_MUTATED")
+
+    def _capture_service_environment(self, smoke=None):
+        smoke = smoke or self.smoke
+        calls = []
+
+        def popen(command, **kwargs):
+            calls.append((command, kwargs))
+            if "--serve" in command:
+                kwargs["stdout"].write(smoke.FEEDBACK_NOTIFY_STUB_MARKER + "\n")
+                kwargs["stdout"].flush()
+            return mock.Mock()
+
+        with tempfile.TemporaryDirectory() as tmpdir, contextlib.ExitStack() as stack:
+            root = Path(tmpdir)
+            stack.enter_context(mock.patch.dict(os.environ, self.parent, clear=True))
+            stack.enter_context(mock.patch.object(smoke, "ROOT", root))
+            stack.enter_context(mock.patch.object(smoke, "_browser_path", return_value=root / "browser"))
+            stack.enter_context(mock.patch.object(smoke, "_node_path", return_value="synthetic-node"))
+            stack.enter_context(mock.patch.object(smoke, "_free_port", side_effect=[54321, 54322]))
+            stack.enter_context(mock.patch.object(smoke, "_wait_http"))
+            stack.enter_context(mock.patch.object(smoke.subprocess, "Popen", side_effect=popen))
+            stack.enter_context(mock.patch.object(smoke.subprocess, "run", return_value=
+                                                  types.SimpleNamespace(stdout="", stderr="", returncode=0)))
+            stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+            result = smoke.run_smoke(artifact_dir=root / "artifacts")
+        self.assertEqual(result, 0, "STUB_LAUNCHER_FAILED")
+        services = [kwargs for command, kwargs in calls if "--serve" in command]
+        self.assertEqual(len(services), 1, "SERVICE_POPEN_NOT_OBSERVED")
+        self.assertEqual(len(calls), 2, "BROWSER_POPEN_NOT_DISTINGUISHED")
+        self.assertIn("env", services[0], "SERVICE_ENV_NOT_PASSED")
+        return services[0]["env"]
+
+    def _probe(self, environment):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir).resolve() / ".env"
+            path.write_text("FLASK_SECRET_KEY=synthetic-file-conflict\n"
+                            "UI_SMOKE_FILE_ONLY=file-only\n", encoding="utf-8")
+            completed = subprocess.run(
+                [sys.executable, "-B", "-X", "utf8", "-c", DOTENV_PROBE, str(path)],
+                cwd=tmpdir, env=environment, capture_output=True, text=True,
+                encoding="utf-8", timeout=15, check=False,
+            )
+        self.assertEqual(completed.returncode, 0, "DOTENV_PROBE_PROCESS_FAILED:" + completed.stderr)
+        self.assertEqual(completed.stderr, "")
+        return json.loads(completed.stdout)
+
+    def _assert_disabled(self, result):
+        self.assertEqual(result["file_opens"], 0, "DOTENV_FILE_OPENED")
+        self.assertFalse(result["file_only_present"], "DOTENV_FILE_ONLY_INJECTED")
+        self.assertIs(result["returned"], False, "DOTENV_NOT_DISABLED")
+        self.assertEqual(result["disabled_before_load"], "1", "DISABLE_NOT_SET_BEFORE_LOAD")
+        self.assertTrue(result["preset_preserved"], "PRESET_CHANGED")
+        self.assertTrue(result["parent_only_preserved"], "UNREGISTERED_PARENT_LOST")
+
+    def test_server_environment_overrides_without_mutating_parent(self):
+        self._assert_mapping()
+
+    def test_service_popen_receives_environment_before_serve(self):
+        environment = self._capture_service_environment()
+        for name, value in SERVER_TEST_SETTINGS.items():
+            self.assertEqual(environment.get(name), value, "SERVICE_SETTING:" + name)
+        self.assertEqual(environment["UI_SMOKE_PARENT_ONLY"], "parent-only")
+
+    def test_real_dotenv_positive_control(self):
+        result = self._probe(self.parent)
+        self.assertIs(result["returned"], True)
+        self.assertEqual(result["file_opens"], 1)
+        self.assertTrue(result["file_only_present"])
+        self.assertTrue(result["preset_preserved"])
+        self.assertTrue(result["parent_only_preserved"])
+
+    def test_child_dotenv_disabled_before_equivalent_import(self):
+        self._assert_disabled(self._probe(self._capture_service_environment()))
+
+    def test_serve_keeps_collection_calendar_and_temporary_path_isolation(self):
+        fake = types.SimpleNamespace(app=types.SimpleNamespace(run=mock.Mock()))
+        with tempfile.TemporaryDirectory() as tmpdir, mock.patch.dict(sys.modules, {"web_form": fake}), \
+                mock.patch.dict(os.environ, self.parent, clear=True), \
+                mock.patch.object(sys, "path", list(sys.path)):
+            root = Path(tmpdir)
+            self.smoke._serve(54321, root)
+            self.assertEqual(fake.SUBSCRIPTIONS_PATH, root / "subscriptions.json")
+            self.assertEqual(fake.FEEDBACK_PATH, root / "feedback.json")
+            self.assertEqual(fake.PAGE_PAYLOADS_DIR, root / "payloads")
+            self.assertEqual(fake.start_background_collection({}),
+                             {"status": "started", "entrypoint": "ui_smoke"})
+            self.assertEqual(fake.load_calendar("synthetic-route"), [])
+            self.assertEqual(os.environ["FEEDBACK_NOTIFY_EMAIL"], "")
+
+    def _mutated_smoke(self, mutation):
+        tree = ast.parse(SMOKE_PATH.read_text(encoding="utf-8"))
+        before = ast.dump(tree)
+        functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
+        builder = functions["_server_environment"]
+        if mutation == "remove_service_env":
+            matches = [node for node in ast.walk(functions["run_smoke"])
+                       if isinstance(node, ast.Call) and ast.unparse(node.func) == "subprocess.Popen"
+                       and node.args and isinstance(node.args[0], ast.List)
+                       and any(isinstance(arg, ast.Constant) and arg.value == "--serve"
+                               for arg in node.args[0].elts)]
+            self.assertEqual(len(matches), 1, "MUTATION_SERVICE_NODE_COUNT")
+            node = matches[0]
+            self.assertEqual(sum(keyword.arg == "env" for keyword in node.keywords), 1)
+            node.keywords = [keyword for keyword in node.keywords if keyword.arg != "env"]
+        elif mutation == "mutate_launcher":
+            matches = [node for node in builder.body if isinstance(node, ast.Assign)
+                       and ast.unparse(node.value) == "dict(os.environ)"]
+            self.assertEqual(len(matches), 1, "MUTATION_COPY_NODE_COUNT")
+            matches[0].value = ast.parse("os.environ", mode="eval").body
+        elif mutation == "drop_path":
+            matches = [node for node in builder.body if isinstance(node, ast.Return)
+                       and ast.unparse(node.value) == "server_env"]
+            self.assertEqual(len(matches), 1, "MUTATION_RETURN_NODE_COUNT")
+            builder.body.insert(builder.body.index(matches[0]),
+                                ast.parse('server_env.pop("PATH", None)').body[0])
+        elif mutation == "remove_dotenv_disable":
+            matches = [(node, index) for node in ast.walk(builder) if isinstance(node, ast.Dict)
+                       for index, key in enumerate(node.keys)
+                       if isinstance(key, ast.Constant) and key.value == "PYTHON_DOTENV_DISABLED"]
+            self.assertEqual(len(matches), 1, "MUTATION_DISABLE_NODE_COUNT")
+            node, index = matches[0]
+            del node.keys[index]
+            del node.values[index]
+        else:
+            self.fail("UNKNOWN_MUTATION")
+        self.assertNotEqual(ast.dump(tree), before, "MUTATION_NO_CHANGE")
+        compiled = compile(ast.fix_missing_locations(tree), str(SMOKE_PATH), "exec")
+        module = types.ModuleType("mutated_ui_smoke")
+        module.__file__ = str(SMOKE_PATH)
+        exec(compiled, module.__dict__)
+        return module
+
+    def test_mutation_service_env_removed_is_rejected_by_wiring(self):
+        smoke = self._mutated_smoke("remove_service_env")
+        with self.assertRaisesRegex(AssertionError, "SERVICE_ENV_NOT_PASSED"):
+            self._capture_service_environment(smoke)
+
+    def test_mutation_launcher_environment_write_is_rejected(self):
+        smoke = self._mutated_smoke("mutate_launcher")
+        with self.assertRaisesRegex(AssertionError, "LAUNCHER_ENV_MUTATED"):
+            self._assert_mapping(smoke)
+
+    def test_mutation_existing_path_dropped_is_rejected(self):
+        smoke = self._mutated_smoke("drop_path")
+        with self.assertRaisesRegex(AssertionError, "PARENT_VALUE_DROPPED:PATH"):
+            self._assert_mapping(smoke)
+
+    def test_mutation_dotenv_disable_removed_is_rejected_by_real_load(self):
+        smoke = self._mutated_smoke("remove_dotenv_disable")
+        result = self._probe(self._capture_service_environment(smoke))
+        self.assertTrue(result["returned"])
+        self.assertTrue(result["file_only_present"])
+        self.assertEqual(result["file_opens"], 1)
+        with self.assertRaisesRegex(AssertionError, "DOTENV_FILE_OPENED"):
+            self._assert_disabled(result)
 
 
 if __name__ == "__main__":
