@@ -504,5 +504,263 @@ class UiSmokeServerEnvironmentContractTest(unittest.TestCase):
             self._assert_disabled(result)
 
 
+class UiSmokeLifecycleContractTest(unittest.TestCase):
+    def setUp(self):
+        self.smoke = _load_smoke_module()
+
+    def _exercise(self, failure=None, *, smoke=None, close_error=False,
+                  terminate_error=False, kill_required=False):
+        smoke = smoke or self.smoke
+        server, browser = mock.Mock(), mock.Mock()
+        for process in (server, browser):
+            if kill_required:
+                process.wait.side_effect = [subprocess.TimeoutExpired("synthetic", 5), 0]
+        if terminate_error:
+            browser.terminate.side_effect = OSError("SYNTHETIC_CLEANUP_ERROR")
+        stream = io.StringIO()
+        stream_close = mock.Mock()
+        created = []
+        real_open, real_read = Path.open, Path.read_text
+
+        def close_stream():
+            stream_close()
+            stream.close()
+            if close_error:
+                raise OSError("SYNTHETIC_CLOSE_ERROR")
+
+        handle = mock.Mock()
+        handle.close.side_effect = close_stream
+
+        def open_path(path, *args, **kwargs):
+            if path.name == "server-process.log":
+                if failure == "log_open":
+                    raise PermissionError("SYNTHETIC_LOG_OPEN")
+                created.append("log")
+                return handle
+            return real_open(path, *args, **kwargs)
+
+        def read_path(path, *args, **kwargs):
+            if path.name == "server-process.log":
+                return "synthetic-server-log\n" + smoke.FEEDBACK_NOTIFY_STUB_MARKER + "\n"
+            return real_read(path, *args, **kwargs)
+
+        def popen(command, **kwargs):
+            if "--serve" in command:
+                if failure == "server_popen":
+                    raise OSError("SYNTHETIC_SERVER_POPEN")
+                created.append("server")
+                return server
+            if failure == "browser_popen":
+                raise OSError("SYNTHETIC_BROWSER_POPEN")
+            created.append("browser")
+            return browser
+
+        output = io.StringIO()
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir, contextlib.ExitStack() as stack:
+            root = Path(tmpdir)
+            artifacts = root / "artifacts"
+            stack.enter_context(mock.patch.object(smoke, "ROOT", root))
+            stack.enter_context(mock.patch.object(smoke, "_browser_path", return_value=root / "browser"))
+            stack.enter_context(mock.patch.object(smoke, "_node_path", side_effect=
+                RuntimeError("SYNTHETIC_NODE_MISSING") if failure == "node" else lambda: "synthetic-node"))
+            stack.enter_context(mock.patch.object(smoke, "_free_port", side_effect=[54321, 54322]))
+            stack.enter_context(mock.patch.object(smoke, "_wait_http"))
+            stack.enter_context(mock.patch.object(smoke.subprocess, "Popen", side_effect=popen))
+            driver = stack.enter_context(mock.patch.object(smoke.subprocess, "run", side_effect=
+                subprocess.TimeoutExpired("synthetic-driver", 60, output=b"partial-out", stderr=b"partial-error")
+                if failure == "driver_timeout" else lambda *a, **k: subprocess.CompletedProcess(a, 0, "", "")))
+            writer = stack.enter_context(mock.patch.object(smoke, "_write_failure_logs", wraps=smoke._write_failure_logs))
+            stack.enter_context(mock.patch.object(Path, "open", open_path))
+            stack.enter_context(mock.patch.object(Path, "read_text", read_path))
+            stack.enter_context(contextlib.redirect_stdout(output))
+            result = {"returncode": None, "escaped": None, "message": ""}
+            try:
+                result["returncode"] = smoke.run_smoke(artifact_dir=artifacts)
+            except Exception as exc:
+                result["escaped"] = type(exc)
+                result["message"] = str(exc)
+            result.update(
+                writer_calls=writer.call_count, created=created,
+                close_calls=stream_close.call_count, stream_closed=stream.closed,
+                server_calls=list(server.mock_calls), browser_calls=list(browser.mock_calls),
+                stdout=output.getvalue(),
+                files={path.name: path.read_text(encoding="utf-8") for path in artifacts.glob("*")},
+                driver_calls=list(driver.call_args_list),
+            )
+        if not stream.closed:
+            stream.close()
+        return result
+
+    def _assert_failure(self, result, reason):
+        self.assertNotIn(result["escaped"], (NameError, UnboundLocalError), "SECONDARY_NAME_ERROR")
+        self.assertIsNone(result["escaped"], "ORIGINAL_FAILURE_ESCAPED:" + result["message"])
+        self.assertEqual(result["returncode"], 1, "FAILURE_NOT_RETURNED")
+        self.assertEqual(result["writer_calls"], 1, "LAUNCHER_EVIDENCE_NOT_WRITTEN")
+        self.assertEqual(set(result["files"]), {"ui-smoke.log", "server.log"}, "FAILURE_ARTIFACT_SET")
+        report = result["files"]["ui-smoke.log"]
+        self.assertIn(reason, report, "PRIMARY_FAILURE_LOST")
+        self.assertIn(reason, result["stdout"], "PRIMARY_FAILURE_LOST")
+        self.assertNotIn("UnboundLocalError", report)
+        if "browser" not in result["created"]:
+            self.assertIn("截图未生成", report, "MISSING_SCREENSHOT_REASON")
+            self.assertIn("浏览器尚未启动", report, "MISSING_SCREENSHOT_REASON")
+            self.assertEqual(result["browser_calls"], [], "UNCREATED_BROWSER_CLEANED")
+        if "server" not in result["created"]:
+            self.assertEqual(result["server_calls"], [], "UNCREATED_SERVER_CLEANED")
+        if "log" not in result["created"]:
+            self.assertEqual(result["close_calls"], 0, "UNCREATED_LOG_CLOSED")
+            self.assertIn("服务日志未生成", result["files"]["server.log"])
+        else:
+            self.assertEqual(result["close_calls"], 1, "CREATED_LOG_NOT_CLOSED")
+            self.assertTrue(result["stream_closed"])
+            self.assertIn("synthetic-server-log", result["files"]["server.log"])
+
+    def _assert_killed_processes_awaited(self, result):
+        self.assertIsNone(result["escaped"])
+        self.assertEqual(result["returncode"], 0)
+        expected = [mock.call.terminate(), mock.call.wait(timeout=5),
+                    mock.call.kill(), mock.call.wait(timeout=5)]
+        self.assertEqual(result["server_calls"], expected, "SERVER_KILL_NOT_AWAITED")
+        self.assertEqual(result["browser_calls"], expected, "BROWSER_KILL_NOT_AWAITED")
+
+    def test_missing_node_writes_launcher_evidence(self):
+        self._assert_failure(self._exercise("node"), "SYNTHETIC_NODE_MISSING")
+
+    def test_log_open_failure_writes_launcher_evidence(self):
+        self._assert_failure(self._exercise("log_open"), "SYNTHETIC_LOG_OPEN")
+
+    def test_service_popen_failure_preserves_original_reason(self):
+        self._assert_failure(self._exercise("server_popen"), "SYNTHETIC_SERVER_POPEN")
+
+    def test_service_popen_cleanup_error_does_not_replace_primary(self):
+        result = self._exercise("server_popen", close_error=True)
+        self._assert_failure(result, "SYNTHETIC_SERVER_POPEN")
+        report = result["files"]["ui-smoke.log"]
+        self.assertIn("SYNTHETIC_CLOSE_ERROR", report)
+        self.assertLess(report.index("SYNTHETIC_SERVER_POPEN"), report.index("SYNTHETIC_CLOSE_ERROR"))
+
+    def test_killed_browser_and_server_are_awaited(self):
+        self._assert_killed_processes_awaited(self._exercise(kill_required=True))
+
+    def test_browser_popen_failure_remains_logged(self):
+        result = self._exercise("browser_popen")
+        # Existing catch already preserves failure code, original reason and server cleanup.
+        self.assertIsNone(result["escaped"])
+        self.assertEqual(result["returncode"], 1)
+        self.assertEqual(result["writer_calls"], 1)
+        self.assertIn("SYNTHETIC_BROWSER_POPEN", result["files"]["ui-smoke.log"])
+        self.assertEqual(result["server_calls"], [mock.call.terminate(), mock.call.wait(timeout=5)])
+        self.assertEqual(result["browser_calls"], [])
+        self.assertTrue(result["stream_closed"])
+
+    def test_driver_timeout_preserves_partial_output_and_cleanup(self):
+        result = self._exercise("driver_timeout")
+        self._assert_failure(result, "synthetic-driver")
+        report = result["files"]["ui-smoke.log"]
+        self.assertIn("partial-out", report)
+        self.assertIn("partial-error", report)
+        self.assertIn("timed out after 60 seconds", report)
+        self.assertEqual(result["driver_calls"][0].kwargs["timeout"], 60)
+        for calls in (result["server_calls"], result["browser_calls"]):
+            self.assertEqual(calls, [mock.call.terminate(), mock.call.wait(timeout=5)])
+
+    def test_cleanup_error_keeps_primary_and_still_cleans_other_resources(self):
+        result = self._exercise("driver_timeout", terminate_error=True)
+        self._assert_failure(result, "synthetic-driver")
+        self.assertIn("SYNTHETIC_CLEANUP_ERROR", result["files"]["ui-smoke.log"])
+        self.assertEqual(result["server_calls"], [mock.call.terminate(), mock.call.wait(timeout=5)])
+        self.assertTrue(result["stream_closed"])
+
+    def _lifecycle_mutation(self, mutation):
+        smoke = _load_smoke_module()
+        tree = ast.parse(inspect.getsource(smoke.run_smoke))
+        before = ast.dump(tree, include_attributes=False)
+        function = tree.body[0]
+        matches = 0
+        if mutation == "drop_early_evidence":
+            for node in ast.walk(function):
+                if not isinstance(node, ast.ExceptHandler):
+                    continue
+                for statement in list(node.body):
+                    if (isinstance(statement, ast.Expr)
+                            and isinstance(statement.value, ast.Call)
+                            and isinstance(statement.value.func, ast.Name)
+                            and statement.value.func.id == "_write_failure_logs"):
+                        node.body.remove(statement)
+                        matches += 1
+        elif mutation == "drop_browser_kill_wait":
+            for node in ast.walk(function):
+                if not isinstance(node, ast.ExceptHandler):
+                    continue
+                if any(isinstance(item, ast.Call)
+                       and ast.unparse(item.func) == "edge_process.kill"
+                       for statement in node.body for item in ast.walk(statement)):
+                    for statement in list(node.body):
+                        if (isinstance(statement, ast.Expr)
+                                and isinstance(statement.value, ast.Call)
+                                and ast.unparse(statement.value.func) == "edge_process.wait"):
+                            node.body.remove(statement)
+                            matches += 1
+        elif mutation == "replace_primary_with_cleanup":
+            for node in ast.walk(function):
+                if (isinstance(node, ast.Try)
+                        and any(isinstance(item, ast.Call)
+                                and ast.unparse(item.func) == "server_log_stream.close"
+                                for statement in node.body for item in ast.walk(statement))):
+                    handler = node.handlers[0]
+                    handler.body[0] = ast.parse('lines = [str(exc)]').body[0]
+                    matches += 1
+        elif mutation == "unbound_server_output":
+            # With early failures now caught, removing initialization can expose
+            # a secondary name error. This is not a reproduced baseline failure.
+            for statement in list(function.body):
+                if (isinstance(statement, ast.Assign)
+                        and any(isinstance(target, ast.Name) and target.id == "server_output"
+                                for target in statement.targets)):
+                    function.body.remove(statement)
+                    matches += 1
+            for node in ast.walk(function):
+                if not isinstance(node, ast.Try):
+                    continue
+                for index, statement in enumerate(node.body):
+                    if (isinstance(statement, ast.Assign)
+                            and isinstance(statement.value, ast.Call)
+                            and ast.unparse(statement.value.func) == "server_log_path.read_text"):
+                        node.body[index] = ast.If(
+                            test=ast.parse("server is not None", mode="eval").body,
+                            body=[statement], orelse=[],
+                        )
+                        matches += 1
+        else:
+            self.fail("UNKNOWN_MUTATION")
+        self.assertEqual(matches, 2 if mutation == "unbound_server_output" else 1,
+                         "MUTATION_TARGET_COUNT")
+        self.assertNotEqual(ast.dump(tree, include_attributes=False), before, "MUTATION_NO_CHANGE")
+        compiled = compile(ast.fix_missing_locations(tree), str(SMOKE_PATH), "exec")
+        exec(compiled, smoke.__dict__)
+        return smoke
+
+    def test_mutation_early_evidence_removed_is_rejected(self):
+        smoke = self._lifecycle_mutation("drop_early_evidence")
+        with self.assertRaisesRegex(AssertionError, "LAUNCHER_EVIDENCE_NOT_WRITTEN"):
+            self._assert_failure(self._exercise("node", smoke=smoke), "SYNTHETIC_NODE_MISSING")
+
+    def test_mutation_browser_kill_wait_removed_is_rejected(self):
+        smoke = self._lifecycle_mutation("drop_browser_kill_wait")
+        with self.assertRaisesRegex(AssertionError, "BROWSER_KILL_NOT_AWAITED"):
+            self._assert_killed_processes_awaited(self._exercise(smoke=smoke, kill_required=True))
+
+    def test_mutation_cleanup_replaces_primary_is_rejected(self):
+        smoke = self._lifecycle_mutation("replace_primary_with_cleanup")
+        with self.assertRaisesRegex(AssertionError, "PRIMARY_FAILURE_LOST"):
+            self._assert_failure(self._exercise("server_popen", smoke=smoke, close_error=True),
+                                 "SYNTHETIC_SERVER_POPEN")
+
+    def test_mutation_unbound_server_output_is_rejected(self):
+        smoke = self._lifecycle_mutation("unbound_server_output")
+        with self.assertRaisesRegex(AssertionError, "SECONDARY_NAME_ERROR"):
+            self._assert_failure(self._exercise("server_popen", smoke=smoke), "SYNTHETIC_SERVER_POPEN")
+
+
 if __name__ == "__main__":
     unittest.main()

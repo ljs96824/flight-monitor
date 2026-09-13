@@ -263,14 +263,16 @@ def run_smoke(*, log_path: Path | None = None, artifact_dir: Path | None = None)
     artifact_dir = artifact_dir or DEFAULT_ARTIFACT_DIR
     log_path = log_path or artifact_dir / "ui-smoke.log"
     production_states_before = _protected_production_states()
+    server_output = "[UI smoke] 服务日志未生成：日志文件尚未创建\n"
     try:
         browser = _browser_path()
+        node = _node_path()
     except Exception as exc:
         output = f"[UI smoke] 结果=FAIL 原因={exc}\n"
+        output += "[UI smoke] 截图未生成：浏览器尚未启动\n"
         print(output, end="")
-        _write_failure_logs(output, "", log_path=log_path, artifact_dir=artifact_dir)
+        _write_failure_logs(output, server_output, log_path=log_path, artifact_dir=artifact_dir)
         return 1
-    node = _node_path()
     app_port = _free_port()
     cdp_port = _free_port()
     base_url = f"http://127.0.0.1:{app_port}"
@@ -283,32 +285,34 @@ def run_smoke(*, log_path: Path | None = None, artifact_dir: Path | None = None)
     with tempfile.TemporaryDirectory(prefix="flight-ui-smoke-", ignore_cleanup_errors=True) as tmpdir:
         tmp = Path(tmpdir)
         server_log_path = tmp / "server-process.log"
-        server_log_stream = server_log_path.open(
-            "w",
-            encoding="utf-8",
-            errors="replace",
-            newline="",
-        )
-        server_env = _server_environment()
-        server = subprocess.Popen(
-            [
-                sys.executable,
-                "-X",
-                "utf8",
-                str(Path(__file__).resolve()),
-                "--serve",
-                "--port",
-                str(app_port),
-                "--data-dir",
-                str(tmp / "data"),
-            ],
-            cwd=ROOT,
-            env=server_env,
-            stdout=server_log_stream,
-            stderr=subprocess.STDOUT,
-        )
+        server_log_stream = None
+        server = None
         edge_process = None
         try:
+            server_log_stream = server_log_path.open(
+                "w",
+                encoding="utf-8",
+                errors="replace",
+                newline="",
+            )
+            server_env = _server_environment()
+            server = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-X",
+                    "utf8",
+                    str(Path(__file__).resolve()),
+                    "--serve",
+                    "--port",
+                    str(app_port),
+                    "--data-dir",
+                    str(tmp / "data"),
+                ],
+                cwd=ROOT,
+                env=server_env,
+                stdout=server_log_stream,
+                stderr=subprocess.STDOUT,
+            )
             _wait_http(base_url + "/")
             edge_process = subprocess.Popen(
                 _browser_command(
@@ -365,22 +369,44 @@ def run_smoke(*, log_path: Path | None = None, artifact_dir: Path | None = None)
             return_code = 1
         finally:
             if edge_process is not None:
-                edge_process.terminate()
                 try:
-                    edge_process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    edge_process.kill()
-            server.terminate()
-            try:
-                server.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                server.kill()
-                server.wait(timeout=5)
-            server_log_stream.close()
-            server_output = server_log_path.read_text(
-                encoding="utf-8",
-                errors="replace",
-            )
+                    edge_process.terminate()
+                    try:
+                        edge_process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        edge_process.kill()
+                        edge_process.wait(timeout=5)
+                except Exception as exc:
+                    lines.append(f"[UI smoke] 清理失败 browser: {exc}")
+                    return_code = 1
+            else:
+                lines.append("[UI smoke] 截图未生成：浏览器尚未启动")
+            if server is not None:
+                try:
+                    server.terminate()
+                    try:
+                        server.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        server.kill()
+                        server.wait(timeout=5)
+                except Exception as exc:
+                    lines.append(f"[UI smoke] 清理失败 server: {exc}")
+                    return_code = 1
+            if server_log_stream is not None:
+                try:
+                    server_log_stream.close()
+                except Exception as exc:
+                    lines.append(f"[UI smoke] 清理失败 server log: {exc}")
+                    return_code = 1
+                try:
+                    server_output = server_log_path.read_text(
+                        encoding="utf-8",
+                        errors="replace",
+                    )
+                except Exception as exc:
+                    server_output = f"[UI smoke] 服务日志读取失败：{exc}\n"
+                    lines.append(server_output.rstrip())
+                    return_code = 1
             if "UI_SMOKE_FEEDBACK_CANARY" in server_output:
                 lines.append("[UI smoke] 结果=FAIL 原因=FEEDBACK_CANARY_IN_SERVER_LOG")
                 return_code = 1
