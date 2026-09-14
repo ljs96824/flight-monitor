@@ -200,6 +200,15 @@ def main(argv=None) -> int:
                 if direct_create
                 else sanitized_backup_summary(result)
             )
+            if result.get("status") == "created":
+                print(
+                    "[运行备份提示] 本次创建已为所选状态文件重新建立归档证据；"
+                    "旧恢复证明与异盘副本证明不再沿用。"
+                    "若研究任务读取该状态文件，补证完成前将拒绝研究准入。"
+                    "请针对同一归档及同一 --backup-status 完成隔离恢复验证与 "
+                    "--verify-off-disk 核验，再检查研究就绪状态。",
+                    file=sys.stderr,
+                )
             return int(result.get("exit_code", 0))
 
         if args.command == "verify":
