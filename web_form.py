@@ -2907,6 +2907,8 @@ def toggle_subscription(subscription_id: str):
 
 @app.route("/subscription/<subscription_id>/delete", methods=["GET", "POST"])
 def delete_subscription(subscription_id: str):
+    if request.method not in {"GET", "POST"}:
+        abort(404)
     canonical_id = canonical_detail_uuid(subscription_id)
     if canonical_id is None:
         abort(404)
