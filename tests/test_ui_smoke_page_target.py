@@ -2,24 +2,38 @@
 
 import json
 from pathlib import Path
+import re
 import shutil
 import subprocess
+import traceback
 import unittest
+from unittest.mock import patch
 
 
 DRIVER = Path(__file__).resolve().parents[1] / "scripts" / "ui_smoke_driver.mjs"
 NODE_HARNESS = r'''
 const http = require("node:http");
 const {performance} = require("node:perf_hooks");
+function emitPhase(sequence, phase, mode = "unknown") {
+  try {
+    process.stderr.write("G14_PHASE " + JSON.stringify({sequence, phase, node: process.version,
+      mode: ["controlled", "native"].includes(mode) ? mode : "unknown"}) + "\n");
+  } catch {
+    // An unavailable diagnostic stream must not replace the execution's outcome.
+  }
+}
+emitPhase(1, "harness_started");
 let input = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", chunk => input += chunk);
 process.stdin.on("end", async () => {
+  emitPhase(2, "input_received");
   const {block, scenario, mode} = JSON.parse(input);
   const AsyncFunction = Object.getPrototypeOf(async function() {}).constructor;
   // Extraction/compilation failures are infrastructure errors, never mutation kills.
   const run = new AsyncFunction("fetch", "sleep", "cdpPort", "AbortSignal", "performance",
     block + "\nreturn target;");
+  emitPhase(3, "compiled", mode);
   const good = {type: "page", id: "ready", webSocketDebuggerUrl: "ws://canary.invalid/page"};
   let attempts = 0, responses = 0, virtualNow = 0, eventId = 0;
   const sleeps = [], requestLimits = [], requestStarts = [], operations = [], abortEvents = [];
@@ -123,6 +137,7 @@ process.stdin.on("end", async () => {
   };
   const start = clock.now(), wallStart = performance.now();
   let settled, watchdog;
+  emitPhase(4, "execution_enter", mode);
   const execution = run(fetch, sleep, String(port), timeoutSignal, clock).then(
     target => settled = {kind: "success", target},
     error => settled = {kind: "error", error: error.message});
@@ -146,15 +161,96 @@ process.stdin.on("end", async () => {
     })]);
   }
   clearTimeout(watchdog);
+  emitPhase(5, "outcome_ready", mode);
   const result = {...outcome, compiled: true, mode, attempts, responses, sleeps,
     requestLimits, requestStarts, operations, abortEvents, elapsedMs: clock.now() - start,
     wallElapsedMs: performance.now() - wallStart};
   server?.closeAllConnections();
   server?.close();
   // Stop only this isolated process, including intentionally infinite mutants.
-  process.stdout.write(JSON.stringify(result), () => process.exit(0));
+  const serialized = JSON.stringify(result);
+  emitPhase(6, "json_serialized", mode);
+  emitPhase(7, "stdout_write_enter", mode);
+  process.stdout.write(serialized, () => {
+    emitPhase(8, "stdout_callback_enter", mode);
+    process.exit(0);
+  });
 });
 '''
+
+
+PHASE_NAMES = (
+    "harness_started", "input_received", "compiled", "execution_enter",
+    "outcome_ready", "json_serialized", "stdout_write_enter", "stdout_callback_enter",
+)
+
+
+def _captured_output(stdout, stderr):
+    def display_text(value):
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="replace")
+        return value if isinstance(value, str) else ""
+
+    if stdout is None:
+        json_status = "absent"
+    elif stdout in ("", b""):
+        json_status = "empty"
+    else:
+        try:
+            json.loads(stdout)
+        except (ValueError, TypeError):
+            json_status = "parse_failed"
+        else:
+            json_status = "parsed"
+
+    phases, summaries = [], []
+    invalid_phase_lines = 0
+    for line in display_text(stderr).splitlines():
+        if not line.startswith("G14_PHASE "):
+            if line:
+                summaries.append("[non-phase stderr redacted]")
+            continue
+        try:
+            candidate = json.loads(line[len("G14_PHASE "):])
+        except (ValueError, TypeError):
+            candidate = None
+        if (not isinstance(candidate, dict)
+                or type(candidate.get("sequence")) is not int
+                or candidate["sequence"] not in range(1, 9)
+                or candidate.get("phase") not in PHASE_NAMES):
+            invalid_phase_lines += 1
+            summaries.append("[invalid phase marker redacted]")
+            continue
+        version = candidate.get("node")
+        phase = {
+            "sequence": candidate["sequence"], "phase": candidate["phase"],
+            "node": version if isinstance(version, str) and len(version) <= 64
+            and re.fullmatch(r"v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?", version) else "unverified",
+            "mode": candidate.get("mode") if candidate.get("mode") in ("controlled", "native", "unknown") else "unverified",
+        }
+        phases.append(phase)
+        summaries.append(json.dumps(phase, ensure_ascii=True))
+
+    # Extract every received phase before limiting the display summary. Never reorder evidence.
+    sequences = [phase["sequence"] for phase in phases]
+    duplicates = list(dict.fromkeys(number for index, number in enumerate(sequences) if number in sequences[:index]))
+    summary = "\n".join(summaries)
+    truncated = len(summary) > 512
+    if truncated:
+        marker = "[summary truncated]"
+        summary = summary[:512 - len(marker)] + marker
+    return {
+        "stdout_present": stdout is not None,
+        "stdout_nonempty": bool(display_text(stdout)),
+        "stdout_complete_json": json_status == "parsed", "stdout_json_status": json_status,
+        "received_phases": phases, "missing_phase_sequences": [n for n in range(1, 9) if n not in sequences],
+        "duplicate_phase_sequences": duplicates,
+        "phase_order_anomaly": any(right <= left for left, right in zip(sequences, sequences[1:]))
+        or any(PHASE_NAMES[phase["sequence"] - 1] != phase["phase"] for phase in phases),
+        "invalid_phase_lines": invalid_phase_lines,
+        "stderr_present": stderr is not None, "stderr_summary": summary,
+        "stderr_summary_truncated": truncated,
+    }
 
 
 class UiSmokePageTargetTest(unittest.TestCase):
@@ -184,12 +280,35 @@ class UiSmokePageTargetTest(unittest.TestCase):
                 input=json.dumps({"block": block, "scenario": scenario, "mode": mode}),
                 text=True, encoding="utf-8", capture_output=True, timeout=30,
             )
-        except subprocess.TimeoutExpired:
-            self.fail("TEST_NOT_FINISHED: SUBPROCESS_TIMEOUT")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        result = json.loads(result.stdout)
+        except subprocess.TimeoutExpired as exc:
+            message = self._failure_message("SUBPROCESS_TIMEOUT", mode, scenario,
+                                            exc.stdout, exc.stderr, timeout=exc.timeout)
+            raise self.failureException(message) from None
+        if result.returncode != 0:
+            message = self._failure_message("NONZERO_EXIT", mode, scenario,
+                                            result.stdout, result.stderr, returncode=result.returncode)
+            raise self.failureException(message) from None
+        try:
+            decoded = json.loads(result.stdout)
+        except (ValueError, TypeError):
+            message = self._failure_message("JSON_PARSE_ERROR", mode, scenario,
+                                            result.stdout, result.stderr, returncode=result.returncode)
+            raise self.failureException(message) from None
+        result = decoded
         self.assertTrue(result["compiled"])
         return result
+
+    def _failure_message(self, category, mode, scenario, stdout, stderr, **status):
+        report = {"failure_category": category, "test_id": self.id(), "mode": mode, "scenario": scenario, **status}
+        try:
+            report.update(_captured_output(stdout, stderr))
+        except Exception:
+            # The primary failure is still raised even if diagnosis itself cannot be formatted.
+            report.update(diagnostic_status="CAPTURE_FORMATTING_FAILED", received_phases=None,
+                          stdout_present=stdout is not None, stdout_complete_json=None,
+                          stdout_json_status="unknown", stderr_summary="[capture formatting failed]",
+                          stderr_summary_truncated=False)
+        return "NODE_SUBPROCESS_FAILURE " + json.dumps(report, ensure_ascii=True)
 
     def _assert_success(self, result, attempts=None):
         self._assert_normal_end(result)
@@ -381,6 +500,185 @@ class UiSmokePageTargetTest(unittest.TestCase):
         self.assertEqual(result["attempts"], 1)
         with self.assertRaisesRegex(AssertionError, "INVALID_PAGE_TARGET"):
             self._assert_success(result, 5)
+
+
+class NodeFailureDiagnosticsTest(unittest.TestCase):
+    phases = (
+        "harness_started", "input_received", "compiled", "execution_enter",
+        "outcome_ready", "json_serialized", "stdout_write_enter", "stdout_callback_enter",
+    )
+
+    def setUp(self):
+        self.runner = UiSmokePageTargetTest("test_first_page_has_no_polling_delay")
+        self.runner.node = "node"
+
+    def _phase(self, sequence, **extra):
+        return "G14_PHASE " + json.dumps({
+            "sequence": sequence, "phase": self.phases[sequence - 1],
+            "node": "v24.15.0", "mode": "controlled", **extra,
+        }) + "\n"
+
+    def _invoke_failure(self, result):
+        options = {"side_effect": result} if isinstance(result, Exception) else {"return_value": result}
+        with patch.object(subprocess, "run", **options) as run:
+            try:
+                self.runner._run("hang", mode="controlled")
+            except Exception as error:
+                captured = error
+                standard_text = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+            else:
+                self.fail("SUBPROCESS_FAILURE_WAS_ACCEPTED")
+        run.assert_called_once()
+        self.assertEqual(run.call_args.kwargs["timeout"], 30)
+        self.assertEqual(json.loads(run.call_args.kwargs["input"])["scenario"], "hang")
+        return captured, standard_text
+
+    def _report(self, result, category):
+        error, standard_text = self._invoke_failure(result)
+        self.assertIsInstance(error, AssertionError, "ORIGINAL_FAILURE_WAS_MASKED")
+        prefix = "NODE_SUBPROCESS_FAILURE "
+        self.assertTrue(str(error).startswith(prefix), "DIAGNOSTIC_REPORT_MISSING")
+        report = json.loads(str(error)[len(prefix):])
+        self.assertEqual(report["failure_category"], category)
+        self.assertEqual(report["test_id"], self.runner.id())
+        self.assertEqual((report["mode"], report["scenario"]), ("controlled", "hang"))
+        return report, standard_text
+
+    def test_phase_emit_sites_are_single_and_ordered(self):
+        positions = []
+        for sequence, name in enumerate(self.phases, 1):
+            call = f'emitPhase({sequence}, "{name}"'
+            self.assertEqual(NODE_HARNESS.count(call), 1, "PHASE_EMIT_SITE_COUNT:" + name)
+            positions.append(NODE_HARNESS.index(call))
+        self.assertEqual(positions, sorted(positions))
+        self.assertLess(positions[0], NODE_HARNESS.index('process.stdin.on("data"'))
+        self.assertLess(NODE_HARNESS.index('process.stdin.on("end"'), positions[1])
+        self.assertLess(NODE_HARNESS.index('block + "\\nreturn target;"'), positions[2])
+        self.assertLess(positions[3], NODE_HARNESS.index("const execution = run("))
+        self.assertLess(NODE_HARNESS.index("clearTimeout(watchdog)"), positions[4])
+        self.assertLess(NODE_HARNESS.index("server?.close();"), positions[5])
+        self.assertLess(NODE_HARNESS.index("JSON.stringify(result)"), positions[5])
+        self.assertLess(positions[6], NODE_HARNESS.index("process.stdout.write("))
+        self.assertLess(NODE_HARNESS.index("process.stdout.write("), positions[7])
+        self.assertLess(positions[7], NODE_HARNESS.index("process.exit(0)"))
+        emitter = NODE_HARNESS.split("function emitPhase(", 1)[1].split("\n}", 1)[0]
+        self.assertIn("process.stderr.write(", emitter)
+        self.assertIn("process.version", emitter)
+        self.assertNotIn("await", emitter)
+        self.assertNotIn("writeFile", emitter)
+
+    def test_controlled_success_keeps_result_contract(self):
+        self.runner.node = shutil.which("node")
+        self.assertIsNotNone(self.runner.node)
+        actual_run = subprocess.run
+        captured = []
+
+        def record(*args, **kwargs):
+            result = actual_run(*args, **kwargs)
+            captured.append(result)
+            return result
+
+        with patch.object(subprocess, "run", side_effect=record):
+            result = self.runner._run("first")
+        self.runner._assert_success(result, 1)
+        self.assertEqual(len(captured), 1)
+        self.assertEqual(json.loads(captured[0].stdout), result)
+        self.assertEqual(set(result), {
+            "kind", "target", "compiled", "mode", "attempts", "responses", "sleeps",
+            "requestLimits", "requestStarts", "operations", "abortEvents", "elapsedMs", "wallElapsedMs",
+        })
+
+    def test_timeout_run_retains_captured_evidence(self):
+        stdout = b'{"kind":"error"}'
+        stderr = (self._phase(1) + self._phase(2) + self._phase(4)).encode()
+        failure = subprocess.TimeoutExpired(["node", "-e", "COMMAND_CANARY"], 30, output=stdout, stderr=stderr)
+        self.assertIs(failure.stdout, failure.output)
+        report, _ = self._report(failure, "SUBPROCESS_TIMEOUT")
+        self.assertEqual(report["timeout"], 30)
+        self.assertTrue(report["stdout_present"])
+        self.assertTrue(report["stdout_complete_json"])
+        self.assertEqual([phase["sequence"] for phase in report["received_phases"]], [1, 2, 4])
+        self.assertEqual(report["missing_phase_sequences"], [3, 5, 6, 7, 8])
+        self.assertEqual(report["received_phases"][0]["node"], "v24.15.0")
+        self.assertNotIn("output", report)
+
+    def test_nonzero_run_keeps_complete_stdout_and_exitcode(self):
+        completed = subprocess.CompletedProcess(["node", "-e", "COMMAND_CANARY"], 3221226505,
+                                                '{"kind":"success","private":"STDOUT_CANARY"}', self._phase(8))
+        report, text = self._report(completed, "NONZERO_EXIT")
+        self.assertEqual(report["returncode"], 3221226505)
+        self.assertTrue(report["stdout_present"])
+        self.assertTrue(report["stdout_complete_json"])
+        self.assertEqual(report["received_phases"][0]["phase"], "stdout_callback_enter")
+        self.assertNotIn("STDOUT_CANARY", text)
+        self.assertNotIn("COMMAND_CANARY", text)
+
+    def test_invalid_json_run_retains_context(self):
+        completed = subprocess.CompletedProcess(["node"], 0, "complete but invalid JSON", self._phase(6))
+        report, _ = self._report(completed, "JSON_PARSE_ERROR")
+        self.assertEqual(report["returncode"], 0)
+        self.assertTrue(report["stdout_present"])
+        self.assertFalse(report["stdout_complete_json"])
+        self.assertEqual(report["stdout_json_status"], "parse_failed")
+        self.assertEqual(report["received_phases"][0]["phase"], "json_serialized")
+
+    def test_diagnostic_inputs_do_not_mask_failure(self):
+        streams = {"none": None, "empty": "", "invalid_utf8": b"\xff\xfe", "partial_marker": 'G14_PHASE {"sequence":'}
+        for category in ("SUBPROCESS_TIMEOUT", "NONZERO_EXIT", "JSON_PARSE_ERROR"):
+            for case, stream in streams.items():
+                with self.subTest(category=category, stream=case):
+                    failure = (subprocess.TimeoutExpired(["node"], 30, output=stream, stderr=stream)
+                               if category == "SUBPROCESS_TIMEOUT" else
+                               subprocess.CompletedProcess(["node"], 1 if category == "NONZERO_EXIT" else 0, stream, stream))
+                    report, _ = self._report(failure, category)
+                    self.assertEqual(report["received_phases"], [])
+                    self.assertEqual(report["stdout_present"], stream is not None)
+                    self.assertFalse(report["stdout_complete_json"])
+                    self.assertEqual(report["invalid_phase_lines"], int(case == "partial_marker"))
+
+    def test_phase_reception_keeps_gaps_duplicates_and_order_before_summary_limit(self):
+        stderr = "\n".join(["SECRET_CANARY https://secret.invalid/?token=synthetic"] * 80) + "\n"
+        stderr += self._phase(1) + self._phase(4) + self._phase(2) + self._phase(4)
+        stderr += self._phase(6, node="VERSION_CANARY", mode="MODE_CANARY", extra="EXTRA_CANARY")
+        report, text = self._report(subprocess.CompletedProcess(["node"], 7, "", stderr), "NONZERO_EXIT")
+        self.assertEqual([phase["sequence"] for phase in report["received_phases"]], [1, 4, 2, 4, 6])
+        self.assertEqual(report["missing_phase_sequences"], [3, 5, 7, 8])
+        self.assertEqual(report["duplicate_phase_sequences"], [4])
+        self.assertTrue(report["phase_order_anomaly"])
+        self.assertLessEqual(len(report["stderr_summary"]), 512)
+        self.assertTrue(report["stderr_summary_truncated"])
+        self.assertIn("[summary truncated]", report["stderr_summary"])
+        for canary in ("SECRET_CANARY", "secret.invalid", "VERSION_CANARY", "MODE_CANARY", "EXTRA_CANARY"):
+            self.assertNotIn(canary, text)
+
+    def test_standard_failure_text_does_not_expose_command_or_stderr_canary(self):
+        canary = "NODE_COMMAND_BODY_CANARY_38_2"
+        failure = subprocess.TimeoutExpired(["node", "-e", canary], 30,
+                                            output=b'{"private":"STDOUT_CANARY"}',
+                                            stderr=(self._phase(3) + "STDERR_CANARY").encode())
+        self.assertIn(canary, str(failure))
+        error, text = self._invoke_failure(failure)
+        self.assertIsInstance(error, AssertionError)
+        for forbidden in (canary, "STDERR_CANARY", "STDOUT_CANARY", "During handling of the above exception"):
+            self.assertNotIn(forbidden, text)
+        self.assertTrue(error.__suppress_context__)
+
+    def test_diagnostic_formatter_failure_keeps_primary_failure(self):
+        failures = (
+            ("SUBPROCESS_TIMEOUT", subprocess.TimeoutExpired(["node"], 30)),
+            ("NONZERO_EXIT", subprocess.CompletedProcess(["node"], 7, "{}", "")),
+            ("JSON_PARSE_ERROR", subprocess.CompletedProcess(["node"], 0, "invalid", "")),
+        )
+        for category, failure in failures:
+            with self.subTest(category=category):
+                with patch(__name__ + "._captured_output", side_effect=ValueError("FORMATTER_CANARY")):
+                    report, text = self._report(failure, category)
+                self.assertEqual(report["diagnostic_status"], "CAPTURE_FORMATTING_FAILED")
+                self.assertIsNone(report["received_phases"])
+                self.assertIsNone(report["stdout_complete_json"])
+                self.assertEqual(report.get("timeout", report.get("returncode")),
+                                 30 if category == "SUBPROCESS_TIMEOUT" else failure.returncode)
+                self.assertNotIn("FORMATTER_CANARY", text)
 
 
 if __name__ == "__main__":
