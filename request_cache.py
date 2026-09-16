@@ -508,7 +508,7 @@ def _read_persistent(
     result = payload.get("result")
     if _result_cache_status(result) != "persistent":
         return None
-    return result
+    return result, payload.get("fetched_at")
 
 
 def _parse_cache_time(value) -> datetime | None:
@@ -926,10 +926,11 @@ def cached_fetch(
         if persist:
             persisted = _read_persistent(key, ttl_seconds, cache_dir, source=source)
             if persisted is not None:
+                persisted, fetched_at = persisted
                 _record_hit(source_name)
                 safe_log(f"[缓存命中] {key[:4]} 复用持久缓存,不重复调API")
                 _request_cache[key] = {
-                    "fetched_at": datetime.now().isoformat(timespec="seconds"),
+                    "fetched_at": fetched_at,
                     "result": copy.deepcopy(persisted),
                 }
                 if _current_stats_round_id:
