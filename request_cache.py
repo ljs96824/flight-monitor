@@ -160,10 +160,12 @@ def _fresh(fetched_at: str | None, ttl_seconds: int) -> bool:
         return False
     try:
         dt = datetime.fromisoformat(str(fetched_at or "").replace("Z", "+00:00"))
-        dt = dt.replace(tzinfo=None)
+        if dt.tzinfo is not None:
+            dt = dt.astimezone().replace(tzinfo=None)
     except (TypeError, ValueError):
         return False
-    return datetime.now() - dt < timedelta(seconds=ttl_seconds)
+    age = datetime.now() - dt
+    return timedelta(0) <= age < timedelta(seconds=ttl_seconds)
 
 
 def _source_stats_bucket(stats: dict, source_name: str) -> dict:
