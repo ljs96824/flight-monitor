@@ -8,6 +8,13 @@ from typing import Callable
 
 from atomic_json_store import update_json
 from subscription_identity import subscription_id as stable_subscription_id
+from subscription_repository import (
+    DuplicateSubscriptionIdError,
+    SubscriptionIdentityMigrationRequired,
+    _SubscriptionFileMissing,
+    _subscription_array,
+    _validated_id_index,
+)
 
 
 BASE_DIR = Path(__file__).parent
@@ -69,11 +76,9 @@ def record_subscription_attempt(
 
     def mutate(payload):
         if payload is None:
-            subscriptions = []
-        elif isinstance(payload, list):
-            subscriptions = payload
-        else:
-            raise ValueError("subscriptions.json 格式错误，应为订阅数组")
+            raise _SubscriptionFileMissing("订阅文件缺失或为 JSON null")
+        subscriptions = _subscription_array(payload)
+        _validated_id_index(subscriptions)
         for item in subscriptions:
             if stable_subscription_id(item) != subscription_key:
                 continue
@@ -109,7 +114,18 @@ def record_subscription_attempt(
             break
         return subscriptions
 
-    update_json(path, mutate)
+    try:
+        update_json(path, mutate)
+    except (
+        _SubscriptionFileMissing,
+        DuplicateSubscriptionIdError,
+        SubscriptionIdentityMigrationRequired,
+    ) as exc:
+        logger(
+            f"[采集启动握手] 状态未落盘 status={status} "
+            f"原因={type(exc).__name__}:{exc}"
+        )
+        return False
     if result["newer_at"]:
         logger(
             f"[采集启动握手] 忽略迟到状态 status={status} "
