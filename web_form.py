@@ -2962,7 +2962,9 @@ def success():
         subscription = _subscription_repository().get(
             LOCAL_OWNER_ID,
             requested_id,
-        ) or {}
+        )
+        if subscription is None:
+            abort(404)
         if subscription:
             migrated, _details = migrate_subscription_defaults([subscription])
             subscription = migrated[0]
