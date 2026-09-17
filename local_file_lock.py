@@ -133,11 +133,13 @@ def file_lock(
             time.sleep(min(0.01, max(0.0, deadline - time.monotonic())))
         yield
     finally:
-        if lock_file is not None:
-            if os_locked:
-                try:
-                    LOCK_BACKEND.unlock(lock_file)
-                except OSError:
-                    pass
-            lock_file.close()
-        thread_lock.release()
+        try:
+            if lock_file is not None:
+                if os_locked:
+                    try:
+                        LOCK_BACKEND.unlock(lock_file)
+                    except OSError:
+                        pass
+                lock_file.close()
+        finally:
+            thread_lock.release()
