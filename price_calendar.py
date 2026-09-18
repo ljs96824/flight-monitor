@@ -117,6 +117,20 @@ def _normalized_calendar_record(
     current = now or _shanghai_now()
     if current.tzinfo is None:
         current = current.replace(tzinfo=SHANGHAI_TZ)
+    raw_deadline = info.get("stale_after")
+    explicit_invalid = (
+        raw_deadline is not None and _parse_timestamp(raw_deadline) is None
+    )
+    success_time = _parse_timestamp(last_success_at)
+    error_type = record.get("error_type")
+    if status in {"success", "stale"}:
+        # These stale records are quarantined, not proven to have expired by TTL.
+        if explicit_invalid:
+            status = "stale"
+            error_type = "CalendarInvalidDeadline"
+        elif success_time is not None and success_time > current.astimezone(SHANGHAI_TZ):
+            status = "stale"
+            error_type = "CalendarFutureSuccess"
     if status == "success" and deadline is not None:
         if current.astimezone(SHANGHAI_TZ) >= deadline:
             status = "stale"
@@ -126,7 +140,7 @@ def _normalized_calendar_record(
             "status": status,
             "last_attempt_at": last_attempt_at,
             "last_success_at": last_success_at,
-            "error_type": record.get("error_type"),
+            "error_type": error_type,
             "stale_after": stale_after,
             "round_id": record.get("round_id"),
         }
@@ -158,6 +172,10 @@ def calendar_record_is_eligible(
 def _status_text(record: dict) -> str:
     status = str(record.get("status") or "")
     if status == "stale":
+        if record.get("error_type") in (
+            "CalendarInvalidDeadline", "CalendarFutureSuccess"
+        ):
+            return "时间证据异常，当前不可用于推荐"
         return "历史参考(已过期)"
     if status == "empty":
         return "本次无报价"
