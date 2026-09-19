@@ -7,6 +7,7 @@ stale.
 
 from __future__ import annotations
 
+import math
 import statistics
 import time
 from datetime import date, datetime, timedelta
@@ -257,9 +258,10 @@ def _source_fetch(source, origin: str, dest: str, date_str: str, cabin_class: st
 
 def _valid_price(value) -> bool:
     try:
-        return float(value) > 0
-    except (TypeError, ValueError):
+        price = float(value)
+    except (TypeError, ValueError, OverflowError):
         return False
+    return math.isfinite(price) and price > 0
 
 
 def _source_names(value) -> list[str]:
@@ -401,7 +403,9 @@ def analyze_date_savings(
     """Find cheaper future dates using the same single-leg calendar price scope."""
     try:
         current = float(current_price)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
+        return []
+    if not math.isfinite(current):
         return []
 
     target = parse_date(target_date)
