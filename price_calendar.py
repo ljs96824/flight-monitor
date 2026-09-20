@@ -525,12 +525,6 @@ def analyze_weekday_pattern(calendar: dict, *, min_samples: int = 7) -> dict | N
 def calendar_rows(calendar: dict, target_date: str) -> list[dict]:
     target = parse_date(target_date)
     rows = []
-    valid_prices = [
-        float(info["min_price"])
-        for info in (calendar.get("dates") or {}).values()
-        if calendar_record_is_eligible(info)
-    ]
-    lowest = min(valid_prices) if valid_prices else None
     for date_str, info in sorted((calendar.get("dates") or {}).items()):
         if not isinstance(info, dict):
             continue
@@ -569,12 +563,19 @@ def calendar_rows(calendar: dict, target_date: str) -> list[dict]:
                 "eligible_for_recommendation": eligible,
                 "historical_reference": bool(price is not None and not eligible),
                 "selected": d == target,
-                "lowest": eligible and lowest is not None and price == lowest,
+                "lowest": False,
                 "scope": "oneway",
                 "label": f"{date_str[5:]} {WEEKDAY_NAMES[d.weekday()]}",
                 "value": price,
             }
         )
+    eligible_rows = [
+        row for row in rows
+        if row["eligible_for_recommendation"] and _valid_price(row["min_price"])
+    ]
+    lowest = min((row["min_price"] for row in eligible_rows), default=None)
+    for row in eligible_rows:
+        row["lowest"] = row["min_price"] == lowest
     return rows
 
 
