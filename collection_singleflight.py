@@ -316,6 +316,7 @@ def acquire_collection_singleflight(
     if not thread_lock.acquire(blocking=False):
         return _busy_gate(str(round_id), path, _read_holder_path(path))
 
+    release_pending = True
     lock_file = None
     try:
         path.touch(exist_ok=True)
@@ -331,6 +332,7 @@ def acquire_collection_singleflight(
             holder = _read_holder_stream(lock_file) or previous_holder
             lock_file.close()
             thread_lock.release()
+            release_pending = False
             return _busy_gate(str(round_id), path, holder)
 
         now = _now()
@@ -362,9 +364,14 @@ def acquire_collection_singleflight(
         )
         _write_holder(lock_file, gate._metadata())
         gate.start_heartbeat()
+        release_pending = False
         return gate
     except Exception:
-        if lock_file is not None:
-            lock_file.close()
-        thread_lock.release()
+        try:
+            if lock_file is not None:
+                lock_file.close()
+        finally:
+            if release_pending:
+                thread_lock.release()
+                release_pending = False
         raise
