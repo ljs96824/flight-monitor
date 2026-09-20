@@ -370,7 +370,7 @@ def append_round_evidence(prefix: str, payload) -> bool:
         sort_keys=True,
     )
     with state["lock"]:
-        state["file"].write(f"{redact_text(prefix)}{encoded}\\n")
+        state["file"].write(f"{redact_text(prefix)}{encoded}\n")
         state["file"].flush()
     return True
 
