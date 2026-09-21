@@ -401,6 +401,9 @@ def end_round_log_archive(*, status: str = "completed") -> None:
         sys.stderr = state["stderr"]
         try:
             state["file"].flush()
+        except Exception:
+            pass
+        try:
             state["file"].close()
         except Exception:
             pass

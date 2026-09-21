@@ -463,5 +463,185 @@ class RoundArchiveStartRollbackTest(unittest.TestCase):
             self.assert_rollback(changed)
 
 
+class _ShutdownArchiveFile:
+    def __init__(self, stream):
+        self.stream = stream
+        self.flush_error = None
+        self.close_error = None
+        self.flush_calls = 0
+        self.close_calls = 0
+        self.flush_sites = []
+
+    def __getattr__(self, name):
+        return getattr(self.stream, name)
+
+    def flush(self):
+        self.flush_calls += 1
+        frame = inspect.currentframe().f_back
+        self.flush_sites.append((frame.f_code.co_name, frame.f_lineno))
+        del frame
+        if self.flush_error is not None:
+            raise self.flush_error
+        return self.stream.flush()
+
+    def close(self):
+        self.close_calls += 1
+        if self.close_error is not None:
+            raise self.close_error
+        return self.stream.close()
+
+
+class RoundArchiveShutdownTest(unittest.TestCase):
+    @contextmanager
+    def shutdown_environment(self):
+        import log_utils
+
+        real_pair = (sys.stdout, sys.stderr)
+        stdout, stderr = io.StringIO(), io.StringIO()
+        private_sys = SimpleNamespace(stdout=stdout, stderr=stderr)
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root = Path(tmp)
+            archives = [_ShutdownArchiveFile((root / name).open("w", encoding="utf-8"))
+                        for name in ("first.log", "second.log")]
+            # Isolate shutdown's explicit flush from the end-marker tee's flush.
+            with patch.object(log_utils, "sys", private_sys), \
+                    patch.object(log_utils, "_round_log_state", None), \
+                    patch.object(log_utils, "safe_log") as marker, \
+                    patch.object(Path, "open", side_effect=archives):
+                env = SimpleNamespace(module=log_utils, sys=private_sys, root=root,
+                                      stdout=stdout, stderr=stderr, archives=archives, marker=marker)
+                try:
+                    log_utils.start_round_log_archive("synthetic-close", root_dir=root,
+                                                     now=datetime(2026, 9, 22, 12))
+                    marker.reset_mock()
+                    yield env
+                finally:
+                    for archive in archives:
+                        archive.stream.close()
+                    stdout.close()
+                    stderr.close()
+                    self.assertIs(sys.stdout, real_pair[0], "REAL_STDOUT_UNCHANGED")
+                    self.assertIs(sys.stderr, real_pair[1], "REAL_STDERR_UNCHANGED")
+
+    def assert_shutdown(self, function=None, *, flush_error=False, close_error=False):
+        with self.shutdown_environment() as env:
+            archive = env.archives[0]
+            archive.write("synthetic record\n")
+            archive.flush_error = OSError("SYNTHETIC_SHUTDOWN_FLUSH") if flush_error else None
+            archive.close_error = OSError("SYNTHETIC_SHUTDOWN_CLOSE") if close_error else None
+            result = (function or env.module.end_round_log_archive)(status="synthetic-status")
+            self.assertIsNone(result, "EXISTING_SUPPRESSION_POLICY")
+            self.assertEqual(archive.flush_calls, 1, "EXPLICIT_FLUSH_ONCE")
+            self.assertEqual(archive.flush_sites[0][0], "end_round_log_archive", "CLEANUP_FLUSH_INJECTION_HIT")
+            self.assertEqual(archive.close_calls, 1, "CLOSE_ATTEMPT_AFTER_FLUSH")
+            self.assertIs(env.sys.stdout, env.stdout, "RESTORE_SAVED_STDOUT")
+            self.assertIs(env.sys.stderr, env.stderr, "RESTORE_SAVED_STDERR")
+            self.assertIsNone(env.module._round_log_state, "CLEAR_ROUND_STATE")
+            self.assertEqual(archive.closed, not close_error, "SYNTHETIC_WRAPPER_CLOSE_STATE")
+            env.marker.assert_called_once()
+            self.assertIn("status=synthetic-status", env.marker.call_args.args[0])
+
+    def test_normal_shutdown_flushes_and_closes_once(self):
+        self.assert_shutdown()
+
+    def test_failed_flush_still_attempts_close(self):
+        self.assert_shutdown(flush_error=True)
+
+    def test_failed_flush_and_close_preserve_cleanup_policy(self):
+        self.assert_shutdown(flush_error=True, close_error=True)
+
+    def test_close_failure_preserves_cleanup_policy(self):
+        self.assert_shutdown(close_error=True)
+
+    def test_failed_flush_can_be_followed_by_new_round(self):
+        with self.shutdown_environment() as env:
+            first, second = env.archives
+            first.flush_error = OSError("SYNTHETIC_SHUTDOWN_FLUSH")
+            env.module.end_round_log_archive()
+            self.assertIsNone(env.module._round_log_state)
+            with patch.object(env.module, "end_round_log_archive", wraps=env.module.end_round_log_archive) as end:
+                env.module.start_round_log_archive("synthetic-restart", root_dir=env.root,
+                                                  now=datetime(2026, 9, 22, 12))
+            end.assert_not_called()
+            self.assertIs(env.module._round_log_state["file"], second)
+            self.assertEqual(env.module._round_log_state["round_id"], "synthetic-restart")
+            env.module.end_round_log_archive(status="ok")
+            self.assertEqual((first.close_calls, second.close_calls), (1, 1), "BOTH_CLOSE_ATTEMPTS")
+            self.assertIs(env.sys.stdout, env.stdout)
+            self.assertIs(env.sys.stderr, env.stderr)
+            self.assertIsNone(env.module._round_log_state)
+
+    def test_end_marker_error_is_not_swallowed_by_cleanup(self):
+        with self.shutdown_environment() as env:
+            original = RuntimeError("SYNTHETIC_END_MARKER")
+            env.marker.side_effect = original
+            archive = env.archives[0]
+            archive.flush_error = OSError("SYNTHETIC_SHUTDOWN_FLUSH")
+            archive.close_error = OSError("SYNTHETIC_SHUTDOWN_CLOSE")
+            with self.assertRaises(RuntimeError) as caught:
+                env.module.end_round_log_archive()
+            self.assertIs(caught.exception, original, "END_MARKER_ERROR_IDENTITY")
+            self.assertEqual(archive.close_calls, 1, "CLOSE_ATTEMPT_AFTER_FLUSH")
+            self.assertIs(env.sys.stdout, env.stdout)
+            self.assertIs(env.sys.stderr, env.stderr)
+            self.assertIsNone(env.module._round_log_state)
+
+    def mutated_shutdown(self, kind):
+        import log_utils
+
+        source = inspect.getsource(log_utils.end_round_log_archive)
+        tree = ast.parse(textwrap.dedent(source))
+        original = ast.dump(tree)
+        function = tree.body[0]
+        blocks = [n for n in function.body if isinstance(n, ast.Try) and n.finalbody]
+        self.assertEqual(len(blocks), 1, "mutation_shutdown_block_match")
+        cleanup = blocks[0].finalbody
+        flushes = [n for n in cleanup if isinstance(n, ast.Try)
+                   and ast.unparse(n.body[0]) == "state['file'].flush()"]
+        closes = [n for n in cleanup if isinstance(n, ast.Try)
+                  and ast.unparse(n.body[0]) == "state['file'].close()"]
+        self.assertEqual(len(flushes), 1, "mutation_flush_match")
+        self.assertEqual(len(closes), 1, "mutation_close_match")
+        flush, close = flushes[0], closes[0]
+        self.assertEqual(len(flush.body), 1)
+        self.assertEqual(len(close.body), 1)
+        matches = 0
+        if kind == "shared_try":
+            flush.body.extend(close.body)
+            cleanup.remove(close)
+            matches = 1
+        elif kind == "restore_after_flush":
+            restores = [n for n in cleanup if isinstance(n, ast.Assign)
+                        and ast.unparse(n.targets[0]) in {"sys.stdout", "sys.stderr"}]
+            self.assertEqual(len(restores), 2, "mutation_saved_stream_pair")
+            for node in restores:
+                cleanup.remove(node)
+            flush.body.extend(restores)
+            matches = 1
+        self.assertEqual(matches, 1, "mutation_exact_match")
+        ast.fix_missing_locations(tree)
+        self.assertNotEqual(ast.dump(tree), original, "mutation_ast_changed")
+        changed = ast.unparse(tree)
+        self.assertNotEqual(changed, ast.unparse(ast.parse(source)), "mutation_source_changed")
+        compiled = compile(changed, "<round-shutdown-mutation>", "exec")
+        namespace = dict(log_utils.__dict__)
+        exec(compiled, namespace)
+        candidate = namespace[function.name]
+        result = FunctionType(candidate.__code__, log_utils.__dict__, candidate.__name__, candidate.__defaults__)
+        result.__kwdefaults__ = candidate.__kwdefaults__
+        self.mutation_evidence = dict(kind=kind, matches=matches, changed=True, compiled=True)
+        return result
+
+    def test_mutation_shared_flush_close_try_is_rejected(self):
+        changed = self.mutated_shutdown("shared_try")
+        with self.assertRaisesRegex(AssertionError, "CLOSE_ATTEMPT_AFTER_FLUSH"):
+            self.assert_shutdown(changed, flush_error=True)
+
+    def test_mutation_restoration_after_flush_is_rejected(self):
+        changed = self.mutated_shutdown("restore_after_flush")
+        with self.assertRaisesRegex(AssertionError, "RESTORE_SAVED_STDOUT"):
+            self.assert_shutdown(changed, flush_error=True)
+
+
 if __name__ == "__main__":
     unittest.main()
