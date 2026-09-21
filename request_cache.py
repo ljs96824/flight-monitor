@@ -1019,8 +1019,8 @@ def cached_fetch(
             "retry_count": retry_count,
             **_source_exception_metadata(exc),
         }
-        _archive_listing_result(source_name, key, result)
         _store_round_only_result(key, result, "round_failed")
+        _archive_listing_result(source_name, key, result)
         safe_log(
             f"[采集失败入池] 源={source_name} 航线={key[1]}->{key[2]} "
             f"日期={key[3]} 重试={retry_count} 原因={result['error']}"
@@ -1031,8 +1031,8 @@ def cached_fetch(
     quota_reason = _quota_failure_reason(result)
     if quota_reason:
         _source_circuit_breakers[source_name] = quota_reason
-        _archive_listing_result(source_name, key, result)
         _store_round_only_result(key, result, "round_failed")
+        _archive_listing_result(source_name, key, result)
         safe_log(f"[源熔断] 源={source_name} 原因={quota_reason} 生效范围=本进程")
         return returned(copy.deepcopy(result), "fresh")
     collected_at = str(result.get("collected_at") or datetime.now().isoformat(timespec="seconds"))
@@ -1049,7 +1049,6 @@ def cached_fetch(
     _record_observations_after_fetch(source, key, result, cabin_class)
     stored = copy.deepcopy(result)
     cache_status = _result_cache_status(stored)
-    _archive_listing_result(source_name, key, stored)
     if cache_status == "persistent":
         _request_cache[key] = {
             "fetched_at": datetime.now().isoformat(timespec="seconds"),
@@ -1062,6 +1061,7 @@ def cached_fetch(
             _write_persistent(key, stored, cache_dir, source=source)
     else:
         _store_round_only_result(key, stored, cache_status)
+    _archive_listing_result(source_name, key, stored)
     fresh_result = copy.deepcopy(result)
     return returned(fresh_result, "fresh")
 
