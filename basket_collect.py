@@ -716,6 +716,7 @@ def _run_basket_locked(
     research_state_conflict = False
     research_progress_applied = False
     outcome_reads = 0
+    body_completed = False
     try:
         round_context_tokens = set_current_round(round_id, db_path=db_path)
         plan = build_collection_plan(
@@ -863,6 +864,7 @@ def _run_basket_locked(
             f"[篮子结果复用] queues={queues} outcome_reads={outcome_reads} "
             "second_cache_reads=0"
         )
+        body_completed = True
     finally:
         if round_context_tokens is not None:
             reset_current_round(round_context_tokens)
@@ -876,7 +878,9 @@ def _run_basket_locked(
             deactivate_collection_plan()
 
         round_status = (
-            "ok"
+            "interrupted"
+            if not body_completed
+            else "ok"
             if failed == 0 and not ledger_degraded and not research_state_conflict
             else "partial"
         )
