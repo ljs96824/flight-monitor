@@ -7,8 +7,10 @@ import tempfile
 import textwrap
 import threading
 import unittest
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
+from types import FunctionType, SimpleNamespace
 from unittest.mock import patch
 
 
@@ -245,6 +247,220 @@ class RoundEvidenceBoundaryTest(unittest.TestCase):
         changed = self.mutated("unescape_payload_newline")
         with self.assertRaisesRegex(AssertionError, "payload_lf_count"):
             self.assert_payload_newline(changed)
+
+
+class _StartMarkerStream(io.StringIO):
+    def __init__(self, fault=None, close_error=None):
+        super().__init__()
+        self.fault = fault
+        self.failure = OSError("SYNTHETIC_START_" + str(fault).upper())
+        self.close_error = close_error
+        self.marker_hits = 0
+        self.flush_calls = 0
+        self.close_calls = 0
+
+    def write(self, value):
+        if "[轮档开始]" in value:
+            self.marker_hits += 1
+            if self.fault == "write":
+                raise self.failure
+        return super().write(value)
+
+    def flush(self):
+        self.flush_calls += 1
+        if self.fault == "flush" and self.marker_hits:
+            raise self.failure
+        return super().flush()
+
+    def close(self):
+        self.close_calls += 1
+        if self.close_error is not None:
+            raise self.close_error
+        return super().close()
+
+
+class RoundArchiveStartRollbackTest(unittest.TestCase):
+    @contextmanager
+    def isolated(self, streams, *, existing_tee=False):
+        import log_utils
+
+        real_pair = (sys.stdout, sys.stderr)
+        console, error_console, run_file = io.StringIO(), io.StringIO(), io.StringIO()
+        stdout = log_utils._Utf8TeeStream(console, run_file, threading.RLock()) if existing_tee else console
+        private_sys = SimpleNamespace(stdout=stdout, stderr=error_console,
+                                      __stdout__=io.StringIO(), __stderr__=io.StringIO())
+        messages = []
+
+        def private_print(*args, **kwargs):
+            messages.append(args)
+            return print(*args, file=private_sys.stdout, **kwargs)
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            with patch.object(log_utils, "sys", private_sys), patch.object(log_utils, "_round_log_state", None), \
+                    patch.object(log_utils, "print", private_print, create=True), \
+                    patch.object(Path, "open", side_effect=streams) as opened:
+                env = SimpleNamespace(module=log_utils, sys=private_sys, root=Path(tmp), opened=opened,
+                                      stdout=stdout, stderr=error_console, messages=messages, run_file=run_file)
+                try:
+                    yield env
+                finally:
+                    # Bypass injected close failures only when disposing synthetic test buffers.
+                    for stream in streams:
+                        io.StringIO.close(stream)
+                    for stream in (console, error_console, run_file, private_sys.__stdout__, private_sys.__stderr__):
+                        io.StringIO.close(stream)
+                    self.assertIs(sys.stdout, real_pair[0], "REAL_STDOUT_UNCHANGED")
+                    self.assertIs(sys.stderr, real_pair[1], "REAL_STDERR_UNCHANGED")
+
+    def start(self, env, function=None, round_id="synthetic-start"):
+        return (function or env.module.start_round_log_archive)(
+            round_id, root_dir=env.root, now=datetime(2026, 9, 21, 12))
+
+    def assert_rollback(self, function=None, *, fault="write", existing_tee=False, close_error=None):
+        archive = _StartMarkerStream(fault, close_error)
+        with self.isolated([archive], existing_tee=existing_tee) as env:
+            with self.assertRaises(OSError, msg="ORIGINAL_START_ERROR_MUST_PROPAGATE") as caught:
+                self.start(env, function)
+            self.assertIs(caught.exception, archive.failure, "ORIGINAL_START_ERROR_IDENTITY")
+            self.assertEqual(str(caught.exception), "SYNTHETIC_START_" + fault.upper())
+            self.assertEqual(archive.marker_hits, 1, "START_MARKER_INJECTION_HIT")
+            self.assertEqual(archive.flush_calls, int(fault == "flush"), "START_FAILURE_PHASE")
+            self.assertIs(env.sys.stdout, env.stdout, "RESTORE_SAVED_STDOUT")
+            self.assertIs(env.sys.stderr, env.stderr, "RESTORE_SAVED_STDERR")
+            self.assertIsNone(env.module._round_log_state, "CLEAR_NEW_ROUND_STATE")
+            self.assertEqual(archive.close_calls, 1, "ATTEMPT_ARCHIVE_CLOSE")
+            env.opened.assert_called_once_with("a", encoding="utf-8", errors="strict", newline="", buffering=1)
+            self.assertEqual(archive.closed, close_error is None)
+            if existing_tee:
+                self.assertIsInstance(env.sys.stdout, env.module._Utf8TeeStream)
+                self.assertIsNot(env.sys.stdout, env.sys.__stdout__)
+                self.assertFalse(env.run_file.closed, "KEEP_PRIOR_RUN_TEE")
+
+    def test_normal_start_end_restores_streams_and_closes_once(self):
+        archive = _StartMarkerStream()
+        with self.isolated([archive]) as env:
+            path = self.start(env)
+            self.assertEqual(path, env.root / "20260921.log")
+            self.assertIs(env.module._round_log_state["file"], archive)
+            self.assertIsInstance(env.sys.stdout, env.module._Utf8TeeStream)
+            env.module.end_round_log_archive(status="ok")
+            self.assertIs(env.sys.stdout, env.stdout)
+            self.assertIs(env.sys.stderr, env.stderr)
+            self.assertIsNone(env.module._round_log_state)
+            self.assertEqual(archive.close_calls, 1)
+            self.assertTrue(archive.closed)
+
+    def test_start_write_failure_rolls_back(self):
+        self.assert_rollback(fault="write")
+
+    def test_start_flush_failure_rolls_back(self):
+        self.assert_rollback(fault="flush")
+
+    def test_start_failure_restores_existing_run_tee(self):
+        self.assert_rollback(existing_tee=True)
+
+    def test_close_failure_does_not_replace_start_failure(self):
+        for close_error in (OSError("SYNTHETIC_CLOSE"), KeyboardInterrupt("SYNTHETIC_CLOSE_INTERRUPT")):
+            with self.subTest(close_error=type(close_error).__name__):
+                self.assert_rollback(close_error=close_error)
+
+    def test_failed_start_can_be_followed_by_successful_start(self):
+        failed, good = _StartMarkerStream("write"), _StartMarkerStream()
+        with self.isolated([failed, good]) as env:
+            with self.assertRaises(OSError) as caught:
+                self.start(env)
+            self.assertIs(caught.exception, failed.failure)
+            with patch.object(env.module, "end_round_log_archive", wraps=env.module.end_round_log_archive) as end:
+                self.start(env, round_id="synthetic-restart")
+            end.assert_not_called()
+            self.assertIs(env.module._round_log_state["file"], good)
+            self.assertEqual(env.module._round_log_state["round_id"], "synthetic-restart")
+            env.module.end_round_log_archive()
+            self.assertIs(env.sys.stdout, env.stdout)
+            self.assertIs(env.sys.stderr, env.stderr)
+            self.assertIsNone(env.module._round_log_state)
+            self.assertEqual((failed.close_calls, good.close_calls), (1, 1))
+
+    def test_new_start_failure_does_not_revive_previous_round(self):
+        old, failed = _StartMarkerStream(), _StartMarkerStream("write")
+        with self.isolated([old, failed], existing_tee=True) as env:
+            self.start(env, round_id="synthetic-old")
+            old_state = env.module._round_log_state
+            with patch.object(env.module, "end_round_log_archive", wraps=env.module.end_round_log_archive) as end:
+                with self.assertRaises(OSError) as caught:
+                    self.start(env, round_id="synthetic-new")
+            self.assertIs(caught.exception, failed.failure)
+            end.assert_called_once_with(status="interrupted")
+            self.assertEqual(old.close_calls, 1)
+            self.assertTrue(old.closed)
+            self.assertIs(env.sys.stdout, env.stdout, "RESTORE_POST_END_STREAM")
+            self.assertIs(env.sys.stderr, env.stderr)
+            self.assertIsNone(env.module._round_log_state, "NO_OLD_ROUND_REVIVAL")
+            self.assertIsNot(env.module._round_log_state, old_state)
+            self.assertEqual(failed.close_calls, 1)
+
+    def mutated_start(self, kind):
+        import log_utils
+
+        source = inspect.getsource(log_utils.start_round_log_archive)
+        tree = ast.parse(textwrap.dedent(source))
+        original = ast.dump(tree)
+        function = tree.body[0]
+        blocks = [node for node in function.body if isinstance(node, ast.Try)
+                  and any(isinstance(n, ast.Call) and ast.unparse(n.func) == "safe_log" for n in ast.walk(node))]
+        self.assertEqual(len(blocks), 1, "mutation_start_block_match")
+        block = blocks[0]
+        self.assertEqual(len(block.handlers), 1)
+        rollback = block.handlers[0]
+        matches = 0
+        if kind == "no_rollback":
+            function.body[function.body.index(block):function.body.index(block) + 1] = block.body
+            matches = 1
+        else:
+            for node in list(rollback.body):
+                if kind == "wrong_stdout" and isinstance(node, ast.Assign) and ast.unparse(node.targets[0]) == "sys.stdout":
+                    self.assertEqual(ast.unparse(node.value), "original_stdout")
+                    node.value = ast.Attribute(value=ast.Name(id="sys", ctx=ast.Load()), attr="__stdout__", ctx=ast.Load())
+                    matches += 1
+                elif kind == "swallow" and isinstance(node, ast.Raise) and node.exc is None:
+                    rollback.body.remove(node)
+                    matches += 1
+                elif kind == "stale_state" and isinstance(node, ast.Assign) and ast.unparse(node.targets[0]) == "_round_log_state":
+                    self.assertIsNone(node.value.value)
+                    rollback.body.remove(node)
+                    matches += 1
+        self.assertEqual(matches, 1, "mutation_exact_match")
+        ast.fix_missing_locations(tree)
+        self.assertNotEqual(ast.dump(tree), original, "mutation_ast_changed")
+        changed = ast.unparse(tree)
+        self.assertNotEqual(changed, ast.unparse(ast.parse(source)), "mutation_source_changed")
+        compiled = compile(changed, "<round-start-mutation>", "exec")
+        namespace = dict(log_utils.__dict__)
+        exec(compiled, namespace)
+        candidate = namespace[function.name]
+        candidate = FunctionType(candidate.__code__, log_utils.__dict__, candidate.__name__, candidate.__defaults__)
+        candidate.__kwdefaults__ = namespace[function.name].__kwdefaults__
+        return candidate
+
+    def test_mutation_missing_rollback_is_rejected(self):
+        changed = self.mutated_start("no_rollback")
+        with self.assertRaisesRegex(AssertionError, "RESTORE_SAVED_STDOUT"):
+            self.assert_rollback(changed)
+
+    def test_mutation_builtin_stdout_restore_is_rejected(self):
+        changed = self.mutated_start("wrong_stdout")
+        with self.assertRaisesRegex(AssertionError, "RESTORE_SAVED_STDOUT"):
+            self.assert_rollback(changed, existing_tee=True)
+
+    def test_mutation_swallowed_start_error_is_rejected(self):
+        changed = self.mutated_start("swallow")
+        with self.assertRaisesRegex(AssertionError, "ORIGINAL_START_ERROR_MUST_PROPAGATE"):
+            self.assert_rollback(changed)
+
+    def test_mutation_stale_round_state_is_rejected(self):
+        changed = self.mutated_start("stale_state")
+        with self.assertRaisesRegex(AssertionError, "CLEAR_NEW_ROUND_STATE"):
+            self.assert_rollback(changed)
 
 
 if __name__ == "__main__":
