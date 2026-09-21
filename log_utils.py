@@ -352,10 +352,21 @@ def start_round_log_archive(
         "round_id": str(round_id or "unknown"),
         "started_at": stamp.isoformat(timespec="seconds"),
     }
-    safe_log(
-        f"===== [轮档开始] round_id={_round_log_state['round_id']} "
-        f"started_at={_round_log_state['started_at']} ====="
-    )
+    try:
+        safe_log(
+            f"===== [轮档开始] round_id={_round_log_state['round_id']} "
+            f"started_at={_round_log_state['started_at']} ====="
+        )
+    except BaseException:
+        sys.stdout = original_stdout
+        sys.stderr = original_stderr
+        _round_log_state = None
+        try:
+            archive_file.close()
+        except BaseException:
+            # Cleanup must not replace the original start-marker failure.
+            pass
+        raise
     return path
 
 
