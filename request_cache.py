@@ -440,7 +440,7 @@ def _read_persistent_payload(key: tuple, cache_dir: Path | None = None) -> dict 
         return None
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         return None
     return payload if isinstance(payload, dict) else None
 
