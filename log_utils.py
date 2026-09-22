@@ -68,6 +68,9 @@ def _close_run_log() -> None:
         return
     try:
         state["file"].flush()
+    except Exception:
+        pass
+    try:
         state["file"].close()
     except Exception:
         pass
