@@ -222,6 +222,10 @@ def _basket_requests(state: dict) -> list[dict]:
     return requests
 
 
+class ResearchSubscriptionInputUnavailable(RuntimeError):
+    """Research cannot establish monitoring load from the subscription input."""
+
+
 def _load_active_subscriptions_for_research(
     path: str | Path,
     *,
@@ -229,10 +233,16 @@ def _load_active_subscriptions_for_research(
 ) -> list[dict]:
     target = Path(path)
     if not target.is_file():
-        return []
-    payload = read_json(target)
+        raise ResearchSubscriptionInputUnavailable(f"订阅输入不存在或不是文件: {target}")
+    try:
+        payload = read_json(target)
+    except JsonStoreReadError as exc:
+        cause = exc.__cause__ if exc.__cause__ is not None else exc
+        raise ResearchSubscriptionInputUnavailable(
+            f"订阅输入读取失败: {target} ({type(cause).__name__})"
+        ) from cause
     if not isinstance(payload, list):
-        raise ValueError("subscriptions.json 格式错误，应为订阅数组")
+        raise ResearchSubscriptionInputUnavailable(f"订阅输入为非数组载荷: {target}")
     active = []
     for item in payload:
         if not isinstance(item, dict):
@@ -412,10 +422,19 @@ def _prepare_research_basket(
 ) -> tuple[dict, list[dict], dict, dict]:
     subscriptions_path = Path(state_path).resolve().parent / "subscriptions.json"
     prices_path = Path(state_path).resolve().parent / "prices.db"
-    subscriptions = _load_active_subscriptions_for_research(
-        subscriptions_path,
-        today=today,
-    )
+    try:
+        subscriptions = _load_active_subscriptions_for_research(
+            subscriptions_path,
+            today=today,
+        )
+    except ResearchSubscriptionInputUnavailable as exc:
+        safe_log(f"[研究输入缺失] path={subscriptions_path} 原因={exc}")
+        return state, [], {
+            "ready": False,
+            "checks": {"subscription_input": False},
+            "missing": ["subscription_input"],
+            "reasons": {"subscription_input": str(exc)},
+        }, {"complete": False, "guard_triggered": False}
     staged_state = deepcopy(state)
     user_dates = active_user_monitor_dates(
         subscriptions,
