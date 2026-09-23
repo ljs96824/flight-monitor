@@ -98,6 +98,13 @@ def _indexing_noindex(response):
     return response
 
 
+@app.after_request
+def _sensitive_response_no_store(response):
+    if request.endpoint in {"subscription_list", "detail"}:
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 configure_session_security(app, logger=safe_log)
 install_csrf_protection(app, logger=safe_log)
 install_management_access(app)
