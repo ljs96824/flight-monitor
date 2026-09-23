@@ -52,7 +52,11 @@ from form_structure import (
 )
 from pricing import passenger_rate_sum
 
-from detail_access import canonical_detail_uuid, detail_token_authorized
+from detail_access import (
+    canonical_detail_uuid,
+    delivery_payload_with_detail_token,
+    detail_token_authorized,
+)
 from log_utils import safe_log
 from subscription_identity import subscription_id as stable_subscription_id
 from subscription_repository import (
@@ -74,6 +78,7 @@ from management_access import (
     clear_management_session,
     establish_management_session,
     install_management_access,
+    management_session_authorized,
     management_token_authorized,
 )
 
@@ -1037,13 +1042,24 @@ def _subscription_last_decision(sub: dict, index: int) -> str:
     return f"{decision}{price_text}" + (f" · {time_text}" if time_text else "")
 
 
-def build_subscription_list_items(subscriptions: list[dict]) -> list[dict]:
+def build_subscription_list_items(
+    subscriptions: list[dict], *, attach_detail_token: bool = False
+) -> list[dict]:
     items = []
     for index, sub in enumerate(subscriptions):
         route_type = _sub_value(sub, "route_type", "domestic")
         round_trip = bool(sub.get("round_trip") or _sub_value(sub, "trip_type") == "round_trip")
         subscription_id = stable_subscription_id(sub)
         detail_subscription_id = canonical_detail_uuid(subscription_id)
+        detail_url = (
+            url_for("detail", sub=detail_subscription_id)
+            if detail_subscription_id
+            else ""
+        )
+        if attach_detail_token:
+            detail_url = delivery_payload_with_detail_token(
+                {"detail_url": detail_url}
+            )["detail_url"]
         items.append(
             {
                 "index": index,
@@ -1056,11 +1072,7 @@ def build_subscription_list_items(subscriptions: list[dict]) -> list[dict]:
                 "status": sub.get("status", "active"),
                 "last_decision": _subscription_last_decision(sub, index),
                 "scenario": _subscription_scenario_text(sub),
-                "detail_url": (
-                    url_for("detail", sub=detail_subscription_id)
-                    if detail_subscription_id
-                    else ""
-                ),
+                "detail_url": detail_url,
                 "delete_url": (
                     url_for(
                         "delete_subscription",
@@ -2883,7 +2895,9 @@ def subscription_list():
         return _identity_migration_required_response(exc)
     return render_template_string(
         LIST_TEMPLATE,
-        items=build_subscription_list_items(subscriptions),
+        items=build_subscription_list_items(
+            subscriptions, attach_detail_token=management_session_authorized()
+        ),
     )
 
 
