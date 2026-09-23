@@ -105,6 +105,13 @@ def _sensitive_response_no_store(response):
     return response
 
 
+@app.after_request
+def _detail_no_referrer(response):
+    if request.endpoint == "detail":
+        response.headers["Referrer-Policy"] = "no-referrer"
+    return response
+
+
 configure_session_security(app, logger=safe_log)
 install_csrf_protection(app, logger=safe_log)
 install_management_access(app)
