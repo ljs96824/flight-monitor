@@ -177,6 +177,7 @@ def generate_report(
             "degraded_excluded": degraded,
         }
 
+    lineage_complete = lineage_complete_for_cells(included, as_of_day=as_of)
     depart_dates = sorted({str(item["depart_date"]) for item in included})
     rows = load_route_observations(db_path, route=route, airport_pair=airport_pair)
     route_codes = _route_codes(rows)
@@ -226,7 +227,7 @@ def generate_report(
                 regime,
                 as_of,
             ),
-            lineage_complete=lineage_complete_for_cells(included, as_of_day=as_of),
+            lineage_complete=lineage_complete,
             regime=regime,
         )
         reliability = decision["overall_reliability"]
