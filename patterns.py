@@ -126,8 +126,10 @@ def build_route_patterns(
     airport_pair=None,
     min_n=MIN_PATTERN_N,
     as_of_day=None,
+    rows=None,
 ):
-    rows = load_route_observations(db_path, route=route, airport_pair=airport_pair)
+    if rows is None:
+        rows = load_route_observations(db_path, route=route, airport_pair=airport_pair)
     if as_of_day is not None:
         rows = [row for row in rows if _observed_day(row) <= str(as_of_day)]
     return build_patterns(rows, min_n=min_n)
