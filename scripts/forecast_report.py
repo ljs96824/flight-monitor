@@ -199,6 +199,7 @@ def generate_report(
         route=route,
         airport_pair=airport_pair,
         as_of_day=as_of,
+        rows=rows,
     )
 
     forecasts = {}
