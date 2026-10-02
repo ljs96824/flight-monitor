@@ -493,29 +493,30 @@ class PanelReuseTest(unittest.TestCase):
     def test_existing_calendar_keeps_nearby_uncollected_markers(self):
         import notifier
 
-        calendar = notifier._payload_price_calendar(
-            {
-                "origin": "上海",
-                "destination": "大阪",
-                "price_calendar": {
-                    "rows": [
+        with patch("notifier.shanghai_today", return_value=ANCHOR_TODAY):
+            calendar = notifier._payload_price_calendar(
+                {
+                    "origin": "上海",
+                    "destination": "大阪",
+                    "price_calendar": {
+                        "rows": [
+                            {
+                                "date": "2026-10-01",
+                                "min_price": 1000,
+                                "selected": True,
+                            }
+                        ],
+                    },
+                    "nearby_dates": [
                         {
-                            "date": "2026-10-01",
-                            "min_price": 1000,
-                            "selected": True,
+                            "date": "2026-10-02",
+                            "min_price": None,
+                            "today_uncollected": True,
                         }
                     ],
                 },
-                "nearby_dates": [
-                    {
-                        "date": "2026-10-02",
-                        "min_price": None,
-                        "today_uncollected": True,
-                    }
-                ],
-            },
-            {},
-        )
+                {},
+            )
 
         self.assertEqual(
             calendar["uncollected_rows"],
