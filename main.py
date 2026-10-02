@@ -1202,7 +1202,7 @@ def _deliver_notification(sub: dict, route: str, message_kwargs: dict) -> bool:
             print("[推送] PushPlus短版渲染完成，开始发送")
             sent = send(
                 push_content,
-                title=f"【{payload.get('push_type', '价格提醒')}】{payload.get('route', route)}",
+                title=f"【{payload.get('push_type', '价格提醒')}】{payload.get('route', route)}" + (f" {payload['phase_label']}" if payload.get("phase_label") else ""),
             ) or sent
             print(f"[推送] PushPlus发送完成: sent={sent}")
 
@@ -1211,7 +1211,7 @@ def _deliver_notification(sub: dict, route: str, message_kwargs: dict) -> bool:
             push_content = render_pushplus_sections(delivery_payload)
             sent = send(
                 push_content,
-                title=f"【{payload.get('push_type', '价格提醒')}】{payload.get('route', route)}",
+                title=f"【{payload.get('push_type', '价格提醒')}】{payload.get('route', route)}" + (f" {payload['phase_label']}" if payload.get("phase_label") else ""),
             ) or sent
             print(f"[推送] 兜底PushPlus发送完成: sent={sent}")
 
@@ -1871,6 +1871,161 @@ def process_subscription(
         singleflight.release()
 
 
+def _return_phase_context(sub: dict, today: date) -> dict | None:
+    hard = sub.get("hard_constraints") or {}
+    constraints = sub.get("constraints") or {}
+    if (
+        not _as_bool(sub.get("round_trip", hard.get("round_trip", False)))
+        or any(_as_bool(item.get("same_day_round_trip", False)) for item in (sub, hard, constraints))
+        or sub.get("date_flexibility", 0) not in (0, "0", None)
+    ):
+        return None
+    try:
+        outbound = date.fromisoformat(sub["depart_date"])
+        returning = date.fromisoformat(sub.get("return_date") or hard.get("return_date"))
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not outbound < today <= returning:
+        return None
+    return {
+        "processing_phase": "return_only",
+        "original_outbound_date": outbound.isoformat(),
+        "phase_label": f"返程(原去程计划出发日 {outbound:%m-%d} 已过)",
+        "origin": sub["destination"], "destination": sub["origin"],
+        "depart_date": returning.isoformat(), "return_date": None,
+        "round_trip": False,
+    }
+
+
+def _return_phase_preferences(sub: dict, context: dict) -> dict:
+    import copy
+
+    view = copy.deepcopy(sub)
+    # The original subscription remains the identity/fingerprint authority.
+    containers = ("hard_constraints", "constraints", "soft_preferences", "preferences", "basic", "advanced_rules")
+    pending = [view]
+    amounts = {"budget", "max_budget", "max_price", "target_price", "ideal_price", "target_price_effective"}
+    while pending:
+        item = pending.pop()
+        for key in amounts:
+            item.pop(key, None)
+        for key in ("budget_mode", "max_budget_mode", "target_price_mode"):
+            item[key] = "none"
+        item["budget_strategy"] = "explicit"
+        pending.extend(item[key] for key in containers if isinstance(item.get(key), dict))
+    view.update(context)
+    view.update({
+        "origin_city": sub.get("destination_city"), "destination_city": sub.get("origin_city"),
+        "origin_type": sub.get("destination_type"), "destination_type": sub.get("origin_type"),
+        "origin_airports": sub.get("destination_airports"),
+        "destination_airports": sub.get("origin_airports"),
+        "origin_airports_active": _subscription_airports(sub, "destination_airports_active", "destination_airports", "destination"),
+        "destination_airports_active": _subscription_airports(sub, "origin_airports_active", "origin_airports", "origin"),
+        "date_flexibility": sub.get("return_date_flexibility", 0),
+    })
+    preferences = subscription_preferences(view)
+    soft = view.get("soft_preferences") or {}
+    for key in ("time_preference_mode", "time_preference", "departure_time_windows", "arrival_time_windows",
+                "return_departure_time_windows", "return_arrival_time_windows"):
+        if key in soft:
+            preferences[key] = copy.deepcopy(soft[key])
+    constraints = copy.deepcopy(view.get("hard_constraints") or {})
+    for item in (preferences, constraints):
+        item.update({
+            "direction": "return", "round_trip": False,
+            "departure_slots": sub.get("return_departure_slots"),
+            "arrival_slots": sub.get("return_arrival_slots"),
+            "preferred_departure_slots": sub.get("return_departure_slots"),
+            "preferred_arrival_slots": sub.get("return_arrival_slots"),
+            "target_price_mode": "none", "budget_mode": "none", "max_budget_mode": "none",
+            "budget_strategy": "explicit",
+        })
+    view["hard_constraints"] = constraints
+    return {"preferences": preferences, "constraints": constraints, "view": view}
+
+
+def _process_return_phase(sub, context, agg, constraint_fp, route_type, request_passengers,
+                          collection_options, web_trigger=False) -> bool:
+    import copy
+
+    projected = _return_phase_preferences(sub, context)
+    view = projected["view"]
+    origins, destinations = view["origin_airports_active"], view["destination_airports_active"]
+    depart_date = context["depart_date"]
+    route = f"{context['origin']}-{context['destination']}"
+    data = collect_for_airport_matrix(
+        agg, origins, destinations, depart_date,
+        cabin_classes=sub.get("cabin_classes"), route_type=route_type, passengers=request_passengers,
+    )
+    source_errors = _source_error_items(agg, data)
+    data = copy.deepcopy(data or {})
+    collected_at = data.get("collected_at") or datetime.now().isoformat(timespec="seconds")
+    normalized = [
+        _normalize_detail_flight(item, item.get("data_source") or item.get("source"))
+        for item in data.get("flights", [])
+    ]
+    for item in normalized:
+        item["collected_at"] = item.get("collected_at") or collected_at
+    flights = [item for item in _filter_data_to_airports({"flights": normalized}, origins, destinations).get("flights", [])
+               if _valid_price(item.get("price"))]
+    if not flights:
+        reason = "返程采集未返回有效航班"
+        safe_log(f"[返程采集失败] 日期={depart_date} 原因={reason}")
+        _log_subscription_failure(sub, source_errors=source_errors, reason=reason)
+        if web_trigger:
+            _notify_subscription_failure(sub, source_errors=source_errors, reason=reason)
+        return False
+    data["flights"], data["total_count"] = flights, len(flights)
+    previous_prices = get_previous_snapshot_prices(route, depart_date, constraint_fingerprint=constraint_fp)
+    for item in flights:
+        if item.get("flight_combo") in previous_prices:
+            item["previous_price"] = previous_prices[item["flight_combo"]]
+    save_raw_response(route, depart_date, data)
+    analysis = analyze_all_flights(
+        flights, data.get("price_insights"), mode=sub.get("mode", "balanced"), priorities=sub.get("priorities"),
+        user_preferences=projected["preferences"], hard_constraints=projected["constraints"],
+    )
+    save_flight_details(route, depart_date, _constraint_history_flights(analysis), constraint_fingerprint=constraint_fp)
+    identity = _subscription_identifier(sub, route)
+    since = get_constraint_epoch_boundary(route, depart_date, None, constraint_fp, subscription_id=identity)
+    limit = get_constraint_history_limit(route, depart_date, None, constraint_fp, subscription_id=identity, default_limit=14)
+    history = get_lowest_price_history(route, depart_date, limit=limit, constraint_fingerprint=constraint_fp,
+                                       include_metadata=True, since=since)
+    days = (date.fromisoformat(depart_date) - _shanghai_today()).days
+    current = (analysis.get("price_range") or [0])[0]
+    nearby = collect_nearby_dates(agg, view, cabin_classes=_reference_cabin_classes(sub), target_min_price=current,
+                                  fresh_scope=collection_options.get("fresh_scope", "primary_only"))
+    analysis.update({
+        **context, "days_to_dept": days, "collected_at": collected_at,
+        "hard_constraints": projected["constraints"], "soft_preferences": view.get("soft_preferences", {}),
+        "notification_goals": sub.get("notification_goals", {}),
+        "source_stats": data.get("source_stats", {}), "source_errors": source_errors,
+        "collection_failures": [], "collection_freshness": data.get("collection_freshness", []),
+        "constraint_fingerprint": constraint_fp, "constraint_price_history": history,
+        "nearby_dates": nearby, "dual_source_price_anomalies": data.get("dual_source_price_anomalies", []),
+    })
+    route_info = {
+        **view, **context, "route_type": route_type,
+        "constraint_fingerprint": constraint_fp, "lowest_price_history": history,
+        "previous_prices": previous_prices, "source_stats": data.get("source_stats", {}),
+        "source_errors": source_errors, "collected_at": collected_at, "nearby_dates": nearby,
+        "data_freshness": {"legs": [{**item, "direction": "返程"} for item in data.get("collection_freshness", [])
+                                      if isinstance(item, dict)]},
+    }
+    route_info["tcurve"] = _notification_tcurve(route_info)
+    forecast = _notification_forecast(route_info)
+    if forecast.get("eligible"):
+        route_info["forecast"] = forecast
+    route_info["provenance_context"] = _notification_provenance_context(route_info)
+    delivered = _deliver_notification(sub, route, {
+        "analysis_result": analysis, "route_info": route_info,
+        "source_stats": data.get("source_stats"), "price_insights": data.get("price_insights"),
+    })
+    if not delivered:
+        _log_subscription_failure(sub, reason="返程通知未发送成功")
+    return delivered
+
+
 def _process_subscription_locked(
     sub: dict,
     ensure_db: bool = True,
@@ -1987,6 +2142,14 @@ def _process_subscription_locked(
         print(f"[机场调试] 全部目的地机场={sub.get('destination_airports')}")
         print(f"[机场调试] 激活的目的地机场={sub.get('destination_airports_active')}")
         print(f"[机场调试] 实际采集用的机场={active_dests}")
+        return_context = _return_phase_context(sub, _shanghai_today())
+        if return_context is not None:
+            completed = _process_return_phase(
+                sub, return_context, agg, constraint_fp, route_type, request_passengers,
+                collection_options, web_trigger=web_trigger,
+            )
+            round_status = "ok" if completed else "failed"
+            return completed
         data = collect_for_airport_matrix(
             agg,
             active_origins,
