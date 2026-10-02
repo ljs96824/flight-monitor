@@ -91,7 +91,10 @@ def make_snapshot(root):
         ledger("2026-09-13","juhe","success","user-only",dep=DEPARTURES[1],role="user_monitor")
         ledger("2026-08-30","juhe","running","outside",dep="2026-10-11",count=0)
         db.commit()
-    (root/"snapshot_manifest.json").write_text(json.dumps({"label":"synthetic-contract"}),encoding="utf-8")
+    snapshot_sha = hashlib.sha256((root/"observations.sqlite3").read_bytes()).hexdigest()
+    (root/"snapshot_manifest.json").write_text(json.dumps({
+        "label":"synthetic-contract", "snapshot_sha256":{"observations.sqlite3":snapshot_sha}
+    }),encoding="utf-8")
     return hashlib.sha256((root/"snapshot_manifest.json").read_bytes()).hexdigest()
 
 
@@ -304,6 +307,12 @@ class TrajectoryReportTest(unittest.TestCase):
         with closing(sqlite3.connect(self.snapshot/"observations.sqlite3")) as db:
             db.execute("ALTER TABLE observations RENAME COLUMN id TO hidden_id")
             db.commit()
+        manifest = self.snapshot/"snapshot_manifest.json"
+        sealed = json.loads(manifest.read_bytes())
+        sealed["snapshot_sha256"]["observations.sqlite3"] = hashlib.sha256(
+            (self.snapshot/"observations.sqlite3").read_bytes()).hexdigest()
+        manifest.write_text(json.dumps(sealed),encoding="utf-8")
+        self.sha = hashlib.sha256(manifest.read_bytes()).hexdigest()
         _,data=self.invoke()
         self.assertEqual(self.row(data,"2026-08-12")["minimum_tuples"],[])
         self.assertIn("证据不足",self.row(data,"2026-08-12")["minimum_evidence"])
