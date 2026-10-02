@@ -32,10 +32,21 @@ def _snapshot_db(db_path, expected_sha):
     supplied = str(expected_sha).lower()
     if len(supplied) != 64 or any(c not in "0123456789abcdef" for c in supplied):
         raise ValueError("manifest SHA-256 格式无效")
-    actual = hashlib.sha256(manifest.read_bytes()).hexdigest()
+    manifest_bytes = manifest.read_bytes()
+    actual = hashlib.sha256(manifest_bytes).hexdigest()
     if actual != supplied:
         raise ValueError("snapshot manifest SHA-256 不匹配")
-    return resolve_observations_db(candidate)
+    metadata = json.loads(manifest_bytes)
+    hashes = metadata.get("snapshot_sha256") if isinstance(metadata, dict) else None
+    expected_db = hashes.get("observations.sqlite3") if isinstance(hashes, dict) else None
+    if (not isinstance(expected_db, str) or len(expected_db) != 64
+            or any(c not in "0123456789abcdef" for c in expected_db.lower())):
+        raise ValueError("snapshot database SHA-256 missing or invalid: observations.sqlite3")
+    db = resolve_observations_db(candidate)
+    database_sha = hashlib.sha256(db.read_bytes()).hexdigest()
+    if database_sha != expected_db.lower():
+        raise ValueError("snapshot database SHA-256 mismatch: observations.sqlite3")
+    return db
 
 
 def _load_evidence(db, departures):
