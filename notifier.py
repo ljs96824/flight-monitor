@@ -4883,7 +4883,7 @@ def _pushplus_plan_flight_label(plan: dict, direction: str) -> str:
     match = re.search(r"^(去程|返程):([^｜\n]+)", line)
     if match:
         return f"{match.group(1)} {match.group(2).strip()}"
-    return "去程" if direction in {"outbound", "main"} else "返程"
+    return _single_plan_direction_label(plan) if direction in {"outbound", "main"} else "返程"
 
 
 
@@ -5053,7 +5053,9 @@ def _payload_combo_plan(combo: dict, route_info: dict, index: int, variant: str)
 
 
 def _payload_single_plan(flight: dict, route_info: dict, analysis_result: dict, index: int, variant: str) -> dict:
-    source_channel_rows = _payload_source_channel_rows(flight, "main")
+    return_only = route_info.get("processing_phase") == "return_only"
+    direction_label = _single_plan_direction_label(route_info)
+    source_channel_rows = _payload_source_channel_rows(flight, "return" if return_only else "main")
     plan = {
         "label": f"方案{chr(65 + index)}",
         "variant": variant,
@@ -5061,15 +5063,18 @@ def _payload_single_plan(flight: dict, route_info: dict, analysis_result: dict, 
         "price": _to_float(flight.get("price")),
         "estimated_price": _to_float((flight.get("price_estimate") or {}).get("transaction_price") or flight.get("price")),
         "main_flight": flight,
-        "summary": format_flight_detail(flight, route_info.get("depart_date"), "去程"),
-        "main_push_line": _pushplus_leg_summary(flight, "去程"),
+        "summary": format_flight_detail(flight, route_info.get("depart_date"), direction_label),
+        "main_push_line": _pushplus_leg_summary(flight, direction_label),
         "baggage_line": _pushplus_baggage_line_for_flight(flight),
         "tags": _flight_status_tags(flight, route_info, analysis_result),
         "risk": _status_risk_label(flight),
-        "buy_condition": _human_recommendation_text(flight, route_info, analysis_result),
+        "buy_condition": "不适用(原预算为往返口径)" if return_only else _human_recommendation_text(flight, route_info, analysis_result),
         "links": {"main": _payload_booking_links_for_flight(flight, route_info, route_info.get("depart_date"), 6)},
         "channel_prices": source_channel_rows or _payload_channel_rows(flight),
     }
+    if return_only:
+        plan["direction"] = "return"
+        plan["processing_phase"] = "return_only"
     lcc_summary = _flight_lcc_summary(flight)
     if lcc_summary.get("has_lcc"):
         plan["lcc_summary"] = lcc_summary
@@ -5232,7 +5237,8 @@ def _apply_departure_feasibility_to_plans(
     for plan in plans:
         item = dict(plan)
         feasibility = {}
-        if outbound_set_off:
+        return_only = item.get("direction") == "return" and not item.get("is_roundtrip")
+        if outbound_set_off and not return_only:
             outbound_flight = item.get("outbound_flight") or item.get("main_flight") or item.get("flight")
             if isinstance(outbound_flight, dict) and outbound_flight:
                 outbound = analyze_departure_feasibility(
@@ -5245,8 +5251,8 @@ def _apply_departure_feasibility_to_plans(
                 )
                 if outbound:
                     feasibility["outbound"] = outbound
-        if item.get("is_roundtrip") and return_set_off:
-            return_flight = item.get("return_flight")
+        if (item.get("is_roundtrip") or return_only) and return_set_off:
+            return_flight = item.get("main_flight") if return_only else item.get("return_flight")
             if isinstance(return_flight, dict) and return_flight:
                 ret = analyze_departure_feasibility(
                     return_set_off,
@@ -5254,7 +5260,7 @@ def _apply_departure_feasibility_to_plans(
                     route_type,
                     transport_min,
                     margin_mode,
-                    route_info.get("return_date"),
+                    route_info.get("depart_date") if return_only else route_info.get("return_date"),
                 )
                 if ret:
                     feasibility["return"] = ret
@@ -6881,6 +6887,8 @@ def _price_change_scope_suffix(change: dict | None) -> str:
 def _email_subject(payload: dict) -> str:
     push_type = payload.get("push_type") or "价格提醒"
     route = payload.get("route") or "航班监控"
+    if _notification_phase_label(payload):
+        return f"【{push_type}】{route}｜{_notification_phase_label(payload)}"
     alternatives = payload.get("same_day_alternatives") or []
     if _data_incomplete_state(payload):
         return f"【数据不完整】{route}"
@@ -7409,6 +7417,30 @@ def _scenario_recommendation_text(
     return mapping.get(scenario, "本次按价格、时间、舒适度、执行风险和行李票规综合排序。")
 
 
+def _notification_phase_label(payload: dict) -> str:
+    if payload.get("processing_phase") != "return_only":
+        return ""
+    return str(payload.get("phase_label") or "")
+
+
+def _single_plan_direction_label(plan: dict) -> str:
+    return "返程" if plan.get("processing_phase") == "return_only" or plan.get("direction") == "return" else "去程"
+
+
+def _return_phase_price_context() -> dict:
+    reason = "不适用(原预算为往返口径)"
+    return {
+        "purchase_budget_decision": {"status": "not_applicable", "reason": reason},
+        "cross_leg_constraints": {"status": "not_applicable", "reason": "本次仅分析返程，不判定跨腿约束"},
+        "recommendation": reason, "price_policy_reason": reason, "buy_condition": reason,
+        "execution_advice": {"conclusion": reason, "summary": "仅展示返程舱位单程报价，请核对票规与实际需求"},
+        "ideal_price": None, "max_price": None, "verify_price": None,
+        "budget_compare_price": None, "budget_input_ideal_price": None, "budget_input_max_price": None,
+        "max_budget_pp_oneway": None, "target_price_pp_oneway": None,
+        "budget_gap": {}, "action_range": {}, "next_step_guidance": {},
+    }
+
+
 def build_notification_payload(
     analysis_result,
     outbound_analysis=None,
@@ -7447,6 +7479,100 @@ def build_notification_payload(
         or route_info.get("route_type")
         or _source_stats_route_type(source_stats)
     )
+    if route_info.get("processing_phase") == "return_only":
+        from plan_tracker import DEFAULT_DATA_DIR, load_pushed_plans
+
+        # Return-only prices never enter the round-trip purchase-decision pipeline.
+        phase_prices = _return_phase_price_context()
+        route_key, depart_key, return_key = _last_push_route_parts(route_info, False)
+        identity = _notification_subscription_id(route_info, subscription)
+        fingerprint = route_info.get("constraint_fingerprint") or analysis_result.get("constraint_fingerprint") or ""
+        last_push = get_last_push_price(route_key, depart_key, return_key, subscription_id=identity)
+        last_snapshot = get_last_push_snapshot(route_key, depart_key, return_key, subscription_id=identity)
+        retirement = _build_source_retirement_context(payload_route_type, last_snapshot)
+        degradation = _build_source_degradation_context(
+            source_stats=source_stats, last_snapshot=last_snapshot, source_errors=source_errors,
+            retired_sources=set(retirement.get("sources") or []), collection_failures=collection_failures,
+        )
+        flights = _single_flights_for_sections(analysis_result)
+        plans = [_payload_single_plan(item, route_info, analysis_result, index, "推荐" if index < 2 else "备选")
+                 for index, item in enumerate(flights[:5])]
+        plans = _apply_plan_tiers(plans)
+        constraints = {**(subscription.get("hard_constraints") or {}), **(subscription.get("constraints") or {})}
+        plans = _apply_departure_feasibility_to_plans(plans, constraints, payload_route_type, route_info)
+        primary = plans[0] if plans else {}
+        primary_flight = primary.get("main_flight") or {}
+        current = primary.get("price")
+        tracking_dir = DEFAULT_DATA_DIR / "return_only"
+        previous_plans = load_pushed_plans(identity, data_dir=tracking_dir)
+        tracking = track_plan_status(identity, flights, data_dir=tracking_dir, source_degradation=degradation)
+        if not previous_plans.get("last_pushed"):
+            tracking = {"status": "scope_changed", "scope": "single", "msg": "口径切换(往返→返程)"}
+        profile, explanation = _payload_travel_profile(analysis_result, subscription)
+        history = price_history if price_history is not None else analysis_result.get("constraint_price_history") or []
+        changes = _constraint_change_context(fingerprint, last_snapshot)
+        sources = _source_set_from_plan(primary)
+        detail_id = canonical_detail_uuid(identity)
+        detail_url = f"{_subscription_form_url(route_info).rstrip('/')}/detail?sub={quote(detail_id)}" if detail_id else ""
+        display_route = {
+            **route_info,
+            "origin_city": route_info.get("origin_city") or get_airport_city((route_info.get("origin_airports_active") or [route_info.get("origin")])[0]),
+            "destination_city": route_info.get("destination_city") or get_airport_city((route_info.get("destination_airports_active") or [route_info.get("destination")])[0]),
+        }
+        goals = route_info.get("notification_goals") or subscription.get("notification_goals") or {}
+        no_primary_reason = ""
+        if not plans:
+            no_primary_reason = "返程数据不完整，本轮结论不可用" if degradation.get("data_incomplete") else "当前约束下未找到符合条件的返程方案"
+        payload = {
+            **phase_prices,
+            "processing_phase": "return_only", "phase_label": route_info["phase_label"],
+            "original_outbound_date": route_info["original_outbound_date"],
+            "push_type": "数据不完整" if degradation.get("data_incomplete") and not plans else "返程行情",
+            "route": _payload_route_text(display_route), "route_airports": _payload_route_airports(route_info),
+            "route_type": payload_route_type, "subscription_id": identity,
+            "origin_airports_active": route_info.get("origin_airports_active"),
+            "destination_airports_active": route_info.get("destination_airports_active"),
+            "origin_airports": route_info.get("origin_airports"), "destination_airports": route_info.get("destination_airports"),
+            "depart_date": depart_key, "return_date": None, "trip_type": "one_way", "is_roundtrip": False,
+            "constraint_fingerprint": fingerprint, "constraint_fingerprint_short": short_constraint_fingerprint(fingerprint),
+            "constraint_change": changes if changes.get("changed") else {},
+            "current_price": current, "display_price": current, "transaction_price": primary.get("estimated_price"),
+            "last_push_price": (last_push or {}).get("price"),
+            "price_signal": {"label": "返程单程报价", "summary": "仅供行情参考，不作购买判断", "sample_n": len(history)},
+            "price_references": {}, "price_tiers": {},
+            "recommended_plans": plans[:2], "alternative_plans": plans[2:5],
+            "adjustment_required_plans": [item for item in plans if _plan_feasibility_rank(item) == 2],
+            "excluded_plans": analysis_result.get("excluded_flights") or [], "no_primary_reason": no_primary_reason,
+            "plan_status_change": tracking, "plan_price_rows": _payload_plan_price_rows(plans),
+            "channel_price_rows": primary.get("channel_prices") or [],
+            "travel_profile": profile, "travel_profile_explanation": explanation,
+            "travel_scenarios": profile.get("scenarios") or [],
+            "passenger_profile": analysis_result.get("passenger_profile") or {},
+            "passenger_rules": analysis_result.get("passenger_rules") or {},
+            "recommendation_basis": analysis_result.get("recommendation_basis") or build_recommendation_basis(profile),
+            "confidence": "仅返程行情", "confidence_dimensions": {}, "confidence_details": {},
+            "trigger_reason": [route_info["phase_label"], phase_prices["purchase_budget_decision"]["reason"]],
+            "limits": ["报价为返程舱位单程价，不代表全员混舱总价", "跨腿约束不适用", "票规与可售状态以渠道核实为准"],
+            "price_history": _normalize_chart_history(history), "trend_summary": "", "trend_fallback": _trend_fallback_line(history),
+            "diff_from_last": {"last_price": (last_push or {}).get("price"), "last_snapshot": last_snapshot or {},
+                               "comparable": bool(last_push) and not changes.get("changed")},
+            "data_freshness": route_info.get("data_freshness") or {},
+            "collected_at": _message_collected_time(analysis_result, route_info),
+            "source_stats": source_stats or {}, "source_errors": source_errors, "collection_failures": collection_failures,
+            "source_degradation": degradation, "source_retirement": retirement,
+            "dual_source_price_anomalies": [{**item, "direction": "return"} for item in analysis_result.get("dual_source_price_anomalies", [])],
+            "detail_url": detail_url, "form_url": _subscription_edit_url(route_info), "feedback_url": _feedback_url(route_info),
+            "days_to_dept": analysis_result.get("days_to_dept"), "tcurve": route_info.get("tcurve") or {},
+            "nearby_date_prices": _payload_nearby_date_rows(route_info, analysis_result, False),
+            "snapshot": {"route": route_key, "depart_date": depart_key, "return_date": return_key,
+                         "subscription_id": identity, "constraint_fingerprint": fingerprint,
+                         "channels": sorted(sources) or _snapshot_channels(primary_flight), "source_set": sorted(sources),
+                         "fare_status": _snapshot_fare_status(primary_flight), "constraint_sample_n": len(history)},
+        }
+        privacy = resolve_notification_privacy_level(goals)
+        if privacy != DEFAULT_NOTIFICATION_PRIVACY_LEVEL:
+            payload["notification_privacy_level"] = privacy
+        return attach_payload_provenance(payload, context=route_info.get("provenance_context") or {})
     decision, confidence, current, target, max_budget = _decision_context(
         analysis_result,
         route_info,
@@ -9692,6 +9818,9 @@ def _render_private_pushplus(payload: dict) -> str | None:
     if level == DEFAULT_NOTIFICATION_PRIVACY_LEVEL:
         return None
     route = html.escape(str(payload.get("route") or "航班监控"))
+    phase = _notification_phase_label(payload)
+    if phase:
+        route += "<br>" + html.escape(phase)
     if level == "minimal":
         return f"<b>航班监控有变动</b><br>{route}"
     band = html.escape(_privacy_price_band(payload))
@@ -9707,6 +9836,9 @@ def _render_private_email(payload: dict) -> tuple[str, str] | None:
     if level == DEFAULT_NOTIFICATION_PRIVACY_LEVEL:
         return None
     route_text = str(payload.get("route") or "航班监控")
+    phase = _notification_phase_label(payload)
+    if phase:
+        route_text += " " + phase
     route = html.escape(route_text)
     subject = f"【航班监控有变动】{route_text}"
     if level == "minimal":
@@ -9737,7 +9869,8 @@ def _push_section(
 def _pushplus_title(payload: dict, fallback: str = "价格提醒") -> str:
     push_type = str(payload.get("push_type") or fallback)
     route = str(payload.get("route") or "航班监控")
-    return f"【{push_type}】{route}"
+    phase = _notification_phase_label(payload)
+    return f"【{push_type}】{route}" + (f" {phase}" if phase else "")
 
 
 def _pushplus_detail_section(payload: dict) -> tuple[PushSection, str | None]:
@@ -9768,8 +9901,23 @@ def render_pushplus_sections(payload: dict) -> PushRender:
     freshness_headline = _data_freshness_headline(payload)
     detail_section, detail_url = _pushplus_detail_section(payload)
 
+    if _notification_phase_label(payload) and not _data_incomplete_state(payload):
+        return PushRender(_pushplus_title(payload), (
+            _push_section("header", 0, html.escape(_pushplus_title(payload)), mandatory=True),
+            _push_section("current_judgment", 0, [
+                html.escape(str(payload.get("no_primary_reason") or payload.get("recommendation") or "")),
+                "仅展示返程舱位单程报价，不作购买判断；跨腿约束不适用",
+            ], mandatory=True),
+            _push_section("primary_plan", 0, _pushplus_plan_brief_lines(payload), mandatory=True),
+            _push_section("plan_tracking", 1, html.escape(_plan_status_change_text(payload))),
+            _push_section("data_freshness", 0, html.escape(freshness_headline), mandatory=True),
+            detail_section,
+        ), detail_url)
+
     if _data_incomplete_state(payload):
         route = html.escape(str(payload.get("route") or "航班监控"))
+        if _notification_phase_label(payload):
+            route += "<br>" + html.escape(_notification_phase_label(payload))
         privacy_level = resolve_notification_privacy_level(payload)
         reason_text = (
             _data_incomplete_reason(payload)
@@ -9842,7 +9990,7 @@ def render_pushplus_sections(payload: dict) -> PushRender:
             ]
         )
         return PushRender(
-            f"【数据不完整】{str(payload.get('route') or '航班监控')}",
+            f"【数据不完整】{str(payload.get('route') or '航班监控')}" + (f" {_notification_phase_label(payload)}" if _notification_phase_label(payload) else ""),
             tuple(sections),
             detail_url,
         )
@@ -10359,7 +10507,7 @@ def _render_payload_plan_card(plan: dict, compact: bool = False, primary_plan: d
     else:
         main_flight = plan.get("main_flight") or plan.get("outbound_flight") or plan.get("flight")
         body_parts.append(
-            _email_plan_leg_group("去程", main_flight, str(plan.get("summary") or ""))
+            _email_plan_leg_group(_single_plan_direction_label(plan), main_flight, str(plan.get("summary") or ""))
         )
         rows.extend(
             [
@@ -11500,6 +11648,14 @@ def _email_action_panel_body(
     price_reason: str,
     interactive_channels: bool = False,
 ) -> str:
+    if _notification_phase_label(payload):
+        return (
+            f"<div>{html.escape(_notification_phase_label(payload))}</div>"
+            f"<div>{html.escape(str(payload.get('no_primary_reason') or ''))}</div>"
+            f"<div>购买判断:{html.escape(str((payload.get('purchase_budget_decision') or {}).get('reason') or ''))}</div>"
+            "<div>仅展示返程舱位单程报价；跨腿约束不适用。请核对票规与实际需求。</div>"
+            + _email_action_links(payload, primary_plan, interactive_channels=interactive_channels)
+        )
     if _data_incomplete_state(payload):
         reason = _data_incomplete_reason(payload)
         blocks = [
@@ -12286,7 +12442,7 @@ def _render_domestic_payload_plan_card(plan: dict, compact: bool = False, primar
         )
     else:
         main_flight = plan.get("main_flight") or plan.get("outbound_flight") or plan.get("flight")
-        body_parts.append(_email_plan_leg_group("去程", main_flight, str(plan.get("summary") or "")))
+        body_parts.append(_email_plan_leg_group(_single_plan_direction_label(plan), main_flight, str(plan.get("summary") or "")))
 
     links = plan.get("links") or {}
     link_value = links.get("main") or links.get("outbound") or ""
@@ -14188,6 +14344,8 @@ def render_email(payload: dict) -> tuple[str, str]:
     if _data_incomplete_state(payload):
         if private_render is not None:
             route = html.escape(str(payload.get("route") or "航班监控"))
+            if _notification_phase_label(payload):
+                route += "<br>" + html.escape(_notification_phase_label(payload))
             reason = html.escape(_private_data_incomplete_reason(payload))
             body = (
                 f"<b>【数据不完整】{route}</b><br>"
@@ -14225,7 +14383,7 @@ def render_email(payload: dict) -> tuple[str, str]:
         )
     if primary_plan.get("baggage_line"):
         baggage_line = f"<div><span style='color:#888;'>行李状态：</span>{html.escape(str(primary_plan.get('baggage_line')))}</div>"
-        if "确认" in str(primary_plan.get("baggage_line")) or "不含" in str(primary_plan.get("baggage_line")):
+        if not _notification_phase_label(payload) and ("确认" in str(primary_plan.get("baggage_line")) or "不含" in str(primary_plan.get("baggage_line"))):
             baggage_line += "<div style='color:#666;font-size:12px;'>当前价格可能不含托运行李；若支付页加行李后超过本次方案验证价，则不建议购买。</div>"
     heading_push_type = "无符合方案" if no_primary else _email_headline_type(payload)
     freshness_headline = _data_freshness_headline(payload)
@@ -14234,6 +14392,8 @@ def render_email(payload: dict) -> tuple[str, str]:
         f"【{html.escape(heading_push_type)}】"
         f"{html.escape(str(payload.get('route') or '航班监控'))}</h2>"
     )
+    if _notification_phase_label(payload):
+        heading_html += f"<div>{html.escape(_notification_phase_label(payload))}</div>"
     if freshness_headline:
         heading_html += (
             "<div style='margin:-4px 0 12px;color:#666;font-size:12px;'>"
@@ -14708,6 +14868,11 @@ def persist_notification_payload(payload: dict) -> None:
         constraint_sample_n=snapshot.get("constraint_sample_n"),
         subscription_id=subscription_id,
     )
+    tracking_options = {}
+    if payload.get("processing_phase") == "return_only":
+        from plan_tracker import DEFAULT_DATA_DIR
+
+        tracking_options["data_dir"] = DEFAULT_DATA_DIR / "return_only"
     save_pushed_plans(
         _first_nonempty_identity(
             payload.get("snapshot", {}).get("subscription_id"),
@@ -14716,6 +14881,7 @@ def persist_notification_payload(payload: dict) -> None:
             route,
         ),
         payload.get("recommended_plans") or [],
+        **tracking_options,
     )
 
 
