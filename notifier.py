@@ -7441,6 +7441,37 @@ def _return_phase_price_context() -> dict:
     }
 
 
+def _track_return_phase_plan(identity, flights, analysis_result, *, data_dir, source_degradation):
+    from plan_tracker import find_flight
+
+    tracking = track_plan_status(identity, flights, data_dir=data_dir, source_degradation=source_degradation)
+    flight_no = (tracking or {}).get("flight_no")
+    if not flight_no or find_flight(flights, flight_no):
+        return tracking
+
+    # Evidence extends tracking only; recommendation membership remains unchanged.
+    candidate_entries = [(item, "") for item in (
+        list(analysis_result.get("all_flights") or []) + list(analysis_result.get("reference_flights") or [])
+    )]
+    excluded_entries = [(item.get("flight"), item.get("reason") or "不符合当前筛选条件")
+                        for item in analysis_result.get("excluded_flights") or [] if isinstance(item, dict)]
+    for status, entries in (("quoted_not_recommended", candidate_entries), ("quoted_excluded", excluded_entries)):
+        matches = []
+        for flight, reason in entries:
+            matched = find_flight([flight], flight_no)
+            if matched and _has_valid_price(matched.get("price")):
+                matches.append((_to_float(matched["price"]), reason))
+        if matches:
+            current_price, reason = min(matches, key=lambda item: item[0])
+            message = f"上次推荐的{flight_no}本轮有报价¥{current_price:,.0f},"
+            message += "未入选本轮推荐" if status == "quoted_not_recommended" else f"当前不符合约束:{reason}"
+            return {**tracking, "status": status, "current_price": current_price, "price_diff": None, "msg": message}
+
+    if not (source_degradation or {}).get("active"):
+        return {**tracking, "msg": f"上次推荐的{flight_no}本轮候选中未取得报价,建议在渠道核实"}
+    return tracking
+
+
 def build_notification_payload(
     analysis_result,
     outbound_analysis=None,
@@ -7505,7 +7536,7 @@ def build_notification_payload(
         current = primary.get("price")
         tracking_dir = DEFAULT_DATA_DIR / "return_only"
         previous_plans = load_pushed_plans(identity, data_dir=tracking_dir)
-        tracking = track_plan_status(identity, flights, data_dir=tracking_dir, source_degradation=degradation)
+        tracking = _track_return_phase_plan(identity, flights, analysis_result, data_dir=tracking_dir, source_degradation=degradation)
         if not previous_plans.get("last_pushed"):
             tracking = {"status": "scope_changed", "scope": "single", "msg": "口径切换(往返→返程)"}
         profile, explanation = _payload_travel_profile(analysis_result, subscription)
