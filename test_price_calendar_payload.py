@@ -150,7 +150,10 @@ class PriceCalendarPayloadTest(unittest.TestCase):
             "round_trip": True,
         }
 
-        with patch("notifier.shanghai_today", return_value=anchor):
+        with (
+            patch("notifier.shanghai_today", return_value=anchor),
+            patch("price_calendar.shanghai_today", return_value=anchor),
+        ):
             calendar = _payload_price_calendar(route_info, analysis)
         prices = {row["date"]: row["min_price"] for row in calendar["rows"]}
 
@@ -389,7 +392,10 @@ class PriceCalendarPayloadTest(unittest.TestCase):
             "notification_goals": {"primary": "cheaper_date"},
         }
 
-        with patch("notifier.shanghai_today", return_value=anchor):
+        with (
+            patch("notifier.shanghai_today", return_value=anchor),
+            patch("price_calendar.shanghai_today", return_value=anchor),
+        ):
             payload = build_notification_payload(
                 analysis,
                 return_analysis=return_analysis,
