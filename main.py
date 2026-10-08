@@ -2927,14 +2927,23 @@ def _run_locked(*, sync_remote: bool, round_id: str):
         collection_plan.log_summary(**log_options)
         collection_plan.execute()
 
+        processed_success = 0
+        processed_failed = 0
+        processing_exceptions = 0
         for sub, preflight in ready:
             try:
-                _process_scheduled_subscription(
+                result = _process_scheduled_subscription(
                     sub,
                     preflight=preflight,
                     round_id=round_id,
                 )
+                if result is True:
+                    processed_success += 1
+                else:
+                    processed_failed += 1
             except Exception as exc:
+                processed_failed += 1
+                processing_exceptions += 1
                 _log_subscription_failure(sub, reason=f"{type(exc).__name__}: {exc}")
                 print(traceback.format_exc())
                 logging.error(
@@ -2942,7 +2951,13 @@ def _run_locked(*, sync_remote: bool, round_id: str):
                     exc_info=True,
                 )
                 continue
-        round_status = "ok"
+        round_status = (
+            "ok" if processed_failed == 0 else "partial" if processed_success else "failed"
+        )
+        safe_log(
+            f"[批次结果] 订阅处理 成功={processed_success} 失败={processed_failed}"
+            f"(其中异常={processing_exceptions}) 前置跳过={preflight_skipped} status={round_status}"
+        )
     finally:
         if round_context_tokens is not None:
             reset_current_round(round_context_tokens)
