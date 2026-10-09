@@ -4645,7 +4645,7 @@ def generate_trend_summary(price_history_data, current_price) -> dict:
 
 
 def price_position_description(current_price, price_history):
-    """鐢ㄥ巻鍙叉暟鎹绠楀綋鍓嶄环鏍肩殑浣嶇疆鎻忚堪"""
+    """用历史数据计算当前价格的位置描述"""
     prices = _flatten_price_history(price_history)
     if len(prices) < 5:
         return None
@@ -4685,7 +4685,7 @@ def price_position_description(current_price, price_history):
 
 
 def waiting_risk_description(price_history, current_price, days_to_dept):
-    """璁＄畻缁х画绛夊緟涓€鍛ㄧ殑椋庨櫓鏀剁泭"""
+    """计算继续等待一周的风险收益"""
     prices = _flatten_price_history(price_history)
     if len(prices) < 10:
         return None
@@ -5335,7 +5335,7 @@ FULL_SERVICE_AIRLINES = [
 def overall_score(
     flight: dict, all_prices: list, all_durations: list, mode: str = "balanced"
 ) -> dict:
-    """缁煎悎璇勫垎 0-10"""
+    """综合评分 0-10"""
     clean_prices = [_to_float(price) for price in all_prices or []]
     clean_prices = [price for price in clean_prices if price is not None]
     clean_durations = [_to_float(duration) for duration in all_durations or []]
@@ -9556,14 +9556,14 @@ def analyze_all_flights(
         },
         {
             "tag": "赶时间选这个",
-            "desc": "鍒拌揪鏈€蹇紝浠锋牸绋嶉珮",
-            "reason": "鍒拌揪鏈€蹇紝浠锋牸绋嶉珮",
+            "desc": "到达最快，价格稍高",
+            "reason": "到达最快，价格稍高",
             "flight": by_duration[0],
         },
         {
             "tag": "怕折腾选这个",
-            "desc": "杞満鏈€杞绘澗锛屼笉鐢ㄥ湪鏈哄満杩囧",
-            "reason": "杞満鏈€杞绘澗锛屼笉鐢ㄥ湪鏈哄満杩囧",
+            "desc": "转机最轻松，不用在机场过夜",
+            "reason": "转机最轻松，不用在机场过夜",
             "flight": most_comfortable,
         },
     ]
@@ -11143,11 +11143,11 @@ def analyze_round_trip(
     if outbound_min is not None and return_min is not None:
         total = outbound_min + return_min
         if outbound_min < return_min * 0.8:
-            insight = f"鍘荤▼濂戒环浣嗚繑绋嬪亸璐碉紝鎬讳环楼{total:,.0f}"
+            insight = f"去程好价但返程偏贵，总价¥{total:,.0f}"
         elif return_min < outbound_min * 0.8:
-            insight = f"杩旂▼濂戒环浣嗗幓绋嬪亸璐碉紝鎬讳环楼{total:,.0f}"
+            insight = f"返程好价但去程偏贵，总价¥{total:,.0f}"
         else:
-            insight = f"鍘荤▼鍜岃繑绋嬩环鏍肩浉瀵瑰潎琛★紝鎬讳环楼{total:,.0f}"
+            insight = f"去程和返程价格相对均衡，总价¥{total:,.0f}"
 
     trend = analyze_roundtrip_trend(history)
     previous = trend.get("previous") if trend.get("available") else None

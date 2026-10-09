@@ -724,7 +724,7 @@ def analyze_row_savings(
         if price_diff < threshold:
             continue
         diff_days = (d - target).days
-        direction = "鎻愬墠" if diff_days < 0 else "鎺ㄨ繜"
+        direction = "提前" if diff_days < 0 else "推迟"
         weekday = row.get("weekday") or WEEKDAY_NAMES[d.weekday()]
         unit = "往返" if row.get("scope") == "roundtrip" else "单程"
         savings.append(
