@@ -885,11 +885,11 @@ def _track_roundtrip_plan(
         )
 
     if (source_degradation or {}).get("active"):
-        label = str(source_degradation.get("source_label") or "?????").strip()
+        label = str(source_degradation.get("source_label") or "缺失数据源").strip()
         msg = (
-            f"????:{desc},{ROUNDTRIP_TRACKING_LABEL}{_format_price(previous_price)}?"
-            f"?????:{ROUNDTRIP_TRACKING_LABEL}{_format_price(current_price)}?"
-            f"??????????{label}?????,?????,?????????"
+            f"上次推荐:{desc},{ROUNDTRIP_TRACKING_LABEL}{_format_price(previous_price)}。"
+            f"本轮同组合:{ROUNDTRIP_TRACKING_LABEL}{_format_price(current_price)}。"
+            f"{label}本轮不可用,报价覆盖不完整,暂不作涨跌比较。"
         )
         return _change_payload(
             "source_unavailable",
@@ -1028,7 +1028,7 @@ def track_plan_status(
     )
 
     if (source_degradation or {}).get("active"):
-        label = str(source_degradation.get("source_label") or "?????").strip()
+        label = str(source_degradation.get("source_label") or "缺失数据源").strip()
         return {
             "status": "source_unavailable",
             "flight_no": flight_no,
@@ -1037,8 +1037,8 @@ def track_plan_status(
             "price_diff": None,
             "scope": "single",
             "msg": (
-                f"?????{flight_no}????{label}?????,"
-                "???????????,??????,?????????"
+                f"上次推荐的{flight_no}:上次{_format_price(previous_price)},本轮{_format_price(current_price)}。"
+                f"{label}本轮不可用,报价覆盖不完整,暂不作涨跌比较,建议在渠道核实。"
             ),
             "source_degradation": dict(source_degradation),
         }
