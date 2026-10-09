@@ -5301,8 +5301,6 @@ SCORE_WEIGHTS = {
 LCC_AIRLINES = [
     "Spirit",
     "Frontier",
-    "鏄ョ鑸┖",
-    "涔濆厓鑸┖",
     "Ryanair",
     "EasyJet",
     "AirAsia",
@@ -5315,11 +5313,8 @@ LCC_AIRLINES = [
 
 FULL_SERVICE_AIRLINES = [
     "Air China",
-    "涓浗鍥借埅",
     "China Eastern",
-    "涓滄柟鑸┖",
     "China Southern",
-    "鍗楁柟鑸┖",
     "United",
     "Delta",
     "American",
