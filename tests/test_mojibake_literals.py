@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import ast
 import collections
+import io
 import pathlib
 import re
+import tokenize
 import unittest
 from datetime import date
 from unittest.mock import patch
@@ -24,22 +26,9 @@ PUA_HI = chr(0xF8FF)
 EURO = chr(0x20AC)
 REPLACEMENT = chr(0xFFFD)
 
-# F11b 之后仍保留的乱码字面量：仅限不可达旧代码（待 F11c 删除）。
+# F11c 之后生产源码不允许残留任何乱码字面量；新增乱码会使守卫失败。
 # 键为 (文件, 最内层函数/类名或模块级赋值名)，值为该作用域内含乱码的字符串常量节点数。
-ALLOWED_RESIDUAL = {
-    ("analyzer.py", "TIME_SLOT_LABELS"): 6,
-    ("analyzer.py", "airline_competition_analysis"): 2,
-    ("analyzer.py", "detect_anomaly"): 4,
-    ("analyzer.py", "nearby_dates_comparison"): 8,
-    ("analyzer.py", "timing_analysis"): 1,
-    ("analyzer.py", "weekday_analysis"): 8,
-    ("notifier.py", "_append_push_reason_section"): 2,
-    ("notifier.py", "_freshness_label"): 4,
-    ("notifier.py", "_min_date"): 1,
-    ("notifier.py", "_price_discrepancy_notice"): 1,
-    ("notifier.py", "_round_trip_price_estimate_line"): 4,
-    ("notifier.py", "_service_info_lines"): 3,
-}
+ALLOWED_RESIDUAL: dict[tuple[str, str], int] = {}
 
 
 def _is_pua(ch: str) -> bool:
@@ -114,6 +103,18 @@ def mojibake_inventory() -> collections.Counter:
     return counter
 
 
+def mojibake_comments() -> list[str]:
+    hits = []
+    for path in _production_files():
+        source = path.read_text(encoding="utf-8-sig")
+        for tok in tokenize.generate_tokens(io.StringIO(source).readline):
+            if tok.type == tokenize.COMMENT and any(
+                is_mojibake_run(m.group()) for m in NON_ASCII_RUN.finditer(tok.string)
+            ):
+                hits.append(f"{path.relative_to(ROOT).as_posix()}:{tok.start[0]}")
+    return hits
+
+
 def _function_node(module_path: pathlib.Path, name: str) -> ast.FunctionDef:
     tree = ast.parse(module_path.read_text(encoding="utf-8-sig"))
     for node in ast.walk(tree):
@@ -147,6 +148,9 @@ class MojibakeDetectorSelfTest(unittest.TestCase):
 class MojibakeResidualGuardTest(unittest.TestCase):
     def test_residual_mojibake_matches_allowlist_exactly(self):
         self.assertEqual(dict(mojibake_inventory()), ALLOWED_RESIDUAL)
+
+    def test_production_comments_have_no_mojibake(self):
+        self.assertEqual(mojibake_comments(), [])
 
 
 class RestoredReachableTextTest(unittest.TestCase):
