@@ -12,6 +12,7 @@ RUNTIME_LOCK = ROOT / "requirements.txt"
 DEV_LOCK = ROOT / "requirements-dev.txt"
 
 IMPORT_TO_PACKAGE = {
+    "dateutil": "python-dateutil",
     "dotenv": "python-dotenv",
     "flask": "flask",
     "httpx": "httpx",

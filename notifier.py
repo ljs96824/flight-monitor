@@ -34,6 +34,13 @@ from detail_access import canonical_detail_uuid
 from airlines import classify_itinerary, classify_segment
 from flight_combo_utils import normalize_combo
 from log_utils import safe_log, safe_log_json
+from departure_guard import (
+    PASSED_REASON_CODE as DEPARTURE_PASSED_REASON_CODE,
+    STATUS_KEY as DEPARTURE_STATUS_KEY,
+    STATUS_PASSED as DEPARTURE_STATUS_PASSED,
+    STATUS_UNKNOWN as DEPARTURE_STATUS_UNKNOWN,
+    UNKNOWN_NOTE as DEPARTURE_UNKNOWN_NOTE,
+)
 from analyzer import (
     MIN_SAMPLE_FOR_PRICE_SIGNAL,
     build_execution_advice,
@@ -3986,6 +3993,7 @@ _FILTER_REASON_LABELS = {
     "return_collection_failed": "返程采集失败，无法组成完整往返",
     "return_candidates_empty": "返程无可用候选，无法组成完整往返",
     "roundtrip_pairing_failed": "去返程未能组成完整往返",
+    DEPARTURE_PASSED_REASON_CODE: "计划起飞时刻已过，已排除（按出发机场当地时间，非实际起飞记录）",
 }
 
 
@@ -9657,6 +9665,9 @@ def _pushplus_plan_brief_lines(payload: dict) -> list[str]:
     schedule_note = str(plan.get("schedule_note") or "").strip()
     if schedule_note:
         lines.append(f"\u5b89\u6392\u8bf4\u660e:{schedule_note}")
+    departure_note = _plan_departure_unknown_note(plan)
+    if departure_note:
+        lines.append(f"\u26a0\ufe0f {departure_note}")
     baggage = str(plan.get("baggage_line") or "").strip()
     if baggage:
         lines.append(f"\u884c\u674e/\u9000\u6539:{baggage}")
@@ -10239,6 +10250,14 @@ def _interline_purchase_line(plan: dict, route_type: str) -> str:
     return ""
 
 
+def _plan_departure_unknown_note(plan: dict) -> str:
+    """方案中任一航段的计划起飞时刻无法核验时返回提示，否则返回空串。"""
+    for flight in _plan_flights(plan or {}):
+        if flight.get(DEPARTURE_STATUS_KEY) == DEPARTURE_STATUS_UNKNOWN:
+            return DEPARTURE_UNKNOWN_NOTE
+    return ""
+
+
 def _route_specific_plan_rows(plan: dict) -> list[tuple[str, str]]:
     route_type = _plan_route_type(plan)
     rows: list[tuple[str, str]] = []
@@ -10447,6 +10466,9 @@ def _render_payload_plan_card(plan: dict, compact: bool = False, primary_plan: d
     refund_line = _plan_refund_line(plan)
     if refund_line:
         rows.append(("退改", refund_line))
+    departure_note = _plan_departure_unknown_note(plan)
+    if departure_note:
+        rows.append(("起飞时刻", departure_note))
     rows.extend(_route_specific_plan_rows(plan))
     punctuality_line = _plan_punctuality_line(plan)
     if punctuality_line:
@@ -13228,6 +13250,17 @@ def _email_single_leg_rejection_table(rows: list[dict]) -> str:
         + "</tbody></table>"
     )
 
+def _excluded_item_departure_passed(item: dict) -> bool:
+    """排除条目或其任一航段的计划起飞时刻已过：不作为“更低价”对照展示。"""
+    if str(item.get("filter_reason_code") or "") == DEPARTURE_PASSED_REASON_CODE:
+        return True
+    for key in ("flight", "outbound", "return"):
+        nested = item.get(key)
+        if isinstance(nested, dict) and nested.get(DEPARTURE_STATUS_KEY) == DEPARTURE_STATUS_PASSED:
+            return True
+    return item.get(DEPARTURE_STATUS_KEY) == DEPARTURE_STATUS_PASSED
+
+
 def _email_excluded_compact_body(payload: dict) -> str:
     excluded = payload.get("excluded_plans") or []
     if not excluded:
@@ -13248,6 +13281,8 @@ def _email_excluded_compact_body(payload: dict) -> str:
     candidates = []
     for item in excluded:
         if not isinstance(item, dict):
+            continue
+        if _excluded_item_departure_passed(item):
             continue
         price = _excluded_item_price(item)
         if price is None:

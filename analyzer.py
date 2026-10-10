@@ -43,6 +43,11 @@ from price_calendar import (
 )
 from domestic_fare_rules import get_aircraft_name
 from flight_combo_utils import normalize_combo
+from departure_guard import (
+    PASSED_REASON as DEPARTURE_PASSED_REASON,
+    PASSED_REASON_CODE as DEPARTURE_PASSED_REASON_CODE,
+    split_by_planned_departure,
+)
 from airlines import (
     LCC_POLICIES,
     canonicalize_airline_lcc_policy,
@@ -8148,6 +8153,8 @@ def _filter_detail_airlines(flight: dict) -> str:
 
 def _filter_constraint_detail(flight: dict, preferences: dict) -> tuple[str, str]:
     reason = str(flight.get("exclude_reason") or "不符合当前筛选条件")
+    if reason == DEPARTURE_PASSED_REASON:
+        return DEPARTURE_PASSED_REASON_CODE, _filter_detail_times(flight)
     if reason == "用户设置必须直飞":
         return "direct_only", f"stops={_stops_count(flight)}"
     if reason == "超过最高可接受价格":
@@ -9024,6 +9031,8 @@ def analyze_all_flights(
     priorities=None,
     user_preferences=None,
     hard_constraints=None,
+    *,
+    departure_reference_now=None,
 ) -> dict:
     """Analyze and rank all flight options."""
     if not flights:
@@ -9060,6 +9069,20 @@ def analyze_all_flights(
         else:
             actionable_flights.append(flight)
     usable_flights = actionable_flights
+    departure_excluded = []
+    if departure_reference_now is not None and usable_flights:
+        usable_flights, departure_excluded = split_by_planned_departure(
+            usable_flights, departure_reference_now
+        )
+        if departure_excluded:
+            print(f"[计划起飞已过] 排除{len(departure_excluded)}个航班")
+        if not usable_flights:
+            _attach_filter_reason_details(departure_excluded, user_preferences or {})
+            return {
+                "error": "no_flights",
+                "excluded_flights": _excluded_flight_summary(departure_excluded),
+                "reference_flights": detail_reference_flights,
+            }
     if not usable_flights:
         return {
             "error": "no_actionable_flights",
@@ -9154,7 +9177,7 @@ def analyze_all_flights(
         merged_preferences,
     )
     preference_excluded.extend(lcc_excluded)
-    excluded_flights = direct_policy_excluded + preference_excluded
+    excluded_flights = departure_excluded + direct_policy_excluded + preference_excluded
     _attach_filter_reason_details(excluded_flights, merged_preferences)
     _log_low_price_filter_rejections(
         filter_input_pool,
