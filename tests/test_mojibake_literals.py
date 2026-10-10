@@ -24,11 +24,9 @@ PUA_HI = chr(0xF8FF)
 EURO = chr(0x20AC)
 REPLACEMENT = chr(0xFFFD)
 
-# F11a 之后仍保留的乱码字面量：仅限不可达旧代码（待 F11c 删除）与判定集合（待 F11b 裁决）。
+# F11b 之后仍保留的乱码字面量：仅限不可达旧代码（待 F11c 删除）。
 # 键为 (文件, 最内层函数/类名或模块级赋值名)，值为该作用域内含乱码的字符串常量节点数。
 ALLOWED_RESIDUAL = {
-    ("analyzer.py", "FULL_SERVICE_AIRLINES"): 3,
-    ("analyzer.py", "LCC_AIRLINES"): 2,
     ("analyzer.py", "TIME_SLOT_LABELS"): 6,
     ("analyzer.py", "airline_competition_analysis"): 2,
     ("analyzer.py", "detect_anomaly"): 4,
@@ -40,7 +38,6 @@ ALLOWED_RESIDUAL = {
     ("notifier.py", "_min_date"): 1,
     ("notifier.py", "_price_discrepancy_notice"): 1,
     ("notifier.py", "_round_trip_price_estimate_line"): 4,
-    ("notifier.py", "_route_is_domestic"): 17,
     ("notifier.py", "_service_info_lines"): 3,
 }
 

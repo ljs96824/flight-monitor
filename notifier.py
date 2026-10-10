@@ -2921,8 +2921,8 @@ def _route_is_domestic(route_info: dict | None) -> bool:
         "CGO", "TSN",
     }
     cn_cities = {
-        "涓婃捣", "鍖椾含", "骞垮窞", "娣卞湷", "鎴愰兘", "鏉窞", "鍗椾含", "鍘﹂棬", "绂忓窞",
-        "姝︽眽", "瑗垮畨", "閲嶅簡", "鏄嗘槑", "闈掑矝", "闀挎矙", "閮戝窞", "澶╂触",
+        "上海", "北京", "广州", "深圳", "成都", "杭州", "南京", "厦门", "福州",
+        "武汉", "西安", "重庆", "昆明", "青岛", "长沙", "郑州", "天津",
     }
 
     origin_codes = route_info.get("origin_airports") or [route_info.get("origin")]
