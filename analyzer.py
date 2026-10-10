@@ -53,7 +53,7 @@ from airlines import (
 from log_utils import safe_log
 from mixed_cabin import match_mixed_cabin_combinations
 from observations_store import get_current_round
-from storage import get_all_history, get_latest_alternatives, get_target_history
+from storage import get_latest_alternatives, get_target_history
 from subscription_preflight import shanghai_today
 
 IATA_CITY_NAMES = {
@@ -4330,139 +4330,6 @@ def get_future_price_changes(
     return changes
 
 
-def timing_analysis(price_history, current_price, days_to_dept) -> dict:
-    """涔扮エ鏃舵満棰勬祴"""
-    if _to_float(current_price) is None:
-        return {"confidence": "low", "data_insufficient": True}
-
-    try:
-        days = int(days_to_dept)
-    except (TypeError, ValueError):
-        return {"confidence": "low", "data_insufficient": True}
-
-    future_changes = get_future_price_changes(price_history, days, horizon=7)
-
-    if not future_changes:
-        return {"confidence": "low", "data_insufficient": True}
-
-    drop_cases = [change for change in future_changes if change < -100]
-    rise_cases = [change for change in future_changes if change > 100]
-    stable_cases = [change for change in future_changes if -100 <= change <= 100]
-
-    total = len(future_changes)
-    result = {
-        "drop_probability": round(len(drop_cases) / total * 100),
-        "rise_probability": round(len(rise_cases) / total * 100),
-        "stable_probability": round(len(stable_cases) / total * 100),
-        "avg_drop": round(sum(drop_cases) / len(drop_cases)) if drop_cases else 0,
-        "avg_rise": round(sum(rise_cases) / len(rise_cases)) if rise_cases else 0,
-    }
-
-    urgency = min(10, max(0, (100 - days) / 10))
-    risk = result["rise_probability"] / 100
-    result["buy_score"] = round(risk * 5 + urgency * 0.5, 1)
-
-    return result
-
-
-def weekday_analysis(db_path, route, depart_date) -> dict:
-    """鍒嗘瀽涓嶅悓鏄熸湡鍑犵殑浠锋牸宸紓"""
-    _ = db_path
-    history = get_all_history(route, depart_date)
-
-    if len(history) < 14:
-        return {"data_insufficient": True}
-
-    from collections import defaultdict
-
-    weekday_prices = defaultdict(list)
-    for record in history:
-        snapshot_time = record.get("snapshot_time")
-        price = _to_float(record.get("price"))
-        if not snapshot_time or price is None:
-            continue
-
-        try:
-            dt = datetime.fromisoformat(snapshot_time)
-        except ValueError:
-            continue
-
-        weekday_prices[dt.weekday()].append(price)
-
-    if sum(len(prices) for prices in weekday_prices.values()) < 14:
-        return {"data_insufficient": True}
-
-    weekday_names = ["鍛ㄤ竴", "鍛ㄤ簩", "鍛ㄤ笁", "鍛ㄥ洓", "鍛ㄤ簲", "鍛ㄥ叚", "鍛ㄦ棩"]
-    stats = {}
-    for day, prices in weekday_prices.items():
-        stats[weekday_names[day]] = {
-            "avg": round(sum(prices) / len(prices)),
-            "min": min(prices),
-            "count": len(prices),
-        }
-
-    sorted_days = sorted(stats.items(), key=lambda item: item[1]["avg"])
-    cheapest_day = sorted_days[0][0]
-    today = weekday_names[shanghai_today().weekday()]
-
-    return {
-        "weekday_stats": dict(sorted_days),
-        "cheapest_day": cheapest_day,
-        "today": today,
-        "today_is_cheap": today == cheapest_day,
-    }
-
-
-def airline_competition_analysis(
-    flights: list[dict], historical_flights: list[dict] = None
-) -> dict:
-    """鑸徃绔炰簤鎬佸娍鍒嗘瀽"""
-    _ = historical_flights
-    from collections import defaultdict
-
-    airline_prices = defaultdict(list)
-    for flight in flights or []:
-        price = _to_float(flight.get("price"))
-        if price is None:
-            continue
-
-        airline = flight.get("airline_summary") or "鏈煡"
-        airline_prices[airline].append(
-            {
-                "flight": dict(flight),
-                "price": price,
-                "combo": flight.get("flight_combo", ""),
-                "duration": flight.get("total_hours"),
-                "stops": flight.get("stops"),
-            }
-        )
-
-    result = {}
-    for airline, options in airline_prices.items():
-        cheapest = min(options, key=lambda item: item["price"])
-        result[airline] = {
-            "cheapest_price": cheapest["price"],
-            "best_option": cheapest["combo"],
-            "duration": cheapest["duration"],
-            "stops": cheapest["stops"],
-            "options_count": len(options),
-            "trend": "unknown",
-        }
-
-    sorted_airlines = sorted(result.items(), key=lambda item: item[1]["cheapest_price"])
-
-    return {
-        "airlines": dict(sorted_airlines),
-        "cheapest_airline": sorted_airlines[0][0] if sorted_airlines else None,
-        "price_spread": (
-            sorted_airlines[-1][1]["cheapest_price"]
-            - sorted_airlines[0][1]["cheapest_price"]
-            if len(sorted_airlines) > 1
-            else 0
-        ),
-    }
-
-
 def comfort_score(flight: dict) -> dict:
     """计算航班舒适度评分（0-10）。"""
     score = 10.0
@@ -4517,46 +4384,6 @@ def comfort_score(flight: dict) -> dict:
         "penalties": penalties,
         "bonuses": bonuses,
     }
-
-
-def detect_anomaly(
-    flight: dict, price_insights: dict, all_prices: list[float]
-) -> dict:
-    """检测价格是否异常偏低。"""
-    price = _to_float(flight.get("price"))
-    if price is None:
-        return {"is_anomaly": False}
-
-    typical_range = (price_insights or {}).get("typical_price_range", [])
-    if not typical_range or len(typical_range) < 2:
-        return {"is_anomaly": False}
-
-    typical_low = _to_float(typical_range[0])
-    typical_high = _to_float(typical_range[1])
-    if typical_low is None or typical_high is None:
-        return {"is_anomaly": False}
-
-    clean_prices = [_to_float(item) for item in all_prices or []]
-    clean_prices = [item for item in clean_prices if item is not None]
-    avg_price = sum(clean_prices) / len(clean_prices) if clean_prices else typical_high
-
-    if price < typical_low * 0.7:
-        discount_pct = round((1 - price / avg_price) * 100) if avg_price else 0
-        return {
-            "is_anomaly": True,
-            "type": "鏋佺浣庝环",
-            "discount_pct": discount_pct,
-            "message": f"姣旀甯镐环鏍间綆{discount_pct}%锛屽彲鑳芥槸绯荤粺閿欒鎴栭檺鏃朵績閿€",
-        }
-
-    if price < typical_low:
-        return {
-            "is_anomaly": False,
-            "is_good_deal": True,
-            "message": "浣庝簬甯傚満姝ｅ父浠锋牸鍖洪棿",
-        }
-
-    return {"is_anomaly": False, "is_good_deal": False}
 
 
 def generate_sparkline(prices: list, width: int = 14) -> str:
@@ -5145,13 +4972,13 @@ def multi_window_analysis(current_price, own_history, google_history, days_to_de
     """多时间窗口纵向分析。"""
     result = {}
 
-    # 绐楀彛涓€锛氱煭鏈熻秼鍔匡紙3-7澶╋級
+    # 窗口一：短期趋势（3-7天）
     if own_history and len(own_history) >= 4:
         recent = [
             record["price"]
             for record in own_history[-14:]
             if record.get("price")
-        ]  # 鏈€杩?澶┟楁瘡澶?娆?14鏉?
+        ]  # 取最近14条记录中有价格的
         if len(recent) >= 4:
             split_index = len(recent) // 2
             first_half = sum(recent[:split_index]) / split_index
@@ -5174,7 +5001,7 @@ def multi_window_analysis(current_price, own_history, google_history, days_to_de
                 "data_points": len(recent),
             }
 
-    # 绐楀彛浜岋細涓湡浣嶇疆锛?4-30澶╋級
+    # 窗口二：中期位置（关注以来全部记录）
     if own_history and len(own_history) >= 10:
         month_prices = [record["price"] for record in own_history if record.get("price")]
         if month_prices:
@@ -5193,7 +5020,7 @@ def multi_window_analysis(current_price, own_history, google_history, days_to_de
                 "vs_avg": current_price - avg_price,
             }
 
-    # 绐楀彛涓夛細闀挎湡鍒嗕綅锛?0-60澶╋紝鐢℅oogle鏁版嵁锛?
+    # 窗口三：长期分位（近60天，用Google数据）
     if google_history:
         if isinstance(google_history[0], (list, tuple)):
             prices = [price for _, price in google_history if price and price > 0]
@@ -5214,31 +5041,6 @@ def multi_window_analysis(current_price, own_history, google_history, days_to_de
             }
 
     return result
-
-
-def nearby_dates_comparison(
-    origin, dest, center_date, fetch_function, days_range=2
-):
-    """鏌ヨ鍑哄彂鏃ュ墠鍚庡嚑澶╃殑鏈€浣庝环锛屽府鐢ㄦ埛鍙戠幇鏇翠究瀹滅殑鏃ユ湡"""
-    from datetime import datetime, timedelta
-
-    center = datetime.strptime(center_date, "%Y-%m-%d")
-    results = {}
-
-    for offset in range(-days_range, days_range + 1):
-        check_date = center + timedelta(days=offset)
-        date_str = check_date.strftime("%Y-%m-%d")
-        weekday_names = ["鍛ㄤ竴", "鍛ㄤ簩", "鍛ㄤ笁", "鍛ㄥ洓", "鍛ㄤ簲", "鍛ㄥ叚", "鍛ㄦ棩"]
-        weekday = weekday_names[check_date.weekday()]
-
-        results[date_str] = {
-            "date": date_str,
-            "weekday": weekday,
-            "offset": offset,
-            "min_price": None,
-        }
-
-    return results
 
 
 def compare_flights(flight_a: dict, flight_b: dict) -> dict:
@@ -5896,16 +5698,6 @@ def _last_arrival_hour(flight: dict) -> int | None:
     if segments:
         return _hour_from_time(segments[-1].get("arr_time") or segments[-1].get("arrival_time"))
     return _hour_from_time(flight.get("arrival_time") or flight.get("arr_time"))
-
-
-TIME_SLOT_LABELS = {
-    "early_morning": "鏃╃彮",
-    "morning": "涓婂崍",
-    "afternoon": "涓嬪崍",
-    "evening": "鍌嶆櫄",
-    "night": "鏅氱彮",
-    "redeye": "绾㈢溂",
-}
 
 
 def time_slot_from_hour(hour: int | None) -> str | None:
@@ -9377,13 +9169,13 @@ def analyze_all_flights(
             "reference_flights": detail_reference_flights,
         }
 
-    # 1. 鎸変环鏍兼帓鍚?
+    # 1. 按价格排名
     by_price = sorted(usable_flights, key=lambda f: _to_float(f.get("price")) or float("inf"))
 
-    # 2. 鎸夋€绘椂闀挎帓鍚?
+    # 2. 按总时长排名
     by_duration = sorted(usable_flights, key=lambda f: f["total_duration_min"])
 
-    # 3. 鎸夋€т环姣旀帓鍚嶏紙缁煎悎寰楀垎锛?
+    # 3. 按性价比排名（综合得分）
     scoring_prices = [
         float(f["price"])
         for f in scoring_reference_flights
@@ -9504,7 +9296,7 @@ def analyze_all_flights(
             else:
                 qualified_flights.append(flight)
 
-    # 4. 鎸変娇鐢ㄥ満鏅瓫閫夋帹鑽愭柟妗?
+    # 4. 按使用场景筛选推荐方案
     fastest_duration = by_duration[0]["total_duration_min"]
 
     def comfortable_layovers(flight: dict) -> bool:

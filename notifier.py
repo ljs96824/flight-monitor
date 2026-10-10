@@ -916,30 +916,6 @@ def _price_estimate_summary_lines(flight: dict) -> list[str]:
     return lines
 
 
-def _round_trip_price_estimate_line(flight: dict) -> str:
-    display_price = _valid_price_float(flight.get("price"))
-    estimated_price = _estimated_price_value(flight)
-    if not display_price or not estimated_price:
-        return _price_text(display_price)
-    if abs(estimated_price - display_price) < 1:
-        return f"鐞嗚{_price_text(display_price)} 鈫?浜ゆ槗{_price_text(estimated_price)}"
-    return (
-        f"鐞嗚{_price_text(display_price)} 鈫?"
-        f"浜ゆ槗{_price_text(estimated_price)}"
-    )
-
-
-def _price_discrepancy_notice(flight: dict) -> str:
-    prices = [entry["price"] for entry in _source_price_entries_for_display(flight)]
-    if len(prices) < 2:
-        return ""
-    low = min(prices)
-    high = max(prices)
-    if low > 0 and (high - low) / low > 0.10:
-        return "鈿狅笍 鍚勬暟鎹簮浠锋牸宸紓杈冨ぇ锛屽缓璁骞冲彴姣斾环"
-    return ""
-
-
 def _format_price(value) -> str:
     return format_price(value).replace("楼", "")
 
@@ -1102,10 +1078,6 @@ def _short_trend(analysis: dict) -> str:
 
 def _first_price(analysis: dict):
     return analysis.get("first_price") or analysis.get("avg_price") or analysis.get("current_price")
-
-
-def _min_date(analysis: dict) -> str:
-    return analysis.get("min_date") or "璁板綍鏈熷唴"
 
 
 def _target_price(analysis: dict):
@@ -1542,23 +1514,6 @@ def _refund_change_lines(extra: dict) -> list[str]:
     refund_line = "💰 退票：可退票" if refundable else "💰 退票：不可退票"
     return [change_line, refund_line]
 
-def _service_info_lines(flight: dict) -> list[str]:
-    extra = flight.get("extra") or {}
-    if flight.get("has_baggage_info"):
-        lines = []
-        lines.extend(format_baggage(extra))
-        lines.append(_seat_selection_line(extra))
-        lines.extend(_refund_change_lines(extra))
-        lines.append("馃搸 鏈嶅姟淇℃伅鏉ユ簮锛欴uffel锛堣埅鍙哥洿杩烇級")
-        return lines
-
-    return [
-        "馃С 琛屾潕锛氳鏌ヨ鑸徃瀹樼綉",
-        "馃獞 閫夊骇锛氳鏌ヨ鑸徃瀹樼綉",
-        "🔄 退改：请查询航司官网",
-    ]
-
-
 def _estimate_drop_probability(price_history, current_price) -> int | None:
     """估算接近当前价格时，下一次记录继续下降的比例。"""
     if not price_history or not current_price:
@@ -1884,19 +1839,6 @@ def _collected_datetime(flight: dict) -> datetime | None:
     return None
 
 
-def _freshness_label(flight: dict) -> str:
-    collected_at = _collected_datetime(flight)
-    if not collected_at:
-        return "馃敶寤鸿鍒锋柊"
-    now = datetime.now(collected_at.tzinfo) if collected_at.tzinfo else datetime.now()
-    minutes = max(0, (now - collected_at).total_seconds() / 60)
-    if minutes <= 30:
-        return "馃煝鏂伴矞"
-    if minutes <= 120:
-        return "馃煛闇€纭"
-    return "馃敶寤鸿鍒锋柊"
-
-
 def _has_free_checked_baggage(flight: dict) -> bool:
     extra = flight.get("extra") or {}
     baggage_detail = extra.get("baggage_detail") or {}
@@ -2027,54 +1969,6 @@ def _round_trip_option_line(
     analysis_result: dict | None = None,
 ) -> str:
     return format_flight_detail(flight, date_str, _option_label(index))
-
-
-def _round_trip_combo_flight_line(prefix: str, flight: dict, date_str: str | None) -> str:
-    label = "购买去程" if prefix == "去" else "购买返程"
-    link = _flight_booking_link(flight, date_str, label)
-    return (
-        f"  {prefix}: {_compact_flight_numbers(flight)} {_round_trip_airline_text(flight)} "
-        f"{_round_trip_price_estimate_line(flight)} | {_flight_status_tags(flight)} | 🔗 {link}"
-    )
-
-
-def _append_round_trip_combo_lines(lines: list[str], combinations: list[dict]) -> None:
-    if not combinations:
-        return
-    lines.append("<b>🔄 往返最优组合</b>")
-    for index, combo in enumerate(combinations[:3], start=1):
-        outbound = combo.get("outbound") or {}
-        return_flight = combo.get("return") or {}
-        total_price = combo.get("total_price")
-        if total_price is None:
-            outbound_price = combo.get("outbound_price") or outbound.get("price")
-            return_price = combo.get("return_price") or return_flight.get("price")
-            if _has_valid_price(outbound_price) and _has_valid_price(return_price):
-                total_price = float(outbound_price) + float(return_price)
-        total_text = _price_text(total_price)
-        estimated_total = None
-        outbound_estimated = _estimated_price_value(outbound)
-        return_estimated = _estimated_price_value(return_flight)
-        if _has_valid_price(outbound_estimated) and _has_valid_price(return_estimated):
-            estimated_total = float(outbound_estimated) + float(return_estimated)
-        estimated_text = _price_text(estimated_total)
-
-        lines.append(f"组合{index}: 往返展示总价{total_text}")
-        if outbound:
-            outbound_date = combo.get("outbound_date") or outbound.get("depart_date")
-            lines.append(_round_trip_combo_flight_line("去", outbound, outbound_date))
-        if return_flight:
-            return_date = combo.get("return_date") or return_flight.get("depart_date")
-            lines.append(_round_trip_combo_flight_line("回", return_flight, return_date))
-        if estimated_total is not None:
-            diff = estimated_total - float(total_price or 0)
-            if diff > 0:
-                lines.append(
-                    f"  往返预估交易价: {estimated_text} ⚠️ 差价{_price_text(diff)}"
-                )
-            else:
-                lines.append(f"  往返预估交易价: {estimated_text} ✅ 全服务航司无额外费用")
-        lines.append("")
 
 
 def _round_trip_top_flights(analysis: dict | None) -> list[dict]:
@@ -3649,14 +3543,6 @@ def _append_action_header_section(
     if max_budget:
         lines.append(f"最高可接受：{_price_text(max_budget)}")
     lines.append("")
-
-def _append_push_reason_section(lines: list[str], push_meta: dict) -> None:
-    _section(lines, "<b>馃搷 涓轰粈涔堢幇鍦ㄦ彁閱掍綘?</b>")
-    reasons = (push_meta or {}).get("reasons") or ["褰撳墠浠锋牸鎴栨柟妗堢姸鎬佽Е鍙戜簡浣犵殑鐩戞帶鏉′欢"]
-    for reason in reasons[:4]:
-        lines.append(f"- {reason}")
-    lines.append("")
-
 
 def _append_price_change_section(
     lines: list[str],
