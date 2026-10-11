@@ -24,6 +24,7 @@ from atomic_json_store import read_json
 # 加载环境变量
 load_dotenv(BASE_DIR / ".env", encoding="utf-8")
 
+from project_time import SHANGHAI_TZ
 from analyzer import (
     apply_default_rules,
     analyze_all_flights,
@@ -1716,6 +1717,11 @@ def _sources_for_price(flights: list[dict], price) -> list[str]:
     return sorted(sources)
 
 
+def _departure_reference_now() -> datetime:
+    """计划起飞时刻核验的参考时刻：上海时区的当前时刻（带时区）。"""
+    return datetime.now(SHANGHAI_TZ)
+
+
 def _constraint_history_flights(analysis: dict | None) -> list[dict]:
     """仅返回当前硬约束过滤后可用于同条件价格历史的候选。"""
     return [
@@ -1984,6 +1990,7 @@ def _process_return_phase(sub, context, agg, constraint_fp, route_type, request_
     analysis = analyze_all_flights(
         flights, data.get("price_insights"), mode=sub.get("mode", "balanced"), priorities=sub.get("priorities"),
         user_preferences=projected["preferences"], hard_constraints=projected["constraints"],
+        departure_reference_now=_departure_reference_now(),
     )
     save_flight_details(route, depart_date, _constraint_history_flights(analysis), constraint_fingerprint=constraint_fp)
     identity = _subscription_identifier(sub, route)
@@ -2219,6 +2226,7 @@ def _process_subscription_locked(
             priorities=sub.get("priorities"),
             user_preferences=preferences,
             hard_constraints=sub.get("hard_constraints", {}),
+            departure_reference_now=_departure_reference_now(),
         )
         constraint_history_flights = _constraint_history_flights(analysis)
         save_flight_details(
@@ -2415,6 +2423,7 @@ def _process_subscription_locked(
                     priorities=sub.get("priorities"),
                     user_preferences=return_preferences,
                     hard_constraints=return_constraints,
+                    departure_reference_now=_departure_reference_now(),
                 )
                 return_constraint_history_flights = _constraint_history_flights(
                     return_analysis

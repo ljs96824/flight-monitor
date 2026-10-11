@@ -3,6 +3,7 @@ flask
 google-search-results
 httpx
 matplotlib
+python-dateutil
 python-dotenv
 pyyaml
 requests
