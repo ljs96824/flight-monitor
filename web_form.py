@@ -1491,7 +1491,7 @@ def parse_int(value: str | None, default: int = 0) -> int:
 
 def normalize_price_scope(value: str | None) -> str:
     text = str(value or "per_person").strip().lower()
-    if text in {"all", "total", "all_passengers", "all_passenger", "??", "??"}:
+    if text in {"all", "total", "all_passengers", "all_passenger", "整单", "全员"}:
         return "all"
     return "per_person"
 
