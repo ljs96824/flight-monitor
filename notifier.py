@@ -9669,7 +9669,10 @@ def _pushplus_next_step_lines(payload: dict) -> list[str]:
 
 
 def _pushplus_plan_brief_lines(payload: dict) -> list[str]:
-    plan = _plan_for_render((payload.get("recommended_plans") or [{}])[0] or {}, payload)
+    raw_plan = (payload.get("recommended_plans") or [{}])[0] or {}
+    if not raw_plan:
+        return []
+    plan = _plan_for_render(raw_plan, payload)
     if not plan:
         return []
     gap = _budget_gap(payload)
@@ -9678,7 +9681,7 @@ def _pushplus_plan_brief_lines(payload: dict) -> list[str]:
     if gap.get("over_max"):
         scope = payload.get("budget_compare_scope") or ("per_person_roundtrip" if plan.get("is_roundtrip") else "per_person_oneway")
         gap_suffix = f"(\u5df2\u8d85\u9884\u7b97{_price_text_with_caliber(gap.get('over_max'), scope, passengers, route_type)})"
-    lines = [f"{plan.get('label') or '??A'} | \u5f53\u524d\u6700\u4f18\u5019\u9009{gap_suffix}"]
+    lines = [f"{plan.get('label') or '方案A'} | \u5f53\u524d\u6700\u4f18\u5019\u9009{gap_suffix}"]
     if plan.get("is_roundtrip"):
         outbound = str(plan.get("outbound_push_line") or "").strip()
         ret = str(plan.get("return_push_line") or "").strip()

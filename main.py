@@ -386,7 +386,7 @@ def _first_airport(codes, fallback):
 
 def _normalize_price_scope(value) -> str:
     text = str(value or "per_person").strip().lower()
-    if text in {"all", "total", "all_passengers", "all_passenger", "overall", "??", "??", "???"}:
+    if text in {"all", "total", "all_passengers", "all_passenger", "overall", "整单", "全员", "全部人"}:
         return "all"
     return "per_person"
 
