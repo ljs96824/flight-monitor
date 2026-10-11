@@ -51,7 +51,7 @@ from detail_access import canonical_detail_uuid, delivery_payload_with_detail_to
 from email_notifier import render_email, send_email
 from filename_utils import sanitize_filename
 from health_check import system_health_check
-from log_utils import end_round_log_archive, redact_text, safe_log, start_round_log_archive
+from log_utils import end_round_log_archive, redact_text, safe_log, safe_log_json, start_round_log_archive
 from notification_config import normalize_notification_goals
 from observation_time import canonicalize_observed_at
 from observations_store import get_current_round, reset_current_round, set_current_round
@@ -1138,7 +1138,28 @@ def _subscription_identifier(sub: dict, route: str) -> str:
     return f"{route}|{sub.get('depart_date', '')}|{sub.get('return_date', '')}"
 
 
+def _log_delivery_channels(sub, route, method, email_sent, pushplus_sent, *, aborted=None) -> None:
+    """分渠道记录投递结果：None=本轮未尝试该渠道，False=已尝试但未被受理，True=已被受理。"""
+    try:
+        record = {
+            "subscription": _subscription_label(sub),
+            "route": route,
+            "method": method,
+            "email_sent": email_sent,
+            "pushplus_sent": pushplus_sent,
+            "any_sent": bool(email_sent or pushplus_sent),
+        }
+        if aborted:
+            record["aborted"] = aborted
+        safe_log_json("[推送渠道] ", record)
+    except Exception as exc:
+        print(f"[推送渠道] 记录失败: {type(exc).__name__}")
+
+
 def _deliver_notification(sub: dict, route: str, message_kwargs: dict) -> bool:
+    method = None
+    email_sent = None
+    pushplus_sent = None
     try:
         notification_goals = normalize_notification_goals(sub.get("notification_goals"))
         method = notification_goals["method"]
@@ -1183,39 +1204,41 @@ def _deliver_notification(sub: dict, route: str, message_kwargs: dict) -> bool:
             print("[推送] 用户选择仅页面查看，已保存页面结果")
             return page_saved
 
-        sent = False
         if method in {"email", "both"}:
+            email_sent = False
             if not email:
                 print("[邮件] 用户选择邮箱推送但未填写邮箱")
             else:
                 print("[推送] 开始发送邮件")
-                sent = send_email(
+                email_sent = bool(send_email(
                     email,
                     subject,
                     full_html,
                     inline_images,
-                ) or sent
-                print(f"[推送] 邮件发送完成: sent={sent}")
+                ))
+                print(f"[推送] 邮件发送完成: email_sent={email_sent}")
 
         if method in {"pushplus", "both"}:
             print("[推送] 开始渲染PushPlus短版")
             push_content = render_pushplus_sections(delivery_payload)
             print("[推送] PushPlus短版渲染完成，开始发送")
-            sent = send(
+            pushplus_sent = bool(send(
                 push_content,
                 title=f"【{payload.get('push_type', '价格提醒')}】{payload.get('route', route)}" + (f" {payload['phase_label']}" if payload.get("phase_label") else ""),
-            ) or sent
-            print(f"[推送] PushPlus发送完成: sent={sent}")
+            ))
+            print(f"[推送] PushPlus发送完成: pushplus_sent={pushplus_sent}")
 
         if method not in {"email", "pushplus", "both", "page_only"}:
             print(f"[推送] 未识别的推送方式 {method!r}，按PushPlus兜底")
             push_content = render_pushplus_sections(delivery_payload)
-            sent = send(
+            pushplus_sent = bool(send(
                 push_content,
                 title=f"【{payload.get('push_type', '价格提醒')}】{payload.get('route', route)}" + (f" {payload['phase_label']}" if payload.get("phase_label") else ""),
-            ) or sent
-            print(f"[推送] 兜底PushPlus发送完成: sent={sent}")
+            ))
+            print(f"[推送] 兜底PushPlus发送完成: pushplus_sent={pushplus_sent}")
 
+        sent = bool(email_sent or pushplus_sent)
+        _log_delivery_channels(sub, route, method, email_sent, pushplus_sent)
         if sent:
             print("[推送] 开始保存推送payload/页面详情")
             try:
@@ -1232,6 +1255,7 @@ def _deliver_notification(sub: dict, route: str, message_kwargs: dict) -> bool:
     except Exception as e:
         print(f"[推送失败] {type(e).__name__}: {e}")
         print(traceback.format_exc())
+        _log_delivery_channels(sub, route, method, email_sent, pushplus_sent, aborted=type(e).__name__)
         return False
 
 
