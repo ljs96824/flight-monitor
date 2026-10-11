@@ -7335,6 +7335,44 @@ def _return_phase_price_context() -> dict:
     }
 
 
+RETURN_PHASE_TREND_NOTE = "趋势图仅展示返程参考价的历史变化，不作购买判断。"
+RETURN_PHASE_BUDGET_FIELD_TEXT = "不适用（原设定为往返口径）"
+RETURN_PHASE_ACTION_FOOTNOTE = "返程阶段不设购买条件，请以支付页最终价、行李和票规为准。"
+RETURN_PHASE_FINAL_DAY_MONITORING_NOTE = "今天是返程日，也是本条监控的最后有效日：今天之后不再推送本航线行情。"
+
+
+def _return_phase_final_day(payload: dict) -> bool:
+    """返程阶段最后有效日：读取 main 分析时写入的 days_to_dept(返程日减当天)，渲染层不读时钟。"""
+    days = payload.get("days_to_dept")
+    return payload.get("processing_phase") == "return_only" and type(days) is int and days == 0
+
+
+def _budget_field_text(payload: dict, key: str) -> str:
+    if payload.get("processing_phase") == "return_only":
+        return RETURN_PHASE_BUDGET_FIELD_TEXT
+    return _price_text(payload.get(key))
+
+
+def _action_card_footnote(payload: dict) -> str:
+    if payload.get("processing_phase") == "return_only":
+        text = RETURN_PHASE_ACTION_FOOTNOTE
+    else:
+        text = "若支付页最终价、行李和票规不满足上方条件，建议保持本条航线监控。"
+    return f"<div style='margin-top:8px;color:#666;font-size:12px;'>{text}</div>"
+
+
+def _monitoring_note(payload: dict) -> str:
+    if _return_phase_final_day(payload):
+        return RETURN_PHASE_FINAL_DAY_MONITORING_NOTE
+    return "保持本条监控:无需操作,系统会继续盯这条航线,有变化会再次提醒你。"
+
+
+def _trend_default_note(payload: dict) -> str:
+    if payload.get("processing_phase") == "return_only":
+        return RETURN_PHASE_TREND_NOTE
+    return "当前搜索参考价已进入可验证区间，建议以支付页最终价为准。"
+
+
 def _track_return_phase_plan(identity, flights, analysis_result, *, data_dir, source_degradation):
     from plan_tracker import find_flight
 
@@ -11896,7 +11934,7 @@ def _email_action_links(
     return (
         "<div style='margin-top:10px;'>"
         + channel_picker
-        + "<div style='margin-top:8px;color:#666;font-size:12px;'>保持本条监控:无需操作,系统会继续盯这条航线,有变化会再次提醒你。</div>"
+        + "<div style='margin-top:8px;color:#666;font-size:12px;'>" + _monitoring_note(payload) + "</div>"
         + action_links
         + "</div>"
     )
@@ -13509,7 +13547,7 @@ def _email_trend_card_body(payload: dict) -> str:
     if payload.get("trend_summary"):
         body += f"<div style='margin-top:8px;'>{html.escape(str(payload['trend_summary']))}</div>"
     else:
-        body += "<div style='margin-top:8px;color:#666;font-size:12px;'>当前搜索参考价已进入可验证区间，建议以支付页最终价为准。</div>"
+        body += f"<div style='margin-top:8px;color:#666;font-size:12px;'>{_trend_default_note(payload)}</div>"
     return body
 
 
@@ -14376,8 +14414,8 @@ def render_email(payload: dict) -> tuple[str, str]:
                             ),
                             ("预估实付价", _email_price_span(payload.get("transaction_price"), "#111")),
                             ("本次验证价", html.escape(verify_text)),
-                            ("理想入手价", _price_text(payload.get("ideal_price"))),
-                            ("最高可接受价", _price_text(payload.get("max_price"))),
+                            ("理想入手价", _budget_field_text(payload, "ideal_price")),
+                            ("最高可接受价", _budget_field_text(payload, "max_price")),
                             ("验证价说明", html.escape(str(payload.get("buy_condition_explanation") or ""))),
                         ]
                     )
@@ -14390,8 +14428,8 @@ def render_email(payload: dict) -> tuple[str, str]:
                     f"<b>搜索参考价：</b>{_price_text(payload.get('display_price') or payload.get('current_price'))}"
                     f"<b>预估实付价：</b>{_price_text(payload.get('transaction_price'))}"
                     f"<b>本次方案验证价：</b>{html.escape(verify_text)}"
-                    f"<b>你的理想入手价：</b>{_price_text(payload.get('ideal_price'))}"
-                    f"<b>最高可接受价：</b>{_price_text(payload.get('max_price'))}"
+                    f"<b>你的理想入手价：</b>{_budget_field_text(payload, 'ideal_price')}"
+                    f"<b>最高可接受价：</b>{_budget_field_text(payload, 'max_price')}"
                     "</div>"
                 ),
             ]
@@ -14527,8 +14565,8 @@ def render_email(payload: dict) -> tuple[str, str]:
 
     action_rows = [
         ("购买条件", html.escape(str(payload.get("buy_condition") or "以支付页为准"))),
-        ("理想入手价", _price_text(payload.get("ideal_price"))),
-        ("最高可接受价", _price_text(payload.get("max_price"))),
+        ("理想入手价", _budget_field_text(payload, "ideal_price")),
+        ("最高可接受价", _budget_field_text(payload, "max_price")),
     ]
     action = payload.get("action_range") or {}
     if action.get("current_label"):
@@ -14538,7 +14576,7 @@ def render_email(payload: dict) -> tuple[str, str]:
             _email_card(
                 "操作建议",
                 _email_table(action_rows)
-                + "<div style='margin-top:8px;color:#666;font-size:12px;'>若支付页最终价、行李和票规不满足上方条件，建议保持本条航线监控。</div>",
+                + _action_card_footnote(payload),
             )
         )
 
@@ -14714,15 +14752,15 @@ def render_detail_html(payload: dict) -> str:
 
     action_rows = [
         ("购买条件", html.escape(str(payload.get("buy_condition") or "以支付页为准"))),
-        ("理想入手价", _price_text(payload.get("ideal_price"))),
-        ("最高可接受价", _price_text(payload.get("max_price"))),
+        ("理想入手价", _budget_field_text(payload, "ideal_price")),
+        ("最高可接受价", _budget_field_text(payload, "max_price")),
     ]
     if not no_primary:
         cards.append(
             _email_card(
                 "操作建议",
                 _email_table(action_rows)
-                + "<div style='margin-top:8px;color:#666;font-size:12px;'>若支付页最终价、行李和票规不满足上方条件，建议保持本条航线监控。</div>",
+                + _action_card_footnote(payload),
             )
         )
 

@@ -18,8 +18,10 @@ EXPECTED_SIGNATURE = (
 EXPECTED_MAIN_CHAIN_SHA256 = {
     # Authorized 2026-08-29 log-only change: full subscription dump -> whitelist summary.
     "build_notification_payload": "6ec18a811b7cb6353af949b74237ffae1352147eb7cd6c170141ae75942d6912",
-    "render_email": "d877278daa9099b02455fd9e26ad221452ec14b1264da3af380f4d1b0fb5a27d",
-    "render_detail_html": "2dbafb52012c71315357a34a5a85138c0456e650e7897b545449322ad21f9aa1",
+    # Authorized 2026-10-11 F5 return-phase wording: budget fields and action footnote via helpers;
+    # revert proof in tests/test_return_phase_wording.py restores d877278d... / 2dbafb52....
+    "render_email": "429fabb2eea4a9b88cc0c653843aa372a8e0faad9f8e2865ad37e1a55cd7471e",
+    "render_detail_html": "2586b469355356e88a09a6c4872c348a8c70129864d9e93b7515280c4100cd29",
     "render_pushplus_sections": "666472ec424df694891027abf2a125e47a8c0ba7d7d92b0400d64419a2ee56ef",
 }
 RETIRED_PRIVATE_RENDERERS = {
