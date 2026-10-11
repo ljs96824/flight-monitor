@@ -199,7 +199,7 @@ class ReturnPhaseProcessingTest(unittest.TestCase):
                 self.stack.enter_context(patch.object(module, "datetime", self.clock))
 
     def run_case(self, *, today=date(2026, 10, 2), panel=False, fail_return=False,
-                 sub=None, price=1200, accepted=True):
+                 sub=None, price=1200, accepted=True, history=()):
         self.clock.today = today
         main, notifier = self.main, self.notifier
         sub = copy.deepcopy(sub if sub is not None else subscription())
@@ -252,7 +252,7 @@ class ReturnPhaseProcessingTest(unittest.TestCase):
                 "get_constraint_epoch_boundary": Mock(return_value=None),
                 "get_constraint_history_limit": Mock(return_value=14),
                 "get_previous_snapshot_prices": Mock(return_value={}),
-                "get_lowest_price_history": Mock(return_value=[]),
+                "get_lowest_price_history": Mock(return_value=[dict(row) for row in history]),
                 "save_raw_response": Mock(), "save_flight_details": Mock(),
                 "save_roundtrip_snapshot": Mock(), "get_roundtrip_price_history": Mock(return_value=[]),
                 "collect_nearby_dates": Mock(return_value=[]),
