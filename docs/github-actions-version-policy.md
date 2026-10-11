@@ -43,3 +43,13 @@ reviewed first.
 - Required checks are the cross-platform acceptance boundary for those changes.
 - Dependency lock files and the pinned Playwright package remain separate
   reproducibility controls and are not changed by this policy.
+
+## Runner Images
+
+- 2026-10-11 依据 actions/runner-images#14748：`ubuntu-latest` 自 2026-10-19 起分批改指
+  Ubuntu 26.04，计划 2026-11-19 完成。
+- `tests` 矩阵的 Ubuntu 项与 `ui-smoke` 固定为 `ubuntu-24.04`，避免没有仓库提交时运行环境漂移；
+  `windows-latest` 维持可移动标签。
+- 采用 Ubuntu 26.04 须单独评审，并以 PR 双平台 CI 验证，不随标签自动切换。
+- 矩阵值即 check 名：Ubuntu 测试的 required check 为 `tests (ubuntu-24.04)`，分支保护须同步替换
+  原 `tests (ubuntu-latest)`。
