@@ -161,7 +161,7 @@ WORKFLOW_MUTATIONS = (
     _mutation(
         "M011", "jobs.tests.strategy.matrix.os",
         ("jobs", "tests", "strategy", "matrix", "os"),
-        ["ubuntu-latest", "windows-latest"], ["ubuntu-latest"],
+        ["ubuntu-24.04", "windows-latest"], ["ubuntu-24.04"],
         "WF010_TEST_STRATEGY",
     ),
     _mutation(
@@ -170,7 +170,7 @@ WORKFLOW_MUTATIONS = (
     ),
     _mutation(
         "M013", "jobs.ui-smoke.runs-on", ("jobs", "ui-smoke", "runs-on"),
-        "ubuntu-latest", "windows-latest", "WF011_RUNNERS",
+        "ubuntu-24.04", "windows-latest", "WF011_RUNNERS",
     ),
     _mutation(
         "M014", "jobs.tests.timeout-minutes",
@@ -390,6 +390,16 @@ WORKFLOW_MUTATIONS = (
         MISSING, "requirements-dev.txt", "WF033_UI_DEV_REQUIREMENTS_ABSENT",
         operation="add",
     ),
+    _mutation(
+        "M055", "jobs.tests.strategy.matrix.os",
+        ("jobs", "tests", "strategy", "matrix", "os"),
+        ["ubuntu-24.04", "windows-latest"], ["ubuntu-latest", "windows-latest"],
+        "WF010_TEST_STRATEGY",
+    ),
+    _mutation(
+        "M056", "jobs.ui-smoke.runs-on", ("jobs", "ui-smoke", "runs-on"),
+        "ubuntu-24.04", "ubuntu-latest", "WF011_RUNNERS",
+    ),
 )
 
 
@@ -510,13 +520,13 @@ def _workflow_contract_violations(workflow):
         tests.get("strategy")
         == {
             "fail-fast": False,
-            "matrix": {"os": ["ubuntu-latest", "windows-latest"]},
+            "matrix": {"os": ["ubuntu-24.04", "windows-latest"]},
         },
     )
     require(
         "WF011_RUNNERS",
         tests.get("runs-on") == "${{ matrix.os }}"
-        and ui.get("runs-on") == "ubuntu-latest",
+        and ui.get("runs-on") == "ubuntu-24.04",
     )
     require(
         "WF012_TIMEOUTS",
@@ -863,6 +873,13 @@ class UiSmokeSpecificContractTest(unittest.TestCase):
         ):
             self.assertIn(release, text)
             self.assertIn(workflow_tag, text)
+        for runner_fact in (
+            "actions/runner-images#14748",
+            "`ubuntu-24.04`",
+            "`tests (ubuntu-24.04)`",
+            "Ubuntu 26.04 须单独评审",
+        ):
+            self.assertIn(runner_fact, text)
         for forbidden in (
             "supply-chain lock",
             "immutable Actions",
