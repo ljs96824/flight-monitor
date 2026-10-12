@@ -1,6 +1,7 @@
 import inspect
 import json
 import logging
+import math
 import os
 import re
 import traceback
@@ -578,9 +579,10 @@ def _as_bool(value) -> bool:
 
 def _valid_price(value) -> bool:
     try:
-        return float(value) > 0
-    except (TypeError, ValueError):
+        price = float(value)
+    except (TypeError, ValueError, OverflowError):
         return False
+    return math.isfinite(price) and price > 0
 
 
 def _map_transfer_policy(policy: str | None) -> str:

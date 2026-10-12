@@ -177,7 +177,7 @@ def _to_decimal(value) -> Decimal | None:
 def round_display_price(value) -> int | None:
     """金额展示唯一舍入口：Decimal ROUND_HALF_UP 到整数元。"""
     number = _to_decimal(value)
-    if number is None:
+    if number is None or not number.is_finite():
         return None
     return int(number.quantize(Decimal("1"), rounding=DISPLAY_PRICE_ROUNDING))
 

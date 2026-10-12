@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import os
 import re
 from datetime import datetime
@@ -233,9 +234,10 @@ def _append_source_price(target: dict, source_name: str | None, price) -> None:
 
 def _valid_price(value) -> bool:
     try:
-        return float(value) > 0
-    except (TypeError, ValueError):
+        price = float(value)
+    except (TypeError, ValueError, OverflowError):
         return False
+    return math.isfinite(price) and price > 0
 
 
 def _source_status_is_failure(status) -> bool:
