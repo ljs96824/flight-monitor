@@ -40,7 +40,7 @@ from analyzer import (
 )
 from collector import _normalize_detail_flight, save_raw_response
 from api_usage import load_usage_strict, usage_ledger_health, usage_snapshot
-from basket_sentinel import run_basket_sentinel
+from basket_sentinel import basket_run_expectation, run_basket_sentinel
 from collection_plan import build_collection_plan, load_collection_settings
 from collection_singleflight import (
     acquire_collection_singleflight,
@@ -124,6 +124,7 @@ CONFIG_PATH = DEFAULT_CONFIG_PATH
 RUNTIME_SETTINGS_PATH = RUNTIME_CONFIG_PATH
 API_USAGE_PATH = DATA_DIR / "api_usage.json"
 BASKET_SENTINEL_STATE_PATH = DATA_DIR / "basket_sentinel.json"
+BASKET_STATE_PATH = DATA_DIR / "basket_state.json"
 ROUND_LOG_ROOT = DATA_DIR / "logs" / "rounds"
 PYTHONANYWHERE_PAYLOAD_PATH = "/home/{user}/flight-monitor/data/payloads/{filename}"
 AIRPORT_COMBINATION_MIN_OPTIONS = 5
@@ -317,6 +318,27 @@ def _notify_system_alert(subscriptions: list[dict], title: str, content: str) ->
     return False
 
 
+def _basket_run_expectation_for_main() -> dict:
+    from research_state_store import load_research_state
+
+    try:
+        settings = load_collection_settings(
+            CONFIG_PATH,
+            runtime_path=RUNTIME_SETTINGS_PATH,
+            require_runtime=True,
+        )
+    except Exception as exc:
+        safe_log(f"[篮子哨兵] 篮子配置不可读,按应运行检查 原因={type(exc).__name__}:{exc}")
+        settings = None
+    state = None
+    try:
+        if BASKET_STATE_PATH.exists():
+            state = load_research_state(BASKET_STATE_PATH)
+    except Exception as exc:
+        safe_log(f"[篮子哨兵] 篮子状态不可读,按应运行检查 原因={type(exc).__name__}:{exc}")
+    return basket_run_expectation(settings, state)
+
+
 def _run_basket_sentinel_for_main(
     subscriptions: list[dict],
     *,
@@ -324,6 +346,10 @@ def _run_basket_sentinel_for_main(
 ) -> dict:
     threshold = os.getenv("BASKET_SENTINEL_AFTER", "20:00")
     try:
+        expectation = _basket_run_expectation_for_main()
+        if not expectation["expected"]:
+            safe_log(f"[篮子哨兵] 今日不要求篮子运行 原因={expectation['reason']}")
+            return {"due": False, "notified": False, "status": "not_expected", "reason": expectation["reason"]}
         return run_basket_sentinel(
             usage_payload=load_usage_strict(API_USAGE_PATH),
             now=now,
