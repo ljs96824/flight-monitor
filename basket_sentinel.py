@@ -9,6 +9,7 @@ from pathlib import Path
 import uuid
 
 from log_utils import safe_log
+from research_cohort import research_runtime_enabled
 
 
 DEFAULT_BASKET_SENTINEL_THRESHOLD = "20:00"
@@ -54,6 +55,21 @@ def evaluate_basket_sentinel(
         "threshold": threshold,
         "reason": "今日篮子未运行" if due else "",
     }
+
+
+def basket_run_expectation(settings: dict | None, state: dict | None) -> dict:
+    """按配置判断今日是否应有篮子台账，口径与 basket_collect 的配置/运行态跳过条件一致。
+
+    settings 或 state 不可读时传 None：此时无法证明篮子被有意停用，按应运行处理，哨兵照常检查。
+    """
+    if settings is None:
+        return {"expected": True, "reason": "settings_unavailable"}
+    if not bool(settings.get("research_basket_enabled")):
+        return {"expected": False, "reason": "research_basket_disabled"}
+    strategy = str(settings.get("research_basket_strategy") or "cohort_v2").strip().lower()
+    if strategy == "cohort_v2" and state is not None and not research_runtime_enabled(state, True):
+        return {"expected": False, "reason": "research_runtime_disabled"}
+    return {"expected": True, "reason": ""}
 
 
 def _load_state(path: Path) -> dict:
