@@ -7,6 +7,7 @@ import re
 import json
 import time
 import html
+import math
 from contextvars import ContextVar
 from datetime import date, datetime, timedelta
 from functools import wraps
@@ -243,9 +244,9 @@ def format_price(price) -> str:
     """Format a CNY price."""
     try:
         value = float(price)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return "暂无报价"
-    if value <= 0:
+    if not math.isfinite(value) or value <= 0:
         return "暂无报价"
     rounded = _round_push_price(value)
     return f"¥{rounded:,}" if rounded is not None else "暂无报价"
@@ -253,9 +254,10 @@ def format_price(price) -> str:
 
 def _has_valid_price(price) -> bool:
     try:
-        return float(price) > 0
-    except (TypeError, ValueError):
+        value = float(price)
+    except (TypeError, ValueError, OverflowError):
         return False
+    return math.isfinite(value) and value > 0
 
 
 def _price_text(price) -> str:
@@ -509,16 +511,17 @@ def _log_recommended_total_consistency(plan: dict) -> None:
 def _valid_price_float(value):
     try:
         price = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
-    return price if price > 0 else None
+    return price if math.isfinite(price) and price > 0 else None
 
 
 def _to_float(value):
     try:
-        return float(value)
-    except (TypeError, ValueError):
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
         return None
+    return number if math.isfinite(number) else None
 
 
 def _preference_value(route_info: dict | None, analysis_result: dict | None, key: str, default=None):

@@ -199,7 +199,7 @@ class ReturnPhaseProcessingTest(unittest.TestCase):
                 self.stack.enter_context(patch.object(module, "datetime", self.clock))
 
     def run_case(self, *, today=date(2026, 10, 2), panel=False, fail_return=False,
-                 sub=None, price=1200, accepted=True, history=()):
+                 sub=None, price=1200, accepted=True, history=(), extra_flights=None):
         self.clock.today = today
         main, notifier = self.main, self.notifier
         sub = copy.deepcopy(sub if sub is not None else subscription())
@@ -213,7 +213,8 @@ class ReturnPhaseProcessingTest(unittest.TestCase):
             if day < today.isoformat() or (fail_return and origins == ["KIX"]):
                 return {"flights": [], "source_errors": [{"source": "juhe", "error": "synthetic unavailable"}]}
             response = {
-                "flights": [flight(origins == ["PVG"], price)],
+                "flights": [flight(origins == ["PVG"], price),
+                            *copy.deepcopy((extra_flights or {}).get("out" if origins == ["PVG"] else "ret", []))],
                 "collected_at": "2026-10-02T16:00:00", "price_insights": {},
                 "source_stats": {}, "source_errors": [],
                 "collection_freshness": [{"source": "juhe", "cache_status": "panel_reuse" if panel else "fresh"}],
