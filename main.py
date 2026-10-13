@@ -1100,7 +1100,7 @@ def _fresh_cached_flights(path: Path, max_age_hours: int = 6) -> list[dict] | No
     try:
         cached = json.loads(path.read_text(encoding="utf-8"))
         updated_at = datetime.fromisoformat(str(cached.get("updated_at")))
-        if datetime.now() - updated_at <= timedelta(hours=max_age_hours):
+        if timedelta(0) <= datetime.now() - updated_at <= timedelta(hours=max_age_hours):
             print(f"[当天往返备选] 使用缓存 {path}")
             return cached.get("flights") or []
     except Exception as exc:

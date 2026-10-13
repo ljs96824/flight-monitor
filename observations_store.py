@@ -140,8 +140,10 @@ def load_fresh_observation_snapshot(
         if not latest_row:
             return None
         latest = _parse_observed_at(latest_row[0])
-        if latest is None or _observation_age(latest, now) > timedelta(
-            hours=float(freshness_hours)
+        if latest is None or not (
+            timedelta(0)
+            <= _observation_age(latest, now)
+            <= timedelta(hours=float(freshness_hours))
         ):
             return None
         rows = connection.execute(
