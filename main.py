@@ -1184,10 +1184,22 @@ def _log_delivery_channels(sub, route, method, email_sent, pushplus_sent, *, abo
         print(f"[推送渠道] 记录失败: {type(exc).__name__}")
 
 
+def _persist_delivered_payload(payload: dict, route: str) -> None:
+    """渠道受理后保存推送快照；存档失败只记录，不改变已发送结论。"""
+    try:
+        persist_notification_payload(payload)
+    except Exception as exc:
+        print(f"[推送存档失败] {type(exc).__name__}: {exc}")
+        print(traceback.format_exc())
+        logging.warning(f"{route} 推送已发送但存档失败: {exc}", exc_info=True)
+
+
 def _deliver_notification(sub: dict, route: str, message_kwargs: dict) -> bool:
     method = None
     email_sent = None
     pushplus_sent = None
+    payload = None
+    persist_attempted = False
     try:
         notification_goals = normalize_notification_goals(sub.get("notification_goals"))
         method = notification_goals["method"]
@@ -1269,12 +1281,8 @@ def _deliver_notification(sub: dict, route: str, message_kwargs: dict) -> bool:
         _log_delivery_channels(sub, route, method, email_sent, pushplus_sent)
         if sent:
             print("[推送] 开始保存推送payload/页面详情")
-            try:
-                persist_notification_payload(payload)
-            except Exception as exc:
-                print(f"[推送存档失败] {type(exc).__name__}: {exc}")
-                print(traceback.format_exc())
-                logging.warning(f"{route} 推送已发送但存档失败: {exc}", exc_info=True)
+            persist_attempted = True
+            _persist_delivered_payload(payload, route)
             print("[推送] 发送完成")
         else:
             print(f"[推送] 发送结果为False，method={method}, email={'yes' if email else 'no'}")
@@ -1284,7 +1292,13 @@ def _deliver_notification(sub: dict, route: str, message_kwargs: dict) -> bool:
         print(f"[推送失败] {type(e).__name__}: {e}")
         print(traceback.format_exc())
         _log_delivery_channels(sub, route, method, email_sent, pushplus_sent, aborted=type(e).__name__)
-        return False
+        if not (email_sent or pushplus_sent):
+            return False
+        print("[推送] 中断前已有渠道受理，按已发送处理")
+        if not persist_attempted:
+            print("[推送] 开始保存推送payload/页面详情")
+            _persist_delivered_payload(payload, route)
+        return True
 
 
 def load_file_subscriptions() -> list[dict]:

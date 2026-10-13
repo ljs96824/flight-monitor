@@ -1,7 +1,7 @@
 """分渠道发送日志：每个渠道只报告自己的受理结果，另写一行结构化汇总。
 
 取值：None=本轮未尝试该渠道；False=已尝试但未被受理(含未填邮箱、发送函数返回 False)；True=已被受理。
-any_sent 与 _deliver_notification 的返回值同义，返回值语义与后续存档门槛不变。
+any_sent 与 _deliver_notification 的返回值同义；中途异常时只要已有渠道受理，仍返回 True 并存档(DL-2)。
 """
 
 import io
@@ -92,8 +92,8 @@ class DeliveryChannelLogTest(unittest.TestCase):
     def test_abort_after_email_keeps_channel_evidence(self):
         result, records, lines, email_calls, push_calls, persist_calls = _deliver(
             "both", email_ok=True, push_render_error=RuntimeError("render failed"))
-        self.assertIs(result, False, "return_semantics_unchanged")
-        self.assertEqual((email_calls, push_calls, persist_calls), (1, 0, 0))
+        self.assertIs(result, True, "partial_send_counts_as_sent")
+        self.assertEqual((email_calls, push_calls, persist_calls), (1, 0, 1))
         self.assertEqual(len(records), 1)
         self.assert_record(records[0], "both", True, None)
         self.assertEqual(records[0]["aborted"], "RuntimeError")
