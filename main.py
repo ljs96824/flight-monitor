@@ -261,6 +261,48 @@ def _log_subscription_failure(sub: dict, *, source_errors=None, reason: str | No
     )
 
 
+def _send_alert_channels(method, email, title: str, content: str) -> tuple[dict, dict]:
+    """逐渠道发送告警类消息，一个渠道抛错不影响另一个渠道。
+
+    取值：None=未尝试该渠道；False=已尝试但未被受理(含未填邮箱、发送抛错)；True=已被受理。
+    """
+    channels = {"email_sent": None, "pushplus_sent": None}
+    errors = {}
+    if method in {"email", "both"}:
+        channels["email_sent"] = False
+        if email:
+            try:
+                channels["email_sent"] = bool(send_email(email, title, content, {}))
+            except Exception as exc:
+                errors["email"] = exc
+    if method in {"pushplus", "both"}:
+        channels["pushplus_sent"] = False
+        try:
+            channels["pushplus_sent"] = bool(send(content, title=title))
+        except Exception as exc:
+            errors["pushplus"] = exc
+    return channels, errors
+
+
+def _log_alert_channels(prefix: str, sub: dict, method, channels: dict, errors: dict, route=None) -> None:
+    """告警类消息的分渠道结构化记录；记录失败不影响发送结论。"""
+    try:
+        record = {"subscription": _subscription_label(sub)}
+        if route:
+            record["route"] = route
+        record.update(
+            method=method,
+            email_sent=channels["email_sent"],
+            pushplus_sent=channels["pushplus_sent"],
+            any_sent=bool(channels["email_sent"] or channels["pushplus_sent"]),
+        )
+        for channel, exc in errors.items():
+            record[f"{channel}_error"] = type(exc).__name__
+        safe_log_json(prefix, record)
+    except Exception as exc:
+        print(f"{prefix.strip()} 记录失败: {type(exc).__name__}")
+
+
 def _notify_subscription_failure(sub: dict, *, source_errors=None, reason: str | None = None) -> bool:
     notification_goals = normalize_notification_goals(sub.get("notification_goals"))
     method = notification_goals["method"]
@@ -272,22 +314,11 @@ def _notify_subscription_failure(sub: dict, *, source_errors=None, reason: str |
         f"原因: {failure_reason}<br>"
         "订阅已保留,下轮自动重试。"
     )
-    sent = False
-    try:
-        if method in {"email", "both"} and email:
-            sent = send_email(
-                email,
-                f"【航班监控采集失败】{route_label}",
-                content,
-                {},
-            ) or sent
-        if method in {"pushplus", "both"}:
-            sent = send(
-                content,
-                title=f"【航班监控采集失败】{route_label}",
-            ) or sent
-    except Exception as exc:
-        safe_log(f"[失败通知] 发送失败: {type(exc).__name__}: {exc}")
+    channels, errors = _send_alert_channels(method, email, f"【航班监控采集失败】{route_label}", content)
+    for channel, exc in errors.items():
+        safe_log(f"[失败通知] 发送失败 渠道={channel}: {type(exc).__name__}: {exc}")
+    sent = bool(channels["email_sent"] or channels["pushplus_sent"])
+    _log_alert_channels("[失败通知渠道] ", sub, method, channels, errors, route=route_label)
     if not sent:
         sub["last_failure"] = {
             "route": route_label,
@@ -305,15 +336,11 @@ def _notify_system_alert(subscriptions: list[dict], title: str, content: str) ->
         email = goals["email"]
         if method == "page_only":
             continue
-        sent = False
-        try:
-            if method in {"email", "both"} and email:
-                sent = send_email(email, title, content, {}) or sent
-            if method in {"pushplus", "both"}:
-                sent = send(content, title=title) or sent
-        except Exception as exc:
-            safe_log(f"[篮子哨兵] 通知渠道失败 原因={type(exc).__name__}:{exc}")
-        if sent:
+        channels, errors = _send_alert_channels(method, email, title, content)
+        for channel, exc in errors.items():
+            safe_log(f"[篮子哨兵] 通知渠道失败 渠道={channel} 原因={type(exc).__name__}:{exc}")
+        _log_alert_channels("[告警渠道] ", sub, method, channels, errors)
+        if channels["email_sent"] or channels["pushplus_sent"]:
             return True
     safe_log("[篮子哨兵] 无可用通知渠道")
     return False
