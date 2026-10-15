@@ -1493,6 +1493,7 @@ def _merge_source_errors(target: list[dict], incoming) -> None:
 
 
 def _dedupe_flights(flights: list[dict]) -> list[dict]:
+    """同一航班组合、同舱位、同起降机场只保留最低价；路线摘要是各来源格式不一的展示文本，不参与判重。"""
     seen = {}
     for flight in flights:
         if not _valid_price(flight.get("price")):
@@ -1500,7 +1501,8 @@ def _dedupe_flights(flights: list[dict]) -> list[dict]:
         key = (
             str(flight.get("flight_combo", "")).replace(" ", "").upper(),
             flight.get("cabin_class") or "economy",
-            flight.get("route_summary") or "",
+            _flight_airport_value(flight, "departure"),
+            _flight_airport_value(flight, "arrival"),
         )
         if key not in seen or float(flight.get("price")) < float(seen[key].get("price")):
             seen[key] = flight
