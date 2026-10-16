@@ -95,7 +95,8 @@ class ApiUsageConcurrencyTest(unittest.TestCase):
     def test_two_threads_record_one_hundred_entries_each_without_loss(self):
         from api_usage import initialize_usage_ledger, load_usage_strict, record_actual_requests
 
-        with tempfile.TemporaryDirectory() as tmp:
+        # Windows 上被拒替换后残留的 .tmp 可能仍被其他进程占用；清理失败不影响本用例的计数断言(G15)。
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             usage_path = Path(tmp) / "api_usage.json"
             initialize_usage_ledger(usage_path)
             errors = []
