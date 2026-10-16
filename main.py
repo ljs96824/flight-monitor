@@ -1256,12 +1256,14 @@ def _deliver_notification(sub: dict, route: str, message_kwargs: dict) -> bool:
         print("[推送] 开始渲染邮件/详情HTML")
         if method in {"email", "both"}:
             print("[推送] 邮件方式已启用，开始生成折线图PNG/邮件HTML")
-        email_rendered = render_email(delivery_payload)
-        if len(email_rendered) == 3:
-            subject, full_html, inline_images = email_rendered
+            email_rendered = render_email(delivery_payload)
+            if len(email_rendered) == 3:
+                subject, full_html, inline_images = email_rendered
+            else:
+                subject, full_html = email_rendered
+                inline_images = {}
         else:
-            subject, full_html = email_rendered
-            inline_images = {}
+            print("[推送] 未选择邮件方式，跳过折线图PNG/邮件HTML")
         print("[推送] 邮件/详情HTML渲染完成")
         detail_html = render_detail_html(payload)
         page_saved = _save_result_for_page(subscription_id, detail_html, payload)
