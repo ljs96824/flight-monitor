@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import traceback
 import unittest
+import warnings
 from unittest.mock import patch
 
 
@@ -253,6 +254,28 @@ def _captured_output(stdout, stderr):
     }
 
 
+G14_FAST_FAIL_RETURNCODE = 3221226505  # 0xC0000409：Windows 快速失败
+
+
+class NativeCrashRetried(UserWarning):
+    """原生模式 Node 子进程以 G14 特征崩溃后，已用同一输入重跑一次。"""
+
+
+def _is_g14_native_crash(completed):
+    """G14 特征：退出码 0xC0000409、stdout 为空、stderr 只有阶段标记且恰为 1–4(崩在执行中)。"""
+    if completed.returncode != G14_FAST_FAIL_RETURNCODE:
+        return False
+    stderr = completed.stderr.decode("utf-8", errors="replace") if isinstance(completed.stderr, bytes) \
+        else (completed.stderr or "")
+    if any(line and not line.startswith("G14_PHASE ") for line in stderr.splitlines()):
+        return False
+    captured = _captured_output(completed.stdout, completed.stderr)
+    return (not captured["stdout_nonempty"]
+            and [phase["sequence"] for phase in captured["received_phases"]] == [1, 2, 3, 4]
+            and not captured["phase_order_anomaly"]
+            and captured["invalid_phase_lines"] == 0)
+
+
 class UiSmokePageTargetTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -274,25 +297,36 @@ class UiSmokePageTargetTest(unittest.TestCase):
         if mode == "controlled":
             self.assertEqual(block.count("await waitForPageTarget()"), 1)
             block = block.replace("await waitForPageTarget()", "await waitForPageTarget(1100, 120)")
-        try:
-            result = subprocess.run(
-                [self.node, "-e", NODE_HARNESS],
-                input=json.dumps({"block": block, "scenario": scenario, "mode": mode}),
-                text=True, encoding="utf-8", capture_output=True, timeout=30,
-            )
-        except subprocess.TimeoutExpired as exc:
-            message = self._failure_message("SUBPROCESS_TIMEOUT", mode, scenario,
-                                            exc.stdout, exc.stderr, timeout=exc.timeout)
-            raise self.failureException(message) from None
+        payload = json.dumps({"block": block, "scenario": scenario, "mode": mode})
+        retried = {}
+        while True:
+            try:
+                result = subprocess.run(
+                    [self.node, "-e", NODE_HARNESS],
+                    input=payload,
+                    text=True, encoding="utf-8", capture_output=True, timeout=30,
+                )
+            except subprocess.TimeoutExpired as exc:
+                message = self._failure_message("SUBPROCESS_TIMEOUT", mode, scenario,
+                                                exc.stdout, exc.stderr, timeout=exc.timeout, **retried)
+                raise self.failureException(message) from None
+            if mode == "native" and not retried and _is_g14_native_crash(result):
+                # G14：Windows 上原生模式偶发 Node 快速失败；同一输入只重跑一次，并以告警留痕。
+                first = self._failure_message("NONZERO_EXIT", mode, scenario,
+                                              result.stdout, result.stderr, returncode=result.returncode)
+                warnings.warn(NativeCrashRetried("G14_RETRY " + first), stacklevel=2)
+                retried = {"g14_retry": True}
+                continue
+            break
         if result.returncode != 0:
             message = self._failure_message("NONZERO_EXIT", mode, scenario,
-                                            result.stdout, result.stderr, returncode=result.returncode)
+                                            result.stdout, result.stderr, returncode=result.returncode, **retried)
             raise self.failureException(message) from None
         try:
             decoded = json.loads(result.stdout)
         except (ValueError, TypeError):
             message = self._failure_message("JSON_PARSE_ERROR", mode, scenario,
-                                            result.stdout, result.stderr, returncode=result.returncode)
+                                            result.stdout, result.stderr, returncode=result.returncode, **retried)
             raise self.failureException(message) from None
         result = decoded
         self.assertTrue(result["compiled"])
