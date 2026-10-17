@@ -41,7 +41,7 @@ from analyzer import (
 )
 from collector import _normalize_detail_flight, save_raw_response
 from api_usage import load_usage_strict, usage_ledger_health, usage_snapshot
-from basket_sentinel import basket_run_expectation, run_basket_sentinel
+from basket_sentinel import basket_run_expectation, read_basket_round_evidence, run_basket_sentinel
 from collection_plan import build_collection_plan, load_collection_settings
 from collection_singleflight import (
     acquire_collection_singleflight,
@@ -383,6 +383,8 @@ def _run_basket_sentinel_for_main(
             now=now,
             threshold=threshold,
             state_path=BASKET_SENTINEL_STATE_PATH,
+            round_evidence=read_basket_round_evidence(ROUND_LOG_ROOT, (now or datetime.now()).date()),
+            expectation_reason=expectation["reason"],
             notifier=lambda title, content: _notify_system_alert(
                 subscriptions,
                 title,
