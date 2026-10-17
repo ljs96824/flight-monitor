@@ -597,6 +597,26 @@ def run_basket(
         singleflight.release()
 
 
+def _close_round_archive_after_setup_failure(round_archive_started: bool, round_id: str, exc: Exception) -> None:
+    """轮档已开、本轮在进入采集前抛错：记下原因，以 interrupted 关闭轮档并恢复标准流。
+
+    收尾自身失败只记一行，不覆盖原始异常(调用方随后原样 raise)；不重建状态、不改准入与配额。
+    """
+    if not round_archive_started:
+        return
+    try:
+        safe_log(f"[篮子中断] round_id={round_id} 阶段=准备 原因={type(exc).__name__}:{exc}")
+    except Exception:
+        pass
+    try:
+        end_round_log_archive(status="interrupted")
+    except Exception as close_exc:
+        try:
+            safe_log(f"[轮档失败] round_id={round_id} 关闭失败={type(close_exc).__name__}:{close_exc}")
+        except Exception:
+            pass
+
+
 def _run_basket_locked(
     *,
     today: date | None = None,
@@ -620,19 +640,23 @@ def _run_basket_locked(
         round_archive_started = True
     except Exception as exc:
         safe_log(f"[轮档失败] round_id={round_id} 原因={type(exc).__name__}:{exc}")
-    settings = settings or load_collection_settings(
-        CONFIG_PATH,
-        runtime_path=RUNTIME_SETTINGS_PATH,
-        require_runtime=True,
-    )
-    state = load_or_create_state(state_path, today)
-    state_revision = int(state["revision"])
-    research_strategy = str(settings.get("research_basket_strategy") or "cohort_v2")
-    cohort_enabled = (
-        research_runtime_enabled(state, True)
-        if research_strategy == "cohort_v2"
-        else False
-    )
+    try:
+        settings = settings or load_collection_settings(
+            CONFIG_PATH,
+            runtime_path=RUNTIME_SETTINGS_PATH,
+            require_runtime=True,
+        )
+        state = load_or_create_state(state_path, today)
+        state_revision = int(state["revision"])
+        research_strategy = str(settings.get("research_basket_strategy") or "cohort_v2")
+        cohort_enabled = (
+            research_runtime_enabled(state, True)
+            if research_strategy == "cohort_v2"
+            else False
+        )
+    except Exception as exc:
+        _close_round_archive_after_setup_failure(round_archive_started, round_id, exc)
+        raise
     if research_strategy == "cohort_v2" and not cohort_enabled:
         safe_log("[篮子跳过] 原因=研究采样运行态已停用,用户监控继续")
         if round_archive_started:
@@ -709,22 +733,29 @@ def _run_basket_locked(
             "failed": 0,
             "written": 0,
         }
+    except Exception as exc:
+        _close_round_archive_after_setup_failure(round_archive_started, round_id, exc)
+        raise
 
-    basket_requests = [
-        {**item, "_consumer_ref": basket_consumer_ref(item, index)}
-        for index, item in enumerate(basket_requests)
-    ]
-    reset_request_cache()
-    round_context_tokens = None
-    start_request_cache_round(
-        round_id,
-        track_usage=True,
-        usage_path=usage_path,
-        quota_budgets=settings["source_quota_budget"],
-        workload_class=workload_class,
-        entrypoint="basket_canary" if workload_class == CANARY else "research_basket",
-    )
-    safe_log(f"[篮子轮次] round_id={round_id}")
+    try:
+        basket_requests = [
+            {**item, "_consumer_ref": basket_consumer_ref(item, index)}
+            for index, item in enumerate(basket_requests)
+        ]
+        reset_request_cache()
+        round_context_tokens = None
+        start_request_cache_round(
+            round_id,
+            track_usage=True,
+            usage_path=usage_path,
+            quota_budgets=settings["source_quota_budget"],
+            workload_class=workload_class,
+            entrypoint="basket_canary" if workload_class == CANARY else "research_basket",
+        )
+        safe_log(f"[篮子轮次] round_id={round_id}")
+    except Exception as exc:
+        _close_round_archive_after_setup_failure(round_archive_started, round_id, exc)
+        raise
 
     queues = 0
     success = 0
