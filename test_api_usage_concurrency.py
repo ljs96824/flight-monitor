@@ -1,9 +1,14 @@
 import json
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+
+
+# 两个写入线程合计的等待预算(G16：Windows CI 上原先每线程 15 秒曾不够；死锁仍会在预算内被报出)。
+JOIN_TIMEOUT_SECONDS = 60
 
 
 class ApiUsageConcurrencyTest(unittest.TestCase):
@@ -100,6 +105,7 @@ class ApiUsageConcurrencyTest(unittest.TestCase):
             usage_path = Path(tmp) / "api_usage.json"
             initialize_usage_ledger(usage_path)
             errors = []
+            progress = {"a": 0, "b": 0}
 
             def worker(prefix):
                 try:
@@ -110,21 +116,32 @@ class ApiUsageConcurrencyTest(unittest.TestCase):
                             day="2026-07-22",
                             round_id=f"{prefix}-{index}",
                         )
+                        progress[prefix] += 1
                 except Exception as exc:  # pragma: no cover - 由断言报告线程异常
                     errors.append(exc)
 
             threads = [
-                threading.Thread(target=worker, args=("a",)),
-                threading.Thread(target=worker, args=("b",)),
+                threading.Thread(target=worker, args=("a",), name="ledger-a"),
+                threading.Thread(target=worker, args=("b",), name="ledger-b"),
             ]
+            started = time.monotonic()
             for thread in threads:
                 thread.start()
+            deadline = started + JOIN_TIMEOUT_SECONDS
             for thread in threads:
-                thread.join(timeout=15)
+                thread.join(timeout=max(0.0, deadline - time.monotonic()))
+            elapsed = time.monotonic() - started
+            alive = [thread.name for thread in threads if thread.is_alive()]
+            # 超时时写明已用时间与各线程已写入条数，区分"慢"与"卡住"。
+            self.assertEqual(
+                alive,
+                [],
+                f"threads_still_running={alive} elapsed={elapsed:.1f}s "
+                f"budget={JOIN_TIMEOUT_SECONDS}s progress={dict(progress)}",
+            )
 
             payload = load_usage_strict(usage_path)
 
-        self.assertFalse(any(thread.is_alive() for thread in threads))
         self.assertEqual(errors, [])
         self.assertEqual(payload["dates"]["2026-07-22"]["juhe"], 200)
         self.assertEqual(len(payload["entries"]), 200)
