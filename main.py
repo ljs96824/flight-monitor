@@ -1346,7 +1346,8 @@ def _deliver_notification(sub: dict, route: str, message_kwargs: dict) -> bool:
         return True
 
 
-def load_file_subscriptions() -> list[dict]:
+def load_file_subscriptions(*, failures: list | None = None) -> list[dict]:
+    """读取本地订阅。failures 为列表时，规范化失败而跳过的订阅({"id", "error"})会追加进去，供批次汇总计数。"""
     if not SUBSCRIPTIONS_PATH.exists():
         return []
     subscriptions = read_json(SUBSCRIPTIONS_PATH)
@@ -1377,6 +1378,8 @@ def load_file_subscriptions() -> list[dict]:
             continue
     if skipped:
         print(f"[订阅汇总] 跳过{len(skipped)}条无效订阅,正常处理{len(active)}条")
+        if failures is not None:
+            failures.extend(skipped)
     return [
         sub
         for sub in active
@@ -2967,6 +2970,21 @@ def _process_scheduled_subscription(
     return result
 
 
+def _preflight_summary_line(checked: int, skipped: int, failed: int) -> str:
+    """[订阅前置校验] 汇总行；没有预检失败时与原格式逐字相同。"""
+    return f"[订阅前置校验] 本轮检查={checked} 跳过={skipped}" + (f" 预检失败={failed}" if failed else "")
+
+
+def _batch_result_line(success: int, failed: int, exceptions: int, skipped: int,
+                       preflight_failed: int, status: str) -> str:
+    """[批次结果] 汇总行；没有预检失败时与原格式逐字相同。"""
+    return (
+        f"[批次结果] 订阅处理 成功={success} 失败={failed}(其中异常={exceptions}) 前置跳过={skipped}"
+        + (f" 预检失败={preflight_failed}" if preflight_failed else "")
+        + f" status={status}"
+    )
+
+
 def _run_locked(*, sync_remote: bool, round_id: str):
     if sync_remote:
         try:
@@ -2977,16 +2995,19 @@ def _run_locked(*, sync_remote: bool, round_id: str):
 
     # 初始化
     init_db()
-    subscriptions = load_file_subscriptions()
-    if not subscriptions:
+    load_failures: list[dict] = []
+    subscriptions = load_file_subscriptions(failures=load_failures)
+    if not subscriptions and not load_failures:
         print("暂无订阅，请通过表单添加")
         logging.info("暂无订阅，请通过表单添加")
         safe_log("[订阅前置校验] 本轮检查=0 跳过=0")
         _run_basket_sentinel_for_main([])
         return
 
-    preflight_checked = 0
+    # 本轮检查数 = 前置跳过 + 预检失败 + 进入处理；加载时规范化失败的订阅计入检查数与预检失败
+    preflight_checked = len(load_failures)
     preflight_skipped = 0
+    preflight_failed = len(load_failures)
     current_day = _shanghai_today()
     ready: list[tuple[dict, dict]] = []
     for sub in subscriptions:
@@ -2994,6 +3015,7 @@ def _run_locked(*, sync_remote: bool, round_id: str):
         try:
             preflight = evaluate_subscription_preflight(sub, today=current_day)
         except Exception as exc:
+            preflight_failed += 1
             _log_subscription_failure(
                 sub,
                 reason=f"前置校验失败: {type(exc).__name__}: {exc}",
@@ -3006,9 +3028,9 @@ def _run_locked(*, sync_remote: bool, round_id: str):
         ready.append((sub, preflight))
 
     if not ready:
-        safe_log(
-            f"[订阅前置校验] 本轮检查={preflight_checked} 跳过={preflight_skipped}"
-        )
+        if preflight_failed:
+            safe_log(_batch_result_line(0, 0, 0, preflight_skipped, preflight_failed, "failed"))
+        safe_log(_preflight_summary_line(preflight_checked, preflight_skipped, preflight_failed))
         _run_basket_sentinel_for_main(subscriptions)
         return
 
@@ -3074,12 +3096,10 @@ def _run_locked(*, sync_remote: bool, round_id: str):
                 )
                 continue
         round_status = (
-            "ok" if processed_failed == 0 else "partial" if processed_success else "failed"
+            "ok" if processed_failed + preflight_failed == 0 else "partial" if processed_success else "failed"
         )
-        safe_log(
-            f"[批次结果] 订阅处理 成功={processed_success} 失败={processed_failed}"
-            f"(其中异常={processing_exceptions}) 前置跳过={preflight_skipped} status={round_status}"
-        )
+        safe_log(_batch_result_line(processed_success, processed_failed, processing_exceptions,
+                                    preflight_skipped, preflight_failed, round_status))
     finally:
         if round_context_tokens is not None:
             reset_current_round(round_context_tokens)
@@ -3094,9 +3114,7 @@ def _run_locked(*, sync_remote: bool, round_id: str):
             except Exception as exc:
                 safe_log(f"[轮档失败] round_id={round_id} 关闭失败={type(exc).__name__}:{exc}")
 
-    safe_log(
-        f"[订阅前置校验] 本轮检查={preflight_checked} 跳过={preflight_skipped}"
-    )
+    safe_log(_preflight_summary_line(preflight_checked, preflight_skipped, preflight_failed))
     logging.info("本轮执行完成")
 
 
