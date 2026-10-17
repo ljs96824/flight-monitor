@@ -325,8 +325,9 @@ class ResearchSubscriptionInputTest(unittest.TestCase):
             "NO_DOWNSTREAM_CALLS", "INPUT_GATE", "INPUT_MISSING_FIRST"]})
 
     def test_mutation_reraise_is_rejected(self):
+        # R4 起准备阶段的异常也会关闭轮档并恢复标准流，故该变异下 stdout/stderr/轮档状态三项不再失败。
         self._assert_mutation("reraise", {"test_null_input_blocks_and_closes_archive": [
-            "no_escape", "end_marker", "stdout_restored", "stderr_restored", "state_cleared"]})
+            "no_escape", "end_marker"]})
 
     def test_mutation_empty_rejected_is_rejected(self):
         self._assert_mutation("reject_empty", {
