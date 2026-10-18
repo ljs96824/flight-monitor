@@ -10,6 +10,7 @@ if __name__ == "__main__":
     )
 
 import json
+import math
 import os
 import queue
 import re
@@ -1038,6 +1039,24 @@ def _subscription_decision_text(value) -> str:
     return str(value or "")
 
 
+def _list_price_text(price) -> str:
+    """列表"最近判断"里的价格片段。
+
+    显示条件与采集入口 main._valid_price 同口径：float 转换失败(含溢出)、非有限或不大于 0 即不显示；
+    只认 int/float 沿用原行为；正有限价格的文字(int 截断、千分位)不变。
+    详情 payload 由 json.dumps 默认 allow_nan=True 落盘，Infinity/NaN/1e400 读回为非有限 float。
+    """
+    if not isinstance(price, (int, float)):
+        return ""
+    try:
+        number = float(price)
+    except OverflowError:
+        return ""
+    if not math.isfinite(number) or number <= 0:
+        return ""
+    return f"(¥{int(price):,})"
+
+
 def _subscription_last_decision(sub: dict, index: int) -> str:
     subscription_id = stable_subscription_id(sub) or str(index)
     record = _load_payload_result(subscription_id) or {}
@@ -1051,7 +1070,7 @@ def _subscription_last_decision(sub: dict, index: int) -> str:
         or "已生成"
     )
     price = payload.get("current_price") or payload.get("display_price") or payload.get("price")
-    price_text = f"(¥{int(price):,})" if isinstance(price, (int, float)) and price else ""
+    price_text = _list_price_text(price)
     time_text = _relative_time_label(str(record.get("created_at") or payload.get("created_at") or ""))
     return f"{decision}{price_text}" + (f" · {time_text}" if time_text else "")
 
