@@ -134,6 +134,9 @@ def merge_subscriptions(
 
 
 def download_remote_subscriptions() -> list[dict]:
+    if os.environ.get("NO_LIVE_API") == "1":
+        safe_log("[sync] NO_LIVE_API=1，已阻止真实 PythonAnywhere 下载")
+        return []
     token = os.environ.get("PYTHONANYWHERE_TOKEN", "").strip()
     user = os.environ.get("PYTHONANYWHERE_USER", "").strip() or "ljs96824"
     if not token or "your" in token.lower() or "你的" in token or "token" == token.lower():

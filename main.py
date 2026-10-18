@@ -1093,6 +1093,9 @@ def _save_result_for_page(
 
 
 def _upload_payload_to_pythonanywhere(payload_path: Path) -> bool:
+    if os.environ.get("NO_LIVE_API") == "1":
+        safe_log("[详情同步] NO_LIVE_API=1，已阻止真实 PythonAnywhere 上传")
+        return False
     if httpx is None:
         print("[详情同步] 未安装httpx,跳过远程payload同步")
         return False
