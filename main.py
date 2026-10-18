@@ -21,7 +21,7 @@ BASE_DIR = Path(__file__).parent
 DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
-from atomic_json_store import read_json
+from atomic_json_store import read_json, write_text_atomic
 # 加载环境变量
 load_dotenv(BASE_DIR / ".env", encoding="utf-8")
 
@@ -1076,9 +1076,10 @@ def _save_result_for_page(
         "html": html_content,
         "payload": payload or {},
     }
-    payload_path.write_text(
+    # 详情是本轮完整生成的快照：先写同目录临时文件再替换，替换前失败不破坏上一份详情(R8-1)。
+    write_text_atomic(
+        payload_path,
         json.dumps(record, ensure_ascii=False, indent=2, default=str),
-        encoding="utf-8",
     )
     safe_log(f"[详情存储] 保存订阅 {canonical_id} 的payload到 {payload_path}")
     try:

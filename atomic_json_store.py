@@ -63,6 +63,36 @@ def _write_json_atomic(path: Path, payload) -> None:
             pass
 
 
+def write_text_atomic(path: str | Path, text: str) -> None:
+    """把一份完整生成的文本快照原子发布到 path；不读取、不校验旧文件。
+
+    写出的字节与 Path(path).write_text(text, encoding="utf-8") 相同(文本模式，按平台转换换行)。
+    内容先完整写入同目录临时文件并落盘，再替换最终文件；替换前任一步失败，原文件保持不变，
+    临时文件被清除，异常原样抛出。目录须由调用方保证存在。
+    """
+
+    target = Path(path)
+    temporary = target.with_name(f"{target.name}.{uuid4().hex}.tmp")
+    try:
+        with temporary.open("w", encoding="utf-8") as stream:
+            stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
+        for attempt in range(ATOMIC_REPLACE_RETRIES + 1):
+            try:
+                os.replace(temporary, target)
+                break
+            except PermissionError:
+                if attempt >= ATOMIC_REPLACE_RETRIES:
+                    raise
+                time.sleep(ATOMIC_REPLACE_RETRY_DELAY_SECONDS * (attempt + 1))
+    finally:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 def update_json(path: str | Path, mutator: Callable[[object], JsonValue]) -> JsonValue:
     """在同一文件锁内完成完整read-modify-write。
 
