@@ -1697,6 +1697,7 @@ class DocsAccuracyTest(unittest.TestCase):
                     "SMTP",
                     "PushPlus",
                     "不是全局网络防火墙",
+                    "PythonAnywhere Files",
                 )
                 if item not in snapshot_section
             ],
@@ -1887,8 +1888,8 @@ class DocsAccuracyTest(unittest.TestCase):
             {
                 "smtp_email": "gateway_enforced",
                 "pushplus": "gateway_enforced_with_call_graph",
-                "pa_subscription_download": "absent",
-                "pa_payload_upload": "absent",
+                "pa_subscription_download": "gateway_enforced",
+                "pa_payload_upload": "gateway_enforced",
                 "juhe": "upstream_controls_only",
                 "serpapi": "upstream_controls_only",
                 "duffel": "upstream_controls_only",
@@ -1926,6 +1927,7 @@ class DocsAccuracyTest(unittest.TestCase):
             "SMTP",
             "PushPlus",
             "私有 gateway 调用图",
+            "PA Files",
             "runtime_contracts",
             "documentation_contract",
         ):
@@ -1933,14 +1935,14 @@ class DocsAccuracyTest(unittest.TestCase):
 
         gaps_section = _markdown_section(text, "## 当前缺口")
         for term in (
-            "PA 订阅下载",
-            "PA payload 上传",
             "Juhe",
             "SerpAPI",
             "Duffel",
             "当前无门，依赖上游控制及调用方测试隔离",
         ):
             self.assertIn(term, gaps_section)
+        for term in ("PA 订阅下载", "PA payload 上传"):
+            self.assertNotIn(term, gaps_section, "pa_files_gaps_closed_by_r3")
 
         boundaries_section = _markdown_section(text, "## 已知边界")
         for term in (
