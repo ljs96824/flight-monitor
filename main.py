@@ -98,6 +98,7 @@ from sync_subscriptions import (
     subscription_input_missing_line,
     sync_subscriptions,
 )
+from ops_alert import alert_subscription_input_missing
 from subscription_attempts import record_subscription_attempt
 from subscription_preflight import (
     evaluate_subscription_preflight,
@@ -3000,12 +3001,18 @@ def _batch_result_line(success: int, failed: int, exceptions: int, skipped: int,
 
 
 def run_cli(sync_remote: bool = True) -> int:
-    """定时命令入口：同步与初始化之前先确认订阅文件存在；缺失时以 EXIT_SUBSCRIPTIONS_MISSING 结束(R9-1)。"""
+    """定时命令入口：同步与初始化之前先确认订阅文件存在；缺失时以 EXIT_SUBSCRIPTIONS_MISSING 结束(R9-1)，
+    并经全局 PushPlus 尽力发一次运维告警(R9-2)；告警结果不改变退出码。
+    """
     try:
         require_subscriptions_file(SUBSCRIPTIONS_PATH)
         run(sync_remote=sync_remote)
     except SubscriptionInputMissing as exc:
         safe_log(subscription_input_missing_line(exc))
+        try:
+            alert_subscription_input_missing(SUBSCRIPTIONS_PATH)
+        except Exception as alert_exc:  # 告警失败不改变缺失结论(R9-2)
+            safe_log(f"[运维告警] 调用失败 原因={type(alert_exc).__name__}")
         return EXIT_SUBSCRIPTIONS_MISSING
     return 0
 

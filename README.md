@@ -79,6 +79,8 @@ Flight Monitor 是一个本地优先的航班采集、约束过滤与通知系�
 现行 Web CRUD、订阅采集、尝试状态与 PA 同步的权威持久化源为 `data/subscriptions.json`。
 该文件缺失时，`main.py` 与 `sync_subscriptions.py` 不同步、不初始化、不采集，以退出码 2 结束，PA 同步也不会据此重建它；
 首次使用先按 6.1 显式建立空订阅文件(已存在时拒绝覆盖)。合法的 `[]` 视为暂无订阅。
+缺失时还会经全局 `PUSHPLUS_TOKEN` 尽力发一次运维告警：同一路径在上海自然日内最多自动尝试一次，去重记录在
+`data/ops_alert_state.json`；未配置该变量或 `NO_LIVE_API=1` 时不发送，只记日志；告警结果不改变退出码。
 `data/runtime_config.yaml` 中的 `subscriptions: []` 目前仍是配置校验与 legacy 迁移所需的空兼容占位；
 在 6b 完成前必须保持为空数组，不得写入真实订阅，也不得提前删除该字段（删除会导致 `validate_runtime_config` 失败）。
 

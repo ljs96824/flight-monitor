@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 
 from atomic_json_store import read_json, update_json
 from log_utils import safe_log
+from ops_alert import alert_subscription_input_missing
 from subscription_identity import ensure_subscription_id, subscription_id
 
 
@@ -237,6 +238,10 @@ def main() -> int:
         require_subscriptions_file(LOCAL_SUBSCRIPTIONS)
     except SubscriptionInputMissing as exc:
         safe_log(subscription_input_missing_line(exc))
+        try:
+            alert_subscription_input_missing(LOCAL_SUBSCRIPTIONS)
+        except Exception as alert_exc:  # 告警失败不改变缺失结论(R9-2)
+            safe_log(f"[运维告警] 调用失败 原因={type(alert_exc).__name__}")
         return EXIT_SUBSCRIPTIONS_MISSING
     sync_subscriptions()
     from main import run_cli
