@@ -40,7 +40,10 @@ class RunEntryTest(unittest.TestCase):
     def run_cli(self, root: Path, *, sync_remote=True):
         logs = []
         effects = {name: Mock(name=name) for name in ("sync_subscriptions", "init_db", "run")}
+        # R9-2 起缺失时还会调用运维告警；这里替换掉，只核对是否调用。
+        self.alert = Mock(return_value={"status": "blocked_offline", "dedup": "not_used"})
         with ExitStack() as stack:
+            stack.enter_context(patch.object(main, "alert_subscription_input_missing", self.alert))
             stack.enter_context(patch.object(main, "SUBSCRIPTIONS_PATH", root / "subscriptions.json"))
             for name, mock in effects.items():
                 stack.enter_context(patch.object(main, name, mock))
@@ -60,6 +63,7 @@ class RunEntryTest(unittest.TestCase):
         self.assertTrue(logs[0].startswith("[订阅输入缺失] 订阅文件缺失: "))
         self.assertIn("不同步、不初始化、不采集", logs[0])
         self.assertEqual(created, [], "nothing_created")
+        self.alert.assert_called_once_with(root / "subscriptions.json")
 
     def test_existing_file_runs_normally(self):
         for content in ("[]", json.dumps(REMOTE, ensure_ascii=False)):
@@ -69,6 +73,7 @@ class RunEntryTest(unittest.TestCase):
                 code, effects, logs = self.run_cli(root, sync_remote=False)
                 self.assertEqual((code, logs), (0, []))
                 effects["run"].assert_called_once_with(sync_remote=False)
+                self.alert.assert_not_called()
 
     def test_file_vanishing_during_run_is_still_exit_2(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -79,8 +84,10 @@ class RunEntryTest(unittest.TestCase):
                 patch.object(main, "SUBSCRIPTIONS_PATH", root / "subscriptions.json"),
                 patch.object(main, "run", side_effect=sync.SubscriptionInputMissing("订阅文件缺失: x")),
                 patch.object(main, "safe_log", side_effect=logs.append),
+                patch.object(main, "alert_subscription_input_missing") as alert,
             ):
                 code = main.run_cli()
+        alert.assert_called_once_with(root / "subscriptions.json")
         self.assertEqual(code, 2)
         self.assertTrue(logs[0].startswith("[订阅输入缺失] 订阅文件缺失: x"))
 
@@ -200,6 +207,7 @@ class SyncEntryTest(unittest.TestCase):
                 patch.object(sync, "download_remote_subscriptions", download),
                 patch.object(sync, "safe_log", side_effect=logs.append),
                 patch.object(main, "run_cli", run_cli),
+                patch.object(sync, "alert_subscription_input_missing") as alert,
             ):
                 missing_code = sync.main()
                 (root / "subscriptions.json").write_text("[]", encoding="utf-8")
@@ -208,6 +216,7 @@ class SyncEntryTest(unittest.TestCase):
         self.assertTrue(logs[0].startswith("[订阅输入缺失] 订阅文件缺失: "))
         self.assertEqual(download.call_count, 1, "downloaded_only_when_present")
         run_cli.assert_called_once_with(sync_remote=False)
+        alert.assert_called_once_with(root / "subscriptions.json")
         tree = ast.parse((ROOT / "sync_subscriptions.py").read_text(encoding="utf-8-sig"))
         guard = [node for node in tree.body if isinstance(node, ast.If)]
         self.assertEqual([ast.dump(item) for item in guard[-1].body],
