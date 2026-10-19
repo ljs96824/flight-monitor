@@ -91,7 +91,13 @@ from storage import (
     save_roundtrip_snapshot,
     save_flight_details,
 )
-from sync_subscriptions import sync_subscriptions
+from sync_subscriptions import (
+    EXIT_SUBSCRIPTIONS_MISSING,
+    SubscriptionInputMissing,
+    require_subscriptions_file,
+    subscription_input_missing_line,
+    sync_subscriptions,
+)
 from subscription_attempts import record_subscription_attempt
 from subscription_preflight import (
     evaluate_subscription_preflight,
@@ -1353,9 +1359,11 @@ def _deliver_notification(sub: dict, route: str, message_kwargs: dict) -> bool:
 
 
 def load_file_subscriptions(*, failures: list | None = None) -> list[dict]:
-    """读取本地订阅。failures 为列表时，规范化失败而跳过的订阅({"id", "error"})会追加进去，供批次汇总计数。"""
-    if not SUBSCRIPTIONS_PATH.exists():
-        return []
+    """读取本地订阅。failures 为列表时，规范化失败而跳过的订阅({"id", "error"})会追加进去，供批次汇总计数。
+
+    文件缺失抛出 SubscriptionInputMissing，不再当作空列表(R9-1)；合法的 [] 仍返回空列表。
+    """
+    require_subscriptions_file(SUBSCRIPTIONS_PATH)
     subscriptions = read_json(SUBSCRIPTIONS_PATH)
     if not isinstance(subscriptions, list):
         message = "subscriptions.json 格式错误，应为订阅数组"
@@ -2991,10 +2999,23 @@ def _batch_result_line(success: int, failed: int, exceptions: int, skipped: int,
     )
 
 
+def run_cli(sync_remote: bool = True) -> int:
+    """定时命令入口：同步与初始化之前先确认订阅文件存在；缺失时以 EXIT_SUBSCRIPTIONS_MISSING 结束(R9-1)。"""
+    try:
+        require_subscriptions_file(SUBSCRIPTIONS_PATH)
+        run(sync_remote=sync_remote)
+    except SubscriptionInputMissing as exc:
+        safe_log(subscription_input_missing_line(exc))
+        return EXIT_SUBSCRIPTIONS_MISSING
+    return 0
+
+
 def _run_locked(*, sync_remote: bool, round_id: str):
     if sync_remote:
         try:
             sync_subscriptions()
+        except SubscriptionInputMissing:
+            raise
         except Exception as exc:
             logging.error(f"PythonAnywhere 订阅同步失败: {exc}")
             print(f"[sync] PythonAnywhere 订阅同步失败，继续处理本地订阅: {exc}")
@@ -3125,4 +3146,4 @@ def _run_locked(*, sync_remote: bool, round_id: str):
 
 
 if __name__ == "__main__":
-    run()
+    raise SystemExit(run_cli())

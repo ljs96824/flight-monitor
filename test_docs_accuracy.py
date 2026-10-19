@@ -1984,6 +1984,13 @@ class DocsAccuracyTest(unittest.TestCase):
                 "scripts/initialize_api_usage.py",
                 "--help",
             ],
+            "scripts/initialize_subscriptions.py": [
+                sys.executable,
+                "-X",
+                "utf8",
+                "scripts/initialize_subscriptions.py",
+                "--help",
+            ],
         }
         referenced = _documented_python_commands(self.readme)
         unchecked = sorted(
@@ -2036,6 +2043,13 @@ class DocsAccuracyTest(unittest.TestCase):
                 "-X",
                 "utf8",
                 "scripts/initialize_api_usage.py",
+                "--help",
+            ],
+            "python -X utf8 scripts/initialize_subscriptions.py": [
+                cli_python,
+                "-X",
+                "utf8",
+                "scripts/initialize_subscriptions.py",
                 "--help",
             ],
             "python -m pip install -r requirements.txt -r requirements-dev.txt": [

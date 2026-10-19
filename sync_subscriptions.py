@@ -23,6 +23,27 @@ PYTHONANYWHERE_FILE_PATH = (
 
 load_dotenv(BASE_DIR / ".env", encoding="utf-8")
 
+# 订阅输入缺失时命令入口的退出码(R9-1)。
+EXIT_SUBSCRIPTIONS_MISSING = 2
+
+
+class SubscriptionInputMissing(RuntimeError):
+    """本地订阅文件缺失：运行入口不得把它当作空列表，同步也不得据此重建(R9-1)。"""
+
+
+def require_subscriptions_file(path: Path) -> None:
+    """只确认订阅文件存在且是文件；内容是否合法由读取方按既有规则显式报错。"""
+    target = Path(path)
+    if not target.is_file():
+        raise SubscriptionInputMissing(f"订阅文件缺失: {target}")
+
+
+def subscription_input_missing_line(exc: SubscriptionInputMissing) -> str:
+    return (
+        f"[订阅输入缺失] {exc}；本轮停止：不同步、不初始化、不采集。"
+        "首次使用请先执行 scripts/initialize_subscriptions.py 显式建立空订阅文件"
+    )
+
 
 def _load_json_list(path: Path) -> list[dict]:
     if not path.exists():
@@ -162,7 +183,11 @@ def download_remote_subscriptions() -> list[dict]:
 
 
 def sync_subscriptions() -> dict:
-    """Download remote subscriptions and merge them into local subscriptions.json."""
+    """Download remote subscriptions and merge them into local subscriptions.json.
+
+    本地文件缺失时在下载前抛出 SubscriptionInputMissing；写入阶段发现文件已消失同样抛出，不按空集合重建(R9-1)。
+    """
+    require_subscriptions_file(LOCAL_SUBSCRIPTIONS)
     remote_subscriptions = download_remote_subscriptions()
     if not remote_subscriptions:
         return {"synced": False, "added": 0, "total": len(_load_json_list(LOCAL_SUBSCRIPTIONS))}
@@ -171,8 +196,8 @@ def sync_subscriptions() -> dict:
 
     def mutate(payload):
         if payload is None:
-            local_subscriptions = []
-        elif isinstance(payload, list):
+            raise SubscriptionInputMissing(f"订阅文件缺失: {LOCAL_SUBSCRIPTIONS}")
+        if isinstance(payload, list):
             local_subscriptions = payload
         else:
             raise ValueError("subscriptions.json 格式错误，应为订阅数组")
@@ -207,12 +232,17 @@ def sync_subscriptions() -> dict:
     }
 
 
-def main() -> None:
+def main() -> int:
+    try:
+        require_subscriptions_file(LOCAL_SUBSCRIPTIONS)
+    except SubscriptionInputMissing as exc:
+        safe_log(subscription_input_missing_line(exc))
+        return EXIT_SUBSCRIPTIONS_MISSING
     sync_subscriptions()
-    from main import run
+    from main import run_cli
 
-    run(sync_remote=False)
+    return run_cli(sync_remote=False)
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -77,6 +77,8 @@ Flight Monitor 是一个本地优先的航班采集、约束过滤与通知系�
 只保存在被 Git 忽略的 `data/runtime_config.yaml`。
 
 现行 Web CRUD、订阅采集、尝试状态与 PA 同步的权威持久化源为 `data/subscriptions.json`。
+该文件缺失时，`main.py` 与 `sync_subscriptions.py` 不同步、不初始化、不采集，以退出码 2 结束，PA 同步也不会据此重建它；
+首次使用先按 6.1 显式建立空订阅文件(已存在时拒绝覆盖)。合法的 `[]` 视为暂无订阅。
 `data/runtime_config.yaml` 中的 `subscriptions: []` 目前仍是配置校验与 legacy 迁移所需的空兼容占位；
 在 6b 完成前必须保持为空数组，不得写入真实订阅，也不得提前删除该字段（删除会导致 `validate_runtime_config` 失败）。
 
@@ -103,6 +105,7 @@ Flight Monitor 是一个本地优先的航班采集、约束过滤与通知系�
 python --version
 python -m pip install -r requirements.txt -r requirements-dev.txt
 python -X utf8 scripts/initialize_api_usage.py
+python -X utf8 scripts/initialize_subscriptions.py
 # pytest 已由 requirements-dev.txt 锁定
 ```
 
