@@ -81,6 +81,7 @@ Flight Monitor 是一个本地优先的航班采集、约束过滤与通知系�
 首次使用先按 6.1 显式建立空订阅文件(已存在时拒绝覆盖)。合法的 `[]` 视为暂无订阅。
 缺失时还会经全局 `PUSHPLUS_TOKEN` 尽力发一次运维告警：同一路径在上海自然日内最多自动尝试一次，去重记录在
 `data/ops_alert_state.json`；未配置该变量或 `NO_LIVE_API=1` 时不发送，只记日志；告警结果不改变退出码。
+误删后可从运行备份只回填该文件，见 [订阅文件单文件恢复规程](docs/subscriptions-single-file-restore.md)；不要用整体生产恢复代替。
 `data/runtime_config.yaml` 中的 `subscriptions: []` 目前仍是配置校验与 legacy 迁移所需的空兼容占位；
 在 6b 完成前必须保持为空数组，不得写入真实订阅，也不得提前删除该字段（删除会导致 `validate_runtime_config` 失败）。
 
@@ -319,6 +320,7 @@ python -X utf8 scripts/snapshot_run.py --output data/snapshot_check.json
 | [observations_store.py](observations_store.py)、[storage.py](storage.py) | 追加式观测库与历史/快照存储 |
 | [scripts/](scripts/) | 快照、体检、只读统计报告和本地 UI smoke |
 | [docs/runtime-backup-and-restore.md](docs/runtime-backup-and-restore.md) | 运行数据备份、隔离恢复与报告复放手册 |
+| [docs/subscriptions-single-file-restore.md](docs/subscriptions-single-file-restore.md) | 订阅文件丢失后从运行备份只回填该文件的规程 |
 | [analytics/](analytics/) | 只读描述统计报告 |
 | [tests/fixtures/](tests/fixtures/) | 脱敏响应、表单规范化与冻结邮件夹具 |
 | [docs/](docs/) | 设计、计划、审计和回归纪律入口 |

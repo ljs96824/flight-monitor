@@ -127,6 +127,8 @@ python -X utf8 scripts/runtime_backup.py restore --archive "E:\flight-monitor-ba
 
 流程持有 collection single-flight，按既定顺序锁定 JSON，验证候选后把旧状态移入 rollback 目录再切换；任一步失败立即恢复旧状态。命令不会自动 Reload。生产恢复后仍需人工核对页面版本信标，再决定是否 Reload。
 
+只丢失 `data/subscriptions.json` 时不要使用生产覆盖：它会把数据库、配额台账和运行配置一并切换回备份时刻。改按[订阅文件单文件恢复规程](subscriptions-single-file-restore.md)只回填该文件。
+
 ## 6. 周期与记录
 
 - 每周至少一次执行完整 `rehearse`。
