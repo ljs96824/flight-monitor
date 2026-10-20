@@ -46,7 +46,7 @@ class DetailPayloadStorageTest(unittest.TestCase):
             finally:
                 self._restore_payload_dir()
 
-            self.assertTrue(saved)
+            self.assertTrue(saved["local_saved"])
             self.assertIn("detail ok", payload_path.read_text(encoding="utf-8"))
             self.assertFalse((tmp_path / "page_results.json").exists())
 
@@ -65,7 +65,7 @@ class DetailPayloadStorageTest(unittest.TestCase):
             finally:
                 self._restore_payload_dir()
 
-            self.assertFalse(saved)
+            self.assertFalse(saved["local_saved"])
             self.assertFalse((tmp_path / "payloads" / "107.json").exists())
             upload.assert_not_called()
 
