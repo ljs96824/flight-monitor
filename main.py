@@ -63,6 +63,7 @@ from email_notifier import render_email, send_email
 from filename_utils import sanitize_filename
 from health_check import system_health_check
 from log_utils import end_round_log_archive, redact_text, safe_log, safe_log_json, start_round_log_archive
+from round_cleanup import RoundCleanup
 from notification_config import normalize_notification_goals
 from observation_time import canonicalize_observed_at
 from observations_store import get_current_round, reset_current_round, set_current_round
@@ -2272,6 +2273,7 @@ def _process_subscription_locked(
     )
     round_archive_started = False
     round_status = "failed"
+    primary_failed = False
     if manage_collection_round:
         try:
             start_round_log_archive(round_id, root_dir=ROUND_LOG_ROOT)
@@ -2933,30 +2935,42 @@ def _process_subscription_locked(
         return True
 
     except Exception as e:
-        print(f"[处理失败] {type(e).__name__}: {e}")
-        print(traceback.format_exc())
-        logging.error(f"{route} 处理失败: {e}", exc_info=True)
-        _log_subscription_failure(
-            sub,
-            source_errors=_source_error_items(agg),
-            reason=f"{type(e).__name__}: {e}",
-        )
+        try:
+            print(f"[处理失败] {type(e).__name__}: {e}")
+            print(traceback.format_exc())
+            logging.error(f"{route} 处理失败: {e}", exc_info=True)
+            _log_subscription_failure(
+                sub,
+                source_errors=_source_error_items(agg),
+                reason=f"{type(e).__name__}: {e}",
+            )
+        except BaseException:
+            # R11：失败处理本身再抛错时同样算主体失败，收尾异常不得顶替它。
+            primary_failed = True
+            raise
         return False
+    except BaseException:
+        primary_failed = True
+        raise
 
 
     finally:
         if manage_collection_round:
-            print_request_cache_stats()
+            # R11：收尾逐步保护，任一步失败不妨碍后续清理与关闭轮档。
+            cleanup = RoundCleanup(round_id)
+            cleanup.step("请求统计与台账核对", print_request_cache_stats)
             if managed_plan_active:
-                deactivate_collection_plan()
+                cleanup.step("解除采集计划", deactivate_collection_plan)
             if round_context_tokens is not None:
-                reset_current_round(round_context_tokens)
-            log_retention_dry_run(BASE_DIR, config_path=CONFIG_PATH)
+                cleanup.step("恢复轮次上下文", reset_current_round, round_context_tokens)
+            cleanup.step("日志保留演练", log_retention_dry_run, BASE_DIR, config_path=CONFIG_PATH)
             if round_archive_started:
                 try:
-                    end_round_log_archive(status=round_status)
+                    end_round_log_archive(status=cleanup.status(round_status))
                 except Exception as exc:
                     safe_log(f"[轮档失败] round_id={round_id} 关闭失败={type(exc).__name__}:{exc}")
+            if not primary_failed:
+                cleanup.raise_first_failure()
 
 
 def run(sync_remote: bool = True):
@@ -3125,6 +3139,7 @@ def _run_locked(*, sync_remote: bool, round_id: str):
         safe_log(f"[轮档失败] round_id={round_id} 原因={type(exc).__name__}:{exc}")
     plan_active = False
     round_context_tokens = None
+    primary_failed = False
     try:
         print(f"[观测轮次] round_id={round_id}")
         round_context_tokens = set_current_round(round_id)
@@ -3182,19 +3197,26 @@ def _run_locked(*, sync_remote: bool, round_id: str):
         )
         safe_log(_batch_result_line(processed_success, processed_failed, processing_exceptions,
                                     preflight_skipped, preflight_failed, round_status))
+    except BaseException:
+        primary_failed = True
+        raise
     finally:
+        # R11：收尾逐步保护，任一步失败不妨碍后续清理与关闭轮档。
+        cleanup = RoundCleanup(round_id)
         if round_context_tokens is not None:
-            reset_current_round(round_context_tokens)
-        print_request_cache_stats()
-        _run_basket_sentinel_for_main(subscriptions)
+            cleanup.step("恢复轮次上下文", reset_current_round, round_context_tokens)
+        cleanup.step("请求统计与台账核对", print_request_cache_stats)
+        cleanup.step("篮子哨兵", _run_basket_sentinel_for_main, subscriptions)
         if plan_active:
-            deactivate_collection_plan()
-        log_retention_dry_run(BASE_DIR, config_path=CONFIG_PATH)
+            cleanup.step("解除采集计划", deactivate_collection_plan)
+        cleanup.step("日志保留演练", log_retention_dry_run, BASE_DIR, config_path=CONFIG_PATH)
         if round_archive_started:
             try:
-                end_round_log_archive(status=round_status)
+                end_round_log_archive(status=cleanup.status(round_status))
             except Exception as exc:
                 safe_log(f"[轮档失败] round_id={round_id} 关闭失败={type(exc).__name__}:{exc}")
+        if not primary_failed:
+            cleanup.raise_first_failure()
 
     safe_log(_preflight_summary_line(preflight_checked, preflight_skipped, preflight_failed))
     logging.info("本轮执行完成")
