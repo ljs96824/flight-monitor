@@ -261,13 +261,14 @@ WORKFLOW_MUTATIONS = (
     _mutation(
         "M031", "jobs.tests.steps[3].run",
         ("jobs", "tests", "steps", 3, "run"),
-        "pip install -r requirements.txt -r requirements-dev.txt",
-        "pip install -r requirements.txt", "WF020_TESTS_INSTALL",
+        "python -m pip install -r requirements.txt -r requirements-dev.txt",
+        "python -m pip install -r requirements.txt", "WF020_TESTS_INSTALL",
     ),
     _mutation(
         "M032", "jobs.ui-smoke.steps[3].run",
         ("jobs", "ui-smoke", "steps", 3, "run"),
-        "pip install -r requirements.txt", "pip install -r requirements-dev.txt",
+        "python -m pip install -r requirements.txt",
+        "python -m pip install -r requirements-dev.txt",
         "WF021_UI_INSTALL", "WF033_UI_DEV_REQUIREMENTS_ABSENT",
     ),
     _mutation(
@@ -399,6 +400,17 @@ WORKFLOW_MUTATIONS = (
     _mutation(
         "M056", "jobs.ui-smoke.runs-on", ("jobs", "ui-smoke", "runs-on"),
         "ubuntu-24.04", "ubuntu-latest", "WF011_RUNNERS",
+    ),
+    # R10：裸 pip 在 Windows 上会因"不能改写自身"失败(锁文件把 pip 降回固定版本时)，安装必须经 python -m pip。
+    _mutation(
+        "M057", "jobs.tests.steps[3].run", ("jobs", "tests", "steps", 3, "run"),
+        "python -m pip install -r requirements.txt -r requirements-dev.txt",
+        "pip install -r requirements.txt -r requirements-dev.txt", "WF020_TESTS_INSTALL",
+    ),
+    _mutation(
+        "M058", "jobs.ui-smoke.steps[3].run", ("jobs", "ui-smoke", "steps", 3, "run"),
+        "python -m pip install -r requirements.txt",
+        "pip install -r requirements.txt", "WF021_UI_INSTALL",
     ),
 )
 
@@ -603,11 +615,11 @@ def _workflow_contract_violations(workflow):
     )
     require(
         "WF020_TESTS_INSTALL",
-        "pip install -r requirements.txt -r requirements-dev.txt" in tests_runs,
+        "python -m pip install -r requirements.txt -r requirements-dev.txt" in tests_runs,
     )
     require(
         "WF021_UI_INSTALL",
-        "pip install -r requirements.txt" in ui_runs,
+        "python -m pip install -r requirements.txt" in ui_runs,
     )
     require(
         "WF022_PYTEST_COMMAND",
