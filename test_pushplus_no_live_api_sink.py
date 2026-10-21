@@ -548,7 +548,7 @@ class PushPlusCallerCompatibilityTest(unittest.TestCase):
                         return_value=("subject", "<p>body</p>", {}),
                     ),
                     patch.object(main, "render_detail_html", return_value="<p>detail</p>"),
-                    patch.object(main, "_save_result_for_page", return_value=True),
+                    patch.object(main, "_save_result_for_page", return_value={"target_reached": True}),
                     patch.object(
                         main, "render_pushplus_sections", return_value=push_render
                     ),

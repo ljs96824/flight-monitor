@@ -66,7 +66,9 @@ class DetailPayloadAtomicPublishTest(unittest.TestCase):
             stack.enter_context(redirect_stdout(io.StringIO()))
             for item in extra:
                 stack.enter_context(item)
-            result = main._save_result_for_page(SUB_ID, html, payload if payload is not None else {"route": "上海 → 大阪"})
+            result = main._save_result_for_page(
+                SUB_ID, html, payload if payload is not None else {"route": "上海 → 大阪"}
+            )["local_saved"]  # R8-2 起返回发布回执
         return result, target, upload, seen_at_upload
 
     def leftovers(self, root: Path):

@@ -49,6 +49,16 @@ from collection_singleflight import (
 )
 from constraint_fingerprint import constraint_fingerprint
 from detail_access import canonical_detail_uuid, delivery_payload_with_detail_token
+from detail_publish import (
+    UPLOAD_DECLINED,
+    UPLOAD_ERROR,
+    UPLOAD_NOT_ATTEMPTED,
+    UPLOAD_SUCCEEDED,
+    build_detail_publish_receipt,
+    pa_payload_directory,
+    pa_same_directory,
+    page_only_delivered,
+)
 from email_notifier import render_email, send_email
 from filename_utils import sanitize_filename
 from health_check import system_health_check
@@ -1066,15 +1076,35 @@ def _email_subject(html_content: str, route_info: dict) -> str:
     return subject[:120]
 
 
+def _pythonanywhere_user() -> str:
+    """实际上传账户；上传与查看目标核对共用同一取值(R8-2)。"""
+    return os.environ.get("PYTHONANYWHERE_USER", "").strip() or "ljs96824"
+
+
 def _save_result_for_page(
     subscription_id: str,
     html_content: str,
     payload: dict | None = None,
-) -> bool:
+) -> dict:
+    """保存详情快照并尝试同步 PA，返回发布回执(R8-2)。
+
+    回执分别记录本地保存、上传结果与查看目标，再显式映射为 target_reached；
+    只有 page_only 按 target_reached 判断送达，其他方式不受影响。
+    """
+    detail_url = (payload or {}).get("detail_url")
+    pa_user = _pythonanywhere_user()
     canonical_id = canonical_detail_uuid(subscription_id)
     if canonical_id is None:
         safe_log(f"[详情存储拒绝] 非UUID订阅标识={subscription_id!r}")
-        return False
+        receipt = build_detail_publish_receipt(
+            local_saved=False,
+            upload=UPLOAD_NOT_ATTEMPTED,
+            detail_url=detail_url,
+            pa_user=pa_user,
+            same_directory_check=lambda: False,
+        )
+        safe_log_json("[详情发布回执] ", receipt)
+        return receipt
     PAGE_PAYLOADS_DIR.mkdir(parents=True, exist_ok=True)
     payload_path = PAGE_PAYLOADS_DIR / f"{canonical_id}.json"
     record = {
@@ -1089,15 +1119,29 @@ def _save_result_for_page(
         json.dumps(record, ensure_ascii=False, indent=2, default=str),
     )
     safe_log(f"[详情存储] 保存订阅 {canonical_id} 的payload到 {payload_path}")
+    upload = UPLOAD_DECLINED
     try:
-        _upload_payload_to_pythonanywhere(payload_path)
+        if _upload_payload_to_pythonanywhere(payload_path) is True:
+            upload = UPLOAD_SUCCEEDED
     except Exception as exc:
+        upload = UPLOAD_ERROR
         safe_log(f"[详情同步失败] {type(exc).__name__}: {exc}")
         logging.warning(
             f"详情payload已本地保存但同步PythonAnywhere失败: {exc}",
             exc_info=True,
         )
-    return True
+    receipt = build_detail_publish_receipt(
+        local_saved=True,
+        upload=upload,
+        detail_url=detail_url,
+        pa_user=pa_user,
+        same_directory_check=lambda: pa_same_directory(
+            payload_path.parent,
+            pa_payload_directory(PYTHONANYWHERE_PAYLOAD_PATH, pa_user),
+        ),
+    )
+    safe_log_json("[详情发布回执] ", receipt)
+    return receipt
 
 
 def _upload_payload_to_pythonanywhere(payload_path: Path) -> bool:
@@ -1108,7 +1152,7 @@ def _upload_payload_to_pythonanywhere(payload_path: Path) -> bool:
         print("[详情同步] 未安装httpx,跳过远程payload同步")
         return False
     token = os.environ.get("PYTHONANYWHERE_TOKEN", "").strip()
-    user = os.environ.get("PYTHONANYWHERE_USER", "").strip() or "ljs96824"
+    user = _pythonanywhere_user()
     if not token or token.lower() in {"token", "your_token"} or "your" in token.lower():
         print("[详情同步] 未配置PYTHONANYWHERE_TOKEN,跳过远程payload同步")
         return False
@@ -1286,12 +1330,16 @@ def _deliver_notification(sub: dict, route: str, message_kwargs: dict) -> bool:
             print("[推送] 未选择邮件方式，跳过折线图PNG/邮件HTML")
         print("[推送] 邮件/详情HTML渲染完成")
         detail_html = render_detail_html(payload)
-        page_saved = _save_result_for_page(subscription_id, detail_html, payload)
+        page_receipt = _save_result_for_page(subscription_id, detail_html, payload)
 
         if method == "page_only":
-            print("[推送] 开始保存页面结果")
-            print("[推送] 用户选择仅页面查看，已保存页面结果")
-            return page_saved
+            # R8-2：仅页面查看按详情是否到达查看目标判断，不再以本地保存代替。
+            delivered = page_only_delivered(page_receipt)
+            if delivered:
+                print("[推送] 用户选择仅页面查看，详情已到达查看目标")
+            else:
+                print("[推送] 用户选择仅页面查看，详情未到达查看目标，按未送达处理")
+            return delivered
 
         if method in {"email", "both"}:
             email_sent = False

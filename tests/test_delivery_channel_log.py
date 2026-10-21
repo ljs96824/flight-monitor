@@ -27,7 +27,7 @@ def _deliver(method, *, email="offline@example.invalid", email_ok=True, push_ok=
         patch.object(main, "feedback_acknowledgement", return_value=None),
         patch.object(main, "render_email", return_value=("主题", "<p>正文</p>", {})),
         patch.object(main, "render_detail_html", return_value="<p>详情</p>"),
-        patch.object(main, "_save_result_for_page", return_value=True),
+        patch.object(main, "_save_result_for_page", return_value={"target_reached": True}),
         patch.object(main, "render_pushplus_sections", **render_kwargs),
         patch.object(main, "send_email", return_value=email_ok) as send_email,
         patch.object(main, "send", return_value=push_ok) as send_push,

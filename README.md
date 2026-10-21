@@ -167,7 +167,7 @@ python -c "from pathlib import Path; src=Path('.env.example'); dst=Path('.env');
 | `SERPAPI_KEY` / `SERPAPI_API_KEY` / `SERP_API_KEY` | 三者只填一个；国际及港澳台商务舱、混舱监控 |
 | `DUFFEL_TOKEN` | 已有候选的行李与退改规则富化 |
 | `SMTP_PROVIDER`、`SMTP_HOST`、`SMTP_PORT`、`SMTP_SSL` | 邮件服务商与连接参数覆盖 |
-| `PYTHONANYWHERE_TOKEN`、`PYTHONANYWHERE_USER` | 可选的订阅和详情 payload 同步 |
+| `PYTHONANYWHERE_TOKEN`、`PYTHONANYWHERE_USER` | 可选的订阅和详情 payload 同步；详情地址指向 PA 时，存量 page_only 订阅只有本次上传成功(或在 PA 同目录直写)才算送达 |
 | `FEEDBACK_NOTIFY_EMAIL` | 表单反馈通知收件地址 |
 | `COLLECTION_LOCK_PATH` | 同机多进程采集单飞锁；建议配置为主运行目录中的绝对路径 |
 | `SESSION_COOKIE_SECURE` | 本地HTTP默认`0`；PA HTTPS部署必须置`1` |
