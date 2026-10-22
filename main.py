@@ -1408,6 +1408,24 @@ def _deliver_notification(sub: dict, route: str, message_kwargs: dict) -> bool:
         return True
 
 
+def _paused_route_label(item: dict) -> str:
+    """暂停订阅跳过行的航线标签(R15)。
+
+    端点只取非空字符串：先看顶层，再看对象型 basic；basic 不是对象时不读取，取不到的端点记"未知"。
+    只用于打印，不参与采集与失败计数，不输出整条记录或损坏字段。
+    """
+    basic = item.get("basic")
+    nested = basic if isinstance(basic, dict) else {}
+
+    def endpoint(key: str) -> str:
+        for value in (item.get(key), nested.get(key)):
+            if isinstance(value, str) and value:
+                return value
+        return "未知"
+
+    return f"{endpoint('origin')}→{endpoint('destination')}"
+
+
 def load_file_subscriptions(*, failures: list | None = None) -> list[dict]:
     """读取本地订阅。failures 为列表时，规范化失败或不是对象而跳过的订阅({"id", "error"})会追加进去，供批次汇总计数。
 
@@ -1432,7 +1450,8 @@ def load_file_subscriptions(*, failures: list | None = None) -> list[dict]:
             logging.warning(f"订阅{label} 不是对象({kind})，已跳过")
             continue
         if item.get("status", "active") != "active":
-            route = f"{item.get('origin') or (item.get('basic') or {}).get('origin', '')}→{item.get('destination') or (item.get('basic') or {}).get('destination', '')}"
+            # R15：暂停记录的跳过行不得因损坏字段中断整批加载；暂停记录仍不采集、不计失败。
+            route = _paused_route_label(item)
             sub_id = item.get("id") or item.get("index") or item.get("_index") or index
             print(f"[跳过] 订阅已暂停: {sub_id} {route}")
             continue
