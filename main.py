@@ -1409,7 +1409,7 @@ def _deliver_notification(sub: dict, route: str, message_kwargs: dict) -> bool:
 
 
 def load_file_subscriptions(*, failures: list | None = None) -> list[dict]:
-    """读取本地订阅。failures 为列表时，规范化失败而跳过的订阅({"id", "error"})会追加进去，供批次汇总计数。
+    """读取本地订阅。failures 为列表时，规范化失败或不是对象而跳过的订阅({"id", "error"})会追加进去，供批次汇总计数。
 
     文件缺失抛出 SubscriptionInputMissing，不再当作空列表(R9-1)；合法的 [] 仍返回空列表。
     """
@@ -1424,6 +1424,12 @@ def load_file_subscriptions(*, failures: list | None = None) -> list[dict]:
     skipped = []
     for index, item in enumerate(subscriptions):
         if not isinstance(item, dict):
+            # R12：非对象条目不参与采集，但按数组位置计入加载失败；不打印原内容，不改写文件。
+            label = f"#{index}"
+            kind = type(item).__name__
+            skipped.append({"id": label, "error": f"not_object:{kind}"})
+            print(f"[订阅跳过] 订阅{label} 不是对象({kind})，已计入加载失败")
+            logging.warning(f"订阅{label} 不是对象({kind})，已跳过")
             continue
         if item.get("status", "active") != "active":
             route = f"{item.get('origin') or (item.get('basic') or {}).get('origin', '')}→{item.get('destination') or (item.get('basic') or {}).get('destination', '')}"
