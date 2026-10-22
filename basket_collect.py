@@ -56,6 +56,7 @@ from research_state_store import (
     load_research_state,
     update_research_state,
 )
+from round_cleanup import RoundCleanup
 from source_profiles import retired_listing_sources
 from sources.aggregator import FlightAggregator, build_default_sources
 from subscription_preflight import evaluate_subscription_preflight, shanghai_today
@@ -767,6 +768,7 @@ def _run_basket_locked(
     research_progress_applied = False
     outcome_reads = 0
     body_completed = False
+    primary_failed = False
     try:
         round_context_tokens = set_current_round(round_id, db_path=db_path)
         plan = build_collection_plan(
@@ -915,17 +917,22 @@ def _run_basket_locked(
             "second_cache_reads=0"
         )
         body_completed = True
+    except BaseException:
+        primary_failed = True
+        raise
     finally:
+        # R11：收尾逐步保护，任一步失败不妨碍后续清理与关闭轮档。
+        cleanup = RoundCleanup(round_id)
         if round_context_tokens is not None:
-            reset_current_round(round_context_tokens)
+            cleanup.step("恢复轮次上下文", reset_current_round, round_context_tokens)
         try:
             written = count_observations_for_round(round_id, db_path)
         except Exception as exc:
             written = 0
             safe_log(f"[篮子失败] route=summary 原因=观测计数失败:{exc}")
-        print_request_cache_stats()
+        cleanup.step("请求统计与台账核对", print_request_cache_stats)
         if plan_active:
-            deactivate_collection_plan()
+            cleanup.step("解除采集计划", deactivate_collection_plan)
 
         round_status = (
             "interrupted"
@@ -935,12 +942,14 @@ def _run_basket_locked(
             else "partial"
         )
         safe_log(f"[篮子完成] 队列={queues} 成功={success} 失败={failed} 总写入={written}")
-        log_retention_dry_run(BASE_DIR, config_path=CONFIG_PATH)
+        cleanup.step("日志保留演练", log_retention_dry_run, BASE_DIR, config_path=CONFIG_PATH)
         if round_archive_started:
             try:
-                end_round_log_archive(status=round_status)
+                end_round_log_archive(status=cleanup.status(round_status))
             except Exception as exc:
                 safe_log(f"[轮档失败] round_id={round_id} 关闭失败={type(exc).__name__}:{exc}")
+        if not primary_failed:
+            cleanup.raise_first_failure()
 
     summary = {
         "round_id": round_id,
