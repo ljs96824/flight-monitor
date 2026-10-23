@@ -93,17 +93,23 @@ def write_text_atomic(path: str | Path, text: str) -> None:
             pass
 
 
-def update_json(path: str | Path, mutator: Callable[[object], JsonValue]) -> JsonValue:
+def update_json(
+    path: str | Path,
+    mutator: Callable[[object], JsonValue],
+    *,
+    missing=None,
+) -> JsonValue:
     """在同一文件锁内完成完整read-modify-write。
 
-    文件尚不存在时，mutator 接收 None；已存在但无法读取时会抛错，绝不把
-    损坏文件伪装成空结构。mutator 必须返回要持久化的完整 JSON 值。
+    文件尚不存在时，mutator 接收 missing 的一份深拷贝(缺省 None)；已存在但无法读取时会抛错，绝不把
+    损坏文件伪装成空结构。已存在的文件内容为 JSON null 时 mutator 接收 None，调用方可借 missing
+    在同一把锁内区分"文件不存在"与"现有内容为 null"(R16)。mutator 必须返回要持久化的完整 JSON 值。
     """
 
     target = Path(path)
     with file_lock(target):
         exists = target.exists()
-        current = read_json(target) if exists else None
+        current = read_json(target) if exists else deepcopy(missing)
         original = deepcopy(current)
         updated = mutator(current)
         if updated is None:

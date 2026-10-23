@@ -7,6 +7,7 @@
 - effective NO_LIVE_API == "1" 或未配置 PUSHPLUS_TOKEN 时不尝试发送，分别记为 blocked_offline / not_configured，不写去重状态；
 - 去重键为"原因 + 规范化路径"，在上海自然日内最多自动尝试一次；"检查并登记本次尝试"在去重状态文件的文件锁内完成；
 - 去重状态不可读或无法登记时进入降级：本次调用最多尝试一次，记 dedup_unavailable，不修复、不覆盖损坏的状态文件；
+  只有状态文件确实不存在时才初始化，现有内容为 JSON null 与其他非对象值一样按格式不对处理(R16)；
 - 发送受理、发送失败、未配置分别记录；告警内容只含原因、路径与时间，不含 token、订阅内容或异常原文；
 - 任何告警失败都不改变调用方原有的失败结论。
 """
@@ -34,13 +35,15 @@ def _default_sender(content: str, title: str) -> bool:
 
 
 def _claim_today(state_path: Path, key: str, day: str, attempted_at: str) -> bool:
-    """在文件锁内检查并登记今天的尝试；今天已尝试过返回 False。状态文件不可读或格式不对时抛错且不写入。"""
+    """在文件锁内检查并登记今天的尝试；今天已尝试过返回 False。
+
+    只有状态文件不存在时才以 {} 初始化(由 update_json 在同一把锁内判定)；状态文件不可读或格式不对
+    (含现有内容为 JSON null)时抛错且不写入。
+    """
 
     claimed = {"value": False}
 
     def mutate(payload):
-        if payload is None:
-            payload = {}
         if not isinstance(payload, dict):
             raise ValueError("运维告警去重状态不是对象")
         entry = payload.get(key)
@@ -49,7 +52,7 @@ def _claim_today(state_path: Path, key: str, day: str, attempted_at: str) -> boo
         claimed["value"] = True
         return {**payload, key: {"date": day, "status": "attempting", "attempted_at": attempted_at}}
 
-    update_json(state_path, mutate)
+    update_json(state_path, mutate, missing={})
     return claimed["value"]
 
 
