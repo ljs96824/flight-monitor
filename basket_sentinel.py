@@ -166,11 +166,16 @@ def basket_run_expectation(settings: dict | None, state: dict | None) -> dict:
 
 
 def _load_state(path: Path) -> dict:
+    """读取哨兵去重状态；缺失、读不到、不是合法 UTF-8 JSON 或不是对象时一律按今日未通知处理。
+
+    非法 UTF-8 与坏 JSON 同口径(R13)：到点照常发一次，发送成功后整份重写；不做容错解码，
+    不把部分可读的损坏内容当作可信的去重记录。
+    """
     if not path.exists():
         return {}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeError, json.JSONDecodeError):
         return {}
     return payload if isinstance(payload, dict) else {}
 
