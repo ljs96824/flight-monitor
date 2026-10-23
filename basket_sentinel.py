@@ -1,7 +1,8 @@
 """基于本地配额台账与当日轮档的篮子任务缺勤哨兵。
 
 台账里没有当日篮子条目时，再读当日轮档里篮子轮次的开始/结束标记，区分：未运行、已运行(零请求)、
-已运行但被阻断、未正常结束、运行证据不可读。只读，不向台账或轮档写任何内容。
+已运行但被阻断、未正常结束、运行证据不完整、运行证据不可读。只读，不向台账或轮档写任何内容。
+结束标记之前须有同一 round_id 的开始标记，轮次编号里的日期须与当日轮档一致，否则该轮次不能证明当日运行情况(R14)。
 """
 
 from __future__ import annotations
@@ -22,18 +23,45 @@ DEFAULT_BASKET_SENTINEL_THRESHOLD = "20:00"
 _ROUND_START = re.compile(r"^===== \[轮档开始\] round_id=(\S+) started_at=\S+ =====$")
 _ROUND_END = re.compile(r"^===== \[轮档结束\] round_id=(\S+) status=(\S+) =====$")
 _ROUND_REASON = re.compile(r"^\[(?:篮子跳过|研究状态冲突|篮子中断)\]")
+_ROUND_DAY = re.compile(r"^basket_(\d{8})T")
+_MARKER_BOUNDARY = re.compile(r"(?====== \[轮档(?:开始|结束)\] )")
 _RAN_STATUSES = {"ok", "partial"}
 _DUE_REASONS = {
     "none": "今日篮子未运行",
     "blocked": "今日篮子已运行但被阻断",
     "abnormal": "今日篮子未正常结束",
+    "incomplete": "今日篮子运行证据不完整",
     "unreadable": "今日篮子运行情况无法确认",
 }
+
+
+def _new_round(round_id: str, day: date, *, start_seen: bool) -> dict:
+    match = _ROUND_DAY.match(round_id)
+    return {
+        "round_id": round_id,
+        "status": None,
+        "reason": "",
+        "start_seen": start_seen,
+        "day_matches": bool(match) and match.group(1) == f"{day:%Y%m%d}",
+    }
+
+
+def _round_evidence_problem(item: dict) -> str:
+    """轮次证据不完整的原因(R14)；空串表示完整。不含 start_seen/day_matches 字段的旧格式证据按完整处理。"""
+    if item.get("start_seen") is False:
+        return "缺少开始标记"
+    if item.get("day_matches") is False:
+        return "日期与当日轮档不符"
+    return ""
 
 
 def read_basket_round_evidence(archive_root: str | Path, day: date) -> dict:
     """只读解析当日轮档中的篮子轮次：结束状态(None=未见结束标记)与第一条跳过/冲突/中断原因行。
 
+    每个轮次另记 start_seen(结束标记之前见过同一 round_id 的开始标记)与 day_matches(round_id 中的日期等于 day)，
+    供分类判断证据是否完整(R14)；只记录，不补写轮档、不推断缺失的标记。
+    标记按整段匹配：上一个写入者在行中途中断、下一轮的标记接在残行之后时，先在标记起点切开再匹配；
+    原因行只归属到尚未见到自己结束标记的那个篮子轮次(按完整 round_id 判断)。
     文件不存在视为当日没有轮次；读取失败时 readable=False 并记下异常类型，不抛错。
     """
     path = Path(archive_root) / f"{day:%Y%m%d}.log"
@@ -45,28 +73,33 @@ def read_basket_round_evidence(archive_root: str | Path, day: date) -> dict:
         return {"readable": False, "path": str(path), "rounds": [], "error": type(exc).__name__}
     rounds: dict[str, dict] = {}
     current = None
-    for line in text.splitlines():
-        start = _ROUND_START.match(line)
-        if start:
-            round_id = start.group(1)
-            current = round_id if round_id.startswith("basket_") else None
-            if current:
-                rounds.setdefault(current, {"round_id": current, "status": None, "reason": ""})
-            continue
-        end = _ROUND_END.match(line)
-        if end:
-            if end.group(1).startswith("basket_"):
-                rounds.setdefault(end.group(1), {"round_id": end.group(1), "status": None, "reason": ""})
-                rounds[end.group(1)]["status"] = end.group(2)
-            current = None
-            continue
-        if current and not rounds[current]["reason"] and _ROUND_REASON.match(line):
-            rounds[current]["reason"] = line[:160]
+    for raw_line in text.splitlines():
+        for line in _MARKER_BOUNDARY.split(raw_line):
+            start = _ROUND_START.match(line)
+            if start:
+                round_id = start.group(1)
+                current = round_id if round_id.startswith("basket_") else None
+                if current and current not in rounds:
+                    rounds[current] = _new_round(current, day, start_seen=True)
+                continue
+            end = _ROUND_END.match(line)
+            if end:
+                end_id = end.group(1)
+                if end_id.startswith("basket_"):
+                    item = rounds.setdefault(end_id, _new_round(end_id, day, start_seen=False))
+                    item["status"] = end.group(2)
+                if end_id == current:
+                    current = None
+                continue
+            if current and not rounds[current]["reason"] and _ROUND_REASON.match(line):
+                rounds[current]["reason"] = line[:160]
     return {"readable": True, "path": str(path), "rounds": list(rounds.values())}
 
 
 def classify_basket_rounds(evidence: dict | None) -> tuple[str, dict | None]:
-    """ran=当日有篮子轮次以 ok/partial 结束；blocked/abnormal 取当日最后一个篮子轮次；none=无轮次；unreadable=读不到。"""
+    """ran=当日有证据完整的篮子轮次以 ok/partial 结束；blocked/abnormal 取当日最后一个证据完整的篮子轮次；
+    incomplete=当日只有缺开始标记或日期不符的篮子轮次；none=无轮次；unreadable=读不到。
+    """
     if evidence is None:
         return "none", None
     if not evidence.get("readable", True):
@@ -74,10 +107,13 @@ def classify_basket_rounds(evidence: dict | None) -> tuple[str, dict | None]:
     rounds = [item for item in (evidence.get("rounds") or []) if isinstance(item, dict)]
     if not rounds:
         return "none", None
-    for item in rounds:
+    complete = [item for item in rounds if not _round_evidence_problem(item)]
+    for item in complete:
         if item.get("status") in _RAN_STATUSES:
             return "ran", item
-    last = rounds[-1]
+    if not complete:
+        return "incomplete", rounds[-1]
+    last = complete[-1]
     return ("blocked" if last.get("status") == "blocked" else "abnormal"), last
 
 
@@ -140,6 +176,11 @@ def _sentinel_message(result: dict, round_evidence: dict | None, expectation_rea
         content = (f"今日篮子轮次 {round_id} 未正常结束(状态={status})"
                    + (f"，{basket_round['reason']}" if basket_round.get("reason") else "")
                    + "；请查看当日轮档与 basket.log。")
+    elif run_class == "incomplete":
+        content = (f"今日没有篮子采集台账记录；当日轮档中的篮子轮次 {round_id} "
+                   f"{_round_evidence_problem(basket_round) or '证据不完整'}"
+                   f"(结束状态={basket_round.get('status') or '未见结束标记'})，不能作为今日运行证据；"
+                   "请查看当日轮档与 basket.log。")
     elif run_class == "unreadable":
         content = (f"今日没有篮子采集台账记录，且当日轮档无法读取"
                    f"({(round_evidence or {}).get('error') or '未知错误'})，无法判断篮子是否运行。")
