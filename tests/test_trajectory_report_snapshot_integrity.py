@@ -112,23 +112,30 @@ class TrajectorySnapshotIntegrityTest(unittest.TestCase):
         self.assert_database_mismatch_rejected()
 
     def test_verified_manifest_bytes_are_read_once_before_database(self):
+        # R17：数据库摘要改由 sha256_file 分块计算，这里同时记录整读与流式摘要两类事件。
         module = load_module()
         read_bytes = Path.read_bytes
+        stream_digest = module.sha256_file
         events = []
 
         def track(path):
-            events.append(path)
-            if path == self.manifest and events.count(path) > 1:
+            events.append(("read", path))
+            if path == self.manifest and events.count(("read", path)) > 1:
                 raise AssertionError("MANIFEST_SECOND_READ")
             return read_bytes(path)
 
-        with patch.object(Path, "read_bytes", track):
+        def digest(path):
+            events.append(("digest", Path(path)))
+            return stream_digest(path)
+
+        with patch.object(Path, "read_bytes", track), patch.object(module, "sha256_file", digest):
             self.assertEqual(module._snapshot_db(self.snapshot, self.sha), self.db)
-        self.assertEqual(events, [self.manifest, self.db], "MANIFEST_THEN_DATABASE")
+        self.assertEqual(events, [("read", self.manifest), ("digest", self.db)], "MANIFEST_THEN_DATABASE")
         events.clear()
-        with patch.object(Path, "read_bytes", track), self.assertRaisesRegex(ValueError, "manifest"):
+        with patch.object(Path, "read_bytes", track), patch.object(module, "sha256_file", digest), \
+                self.assertRaisesRegex(ValueError, "manifest"):
             module._snapshot_db(self.snapshot, "0" * 64)
-        self.assertEqual(events, [self.manifest], "DO_NOT_READ_DB_AFTER_MANIFEST_REJECTION")
+        self.assertEqual(events, [("read", self.manifest)], "DO_NOT_READ_DB_AFTER_MANIFEST_REJECTION")
 
     def test_rejection_precedes_sqlite_consumers(self):
         self.change_one_price_byte()
