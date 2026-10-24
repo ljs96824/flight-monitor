@@ -16,7 +16,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from observation_time import resolve_observed_day_shanghai
-from readonly_snapshot import resolve_observations_db, resolve_snapshot_member
+from readonly_snapshot import resolve_observations_db, resolve_snapshot_member, sha256_file
 from tcurve import expected_search_sources, load_tcurve_daily_cells, readonly_connection
 
 
@@ -43,7 +43,8 @@ def _snapshot_db(db_path, expected_sha):
             or any(c not in "0123456789abcdef" for c in expected_db.lower())):
         raise ValueError("snapshot database SHA-256 missing or invalid: observations.sqlite3")
     db = resolve_observations_db(candidate)
-    database_sha = hashlib.sha256(db.read_bytes()).hexdigest()
+    # R17：数据库按 1 MiB 分块流式计算摘要，不再整库读入内存；清单仍按上面同一份已读字节校验并解析。
+    database_sha = sha256_file(db)
     if database_sha != expected_db.lower():
         raise ValueError("snapshot database SHA-256 mismatch: observations.sqlite3")
     return db
