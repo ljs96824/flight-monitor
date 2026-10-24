@@ -483,6 +483,38 @@ def _clean_airport_codes(codes) -> list[str]:
     return [str(code).strip().upper() for code in (codes or []) if str(code or "").strip()]
 
 
+_TOP_LEVEL_LIST_FIELDS = (
+    "cabin_classes", "origin_airports", "origin_airports_active",
+    "destination_airports", "destination_airports_active", "dest_airports",
+)
+_BASIC_LIST_FIELDS = (
+    "origin_airports", "origin_airports_active", "destination_airports",
+    "destination_airports_active", "dest_airports", "dest_airports_active",
+)
+
+
+def _check_list_field_shapes(item: dict) -> None:
+    """R18：舱位与机场列表字段只接受字符串或由字符串组成的列表；空值照旧按缺省处理。
+
+    类型不对时抛 ValueError，只报字段名与类型名、不带原值；加载器把它计为规范化失败，整批照常。
+    basic 非空却不是对象(例如键值对数组)时同样报类型无效：迁移旧格式时它会被转成对象，其中的字段就绕过了检查。
+    """
+    basic = item.get("basic")
+    if basic and not isinstance(basic, dict):
+        raise ValueError(f"basic 类型无效({type(basic).__name__})")
+    for container, prefix, keys in ((item, "", _TOP_LEVEL_LIST_FIELDS), (basic or {}, "basic.", _BASIC_LIST_FIELDS)):
+        for key in keys:
+            value = container.get(key)
+            if not value or isinstance(value, str):
+                continue
+            if isinstance(value, (list, tuple)):
+                strange = [entry for entry in value if not isinstance(entry, str)]
+                if not strange:
+                    continue
+                raise ValueError(f"{prefix}{key} 类型无效({type(value).__name__}含{type(strange[0]).__name__})")
+            raise ValueError(f"{prefix}{key} 类型无效({type(value).__name__})")
+
+
 def _resolved_airport_codes(location_info: dict) -> list[str]:
     """只接受 resolve_location 从 AIRPORTS 主字典推导出的 IATA。"""
     return [
@@ -746,6 +778,8 @@ def _invalid_location_subscription(
 def _normalize_subscription(item: dict) -> dict:
     from cabin_allocation import find_explicit_cabin_allocation, validate_cabin_allocation
 
+    # R18：按原始写法检查列表字段形态，报出的字段位置与订阅文件里的写法一致。
+    _check_list_field_shapes(item)
     item = migrate_old_subscription(item)
     hard_constraints = dict(item.get("hard_constraints") or {})
     soft_preferences = dict(item.get("soft_preferences") or {})
