@@ -43,7 +43,7 @@ SUBSCRIPTIONS = (
     "[\r\n"
     '  {"id": "sub-active", "status": "active", "origin": "上海", "destination": "大阪", '
     '"depart_date": "2026-12-01", "notification_goals": {"method": "both", "email": "owner@example.com"}, '
-    '"max_budget": 3210},\r\n'
+    '"max_budget": 3210.75},\r\n'
     '  {"id": "sub-paused", "status": "paused", "basic": {"origin": "上海", "destination": "东京", '
     '"departure_date": "2026-12-05", "return_date": "2026-12-09"}},\r\n'
     '  {"id": "sub-expired", "status": "active", "origin": "上海", "destination": "札幌", '
@@ -223,7 +223,8 @@ class PreviewTest(SubscriptionRestoreTestCase):
         self.assertEqual(result["real_api_calls"], 0)
         self.assertIn(f"--expect-sha256 {SUBSCRIPTIONS_SHA256}", result["apply_arguments"])
         self.assertNotIn("owner@example.com", stdout)
-        self.assertNotIn("3210", stdout)
+        # G19：预算测试值带小数点，归档摘要、备份编号与临时目录名里都不会出现，旧值 3210 曾与 archive_sha256 偶然重合。
+        self.assertNotIn("3210.75", stdout)
         self.record.assert_not_called()
         self.lock_resolver.assert_not_called()
         self.acquire.assert_not_called()
