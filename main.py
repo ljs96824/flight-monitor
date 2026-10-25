@@ -42,7 +42,7 @@ from analyzer import (
 from collector import _normalize_detail_flight, save_raw_response
 from api_usage import load_usage_strict, usage_ledger_health, usage_snapshot
 from basket_sentinel import basket_run_expectation, read_basket_round_evidence, run_basket_sentinel
-from collection_plan import build_collection_plan, load_collection_settings
+from collection_plan import build_collection_plan, load_collection_settings, unplannable_trip_date
 from collection_singleflight import (
     acquire_collection_singleflight,
     collection_busy_status,
@@ -513,6 +513,19 @@ def _check_list_field_shapes(item: dict) -> None:
                     continue
                 raise ValueError(f"{prefix}{key} 类型无效({type(value).__name__}含{type(strange[0]).__name__})")
             raise ValueError(f"{prefix}{key} 类型无效({type(value).__name__})")
+
+
+def _check_planned_trip_dates(subscription: dict) -> None:
+    """R19：采集计划要用的去程与返程日期须能按低价日历口径展开(前 10 个字符按 ISO 日期解析，并能取到前后 14 天)。
+
+    展开不了时抛 ValueError，只报字段名、不带原值；加载器把它计为规范化失败，坏订阅不进入采集计划、不产生请求，
+    其他订阅照常。顶层去程为空的记录照旧由加载器剔除，不在此检查；日期弹性等其他字段不在此检查。
+    """
+    if not subscription.get("depart_date"):
+        return
+    field = unplannable_trip_date(subscription)
+    if field:
+        raise ValueError(f"{field} 日期无效")
 
 
 def _resolved_airport_codes(location_info: dict) -> list[str]:
@@ -1083,6 +1096,8 @@ def _normalize_subscription(item: dict) -> dict:
     normalized["goals"] = _normalize_goals(
         normalized.get("notification_goals"), normalized.get("goals", [])
     )
+    # R19：坏日期在进入采集计划之前拒收，计入加载失败，不再让整批在构建计划时中断。
+    _check_planned_trip_dates(normalized)
     return normalized
 
 
