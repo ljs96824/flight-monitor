@@ -667,6 +667,39 @@ def _passengers(subscription: dict) -> dict:
     return dict(raw) if isinstance(raw, dict) else {"adult": 1}
 
 
+def planned_trip_dates(subscription: dict) -> list[tuple[str, str]]:
+    """R19：返回采集计划会用到的去程与返程日期(字段名, 文本)，取值与 build_collection_plan 完全一致。
+
+    去程为空时计划跳过该订阅，返回空列表；只有往返或当天往返才带返程，当天往返未写返程时沿用去程。
+    """
+    depart_date = str(_value(subscription, "depart_date") or "")
+    if not depart_date:
+        return []
+    dates = [("depart_date", depart_date)]
+    same_day = _as_bool(_value(subscription, "same_day_round_trip"))
+    round_trip = _as_bool(_value(subscription, "round_trip")) or same_day
+    return_date = str(_value(subscription, "return_date") or (depart_date if same_day else ""))
+    if round_trip and return_date:
+        dates.append(("return_date", return_date))
+    return dates
+
+
+def unplannable_trip_date(subscription: dict) -> str:
+    """R19：返回采集计划会用到、却按低价日历口径展开不了的日期字段名(depart_date 或 return_date)；都能展开时返回空串。
+
+    展开口径即 price_calendar._query_dates(与 _calendar_dates 同一函数)：取前 10 个字符按 ISO 日期解析，再取目标日前后
+    14 天——这是计划里离目标日最远的取值(弹性日期最多前后 7 天)；解析不了或超出日期可表示范围都算展开不了。
+    """
+    from price_calendar import _query_dates
+
+    for field, text in planned_trip_dates(subscription):
+        try:
+            _query_dates(text)
+        except (ValueError, OverflowError):
+            return field
+    return ""
+
+
 def _flex_dates(center_text: str, flexibility) -> list[str]:
     try:
         center = date.fromisoformat(str(center_text))
