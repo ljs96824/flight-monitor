@@ -59,6 +59,7 @@ from research_state_store import (
 from round_cleanup import RoundCleanup
 from source_profiles import retired_listing_sources
 from sources.aggregator import FlightAggregator, build_default_sources
+from subscription_identity import subscription_id
 from subscription_preflight import evaluate_subscription_preflight, shanghai_today
 from workload_class import CANARY, RESEARCH_COHORT
 
@@ -227,11 +228,47 @@ class ResearchSubscriptionInputUnavailable(RuntimeError):
     """Research cannot establish monitoring load from the subscription input."""
 
 
+# R20：研究准备按这一航向统计已有用户监控的出发日；加载订阅时的逐条试算用同一航向。
+_RESEARCH_USER_MONITOR_ROUTE = {"origin": "PVG", "dest": "KIX"}
+# R20：订阅字段的类型、日期或数值让研究准备的计算抛出这几类异常时，整份输入按不可用处理(研究不准入、状态不推进)，不跳过坏记录。
+_RESEARCH_INPUT_ERRORS = (TypeError, ValueError, OverflowError)
+
+
+def _research_input_unavailable(
+    target: Path, index: int, item: dict, step: str, exc: Exception
+) -> ResearchSubscriptionInputUnavailable:
+    """原因只写文件、数组位置、订阅编号(repr 转义，换行等控制字符不会混进日志)、出错步骤与异常类型，不带字段原值。"""
+    identifier = subscription_id(item)
+    label = f"#{index}" + (f" id={identifier!r}" if identifier else "")
+    return ResearchSubscriptionInputUnavailable(
+        f"订阅无法估算监控负载: {target} 订阅{label} 步骤={step} 原因={type(exc).__name__}"
+    )
+
+
+def _probe_research_load(
+    target: Path, index: int, item: dict, *, source_builder: Callable | None
+) -> None:
+    """R20：对这一条按研究准备随后真正要做的两步各试算一次(用户监控出发日、订阅采集计划)，抛错即按订阅输入不可用处理。"""
+    steps = (
+        ("用户监控日期", lambda: active_user_monitor_dates([item], **_RESEARCH_USER_MONITOR_ROUTE)),
+        ("订阅采集计划", lambda: build_collection_plan(
+            subscriptions=[item], basket_requests=[], source_builder=source_builder,
+        )),
+    )
+    for step, compute in steps:
+        try:
+            compute()
+        except _RESEARCH_INPUT_ERRORS as exc:
+            raise _research_input_unavailable(target, index, item, step, exc) from exc
+
+
 def _load_active_subscriptions_for_research(
     path: str | Path,
     *,
     today: date,
+    source_builder: Callable | None = None,
 ) -> list[dict]:
+    """读取研究用的在用订阅；R20 起每条都须能被前置校验、用户监控出发日与订阅采集计划算出结果，否则整份输入不可用。"""
     target = Path(path)
     if not target.is_file():
         raise ResearchSubscriptionInputUnavailable(f"订阅输入不存在或不是文件: {target}")
@@ -245,14 +282,19 @@ def _load_active_subscriptions_for_research(
     if not isinstance(payload, list):
         raise ResearchSubscriptionInputUnavailable(f"订阅输入为非数组载荷: {target}")
     active = []
-    for item in payload:
+    for index, item in enumerate(payload):
         if not isinstance(item, dict):
             continue
         status = str(item.get("status") or "active").strip().lower()
         if status not in {"active", "enabled"}:
             continue
-        if evaluate_subscription_preflight(item, today=today).get("skip"):
+        try:
+            skipped = evaluate_subscription_preflight(item, today=today).get("skip")
+        except _RESEARCH_INPUT_ERRORS as exc:
+            raise _research_input_unavailable(target, index, item, "前置校验", exc) from exc
+        if skipped:
             continue
+        _probe_research_load(target, index, item, source_builder=source_builder)
         active.append(item)
     return active
 
@@ -427,6 +469,7 @@ def _prepare_research_basket(
         subscriptions = _load_active_subscriptions_for_research(
             subscriptions_path,
             today=today,
+            source_builder=source_builder,
         )
     except ResearchSubscriptionInputUnavailable as exc:
         safe_log(f"[研究输入缺失] path={subscriptions_path} 原因={exc}")
@@ -439,8 +482,7 @@ def _prepare_research_basket(
     staged_state = deepcopy(state)
     user_dates = active_user_monitor_dates(
         subscriptions,
-        origin="PVG",
-        dest="KIX",
+        **_RESEARCH_USER_MONITOR_ROUTE,
     )
     schedule = prepare_research_requests(
         staged_state,
