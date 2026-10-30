@@ -82,6 +82,7 @@ def _build_report_inputs(
     subscriptions = _load_active_subscriptions_for_research(
         subscriptions_path,
         today=today,
+        source_builder=source_builder,
     )
     state = deepcopy(_read_state(Path(state_path)))
     schedule = prepare_research_requests(
