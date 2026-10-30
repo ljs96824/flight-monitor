@@ -32,6 +32,10 @@ class SubscriptionInputMissing(RuntimeError):
     """本地订阅文件缺失：运行入口不得把它当作空列表，同步也不得据此重建(R9-1)。"""
 
 
+class _LocalFileAbsent:
+    """R21：交给 update_json 的缺文件标记。JSON 解析不会产出这个类型，同一把锁内据此区分"文件已消失"与"现有内容为 null"。"""
+
+
 def require_subscriptions_file(path: Path) -> None:
     """只确认订阅文件存在且是文件；内容是否合法由读取方按既有规则显式报错。"""
     target = Path(path)
@@ -48,7 +52,8 @@ def subscription_input_missing_line(exc: SubscriptionInputMissing) -> str:
 
 def _load_json_list(path: Path) -> list[dict]:
     if not path.exists():
-        return []
+        # R21：远端为空时只读本地文件；此时文件已消失同样按缺失处理，不当作空列表(R9-1)。
+        raise SubscriptionInputMissing(f"订阅文件缺失: {path}")
     data = read_json(path)
     if not isinstance(data, list):
         raise ValueError("subscriptions.json 格式错误，应为订阅数组")
@@ -187,6 +192,7 @@ def sync_subscriptions() -> dict:
     """Download remote subscriptions and merge them into local subscriptions.json.
 
     本地文件缺失时在下载前抛出 SubscriptionInputMissing；写入阶段发现文件已消失同样抛出，不按空集合重建(R9-1)。
+    R21：远端为空时的读取阶段发现文件已消失同样抛出；现有内容为 JSON null 或其他非数组时抛 ValueError(格式错误)，不写入。
     """
     require_subscriptions_file(LOCAL_SUBSCRIPTIONS)
     remote_subscriptions = download_remote_subscriptions()
@@ -196,17 +202,18 @@ def sync_subscriptions() -> dict:
     state: dict = {}
 
     def mutate(payload):
-        if payload is None:
+        if isinstance(payload, _LocalFileAbsent):
             raise SubscriptionInputMissing(f"订阅文件缺失: {LOCAL_SUBSCRIPTIONS}")
         if isinstance(payload, list):
             local_subscriptions = payload
         else:
+            # R21：现有内容为 JSON null 与其他非数组内容同属格式错误，不按缺失处理(与远端为空时的读取、主入口加载同一口径)。
             raise ValueError("subscriptions.json 格式错误，应为订阅数组")
         plan = plan_remote_ingest(local_subscriptions, remote_subscriptions)
         state.update(plan)
         return plan["subscriptions"]
 
-    update_json(LOCAL_SUBSCRIPTIONS, mutate)
+    update_json(LOCAL_SUBSCRIPTIONS, mutate, missing=_LocalFileAbsent())
     plan = state
     merged = plan["subscriptions"]
     added = plan["added"]
@@ -236,6 +243,8 @@ def sync_subscriptions() -> dict:
 def main() -> int:
     try:
         require_subscriptions_file(LOCAL_SUBSCRIPTIONS)
+        # R21：同步途中文件消失与开头即缺失同样处理(记一行、尝试告警、退出码 2、不采集)，与 main.run_cli 一致；其他异常照旧向上抛。
+        sync_subscriptions()
     except SubscriptionInputMissing as exc:
         safe_log(subscription_input_missing_line(exc))
         try:
@@ -243,7 +252,6 @@ def main() -> int:
         except Exception as alert_exc:  # 告警失败不改变缺失结论(R9-2)
             safe_log(f"[运维告警] 调用失败 原因={type(alert_exc).__name__}")
         return EXIT_SUBSCRIPTIONS_MISSING
-    sync_subscriptions()
     from main import run_cli
 
     return run_cli(sync_remote=False)
