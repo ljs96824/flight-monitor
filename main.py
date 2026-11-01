@@ -170,6 +170,14 @@ def _subscription_route_label(sub: dict) -> str:
     return f"{sub.get('origin') or '?'}->{sub.get('destination') or '?'}"
 
 
+def _distinct_cabin_classes(value) -> list[str]:
+    """R22："省API"估算的舱位计数口径——单个字符串算一个舱位，空值与列表里的空项按经济舱(与采集计划、请求缓存键一致)，
+    同一舱位只算一次；本函数对任何写法都不抛错。"""
+    if isinstance(value, (list, tuple)):
+        return list(dict.fromkeys(str(item or "economy") for item in value)) or ["economy"]
+    return [str(value)] if value else ["economy"]
+
+
 def _estimated_saved_api_calls(sub: dict) -> int:
     """估算目标日首轮本会发出的真实外部请求数，Juhe 过去日期守卫不计。"""
     profile = get_source_profile(sub.get("route_type"))
@@ -181,14 +189,12 @@ def _estimated_saved_api_calls(sub: dict) -> int:
         env_key = _SOURCE_ENV_KEYS.get(source_name)
         if env_key is None or os.environ.get(env_key):
             enabled_external_sources += 1
-    origins = sub.get("origin_airports_active") or sub.get("origin_airports") or [sub.get("origin")]
-    destinations = (
-        sub.get("destination_airports_active")
-        or sub.get("destination_airports")
-        or [sub.get("destination")]
-    )
-    airport_combinations = max(1, len(origins or [])) * max(1, len(destinations or []))
-    cabin_count = max(1, len(sub.get("cabin_classes") or ["economy"]))
+    # R22：机场与舱位按本轮实际采集的取值计数，不再对字符串按字符计数。机场用 _subscription_airports——与
+    # collect_for_airport_matrix 的入参同一函数(单个字符串算一个机场、兼容 basic 字段、启用机场限于全部机场)；重复机场只算一次。
+    origins = _subscription_airports(sub, "origin_airports_active", "origin_airports", "origin")
+    destinations = _subscription_airports(sub, "destination_airports_active", "destination_airports", "destination")
+    airport_combinations = max(1, len(dict.fromkeys(origins))) * max(1, len(dict.fromkeys(destinations)))
+    cabin_count = len(_distinct_cabin_classes(sub.get("cabin_classes")))
     return enabled_external_sources * airport_combinations * cabin_count
 
 
