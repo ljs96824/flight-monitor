@@ -85,21 +85,19 @@ def _update_source_history(source_stats: dict | None) -> tuple[dict, list[str]]:
 
     def mutate(payload):
         nonlocal warnings
-        if payload is None:
-            history = {}
-        elif isinstance(payload, dict):
-            history = payload
-        else:
+        # R24：文件不存在时 update_json 交来 missing={} 的副本，照旧从空记录开始；现有内容为 JSON null 与其他非对象内容一样
+        # 按损坏处理——抛 JsonStoreReadError、不写入，走下方降级分支(与 _load_source_health、损坏记录不覆盖的既有口径一致)。
+        if not isinstance(payload, dict):
             raise JsonStoreReadError("source_health 根节点必须是对象")
         history, warnings = _apply_source_history_updates(
-            history,
+            payload,
             entries,
             now=now,
         )
         return history
 
     try:
-        history = update_json(SOURCE_HEALTH_PATH, mutate)
+        history = update_json(SOURCE_HEALTH_PATH, mutate, missing={})
     except JsonStoreReadError as exc:
         safe_log(
             "[源健康] source_health_state_degraded "
