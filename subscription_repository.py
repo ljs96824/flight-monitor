@@ -53,9 +53,12 @@ class _SubscriptionFileMissing(RuntimeError):
     """Abort a write RMW without creating a missing subscription file."""
 
 
-def _subscription_array(payload, *, allow_missing: bool = False) -> list[dict]:
-    if payload is None and allow_missing:
-        return []
+def _subscription_array(payload) -> list[dict]:
+    """只接受订阅数组；JSON null 与其他非数组内容一律按格式错误抛 ValueError。
+
+    R23：去掉只有新建订阅在用的 allow_missing(即"null 当空数组"的放行)。文件不存在的情况由各调用方自行处理，
+    不在此处与 null 合并。
+    """
     if not isinstance(payload, list):
         raise ValueError("subscriptions.json 格式错误，应为订阅数组")
     return payload
@@ -159,6 +162,11 @@ class SubscriptionRepository:
             return deepcopy(subscriptions[index])
 
     def create(self, owner_id: str, subscription: dict) -> dict:
+        """新增一条订阅，返回保存后的副本。
+
+        文件不存在时新建为只含这一条的数组；现有内容为 JSON null 或其他非数组时按格式错误抛 ValueError、不写入
+        (R23：此前 null 被当成空数组，写回只含新订阅的数组)。缺失与 null 在 update_json 的同一把锁内区分。
+        """
         if not self._owns(owner_id):
             raise SubscriptionOwnerScopeError(
                 f"owner scope unavailable: {owner_id!r}"
@@ -167,7 +175,9 @@ class SubscriptionRepository:
         saved: dict = {}
 
         def mutate(payload):
-            subscriptions = _subscription_array(payload, allow_missing=True)
+            # R23：文件不存在时 update_json 交来 missing=[] 的副本；现有内容为 JSON null 时 payload 为 None，与其他非数组
+            # 内容同属格式错误，_subscription_array 抛 ValueError、不写入(与列表读取、本机同步同一口径)。
+            subscriptions = _subscription_array(payload)
             positions = _validated_id_index(subscriptions)
             ensure_subscription_id(candidate)
             candidate_id = persisted_subscription_id(candidate)
@@ -182,7 +192,7 @@ class SubscriptionRepository:
             saved.update(deepcopy(candidate))
             return subscriptions
 
-        update_json(self.path, mutate)
+        update_json(self.path, mutate, missing=[])
         return saved
 
     def update(
