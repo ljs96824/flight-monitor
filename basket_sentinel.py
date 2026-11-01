@@ -210,13 +210,14 @@ def _load_state(path: Path) -> dict:
     """读取哨兵去重状态；缺失、读不到、不是合法 UTF-8 JSON 或不是对象时一律按今日未通知处理。
 
     非法 UTF-8 与坏 JSON 同口径(R13)：到点照常发一次，发送成功后整份重写；不做容错解码，
-    不把部分可读的损坏内容当作可信的去重记录。
+    不把部分可读的损坏内容当作可信的去重记录。合法 UTF-8 但 json 拒收的内容(整数位数超限、嵌套过深)同样处理(R13b)。
     """
     if not path.exists():
         return {}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError):
+    except (OSError, ValueError, RecursionError):
+        # R13b：ValueError 涵盖坏 JSON(JSONDecodeError)、非法 UTF-8(UnicodeDecodeError)与整数位数超限；RecursionError 为嵌套过深。
         return {}
     return payload if isinstance(payload, dict) else {}
 
@@ -231,8 +232,11 @@ def _write_state(path: Path, payload: dict) -> None:
             os.fsync(handle.fileno())
         os.replace(temp_path, path)
     finally:
-        if temp_path.exists():
+        # R13b：清理临时文件失败只记一行，不掩盖写入阶段的原始错误。
+        try:
             temp_path.unlink(missing_ok=True)
+        except OSError as exc:
+            safe_log(f"[篮子哨兵] 临时文件清理失败 path={temp_path} 原因={type(exc).__name__}:{exc}")
 
 
 def run_basket_sentinel(
@@ -245,6 +249,12 @@ def run_basket_sentinel(
     round_evidence: dict | None = None,
     expectation_reason: str = "",
 ) -> dict:
+    """到点检查今日篮子是否运行，需要时发一次提醒，发送成功后写去重状态。
+
+    结果为 evaluate_basket_sentinel 的结论，另带 notified；到点时再带 status(already_notified / notified / notify_failed)。
+    R13b：notified 为 True 时另带 state_saved——去重状态写入成功为 True，写入遇 OSError 为 False(记一行，不向外抛)。
+    先发后记，所以状态写不进去期间，同日之后再到点且条件仍成立时会再提醒(至少一次)。
+    """
     current = now or datetime.now()
     result = evaluate_basket_sentinel(
         usage_payload,
@@ -271,11 +281,19 @@ def run_basket_sentinel(
     result["notified"] = notified
     result["status"] = "notified" if notified else "notify_failed"
     if notified:
-        _write_state(
-            path,
-            {
-                "last_notified_day": result["date"],
-                "notified_at": current.isoformat(timespec="seconds"),
-            },
-        )
+        try:
+            _write_state(
+                path,
+                {
+                    "last_notified_day": result["date"],
+                    "notified_at": current.isoformat(timespec="seconds"),
+                },
+            )
+        except OSError as exc:
+            # R13b：提醒已发出，只是去重记录没写进去——照实记一行，结论仍为 notified，不再让主入口记"检查失败"；
+            # 先发后记的既有顺序不变，同日之后再到点且条件仍成立时会再提醒一次，直到状态能写入为止。
+            result["state_saved"] = False
+            safe_log(f"[篮子哨兵] 已通知，但去重状态写入失败 原因={type(exc).__name__}:{exc}")
+        else:
+            result["state_saved"] = True
     return result
