@@ -23,14 +23,38 @@ class JsonStoreReadError(RuntimeError):
     """JSON 文件无法完整、可信地读取。"""
 
 
+# R25：JSON 存储接受的最大嵌套层数(对象与数组各算一层，标量不算)。本项目各 JSON 状态文件实际只有个位数层；
+# read_json 交出的与 update_json 写入的内容都不超过这个层数，deepcopy、比较与写回因此不会触发递归上限。
+MAX_JSON_NESTING = 100
+
+
+def _check_nesting(payload) -> None:
+    """不用递归地逐层检查对象与数组的嵌套层数，超过 MAX_JSON_NESTING 时抛 ValueError(R25)。"""
+
+    pending = [(payload, 1)] if isinstance(payload, (dict, list)) else []
+    while pending:
+        node, depth = pending.pop()
+        if depth > MAX_JSON_NESTING:
+            raise ValueError(f"JSON 嵌套超过 {MAX_JSON_NESTING} 层")
+        children = node.values() if isinstance(node, dict) else node
+        pending.extend((child, depth + 1) for child in children if isinstance(child, (dict, list)))
+
+
 def read_json(path: str | Path):
-    """读取 JSON；任何读取或解析失败都会显式抛出。"""
+    """读取 JSON；任何读取或解析失败都会显式抛出。
+
+    R25：除打不开、编码与语法错误外，数字超过整数位数上限(ValueError)、解析时嵌套过深(RecursionError)与解析后
+    嵌套超过 MAX_JSON_NESTING 层，同样记一行并抛 JsonStoreReadError，与无法解析的 JSON 同口径，不再原样外抛；
+    其他异常(如 TypeError、MemoryError)照旧原样外抛。
+    """
 
     target = Path(path)
     try:
         with target.open("r", encoding="utf-8") as stream:
-            return json.load(stream)
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            payload = json.load(stream)
+        _check_nesting(payload)
+        return payload
+    except (OSError, ValueError, RecursionError) as exc:
         safe_log(
             f"[JSON存储] 读取失败 path={target} "
             f"原因={type(exc).__name__}:{exc}"
@@ -104,6 +128,8 @@ def update_json(
     文件尚不存在时，mutator 接收 missing 的一份深拷贝(缺省 None)；已存在但无法读取时会抛错，绝不把
     损坏文件伪装成空结构。已存在的文件内容为 JSON null 时 mutator 接收 None，调用方可借 missing
     在同一把锁内区分"文件不存在"与"现有内容为 null"(R16)。mutator 必须返回要持久化的完整 JSON 值。
+    R25：mutator 返回的内容嵌套超过 MAX_JSON_NESTING 层时拒绝写入——记一行写入失败并抛 ValueError，原文件不变，
+    不留下 read_json 读不回的文件。
     """
 
     target = Path(path)
@@ -117,6 +143,7 @@ def update_json(
         if exists and updated == original:
             return updated
         try:
+            _check_nesting(updated)
             _write_json_atomic(target, updated)
         except Exception as exc:
             safe_log(
