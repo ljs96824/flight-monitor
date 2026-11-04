@@ -40,6 +40,26 @@ def _check_nesting(payload) -> None:
         pending.extend((child, depth + 1) for child in children if isinstance(child, (dict, list)))
 
 
+# R26：read_json 认定为"读不了"的异常类型(R25 口径)，供自行解析 JSON 的读取方沿用同一口径。
+JSON_READ_ERRORS = (OSError, ValueError, RecursionError)
+
+
+def parse_json_text(text: str):
+    """按 read_json 的口径解析一段 JSON 文本，解析后检查嵌套层数(R26)。
+
+    只接受 str：read_json 按 UTF-8 文本读入，而 json.loads 收到 bytes 时会自行识别 BOM 与 UTF-16，口径不同，
+    因此其他类型一律抛 TypeError。解析失败时原样抛出 ValueError(含语法错误、超长整数与超过 MAX_JSON_NESTING
+    层)或 RecursionError，二者都在 JSON_READ_ERRORS 内；不记日志、不包装，由调用方按自己的口径处理；其他异常
+    照旧原样外抛。
+    """
+
+    if not isinstance(text, str):
+        raise TypeError(f"parse_json_text 只接受 str，收到 {type(text).__name__}")
+    payload = json.loads(text)
+    _check_nesting(payload)
+    return payload
+
+
 def read_json(path: str | Path):
     """读取 JSON；任何读取或解析失败都会显式抛出。
 
@@ -54,7 +74,7 @@ def read_json(path: str | Path):
             payload = json.load(stream)
         _check_nesting(payload)
         return payload
-    except (OSError, ValueError, RecursionError) as exc:
+    except JSON_READ_ERRORS as exc:
         safe_log(
             f"[JSON存储] 读取失败 path={target} "
             f"原因={type(exc).__name__}:{exc}"

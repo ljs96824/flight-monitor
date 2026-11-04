@@ -6,7 +6,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from atomic_json_store import read_json
+from atomic_json_store import JSON_READ_ERRORS, parse_json_text, read_json
 from filename_utils import sanitize_filename
 from flight_combo_utils import normalize_combo
 from log_utils import safe_log
@@ -375,9 +375,11 @@ def load_pushed_plans(sub_id, data_dir=None) -> dict:
     if not path.exists():
         return {}
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        payload = parse_json_text(path.read_text(encoding="utf-8"))
+    except JSON_READ_ERRORS:
         return {}
+    # R26：读取口径同 read_json(R25，含非法 UTF-8)；读不了与不是对象的内容一样按没有记录处理——调用方都按对象取 last_pushed。
+    return payload if isinstance(payload, dict) else {}
 
 
 def get_subscription_feedback(subscription_id, data_dir=None, unresolved_only: bool = True) -> list[dict]:

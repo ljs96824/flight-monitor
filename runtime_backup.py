@@ -20,6 +20,7 @@ import tempfile
 from typing import Callable
 from uuid import uuid4
 
+from atomic_json_store import JSON_READ_ERRORS, parse_json_text
 from backup_status import record_backup_created
 from config_loader import RuntimeConfigError, validate_runtime_config
 from collection_singleflight import (
@@ -381,10 +382,11 @@ def scan_runtime_state(
 
 
 def _strict_json(path: Path):
+    # R26：与 read_json 同一读取口径(R25)；超长整数、嵌套过深与超过 MAX_JSON_NESTING 层同样按解析失败处理。
     try:
         with path.open("r", encoding="utf-8") as handle:
-            return json.load(handle)
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            return parse_json_text(handle.read())
+    except JSON_READ_ERRORS as exc:
         raise RuntimeStateValidationError(
             f"JSON解析失败: {path.name}: {type(exc).__name__}"
         ) from exc
@@ -419,9 +421,9 @@ def _strict_jsonl(path: Path) -> int:
             for line_number, line in enumerate(handle, start=1):
                 if not line.strip():
                     continue
-                json.loads(line)
+                parse_json_text(line)
                 count += 1
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+    except JSON_READ_ERRORS as exc:
         raise RuntimeStateValidationError(
             f"JSONL解析失败: {path.name}:{line_number}: {type(exc).__name__}"
         ) from exc
