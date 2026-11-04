@@ -251,12 +251,14 @@ class DetailPayloadDecodeTest(unittest.TestCase):
         tree = ast.parse(source)
         old = ast.dump(tree)
         if kind in {"remove_unicode", "broad_catch"}:
+            # R26：读取口径改为与 read_json 共用的 JSON_READ_ERRORS(OSError、ValueError、RecursionError)；去掉解码错误的
+            # 变异改写为把其中的 ValueError 换成只接语法错误的 JSONDecodeError，并自带 import，不依赖 web_form 的全局名。
             targets = [node for node in ast.walk(tree) if isinstance(node, ast.ExceptHandler)
-                       and isinstance(node.type, ast.Tuple)
-                       and [ast.unparse(item) for item in node.type.elts] == ["json.JSONDecodeError", "OSError", "UnicodeError"]]
+                       and isinstance(node.type, ast.Name) and node.type.id == "JSON_READ_ERRORS"]
             self.assertEqual(len(targets), 1, "MUTATION_MATCH")
             if kind == "remove_unicode":
-                targets[0].type.elts.pop()
+                targets[0].type = ast.parse(
+                    "(OSError, __import__('json').JSONDecodeError, RecursionError)", mode="eval").body
             else:
                 targets[0].type = ast.Name(id="Exception", ctx=ast.Load())
         elif kind == "replace_decode":

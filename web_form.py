@@ -9,7 +9,6 @@ if __name__ == "__main__":
         "run_web.py 提供回环默认绑定与显式公网授权门。"
     )
 
-import json
 import math
 import os
 import queue
@@ -22,7 +21,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from flask import Flask, abort, jsonify, redirect, render_template_string, request, session, url_for
-from atomic_json_store import read_json, update_json
+from atomic_json_store import JSON_READ_ERRORS, parse_json_text, read_json, update_json
 
 from airports import (
     AIRPORTS,
@@ -892,17 +891,17 @@ def load_feedback() -> list[dict]:
 
 
 def save_feedback(record: dict) -> None:
-    def mutate(payload):
-        if payload is None:
-            records = []
-        elif isinstance(payload, list):
-            records = payload
-        else:
-            raise ValueError("feedback.json 格式错误，应为反馈数组")
-        records.append(record)
-        return records
+    """追加一条反馈。文件不存在时新建为单元素数组；现有内容为 JSON null 或其他非数组时按格式错误抛 ValueError、
+    不写入(R26：此前 null 被当成空数组，写回只含这一条的数组；与 load_feedback 同一口径)。"""
 
-    update_json(FEEDBACK_PATH, mutate)
+    def mutate(payload):
+        # R26：文件不存在时 update_json 交来 missing=[] 的副本；现有内容为 null 时 payload 为 None，与其他非数组同属格式错误。
+        if not isinstance(payload, list):
+            raise ValueError("feedback.json 格式错误，应为反馈数组")
+        payload.append(record)
+        return payload
+
+    update_json(FEEDBACK_PATH, mutate, missing=[])
 
 
 def notify_feedback_author(record: dict) -> bool:
@@ -946,8 +945,9 @@ def _load_payload_result(subscription_id: str) -> dict | None:
     if not path.is_file():
         return None
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError, UnicodeError):
+        # R26：与 read_json 同一读取口径(R25)——超长整数、解析时嵌套过深与超过 MAX_JSON_NESTING 层同样按读不了处理。
+        data = parse_json_text(path.read_text(encoding="utf-8"))
+    except JSON_READ_ERRORS:
         return None
     return data if isinstance(data, dict) else None
 
