@@ -28,16 +28,33 @@ class JsonStoreReadError(RuntimeError):
 MAX_JSON_NESTING = 100
 
 
-def _check_nesting(payload) -> None:
-    """不用递归地逐层检查对象与数组的嵌套层数，超过 MAX_JSON_NESTING 时抛 ValueError(R25)。"""
+# R28：参与嵌套计数的容器。元组按 json 序列化写成数组，读回后就是数组，因此同样算一层；解析出来的内容不含元组。
+_NESTING_CONTAINERS = (dict, list, tuple)
 
-    pending = [(payload, 1)] if isinstance(payload, (dict, list)) else []
+
+def _check_nesting(payload) -> None:
+    """不用递归地逐层检查对象与数组的嵌套层数，超过 MAX_JSON_NESTING 时抛 ValueError(R25)。
+
+    R28：元组也算一层(见 _NESTING_CONTAINERS)；读取侧解析结果不含元组，不受影响。
+    """
+
+    pending = [(payload, 1)] if isinstance(payload, _NESTING_CONTAINERS) else []
     while pending:
         node, depth = pending.pop()
         if depth > MAX_JSON_NESTING:
             raise ValueError(f"JSON 嵌套超过 {MAX_JSON_NESTING} 层")
         children = node.values() if isinstance(node, dict) else node
-        pending.extend((child, depth + 1) for child in children if isinstance(child, (dict, list)))
+        pending.extend((child, depth + 1) for child in children if isinstance(child, _NESTING_CONTAINERS))
+
+
+def check_json_nesting(payload) -> None:
+    """写入前检查(R28)：payload 嵌套超过 MAX_JSON_NESTING 层(对象、数组与元组各算一层，标量不算)时抛 ValueError。
+
+    与 update_json 写入前、read_json 与 parse_json_text 读回后的检查同一判定，供自行写 JSON 文件的写入方在写之前
+    调用，不留下自己读不回的文件。不用递归，不记日志。
+    """
+
+    _check_nesting(payload)
 
 
 # R26：read_json 认定为"读不了"的异常类型(R25 口径)，供自行解析 JSON 的读取方沿用同一口径。

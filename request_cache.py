@@ -14,7 +14,7 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from atomic_json_store import JSON_READ_ERRORS, parse_json_text
+from atomic_json_store import JSON_READ_ERRORS, check_json_nesting, parse_json_text
 from domestic_fare_rules import AIRCRAFT_NAMES, re_match_aircraft_code
 from filename_utils import sanitize_filename
 from flight_combo_utils import normalize_combo
@@ -665,6 +665,13 @@ def _write_persistent(
         "producer_class": _source_producer(source) if source is not None else "",
         "result": result,
     }
+    try:
+        check_json_nesting(payload)
+    except ValueError as exc:
+        # R28：写入的整份内容(含外层 fetched_at、key 等)嵌套超过 MAX_JSON_NESTING 层时，读回按未命中(R27)，写了也用不上，
+        # 因此不写；不停用该目录，原有文件不动(与写入失败时一样，有效期更长的调用方仍可能命中这份更早的结果)。
+        safe_log(f"[缓存] 结果不写入持久缓存 {path.name}: {exc}")
+        return
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")

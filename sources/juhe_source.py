@@ -14,7 +14,7 @@ import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from atomic_json_store import JSON_READ_ERRORS, parse_json_text
+from atomic_json_store import JSON_READ_ERRORS, check_json_nesting, parse_json_text
 from filename_utils import sanitize_filename
 from domestic_fare_rules import get_aircraft_name
 from log_utils import safe_log
@@ -461,6 +461,12 @@ class JuheSource(FlightSource):
             "fetched_at": datetime.now().isoformat(timespec="seconds"),
             "raw": raw,
         }
+        try:
+            check_json_nesting(payload)
+        except ValueError as exc:
+            # R28：读回时按未命中(R27)的内容不写入；返回 False，与写入失败一样保留本轮结果，原有文件不动。
+            safe_log(f"[缓存不写入] 源=juhe 文件={path.name} 原因={exc}")
+            return False
         for attempt in range(2):
             try:
                 _write_cache_once(path, payload)
