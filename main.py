@@ -21,7 +21,7 @@ BASE_DIR = Path(__file__).parent
 DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
-from atomic_json_store import parse_json_text, read_json, write_text_atomic
+from atomic_json_store import check_json_nesting, parse_json_text, read_json, write_text_atomic
 # 加载环境变量
 load_dotenv(BASE_DIR / ".env", encoding="utf-8")
 
@@ -1280,13 +1280,20 @@ def _collect_same_day_fallback_flights(
     ]
     flights = _filter_data_to_airports({"flights": flights}, origins, dests).get("flights", [])
     flights = [flight for flight in flights if _valid_price(flight.get("price"))]
+    payload = {
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+        "date": date_str,
+        "flights": flights,
+    }
+    try:
+        check_json_nesting(payload)
+    except ValueError as exc:
+        # R28：读回时按缓存读取失败处理(R27)的内容不写入；本轮照常使用这批航班，原有文件不动。
+        print(f"[当天往返备选] 不写入缓存 {cache_path}: {exc}")
+        return flights
     cache_path.write_text(
         json.dumps(
-            {
-                "updated_at": datetime.now().isoformat(timespec="seconds"),
-                "date": date_str,
-                "flights": flights,
-            },
+            payload,
             ensure_ascii=False,
             indent=2,
             default=str,
