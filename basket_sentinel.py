@@ -14,6 +14,7 @@ from datetime import date, datetime, time as clock_time
 from pathlib import Path
 import uuid
 
+from atomic_json_store import JSON_READ_ERRORS, parse_json_text
 from log_utils import safe_log
 from research_cohort import research_runtime_enabled
 
@@ -211,13 +212,16 @@ def _load_state(path: Path) -> dict:
 
     非法 UTF-8 与坏 JSON 同口径(R13)：到点照常发一次，发送成功后整份重写；不做容错解码，
     不把部分可读的损坏内容当作可信的去重记录。合法 UTF-8 但 json 拒收的内容(整数位数超限、嵌套过深)同样处理(R13b)。
+    R27：改用 atomic_json_store 的 parse_json_text(与 read_json 同一套嵌套检查)与 JSON_READ_ERRORS(与 read_json 接住的
+    异常相同)，解析后嵌套超过 MAX_JSON_NESTING 层的内容同样处理。
     """
     if not path.exists():
         return {}
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError, RecursionError):
+        payload = parse_json_text(path.read_text(encoding="utf-8"))
+    except JSON_READ_ERRORS:
         # R13b：ValueError 涵盖坏 JSON(JSONDecodeError)、非法 UTF-8(UnicodeDecodeError)与整数位数超限；RecursionError 为嵌套过深。
+        # R27：JSON_READ_ERRORS 即 (OSError, ValueError, RecursionError)；嵌套超过 MAX_JSON_NESTING 层由 parse_json_text 报 ValueError。
         return {}
     return payload if isinstance(payload, dict) else {}
 

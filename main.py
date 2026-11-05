@@ -21,7 +21,7 @@ BASE_DIR = Path(__file__).parent
 DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
-from atomic_json_store import read_json, write_text_atomic
+from atomic_json_store import parse_json_text, read_json, write_text_atomic
 # 加载环境变量
 load_dotenv(BASE_DIR / ".env", encoding="utf-8")
 
@@ -1238,7 +1238,9 @@ def _fresh_cached_flights(path: Path, max_age_hours: int = 6) -> list[dict] | No
     if not path.exists():
         return None
     try:
-        cached = json.loads(path.read_text(encoding="utf-8"))
+        # R27：解析口径同 read_json(R25)，嵌套超过 MAX_JSON_NESTING 层的缓存同样按读取失败处理；
+        # 其余读不了的情况(含非法 UTF-8、超长整数与解析时嵌套过深)原本已由下方 except Exception 接住。
+        cached = parse_json_text(path.read_text(encoding="utf-8"))
         updated_at = datetime.fromisoformat(str(cached.get("updated_at")))
         if timedelta(0) <= datetime.now() - updated_at <= timedelta(hours=max_age_hours):
             print(f"[当天往返备选] 使用缓存 {path}")
