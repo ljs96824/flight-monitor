@@ -1161,7 +1161,6 @@ def _save_result_for_page(
         )
         safe_log_json("[详情发布回执] ", receipt)
         return receipt
-    PAGE_PAYLOADS_DIR.mkdir(parents=True, exist_ok=True)
     payload_path = PAGE_PAYLOADS_DIR / f"{canonical_id}.json"
     record = {
         "subscription_id": canonical_id,
@@ -1169,6 +1168,22 @@ def _save_result_for_page(
         "html": html_content,
         "payload": payload or {},
     }
+    try:
+        check_json_nesting(record)
+    except ValueError as exc:
+        # R29：嵌套超过 MAX_JSON_NESTING 层的详情读回时按读不了(R26，详情页 404)，写了也用不上，因此不写、不上传、
+        # 不建详情目录；与非 UUID 订阅标识被拒时同一条回执路径，上一份详情不动(R8-1)。
+        safe_log(f"[详情存储拒绝] 订阅 {canonical_id} 的详情内容不写入: {exc}")
+        receipt = build_detail_publish_receipt(
+            local_saved=False,
+            upload=UPLOAD_NOT_ATTEMPTED,
+            detail_url=detail_url,
+            pa_user=pa_user,
+            same_directory_check=lambda: False,
+        )
+        safe_log_json("[详情发布回执] ", receipt)
+        return receipt
+    PAGE_PAYLOADS_DIR.mkdir(parents=True, exist_ok=True)
     # 详情是本轮完整生成的快照：先写同目录临时文件再替换，替换前失败不破坏上一份详情(R8-1)。
     write_text_atomic(
         payload_path,

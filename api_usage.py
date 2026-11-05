@@ -13,7 +13,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from atomic_json_store import JSON_READ_ERRORS, parse_json_text
+from atomic_json_store import JSON_READ_ERRORS, check_json_nesting, parse_json_text
 from local_file_lock import FileLockTimeout, file_lock
 from log_utils import safe_log
 from project_time import SHANGHAI_TZ
@@ -31,6 +31,10 @@ UsageLockTimeout = FileLockTimeout
 
 class UsageLedgerReadError(RuntimeError):
     """Raised when the quota ledger cannot be trusted for production use."""
+
+
+class UsageLedgerWriteRefused(RuntimeError):
+    """Raised before writing a ledger nested too deeply for load_usage_strict to read back (R29)."""
 
 
 class UsageLedgerAlreadyExists(RuntimeError):
@@ -82,6 +86,12 @@ def _usage_lock(
 
 
 def _atomic_write_json(path: Path, payload: dict) -> None:
+    try:
+        check_json_nesting(payload)
+    except ValueError as exc:
+        # R29：嵌套超过 MAX_JSON_NESTING 层的台账读回时 load_usage_strict 报读不了(R27)，因此不写；原有台账不动，
+        # 不建目录与临时文件。台账内容来自严格读出的台账与校验过的计数，实际不会触发，只为与其他写入方同一口径。
+        raise UsageLedgerWriteRefused(f"配额台账拒绝写入: {path}: {exc}") from exc
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
     try:
@@ -581,7 +591,8 @@ def record_actual_requests(
             # complete locked read-modify-write; never retry only the replace.
             last_error = exc
             last_error_kind = "write"
-        except UsageLedgerReadError as exc:
+        except (UsageLedgerReadError, UsageLedgerWriteRefused) as exc:
+            # R29：写入前检查不通过与读不了台账一样，不重试，先留一条待对账审计再抛出，这笔计数不丢。
             _append_conflict_audit(
                 usage_path=usage_path,
                 conflict_log_path=conflict_log_path,

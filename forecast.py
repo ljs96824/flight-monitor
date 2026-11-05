@@ -10,6 +10,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from airports import AIRPORTS
+from atomic_json_store import check_json_nesting
 from holidays import holiday_labels_for_route
 from method_registry import method_version
 from provenance import build_envelope
@@ -546,6 +547,8 @@ def walk_forward_backtest(
 
 
 def write_backtest_report(report, path):
+    # R29：写之前按 JSON 读取口径检查嵌套层数，超过 MAX_JSON_NESTING 层抛 ValueError，不建目录与临时文件、原有报告不动。
+    check_json_nesting(report)
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = target.with_suffix(target.suffix + ".tmp")
