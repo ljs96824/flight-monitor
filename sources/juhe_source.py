@@ -14,6 +14,7 @@ import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+from atomic_json_store import JSON_READ_ERRORS, parse_json_text
 from filename_utils import sanitize_filename
 from domestic_fare_rules import get_aircraft_name
 from log_utils import safe_log
@@ -434,9 +435,14 @@ class JuheSource(FlightSource):
         if not path.exists():
             return None
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            # R27：解析口径同 read_json(R25)；读不了(含解析时嵌套过深与嵌套超过 MAX_JSON_NESTING 层)与不是对象的内容
+            # 都按未命中处理，与无法解析的 JSON 一致。fetched_at 是字符串但不是合法时间时照旧按未命中(ValueError 在
+            # JSON_READ_ERRORS 内)；不是字符串或带时区时仍抛 TypeError，基线如此，不在本笔。
+            payload = parse_json_text(path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                return None
             fetched_at = datetime.fromisoformat(payload.get("fetched_at", ""))
-        except (OSError, ValueError, json.JSONDecodeError):
+        except JSON_READ_ERRORS:
             return None
         if datetime.now() - fetched_at > timedelta(minutes=CACHE_TTL_MINUTES):
             return None

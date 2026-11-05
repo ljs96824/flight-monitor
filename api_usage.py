@@ -13,6 +13,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
+from atomic_json_store import JSON_READ_ERRORS, parse_json_text
 from local_file_lock import FileLockTimeout, file_lock
 from log_utils import safe_log
 from project_time import SHANGHAI_TZ
@@ -248,14 +249,18 @@ def _validate_usage_payload(payload, *, path: Path) -> dict:
 
 
 def load_usage_strict(path: str | Path = DEFAULT_USAGE_PATH) -> dict:
-    """Load a production ledger without inventing an empty replacement."""
+    """Load a production ledger without inventing an empty replacement.
+
+    R27：读取口径同 read_json(R25)——非法 UTF-8、超长整数、解析时嵌套过深与嵌套超过 MAX_JSON_NESTING 层，与打不开、
+    无法解析的台账一样报 UsageLedgerReadError，不再原样外抛 UnicodeDecodeError、ValueError 或 RecursionError。
+    """
 
     usage_path = Path(path)
     if not usage_path.exists():
         raise UsageLedgerReadError(f"配额台账不存在: {usage_path}")
     try:
-        payload = json.loads(usage_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        payload = parse_json_text(usage_path.read_text(encoding="utf-8"))
+    except JSON_READ_ERRORS as exc:
         raise UsageLedgerReadError(f"配额台账读取失败: {usage_path}: {exc}") from exc
     return _validate_usage_payload(payload, path=usage_path)
 

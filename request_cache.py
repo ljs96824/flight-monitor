@@ -14,6 +14,7 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from atomic_json_store import JSON_READ_ERRORS, parse_json_text
 from domestic_fare_rules import AIRCRAFT_NAMES, re_match_aircraft_code
 from filename_utils import sanitize_filename
 from flight_combo_utils import normalize_combo
@@ -439,8 +440,9 @@ def _read_persistent_payload(key: tuple, cache_dir: Path | None = None) -> dict 
     if not path.exists():
         return None
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        # R27：与 read_json 同一读取口径(R25)——超长整数、解析时嵌套过深与超过 MAX_JSON_NESTING 层同样按未命中处理。
+        payload = parse_json_text(path.read_text(encoding="utf-8"))
+    except JSON_READ_ERRORS:
         return None
     return payload if isinstance(payload, dict) else None
 

@@ -177,9 +177,12 @@ class PersistentCacheDecodeTest(unittest.TestCase):
         handlers = [node for node in ast.walk(tree) if isinstance(node, ast.ExceptHandler)]
         self.assertEqual(len(handlers), 1, "MUTATION_HANDLER_MATCH")
         handler = handlers[0]
-        self.assertEqual(ast.unparse(handler.type), "(OSError, json.JSONDecodeError, UnicodeDecodeError)")
+        # R27：读取口径改为与 read_json 共用的 JSON_READ_ERRORS(OSError、ValueError、RecursionError)；去掉解码错误的
+        # 变异改写为把其中的 ValueError 换成只接语法错误的 JSONDecodeError，并自带 import，不依赖模块的全局名。
+        self.assertEqual(ast.unparse(handler.type), "JSON_READ_ERRORS")
         if kind == "decode_removed":
-            handler.type.elts.pop()
+            handler.type = ast.parse(
+                "(OSError, __import__('json').JSONDecodeError, RecursionError)", mode="eval").body
         elif kind == "replace":
             reads = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
                      and isinstance(node.func, ast.Attribute) and ast.unparse(node.func) == "path.read_text"]
