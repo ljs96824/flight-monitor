@@ -1306,14 +1306,16 @@ def _collect_same_day_fallback_flights(
         # R28：读回时按缓存读取失败处理(R27)的内容不写入；本轮照常使用这批航班，原有文件不动。
         print(f"[当天往返备选] 不写入缓存 {cache_path}: {exc}")
         return flights
-    cache_path.write_text(
+    # R31：先写同目录临时文件再替换，写到一半失败时原有缓存文件不动，临时文件随即删除(删除失败或进程被强行结束时可能残留)；
+    # 异常照旧由调用方接住。
+    write_text_atomic(
+        cache_path,
         json.dumps(
             payload,
             ensure_ascii=False,
             indent=2,
             default=str,
         ),
-        encoding="utf-8",
     )
     print(f"[当天往返备选] 已缓存 {len(flights)} 个航班到 {cache_path}")
     return flights

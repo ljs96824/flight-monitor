@@ -6,7 +6,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from atomic_json_store import JSON_READ_ERRORS, check_json_nesting, parse_json_text, read_json
+from atomic_json_store import JSON_READ_ERRORS, check_json_nesting, parse_json_text, read_json, write_text_atomic
 from filename_utils import sanitize_filename
 from flight_combo_utils import normalize_combo
 from log_utils import safe_log
@@ -373,7 +373,9 @@ def save_pushed_plans(sub_id, plans: list[dict] | None, data_dir=None) -> dict:
         safe_log(f"[方案追踪] 已推送方案不写入 {path.name}: {exc}")
         return {}
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    # R31：先写同目录临时文件再替换，写到一半失败时上一份记录不动，临时文件随即删除(删除失败或进程被强行结束时可能残留)；
+    # 异常照旧由调用方接住。
+    write_text_atomic(path, json.dumps(payload, ensure_ascii=False, indent=2))
     return payload
 
 
