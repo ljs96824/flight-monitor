@@ -14,7 +14,7 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from atomic_json_store import JSON_READ_ERRORS, check_json_nesting, parse_json_text
+from atomic_json_store import JSON_READ_ERRORS, check_json_nesting, parse_json_text, replace_lone_surrogates
 from domestic_fare_rules import AIRCRAFT_NAMES, re_match_aircraft_code
 from filename_utils import sanitize_filename
 from flight_combo_utils import normalize_combo
@@ -796,6 +796,22 @@ def _record_observations_after_fetch(source, key: tuple, result, cabin_class: st
         safe_log(f"[\u89c2\u6d4b\u843d\u5e93\u5931\u8d25] round={round_id} \u6e90={source_name} \u539f\u56e0={exc}")
 
 
+def _clean_source_result(result, key: tuple):
+    """把源结果里的孤立代理项替换为 U+FFFD 后再交给后续环节(R30)；有替换时记一行。
+
+    孤立代理项写持久缓存、轮次证据、观测库、详情与推送时都会抛 UnicodeEncodeError：写持久缓存或轮次证据那一步会让
+    cached_fetch 向外抛、采集计划整体中断，写持久缓存时还会把已有缓存文件截成 0 字节。没有孤立代理项时原样返回同一个对象。
+    """
+
+    cleaned, replaced = replace_lone_surrogates(result)
+    if replaced:
+        safe_log(
+            f"[源结果清洗] 源={key[0]} 航线={key[1]}->{key[2]} 日期={key[3]} "
+            f"含孤立代理项的字符串 {replaced} 个，已替换为 U+FFFD"
+        )
+    return cleaned
+
+
 def cached_fetch(
     source,
     origin: str,
@@ -1028,6 +1044,8 @@ def cached_fetch(
             "retry_count": retry_count,
             **_source_exception_metadata(exc),
         }
+        # R30：异常信息可能带着源返回的文本，先清洗再入池与返回(同一轮再取这个键时从池里拿到的也是清洗后的)。
+        result = _clean_source_result(result, key)
         _store_round_only_result(key, result, "round_failed")
         _archive_listing_result(source_name, key, result)
         safe_log(
@@ -1035,6 +1053,8 @@ def cached_fetch(
             f"日期={key[3]} 重试={retry_count} 原因={result['error']}"
         )
         return returned(copy.deepcopy(result), "fresh")
+    # R30：取到的结果先清洗孤立代理项，再记观测、写缓存、入池与留证据。
+    result = _clean_source_result(result, key)
     if retry_count and isinstance(result, dict):
         result.setdefault("retry_count", retry_count)
     quota_reason = _quota_failure_reason(result)
