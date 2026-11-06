@@ -6,6 +6,7 @@ from copy import deepcopy
 import json
 import os
 from pathlib import Path
+import re
 import time
 from typing import Callable, TypeVar
 from uuid import uuid4
@@ -55,6 +56,88 @@ def check_json_nesting(payload) -> None:
     """
 
     _check_nesting(payload)
+
+
+# R30：字符串里的代理码位(U+D800–U+DFFF)。完整的代理对在 Python 字符串里是一个字符，这里匹配到的都是单独的代理码位
+# (孤立代理项)，不能编码为 UTF-8；源结果里它们来自 JSON 的 \u 转义(如 "\ud83d")。
+_LONE_SURROGATE = re.compile("[\ud800-\udfff]")
+# 替换字符用 chr 生成，生产源码里不出现 U+FFFD 字面量(乱码守卫 tests/test_mojibake_literals.py)。
+_REPLACEMENT_CHARACTER = chr(0xFFFD)
+
+
+def _has_lone_surrogate(text: str) -> bool:
+    return not text.isascii() and _LONE_SURROGATE.search(text) is not None
+
+
+def replace_lone_surrogates(value):
+    """把 value 中字符串里的孤立代理项逐个替换为 U+FFFD，返回 (新值, 被替换的字符串个数)(R30)。
+
+    孤立代理项写文件、写 SQLite、发邮件时都会抛 UnicodeEncodeError。范围是经对象、数组与元组可达的全部字符串：对象的
+    字符串键与值、数组与元组的元素。没有孤立代理项时原样返回同一个对象、个数为 0；有时整份复制：每个容器只复制一次，
+    共享引用与循环引用在副本里照旧；对象、数组与元组复制为 dict、list、tuple，非字符串的键与其他值原样保留，输入不改动；
+    替换后同一对象里两个键相同时保留后出现的那个。不用递归，耗时与元素总数成正比，不记日志。
+    """
+
+    pending = [value]
+    seen = set()
+    while pending:
+        node = pending.pop()
+        if isinstance(node, str):
+            if _has_lone_surrogate(node):
+                break
+        elif isinstance(node, _NESTING_CONTAINERS) and id(node) not in seen:
+            seen.add(id(node))
+            if isinstance(node, dict):
+                pending.extend(key for key in node if isinstance(key, str))
+                node = node.values()
+            pending.extend(child for child in node if isinstance(child, (str, *_NESTING_CONTAINERS)))
+    else:
+        return value, 0
+
+    replaced = 0
+
+    def clean(item):
+        nonlocal replaced
+        if isinstance(item, str) and _has_lone_surrogate(item):
+            replaced += 1
+            return _LONE_SURROGATE.sub(_REPLACEMENT_CHARACTER, item)
+        return item
+
+    # 每个可达容器只复制一次：对象与数组先建空的，元组留到后面再建
+    originals = {}
+    copies = {}
+    pending = [value]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, _NESTING_CONTAINERS) and id(node) not in originals:
+            originals[id(node)] = node
+            copies[id(node)] = {} if isinstance(node, dict) else [] if isinstance(node, list) else None
+            pending.extend(node.values() if isinstance(node, dict) else node)
+
+    def final(item):
+        return copies[id(item)] if isinstance(item, _NESTING_CONTAINERS) else clean(item)
+
+    # 元组不可变，自内向外建：先建它直接包含的元组(元组之间不会成环)
+    for start in [node for node in originals.values() if isinstance(node, tuple)]:
+        stack = [start]
+        while stack:
+            node = stack[-1]
+            if copies[id(node)] is not None:
+                stack.pop()
+                continue
+            inner = [child for child in node if isinstance(child, tuple) and copies[id(child)] is None]
+            if inner:
+                stack.extend(inner)
+            else:
+                copies[id(node)] = tuple(final(child) for child in node)
+    for node_id, node in originals.items():
+        if isinstance(node, dict):
+            target = copies[node_id]
+            for key, child in node.items():
+                target[clean(key)] = final(child)
+        elif isinstance(node, list):
+            copies[node_id].extend(final(child) for child in node)
+    return final(value), replaced
 
 
 # R26：read_json 认定为"读不了"的异常类型(R25 口径)，供自行解析 JSON 的读取方沿用同一口径。

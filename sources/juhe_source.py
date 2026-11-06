@@ -14,7 +14,7 @@ import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from atomic_json_store import JSON_READ_ERRORS, check_json_nesting, parse_json_text
+from atomic_json_store import JSON_READ_ERRORS, check_json_nesting, parse_json_text, replace_lone_surrogates
 from filename_utils import sanitize_filename
 from domestic_fare_rules import get_aircraft_name
 from log_utils import safe_log
@@ -266,6 +266,11 @@ class JuheSource(FlightSource):
         safe_log(f"[juhe raw] {response.text[:2000]}")
         response.raise_for_status()
         raw = response.json()
+        # R30：响应里的孤立代理项写缓存时会抛 UnicodeEncodeError、让这次采集记失败(每轮照付请求、不留缓存)，
+        # 因此先替换为 U+FFFD；之后的判断、写缓存与解析航班都用替换后的内容。
+        raw, replaced = replace_lone_surrogates(raw)
+        if replaced:
+            safe_log(f"[juhe] {origin}->{dest} {date_str} 响应含孤立代理项的字符串 {replaced} 个，已替换为 U+FFFD")
         if _is_invalid_date_response(raw):
             safe_log(f"[juhe] invalid date skipped {date_str}")
             return {
