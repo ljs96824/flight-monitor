@@ -6,7 +6,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from atomic_json_store import JSON_READ_ERRORS, parse_json_text, read_json
+from atomic_json_store import JSON_READ_ERRORS, check_json_nesting, parse_json_text, read_json
 from filename_utils import sanitize_filename
 from flight_combo_utils import normalize_combo
 from log_utils import safe_log
@@ -364,8 +364,15 @@ def save_pushed_plans(sub_id, plans: list[dict] | None, data_dir=None) -> dict:
     if not records:
         return {}
     path = _storage_path(sub_id, data_dir)
-    path.parent.mkdir(parents=True, exist_ok=True)
     payload = {"subscription_id": str(sub_id), "last_pushed": records}
+    try:
+        check_json_nesting(payload)
+    except ValueError as exc:
+        # R29：嵌套超过 MAX_JSON_NESTING 层的内容读回时 load_pushed_plans 按没有记录处理(R26)，因此不写；原有记录不动、
+        # 不建目录，返回 {}(与没有可记录的方案时一样)。
+        safe_log(f"[方案追踪] 已推送方案不写入 {path.name}: {exc}")
+        return {}
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return payload
 

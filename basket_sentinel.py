@@ -14,7 +14,7 @@ from datetime import date, datetime, time as clock_time
 from pathlib import Path
 import uuid
 
-from atomic_json_store import JSON_READ_ERRORS, parse_json_text
+from atomic_json_store import JSON_READ_ERRORS, check_json_nesting, parse_json_text
 from log_utils import safe_log
 from research_cohort import research_runtime_enabled
 
@@ -226,7 +226,17 @@ def _load_state(path: Path) -> dict:
     return payload if isinstance(payload, dict) else {}
 
 
+class SentinelStateWriteRefused(ValueError):
+    """去重状态嵌套超过 MAX_JSON_NESTING 层(读回时 _load_state 按今日未通知处理)，写之前抛出(R29)。"""
+
+
 def _write_state(path: Path, payload: dict) -> None:
+    # R29：写之前按读取口径检查嵌套层数(调用方写的是两个标量字段，实际不会触发，只为与其他写入方同一口径)；
+    # 不通过时抛 SentinelStateWriteRefused，不建目录与临时文件、原有状态不动，调用方按"去重状态写入失败"处理。
+    try:
+        check_json_nesting(payload)
+    except ValueError as exc:
+        raise SentinelStateWriteRefused(str(exc)) from exc
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     try:
@@ -256,7 +266,8 @@ def run_basket_sentinel(
     """到点检查今日篮子是否运行，需要时发一次提醒，发送成功后写去重状态。
 
     结果为 evaluate_basket_sentinel 的结论，另带 notified；到点时再带 status(already_notified / notified / notify_failed)。
-    R13b：notified 为 True 时另带 state_saved——去重状态写入成功为 True，写入遇 OSError 为 False(记一行，不向外抛)。
+    R13b：notified 为 True 时另带 state_saved——去重状态写入成功为 True，写入遇 OSError 为 False(记一行，不向外抛)；
+    R29 起写入前的嵌套检查不通过(SentinelStateWriteRefused)同样为 False，其他 ValueError 照旧向外抛。
     先发后记，所以状态写不进去期间，同日之后再到点且条件仍成立时会再提醒(至少一次)。
     """
     current = now or datetime.now()
@@ -293,7 +304,8 @@ def run_basket_sentinel(
                     "notified_at": current.isoformat(timespec="seconds"),
                 },
             )
-        except OSError as exc:
+        except (OSError, SentinelStateWriteRefused) as exc:
+            # R29：写入前的嵌套检查不通过与写盘失败同样处理；其他 ValueError(如序列化失败)照旧向外抛。
             # R13b：提醒已发出，只是去重记录没写进去——照实记一行，结论仍为 notified，不再让主入口记"检查失败"；
             # 先发后记的既有顺序不变，同日之后再到点且条件仍成立时会再提醒一次，直到状态能写入为止。
             result["state_saved"] = False
