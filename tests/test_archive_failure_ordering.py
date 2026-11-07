@@ -395,7 +395,8 @@ class ArchiveFailureOrderingTest(unittest.TestCase):
                         raise error
                     return real_dumps(value, *args, **kwargs)
 
-                point = patch.object(cache.json, "dumps", side_effect=dumps) if isinstance(error, TypeError) else patch.object(Path, "write_text", side_effect=error)
+                # R31：持久缓存改经 write_text_atomic 写入(先写临时文件再替换)，写盘故障注入点随之改为它。
+                point = patch.object(cache.json, "dumps", side_effect=dumps) if isinstance(error, TypeError) else patch.object(cache, "write_text_atomic", side_effect=error)
                 with patch.object(cache, "_record_observations_after_fetch"), patch.object(cache, "safe_log") as log, point:
                     result, status, _ = self.fetch(env)
                 disabled = str(cache._cache_path(env.key, env.root / "cache").parent)
@@ -405,14 +406,14 @@ class ArchiveFailureOrderingTest(unittest.TestCase):
                 self.assertEqual(env.observed, [])
                 self.assertEqual(len(serialization_hits), int(isinstance(error, TypeError)))
                 self.assertEqual(api_usage.round_actual_counts(api_usage.load_usage_strict(env.root / "usage.json"), ROUND), {"juhe": 1})
-                with patch.object(Path, "write_text") as write:
+                with patch.object(cache, "write_text_atomic") as write:
                     cache._write_persistent(env.key, result, env.root / "cache", source=env.source)
                 write.assert_not_called()
 
     def test_persistent_write_uncaught_error(self):
         with self.scenario(outcome="positive") as env:
             error = RuntimeError("SYNTHETIC_UNCAUGHT_WRITE")
-            with patch.object(cache, "safe_log"), patch.object(Path, "write_text", side_effect=error):
+            with patch.object(cache, "safe_log"), patch.object(cache, "write_text_atomic", side_effect=error):
                 with self.assertRaises(RuntimeError) as raised:
                     self.fetch(env)
             self.assertIs(raised.exception, error)
@@ -427,7 +428,7 @@ class ArchiveFailureOrderingTest(unittest.TestCase):
                 if "持久化失败" in message:
                     raise log_error
 
-            with patch.object(cache, "safe_log", side_effect=log), patch.object(Path, "write_text", side_effect=OSError("SYNTHETIC_WRITE")):
+            with patch.object(cache, "safe_log", side_effect=log), patch.object(cache, "write_text_atomic", side_effect=OSError("SYNTHETIC_WRITE")):
                 with self.assertRaises(RuntimeError) as raised:
                     self.fetch(env)
             self.assertIs(raised.exception, log_error)

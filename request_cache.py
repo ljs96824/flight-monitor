@@ -14,7 +14,13 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from atomic_json_store import JSON_READ_ERRORS, check_json_nesting, parse_json_text, replace_lone_surrogates
+from atomic_json_store import (
+    JSON_READ_ERRORS,
+    check_json_nesting,
+    parse_json_text,
+    replace_lone_surrogates,
+    write_text_atomic,
+)
 from domestic_fare_rules import AIRCRAFT_NAMES, re_match_aircraft_code
 from filename_utils import sanitize_filename
 from flight_combo_utils import normalize_combo
@@ -674,7 +680,9 @@ def _write_persistent(
         return
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        # R31：先写同目录临时文件再替换，写到一半失败(如磁盘已满)时原有缓存文件不动，临时文件随即删除
+        # (删除失败或进程被强行结束时可能残留)；替换失败(Windows 上文件被占用、重试后仍失败)与写入失败同样按 OSError 处理。
+        write_text_atomic(path, json.dumps(payload, ensure_ascii=False))
     except (TypeError, OSError) as exc:
         _disabled_persistent_dirs.add(disabled_key)
         safe_log(f"[缓存] 持久化失败,本轮将跳过该目录 {disabled_key}: {exc}")
