@@ -356,6 +356,11 @@ class JuheSource(FlightSource):
         for item in parsed or []:
             flight_no = str(_first(item, "flightNo", "flight_no", "flightNumber")).strip()
             price = _to_float(_first(item, "ticketPrice", "price", "adultPrice"))
+            if price is None:
+                # R32：价格缺失或不可解析时逐条跳过并记一行诊断；基线在此以 None <= 0 抛 TypeError，
+                # 整份响应里价格正常的条目一起丢失。航班标识有界截断并转义，诊断不含原始价格值。
+                safe_log(f"[juhe] 价格无法解析跳过 flight={(flight_no or '?')[:32]!r}")
+                continue
             if price <= 0:
                 continue
 
