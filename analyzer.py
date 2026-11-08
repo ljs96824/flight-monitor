@@ -9049,6 +9049,7 @@ def analyze_all_flights(
             "error": "no_valid_prices",
             "total_options": 0,
             "all_flights": [],
+            "roundtrip_candidate_flights": [],
             "price_range": [],
             "current_min_price": None,
             "market_context": {},
@@ -9089,6 +9090,7 @@ def analyze_all_flights(
             "total_options": 0,
             "total_reference_options": len(detail_reference_flights),
             "all_flights": [],
+            "roundtrip_candidate_flights": [],
             "reference_flights": detail_reference_flights,
             "price_range": [],
             "current_min_price": None,
@@ -9215,6 +9217,7 @@ def analyze_all_flights(
             "error": "no_valid_prices",
             "total_options": len(usable_flights),
             "all_flights": usable_flights,
+            "roundtrip_candidate_flights": usable_flights,
             "price_range": [],
             "current_min_price": None,
             "market_context": {},
@@ -9496,6 +9499,7 @@ def analyze_all_flights(
         "business_recommendation": business_recommendation,
         "same_day_base_flights": same_day_base_flights,
         "all_flights": display_flights,
+        "roundtrip_candidate_flights": usable_flights,
         "price_range": [lowest_price, max(prices)],
         "cabin_price_ranges": cabin_price_ranges,
         "cabin_policy_summary": build_cabin_policy_summary(merged_preferences, usable_flights),
@@ -9578,7 +9582,26 @@ def _mixed_economy_candidate_reason(
 
 
 def _top_flights_for_round_trip(analysis: dict, limit: int = 3) -> list[dict]:
-    flights = analysis.get("economy_recommendations") or analysis.get("all_flights") or []
+    # R33：往返价格候选从满足约束、未经展示截断的候选池取；不再从
+    # economy_recommendations（按推荐展示目的压缩过的列表）反推。
+    # 新键缺失时回退旧产物的 all_flights（尽力兼容，旧产物已被展示截断）；
+    # 新键存在但为空列表时保持无候选，不回退。
+    if "roundtrip_candidate_flights" in analysis:
+        candidates = analysis["roundtrip_candidate_flights"]
+        if not isinstance(candidates, list):
+            raise TypeError(
+                "roundtrip_candidate_flights 必须是列表；缺键时才回退 all_flights"
+            )
+        flights = [
+            flight
+            for flight in candidates
+            if isinstance(flight, dict)
+            and (flight.get("cabin_class") or "economy") == "economy"
+            and not flight.get("reference_only")
+            and has_enough_detail(flight)
+        ]
+    else:
+        flights = analysis.get("all_flights") or []
     return sorted(
         [flight for flight in flights if (_to_float(flight.get("price")) or 0) > 0],
         key=lambda flight: _to_float(flight.get("price")) or 999999,
@@ -11161,6 +11184,23 @@ def analyze_round_trip(
     }
 
 
+def flight_itinerary_identity_key(flight: dict):
+    """行程身份键：规范化航班组合 + 舱位，供推荐/通知判重使用。
+
+    route_summary、推荐标签、说明文字、价格与综合分不进入身份键。
+    身份信息不足（航班组合缺失或规范化后为空）时返回 None；调用方不得把
+    None 归入同一个判重集合，身份不足的记录互不判重、各自保留。
+    身份键相同只说明进入同一行程身份范围，不代表票规/产品等价。
+    本函数为纯函数：不读配置、数据库或网络，不修改输入字典。
+    """
+    if not isinstance(flight, dict):
+        return None
+    combo = normalize_combo(flight.get("flight_combo") or "")
+    if not combo:
+        return None
+    return (combo, flight.get("cabin_class") or "economy")
+
+
 def select_recommendations(economy_flights, business_flights, mode: str = "balanced"):
     """Select push options: up to four economy options and one business option."""
     economy_flights = [
@@ -11216,13 +11256,16 @@ def select_recommendations(economy_flights, business_flights, mode: str = "balan
         )
 
     eco_recs = []
-    seen_routes = set()
+    seen_identities = set()
 
     for flight in sorted(economy_flights, key=sort_key):
-        route = flight.get("route_summary", "")
-        if route not in seen_routes and len(eco_recs) < 4:
+        identity = flight_itinerary_identity_key(flight)
+        if identity is not None:
+            if identity in seen_identities:
+                continue
+            seen_identities.add(identity)
+        if len(eco_recs) < 4:
             eco_recs.append(flight)
-            seen_routes.add(route)
 
     business_rec = None
     if business_flights:
