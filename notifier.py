@@ -60,6 +60,7 @@ from analyzer import (
     classify_plan_tier,
     determine_push_type,
     evaluate_purchase_budget,
+    flight_itinerary_identity_key,
     generate_decision_summary,
     generate_trend_summary,
     get_total_passengers,
@@ -1689,12 +1690,15 @@ def _select_compact_recommendations(analysis_result: dict) -> tuple[list[dict], 
     ]
 
     economy_recs = []
-    seen_routes = set()
+    seen_identities = set()
     for flight in sorted(economy_flights, key=lambda item: item.get("price", 99999)):
-        route = flight.get("route_summary", "")
-        if route not in seen_routes and len(economy_recs) < 4:
+        identity = flight_itinerary_identity_key(flight)
+        if identity is not None:
+            if identity in seen_identities:
+                continue
+            seen_identities.add(identity)
+        if len(economy_recs) < 4:
             economy_recs.append(flight)
-            seen_routes.add(route)
 
     if business_flights:
         business_rec = min(business_flights, key=lambda item: item.get("price", 99999))
