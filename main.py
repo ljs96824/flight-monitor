@@ -1,4 +1,5 @@
 import inspect
+import hashlib
 import json
 import logging
 import math
@@ -21,7 +22,7 @@ BASE_DIR = Path(__file__).parent
 DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
-from atomic_json_store import check_json_nesting, parse_json_text, read_json, write_text_atomic
+from atomic_json_store import check_json_nesting, parse_json_text, read_json, update_json, write_text_atomic
 # 加载环境变量
 load_dotenv(BASE_DIR / ".env", encoding="utf-8")
 
@@ -111,6 +112,7 @@ from sync_subscriptions import (
 )
 from ops_alert import alert_subscription_input_missing
 from subscription_attempts import record_subscription_attempt
+from subscription_identity import persisted_subscription_id
 from subscription_preflight import (
     evaluate_subscription_preflight,
     shanghai_today as _shanghai_today,
@@ -275,6 +277,130 @@ def _should_skip_low_price_alert(sub: dict, analysis: dict) -> bool:
         and not analysis.get("low_price_alert_triggered", False)
         and not analysis.get("collection_failures")
     )
+
+
+# R34：低价"无法判断"一次性能力提示。去重键 = (持久化订阅身份, 规范化判断配置哈希)，
+# 不含本轮报价、样本数、采集时间、round_id、发送结果或任何密钥。
+LOW_PRICE_NOTICE_STATE_PATH = DATA_DIR / "low_price_notice_state.json"
+
+LOW_PRICE_NOTICE_TEXT_ROUNDTRIP = (
+    "当前尚不能判断整个往返行程是否进入低价区。"
+    "去程单程历史不能代表往返总价；本消息仅说明提醒能力暂不可用，不是低价提醒。"
+)
+LOW_PRICE_NOTICE_TEXT_DEFAULT = (
+    "本次取得了航班报价，但当前缺少可用于该订阅的同口径历史，"
+    "暂时不能判断是否进入低价区。此消息不是低价提醒。"
+)
+
+
+def _low_price_notice_config_hash(
+    sub: dict,
+    *,
+    active_origins,
+    active_dests,
+    constraint_fp,
+    round_trip: bool,
+    return_date,
+    passengers,
+    search_sources,
+) -> str:
+    """能力提示去重配置哈希：只含规范化判断配置，不含运行证据与通知回执。"""
+    hard = sub.get("hard_constraints", {}) or {}
+    strategy = hard.get("budget_strategy") or sub.get("budget_strategy") or "explicit"
+    origins = sorted({str(code or "").upper() for code in (active_origins or []) if code})
+    dests = sorted({str(code or "").upper() for code in (active_dests or []) if code})
+    sources = sorted({type(source).__name__ for source in (search_sources or [])})
+    payload = {
+        "schema": "low-price-notice-v1",
+        "rule": {"threshold_percentile": 0.30, "min_samples": 5},
+        "budget_strategy": str(strategy),
+        "route": [str(sub.get("origin") or ""), str(sub.get("destination") or "")],
+        "dates": [str(sub.get("depart_date") or ""), str(return_date or "")],
+        "trip": {
+            "round_trip": bool(round_trip),
+            "same_day_round_trip": bool(
+                sub.get("same_day_round_trip") or hard.get("same_day_round_trip")
+            ),
+        },
+        "date_flexibility": [
+            str(sub.get("date_flexibility", 0)),
+            str(sub.get("return_date_flexibility", 0)),
+        ],
+        "airports": {"origins": origins, "destinations": dests},
+        "passengers": passengers or {},
+        "amount_scope": [
+            str(hard.get("max_budget_scope") or hard.get("budget_scope") or ""),
+            str(hard.get("target_price_scope") or ""),
+            "roundtrip" if round_trip else "oneway",
+            str(sub.get("currency") or ""),
+        ],
+        "constraint_fingerprint": str(constraint_fp or ""),
+        "mode": str(sub.get("mode", "balanced")),
+        "priorities": sub.get("priorities"),
+        "sources": sources,
+    }
+    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _low_price_notice_recorded(notice_key: str) -> bool:
+    if not LOW_PRICE_NOTICE_STATE_PATH.exists():
+        return False
+    state = read_json(LOW_PRICE_NOTICE_STATE_PATH)
+    return bool(isinstance(state, dict) and notice_key in state)
+
+
+def _record_low_price_notice(notice_key: str, reason: str) -> None:
+    def add(current):
+        state = dict(current) if isinstance(current, dict) else {}
+        state[notice_key] = {
+            "notified_at": datetime.now().isoformat(timespec="seconds"),
+            "reason": reason,
+        }
+        return state
+
+    update_json(LOW_PRICE_NOTICE_STATE_PATH, add, missing={})
+
+
+def _handle_low_price_unknown(sub: dict, analysis: dict, **hash_inputs) -> None:
+    """低价 unknown：同一订阅同一配置只提示一次能力受限，不发完整行情。"""
+    reason = str(analysis.get("low_price_alert_reason") or "")
+    route_label = _subscription_route_label(sub)
+    stable_id = persisted_subscription_id(sub)
+    if not stable_id:
+        # 身份缺失属输入异常：不发共同空键记录，也不声称已可靠提示。
+        safe_log(
+            f"[低价提示] 订阅缺少持久化身份，本轮不发能力提示 "
+            f"订阅={_subscription_label(sub)} 航线={route_label}"
+        )
+        return
+    config_hash = _low_price_notice_config_hash(sub, **hash_inputs)
+    notice_key = f"{stable_id}:{config_hash}"
+    if _low_price_notice_recorded(notice_key):
+        print("[推送] 低价判断缺少同口径历史，本轮配置已提示过，跳过推送")
+        return
+    text = (
+        LOW_PRICE_NOTICE_TEXT_ROUNDTRIP
+        if reason == "roundtrip_history_not_supported"
+        else LOW_PRICE_NOTICE_TEXT_DEFAULT
+    )
+    goals = normalize_notification_goals(sub.get("notification_goals"))
+    method = goals["method"]
+    email = goals["email"]
+    channels, errors = _send_alert_channels(
+        method, email, f"【低价提醒能力提示】{route_label}", text
+    )
+    for channel, exc in errors.items():
+        safe_log(f"[低价提示] 发送失败 渠道={channel}: {type(exc).__name__}: {exc}")
+    _log_alert_channels("[低价提示渠道] ", sub, method, channels, errors, route=route_label)
+    if channels["email_sent"] or channels["pushplus_sent"]:
+        _record_low_price_notice(notice_key, reason)
+        safe_log(f"[低价提示] 已发送并记录 订阅={_subscription_label(sub)} 原因={reason}")
+    else:
+        safe_log(
+            f"[低价提示] 未被任何渠道受理，不记录，下轮重试 "
+            f"订阅={_subscription_label(sub)} 原因={reason}"
+        )
 
 
 def _log_subscription_failure(sub: dict, *, source_errors=None, reason: str | None = None) -> None:
@@ -2277,6 +2403,7 @@ def _process_return_phase(sub, context, agg, constraint_fp, route_type, request_
         flights, data.get("price_insights"), mode=sub.get("mode", "balanced"), priorities=sub.get("priorities"),
         user_preferences=projected["preferences"], hard_constraints=projected["constraints"],
         departure_reference_now=_departure_reference_now(),
+        low_price_trip_type="return_only",
     )
     save_flight_details(route, depart_date, _constraint_history_flights(analysis), constraint_fingerprint=constraint_fp)
     identity = _subscription_identifier(sub, route)
@@ -2506,6 +2633,16 @@ def _process_subscription_locked(
         logging.info(f"{route} 存储{data.get('total_count', 0)}个航班方案")
 
         preferences = subscription_preferences(sub)
+        # R34：往返（含当天往返）在低价判断范围上归 round_trip；混舱属性不掩盖行程范围。
+        low_price_trip_type = (
+            "round_trip"
+            if _as_bool(sub.get("round_trip", False))
+            or _as_bool(
+                sub.get("same_day_round_trip")
+                or (sub.get("hard_constraints") or {}).get("same_day_round_trip")
+            )
+            else "one_way"
+        )
         analysis = analyze_all_flights(
             flights,
             data.get("price_insights"),
@@ -2514,6 +2651,7 @@ def _process_subscription_locked(
             user_preferences=preferences,
             hard_constraints=sub.get("hard_constraints", {}),
             departure_reference_now=_departure_reference_now(),
+            low_price_trip_type=low_price_trip_type,
         )
         constraint_history_flights = _constraint_history_flights(analysis)
         save_flight_details(
@@ -2711,6 +2849,7 @@ def _process_subscription_locked(
                     user_preferences=return_preferences,
                     hard_constraints=return_constraints,
                     departure_reference_now=_departure_reference_now(),
+                    low_price_trip_type="round_trip",
                 )
                 return_constraint_history_flights = _constraint_history_flights(
                     return_analysis
@@ -2945,7 +3084,21 @@ def _process_subscription_locked(
             file.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
 
         if _should_skip_low_price_alert(sub, analysis):
-            print("[推送] 当前价格未进入低价区间，按订阅策略跳过推送")
+            if analysis.get("low_price_alert_state") == "unknown":
+                # R34：无法判断 -> 一次性能力提示（同订阅同配置去重），不发完整行情。
+                _handle_low_price_unknown(
+                    sub,
+                    analysis,
+                    active_origins=active_origins,
+                    active_dests=active_dests,
+                    constraint_fp=constraint_fp,
+                    round_trip=round_trip,
+                    return_date=return_date,
+                    passengers=request_passengers,
+                    search_sources=search_sources,
+                )
+            else:
+                print("[推送] 当前价格未进入低价区间，按订阅策略跳过推送")
             return True
 
         data_freshness_legs = [

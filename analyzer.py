@@ -8845,6 +8845,60 @@ def _auto_budget_price(price_insights: dict | None, percentile: float) -> float 
     return float(prices[index])
 
 
+LOW_PRICE_TRIP_TYPES = ("one_way", "round_trip", "return_only")
+LOW_PRICE_ALERT_STATES = ("triggered", "not_triggered", "unknown", "not_applicable")
+
+
+def _compat_low_price_trip_type(merged_preferences: dict | None) -> str | None:
+    """仅从既有配置明确证明行程类型；证明不了返回 None（不猜成单程）。"""
+    prefs = merged_preferences or {}
+    if prefs.get("round_trip") or prefs.get("same_day_round_trip"):
+        return "round_trip"
+    if prefs.get("round_trip") is False:
+        return "one_way"
+    return None
+
+
+def resolve_low_price_alert_state(
+    budget_strategy,
+    target_price_effective,
+    lowest_price,
+    price_insights,
+    low_price_trip_type: str | None,
+    merged_preferences: dict | None = None,
+) -> tuple[str, str | None]:
+    """R34：低价提醒四态判定（triggered/not_triggered/unknown/not_applicable）。
+
+    unknown 附稳定原因码；返程阶段与非低价策略为 not_applicable。
+    low_price_trip_type 为 None 时只做无冲突的兼容解析，证明不了行程类型
+    且策略为低价时返回 unknown/trip_context_unknown，不猜成单程。
+    纯函数：不读订阅文件、不写状态、不发通知。
+    """
+    if budget_strategy != "low_price_alert":
+        return "not_applicable", None
+    trip_type = low_price_trip_type
+    if trip_type is None:
+        trip_type = _compat_low_price_trip_type(merged_preferences)
+    if trip_type == "return_only":
+        # 返程阶段既有政策：不作购买判断，不重启低价判断。
+        return "not_applicable", None
+    if trip_type == "round_trip":
+        # 第一步尚无同口径往返历史比较能力；不得用去程单程阈值触发往返提醒。
+        return "unknown", "roundtrip_history_not_supported"
+    if trip_type != "one_way":
+        return "unknown", "trip_context_unknown"
+    if lowest_price is None:
+        return "unknown", "no_valid_offers"
+    if target_price_effective is None:
+        history = _extract_history_prices(price_insights)
+        if not history:
+            return "unknown", "history_unavailable"
+        return "unknown", "history_insufficient"
+    if lowest_price <= target_price_effective:
+        return "triggered", "entered_low_zone"
+    return "not_triggered", "above_threshold"
+
+
 def price_tolerance_advice(
     price, target_price=None, tolerance=100, max_budget=None
 ) -> dict | None:
@@ -9033,10 +9087,26 @@ def analyze_all_flights(
     hard_constraints=None,
     *,
     departure_reference_now=None,
+    low_price_trip_type: str | None = None,
 ) -> dict:
     """Analyze and rank all flight options."""
+    if low_price_trip_type is not None and low_price_trip_type not in LOW_PRICE_TRIP_TYPES:
+        raise ValueError(
+            f"low_price_trip_type 必须是 {LOW_PRICE_TRIP_TYPES} 之一或 None，"
+            f"收到 {low_price_trip_type!r}"
+        )
+    early_merged = {**(user_preferences or {}), **(hard_constraints or {})}
+    early_strategy = early_merged.get("budget_strategy", "explicit")
+
+    def early_low_price_fields() -> dict:
+        # R34：早退分支也要带明确低价状态；error 语义不变。
+        state, reason = resolve_low_price_alert_state(
+            early_strategy, None, None, price_insights, low_price_trip_type, early_merged
+        )
+        return {"low_price_alert_state": state, "low_price_alert_reason": reason}
+
     if not flights:
-        return {"error": "no_flights"}
+        return {"error": "no_flights", **early_low_price_fields()}
 
     usable_flights = [
         flight
@@ -9050,6 +9120,7 @@ def analyze_all_flights(
             "total_options": 0,
             "all_flights": [],
             "roundtrip_candidate_flights": [],
+            **early_low_price_fields(),
             "price_range": [],
             "current_min_price": None,
             "market_context": {},
@@ -9091,6 +9162,7 @@ def analyze_all_flights(
             "total_reference_options": len(detail_reference_flights),
             "all_flights": [],
             "roundtrip_candidate_flights": [],
+            **early_low_price_fields(),
             "reference_flights": detail_reference_flights,
             "price_range": [],
             "current_min_price": None,
@@ -9218,6 +9290,7 @@ def analyze_all_flights(
             "total_options": len(usable_flights),
             "all_flights": usable_flights,
             "roundtrip_candidate_flights": usable_flights,
+            **early_low_price_fields(),
             "price_range": [],
             "current_min_price": None,
             "market_context": {},
@@ -9491,6 +9564,16 @@ def analyze_all_flights(
         decision_flight.get("execution_grade"),
     )
 
+    # R34：四态与原因码为低价语义与通知分流的依据；旧布尔仅兼容保留。
+    low_price_state, low_price_reason = resolve_low_price_alert_state(
+        budget_strategy,
+        target_price_effective,
+        lowest_price,
+        price_insights,
+        low_price_trip_type,
+        merged_preferences,
+    )
+
     return {
         "total_options": len(usable_flights),
         "total_options_before_preferences": original_options,
@@ -9515,12 +9598,10 @@ def analyze_all_flights(
         "budget_strategy": budget_strategy,
         "low_price_alert_triggered": (
             budget_strategy != "low_price_alert"
-            or (
-                target_price_effective is not None
-                and lowest_price is not None
-                and lowest_price <= target_price_effective
-            )
+            or low_price_state == "triggered"
         ),
+        "low_price_alert_state": low_price_state,
+        "low_price_alert_reason": low_price_reason,
         "price_tolerance": price_tolerance,
         "price_band": price_band,
         "decision_summary": decision_summary,
