@@ -8467,6 +8467,65 @@ def build_notification_payload(
     )
 
 
+def build_local_low_price_payload(**kwargs):
+    """Keep product, comparison amount, thresholds and history on one evidence snapshot."""
+    analysis = kwargs["analysis_result"]
+    context = analysis["low_price_alert_context"]
+    if (analysis.get("budget_strategy") != "low_price_alert" or context.get("state") != "triggered"
+            or analysis.get("collection_failures") or (kwargs.get("route_info") or {}).get("processing_phase") == "return_only"):
+        return build_notification_payload(**kwargs)
+    selected = context["selected_flights"]
+    scope = context["price_scope"]
+    mixed = context["cabin_scope"].startswith("mixed:")
+    rt = scope.endswith("roundtrip")
+    route = dict(kwargs.get("route_info") or {})
+    price = context["evaluated_amount_cny"]
+    threshold = context["threshold_cny"]
+    history = [{"price": float(amount), "evidence_id": eid} for eid,amount in
+               zip(context["prior_evidence_ids"],context["prior_amounts_raw"])]
+    def leg(direction):
+        flights = [f for k,f in selected.items() if k.startswith(direction + ":")]
+        return next((f for f in flights if f.get("cabin_class")=="economy"),flights[0])
+    ob = leg("outbound")
+    outbound = dict(analysis, all_flights=[ob], economy_recommendations=[ob], recommendations=[ob],
+                    current_min_price=price, price_range=[price,price], price_insights={},
+                    constraint_price_history=history, lowest_price_history=history)
+    combo = None
+    inbound = None
+    if rt:
+        ret = leg("return")
+        combo = dict(outbound=ob, **{"return":ret}, total_price=price, outbound_price=ob["price"],
+                     return_price=ret["price"])
+        inbound = dict(kwargs.get("return_analysis") or {}, all_flights=[ret], economy_recommendations=[ret])
+        outbound["round_trip_analysis"] = dict(total_min=price, top_combinations=[combo])
+        outbound["return_analysis"] = inbound
+    route.update(lowest_price_history=history, target_price=threshold)
+    payload = build_notification_payload(**{**kwargs, "analysis_result":outbound, "outbound_analysis":outbound,
+                                          "return_analysis":inbound, "route_info":route,
+                                          "price_insights":{}, "price_history":history})
+    plan = (_payload_combo_plan(combo,route,0,"primary") if rt else
+            _payload_single_plan(ob,route,outbound,0,"primary"))
+    condition = f"以支付页同口径最终价不高于 ¥{context['threshold_raw_text']} 为购买条件"
+    reason = f"进入低价区间：去重后的合格报价观测 {context['prior_n']} 个，本地 P30 为 ¥{context['threshold_raw_text']}"
+    plan.update(price=price, estimated_price=price, buy_condition=condition,
+                low_price_slots=selected, summary=f"同口径报价 {_price_text(price)}")
+    if mixed:
+        plan.update(mixed_cabin=True, mixed_cabin_disclosure=MIXED_CABIN_DISCLOSURE,
+                    cabin_allocation=json.loads(context["cabin_scope"].partition(":")[2]))
+        plan["summary"] += "；" + MIXED_CABIN_DISCLOSURE
+    payload.update(push_type="进入低价区间", recommended_plans=[plan], alternative_plans=[],
+        adjustment_required_plans=[], recommended_price=price, current_price=price, display_price=price,
+        transaction_price=price, budget_compare_price=price, budget_compare_scope=scope, target_compare_scope=scope,
+        ideal_price=threshold, verify_price=threshold, budget_input_ideal_price=threshold,
+        buy_condition=condition, buy_condition_explanation=reason, trigger_reason=[reason],
+        recommendation=reason, price_policy_reason=reason, plan_price_rows=_payload_plan_price_rows([plan]),
+        price_signal={"label":"进入低价区间","summary":reason,"sample_n":context["prior_n"]},
+        price_history=history, price_references={}, trend_summary=reason, trend_fallback="",
+        action_range={}, execution_advice={"condition":condition}, low_price_alert_context=context)
+    payload["snapshot"]["constraint_sample_n"] = context["prior_n"]
+    return payload
+
+
 def _payload_price(value) -> str:
     return _price_text(value)
 

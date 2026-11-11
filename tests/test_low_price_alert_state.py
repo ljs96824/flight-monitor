@@ -1,7 +1,7 @@
 """R34：低价提醒四态（triggered/not_triggered/unknown/not_applicable）与一次性能力提示。
 
 合同（2026-11-09 维护者裁定）：
-- 往返（含当天往返、尚不具备同口径比较能力的混舱往返）低价策略统一 unknown，
+- R35：没有本地同口径历史的往返低价策略为 unknown，
   不用去程单程阈值触发往返低价提醒。
 - 非低价策略与返程阶段显式 not_applicable；返程阶段不重启低价判断。
 - unknown 的旧布尔 low_price_alert_triggered 必须为 False，不得改成 True。
@@ -66,17 +66,21 @@ class AnalyzerStateTest(unittest.TestCase):
     def test_roundtrip_unknown_despite_sufficient_history_and_low_price(self):
         result = run_analysis("round_trip", points=6, lowest=550.0)
         self.assertEqual(result["low_price_alert_state"], "unknown")
-        self.assertEqual(result["low_price_alert_reason"], "roundtrip_history_not_supported")
+        self.assertEqual(result["low_price_alert_reason"], "history_unavailable")
         self.assertFalse(result["low_price_alert_triggered"])
 
     def test_one_way_triggered_unchanged(self):
         result = run_analysis("one_way", points=6, lowest=550.0)
+        analyzer.apply_low_price_evaluation(result, {"state": "triggered", "reason": "entered_low_zone",
+                                                     "threshold_cny": 600, "prior_n": 5})
         self.assertEqual(result["low_price_alert_state"], "triggered")
         self.assertEqual(result["low_price_alert_reason"], "entered_low_zone")
         self.assertTrue(result["low_price_alert_triggered"])
 
     def test_one_way_not_triggered(self):
         result = run_analysis("one_way", points=6, lowest=5000.0)
+        analyzer.apply_low_price_evaluation(result, {"state": "not_triggered", "reason": "above_threshold",
+                                                     "threshold_cny": 600, "prior_n": 5})
         self.assertEqual(result["low_price_alert_state"], "not_triggered")
         self.assertEqual(result["low_price_alert_reason"], "above_threshold")
         self.assertFalse(result["low_price_alert_triggered"])
@@ -89,6 +93,8 @@ class AnalyzerStateTest(unittest.TestCase):
 
     def test_history_insufficient(self):
         result = run_analysis("one_way", points=3)
+        analyzer.apply_low_price_evaluation(result, {"state": "unknown", "reason": "history_insufficient",
+                                                     "threshold_cny": None, "prior_n": 3})
         self.assertEqual(result["low_price_alert_state"], "unknown")
         self.assertEqual(result["low_price_alert_reason"], "history_insufficient")
         self.assertFalse(result["low_price_alert_triggered"])
@@ -114,7 +120,7 @@ class AnalyzerStateTest(unittest.TestCase):
             "round_trip": True,
         })
         self.assertEqual(result["low_price_alert_state"], "unknown")
-        self.assertEqual(result["low_price_alert_reason"], "roundtrip_history_not_supported")
+        self.assertEqual(result["low_price_alert_reason"], "history_unavailable")
 
     def test_invalid_trip_type_raises(self):
         with self.assertRaises(ValueError):
