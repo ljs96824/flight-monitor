@@ -3,6 +3,15 @@
 from __future__ import annotations
 
 import statistics
+import hashlib
+import itertools
+import math
+from decimal import Decimal, localcontext
+from observation_time import canonicalize_observed_at
+from source_profiles import ROUTE_SOURCE_PROFILES
+from storage import LOW_PRICE_ALERT_METHOD_VERSION
+from cabin_allocation import find_explicit_cabin_allocation, validate_cabin_allocation, normalize_passenger_counts
+from price_estimator import passenger_fare_rates, passenger_price_factor
 import copy
 import json
 import os
@@ -56,7 +65,8 @@ from airlines import (
     resolve_lcc_policy,
 )
 from log_utils import safe_log
-from mixed_cabin import match_mixed_cabin_combinations
+from mixed_cabin import (match_mixed_cabin_combinations, match_mixed_cabin_oneway_strict,
+                         match_mixed_cabin_roundtrip_strict, strict_leg_identity)
 from observations_store import get_current_round
 from storage import get_latest_alternatives, get_target_history
 from subscription_preflight import shanghai_today
@@ -8849,6 +8859,224 @@ LOW_PRICE_TRIP_TYPES = ("one_way", "round_trip", "return_only")
 LOW_PRICE_ALERT_STATES = ("triggered", "not_triggered", "unknown", "not_applicable")
 
 
+def _lp_json(value):
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+
+
+def _lp_hash(value):
+    return hashlib.sha256(_lp_json(value).encode("utf-8")).hexdigest()
+
+
+def _lp_unknown(reason):
+    return dict(state="unknown", reason=reason, can_evaluate_current=False, can_append_sample=False,
+                sample_delta=0, threshold_cny=None)
+
+
+def apply_low_price_evaluation(analysis, context):
+    """Expose only the current offer's frozen local decision to the notification path."""
+    analysis.update(low_price_alert_context=context, low_price_alert_state=context["state"],
+                    low_price_alert_reason=context["reason"],
+                    low_price_alert_triggered=context["state"] == "triggered",
+                    target_price_effective=context.get("threshold_cny"))
+    return analysis
+
+
+def _lp_target(sub, passengers):
+    hard = sub.get("hard_constraints") or {}
+    arrangement = hard.get("cabin_arrangement") or sub.get("cabin_arrangement")
+    policy = hard.get("cabin_policy") or sub.get("cabin_policy")
+    if arrangement == "mixed":
+        allocation = find_explicit_cabin_allocation(hard, sub)
+        if not allocation:
+            return None, None, "invalid_cabin_allocation"
+        try:
+            allocation = validate_cabin_allocation(allocation, passengers)["allocation"]
+        except (ValueError, TypeError):
+            return None, None, "invalid_cabin_allocation"
+        return "mixed:" + _lp_json(allocation), allocation, None
+    if arrangement == "business_all":
+        return "business", None, None
+    if arrangement == "economy_all" or (not arrangement and policy in (None, "", "economy_only")):
+        return "economy", None, None
+    return None, None, "cabin_scope_ambiguous"
+
+
+def _lp_slots(required, dates, leg_data):
+    slots = {}
+    unverified = False
+    for leg, day in dates.items():
+        data = leg_data.get(leg) or {}
+        pairs = sorted(set(map(tuple, data.get("attempted_airport_pairs") or [])))
+        if not pairs:
+            return {}, "source_coverage_incomplete"
+        for cabin, sources in required.items():
+            times = {}
+            if not sources:
+                return {}, "source_coverage_incomplete"
+            for origin, dest in pairs:
+                for source in sources:
+                    if any(e.get("source")==source and e.get("cabin_class") in (None, "", cabin)
+                           and e.get("origin_airport") in (None, "", origin)
+                           and e.get("dest_airport") in (None, "", dest) and e.get("leg") in (None, leg)
+                           for e in data.get("source_errors", [])):
+                        return {}, "source_coverage_incomplete"
+                    arrived = [u for u in data.get("fetch_evidence_units", []) if
+                               (u.get("source"), u.get("cabin_class"), u.get("origin_airport"),
+                                u.get("dest_airport"), u.get("depart_date")) == (source,cabin,origin,dest,day)]
+                    if not arrived or any(u.get("source_status") not in ("success","empty","cache") for u in arrived):
+                        return {}, "source_coverage_incomplete"
+                    for u in arrived:
+                        if u["source_status"] == "empty":
+                            continue
+                        if u.get("evidence_qualified") is not True or not all(u.get(k) for k in
+                                  ("observed_at_utc","observation_round_id","fetch_event_id")):
+                            unverified = True
+                            continue
+                        times[_lp_unit_id(u)] = u["observed_at_utc"]
+            slots[leg+":"+cabin] = {"fetch_unit_ids": sorted(times), "unit_times": times}
+    return slots, "quote_provenance_unverified" if unverified else None
+
+
+def _lp_unit_id(u):
+    return _lp_hash(dict(schema="low-price-fetch-unit-v1", **{k:u[k] for k in
+        ("source","origin_airport","dest_airport","depart_date","cabin_class","observed_at_utc",
+         "observation_round_id","fetch_event_id")}))
+
+
+def _lp_flight_rank(flight, day):
+    _, combo, path = strict_leg_identity(flight, day)
+    return (path[0][0], path[-1][1], day, combo, path,
+            str(flight.get("price_source") or flight.get("source") or ""))
+
+
+def _lp_offers(sub, pools, dates, scope, allocation, passengers, route_type, group_price):
+    opts = dict(allocation=allocation, passengers=passengers, route_type=route_type)
+    if allocation:
+        if "return" in dates:
+            return match_mixed_cabin_roundtrip_strict(pools["outbound"], pools["return"],
+                        dates["outbound"], dates["return"], **opts)
+        return [(o,) for o in match_mixed_cabin_oneway_strict(pools["outbound"], dates["outbound"], **opts)]
+    factor = Decimal(str(passenger_price_factor(passengers, route_type))) if group_price else Decimal(1)
+    choices = []
+    for leg, day in dates.items():
+        choices.append([dict(amount=Decimal(str(f["price"]))*factor, flights={scope:f},
+            identity=_lp_flight_rank(f, day))
+            for f in pools[leg]])
+    return itertools.product(*choices)
+
+
+def build_current_low_price_offer(sub, analyses, leg_data, *, trip_type, route_type,
+                                  origins, destinations, passengers, constraint_fp):
+    """Price only the requested product; display pools and external percentiles are not evidence."""
+    hard = sub.get("hard_constraints") or {}
+    scope, allocation, error = _lp_target(sub, passengers)
+    if error:
+        return _lp_unknown(error)
+    cabins = sorted(c for c,n in allocation.items() if any(n.values())) if allocation else [scope]
+    dates = {"outbound": str(sub["depart_date"])}
+    if trip_type == "round_trip":
+        dates["return"] = str(sub.get("return_date") or hard.get("return_date") or "")
+    # Static coverage policy belongs to the bucket even when an expected source is absent.
+    specs = ROUTE_SOURCE_PROFILES.get(route_type, {}).get("sources", [])
+    required = {c:sorted(s["name"] for s in specs if s.get("weight",0)>0 and s.get("role")!="enrichment"
+                         and c in (s.get("cabins") or cabins)) for c in cabins}
+    group_price = bool(allocation) or normalize_budget_scope(hard.get("target_price_scope")
+                  or sub.get("target_price_scope") or hard.get("max_budget_scope") or sub.get("max_budget_scope")
+                  or hard.get("budget_scope") or sub.get("budget_scope")) == "all"
+    rt = "return" in dates
+    airports = dict(outbound_origins=sorted(set(origins)), outbound_destinations=sorted(set(destinations)),
+                    return_origins=sorted(set(destinations)) if rt else [], return_destinations=sorted(set(origins)) if rt else [],
+                    origin_airport_preference=sub.get("origin_airport_preference"),
+                    matrix_mode="primary_short_circuit_v1" if len(origins)*len(destinations)>1 else "single_pair_v1")
+    coverage = dict(airport_coverage_policy=airports, source_coverage_policy=dict(
+                    route_profile=route_type, required_pricing_sources_by_cabin=required))
+    members = normalize_passenger_counts(passengers if group_price else {"adult":1})
+    fields = dict(method_version=LOW_PRICE_ALERT_METHOD_VERSION,trip_type=trip_type,route=f"{sub['origin']}-{sub['destination']}",
+                  depart_date=dates["outbound"],return_date=dates.get("return",""),cabin_scope=scope,
+                  price_scope=("all_passengers_" if group_price else "per_person_")+("roundtrip" if rt else "oneway"),
+                  passenger_signature=_lp_json(members),route_rate_key=passenger_fare_rates(route_type)[0],
+                  constraint_fingerprint=constraint_fp)
+    bucket = _lp_hash(dict(schema="low-price-bucket-v1",**fields,**coverage))
+    slots, error = _lp_slots(required, dates, leg_data)
+    if (analyses.get("outbound") or {}).get("collection_failures"):
+        error = "source_coverage_incomplete"
+    if error:
+        return dict(_lp_unknown(error), bucket_key=bucket, coverage_policy=coverage,
+                    coverage_complete=error != "source_coverage_incomplete")
+    pools = {}
+    for leg, day in dates.items():
+        pool = []
+        for flight in (analyses.get(leg) or {}).get("roundtrip_candidate_flights", []):
+            c = flight.get("cabin_class") or "economy"
+            if (c not in cabins or flight.get("reference_only") or not has_enough_detail(flight)
+                    or not strict_leg_identity(flight, day)):
+                continue
+            price = _to_float(flight.get("price"))
+            if price is None or not math.isfinite(price) or price <= 0:
+                continue
+            source = str(flight.get("price_source") or flight.get("source") or "")
+            lineage = (flight.get("source_collection") or {}).get(source) or {}
+            if source not in required[c]:
+                continue
+            if (not all(lineage.get(k) for k in ("source", "origin_airport", "dest_airport", "depart_date",
+                                                  "cabin_class", "observed_at_utc", "observation_round_id", "fetch_event_id"))
+                    or lineage.get("evidence_qualified") is not True
+                    or _lp_unit_id(lineage) not in slots[leg+":"+c]["unit_times"]):
+                return _lp_unknown("quote_provenance_unverified")
+            # An equal-price merged quote must not depend on supplier traversal order.
+            equal_sources = {source}
+            for q in flight.get("source_price_details") or []:
+                name = q.get("source")
+                sibling = (flight.get("source_collection") or {}).get(name) or {}
+                if (name in required[c] and sibling.get("evidence_qualified") is True
+                        and _to_float(q.get("price")) is not None
+                        and Decimal(str(q["price"])) == Decimal(str(flight["price"]))):
+                    equal_sources.add(name)
+            pool.append(dict(flight, price_source=min(equal_sources)))
+        pools[leg] = pool
+    if not all(pools.values()) or not all(s["fetch_unit_ids"] for s in slots.values()):
+        return _lp_unknown("no_valid_offers")
+    best, tied = None, {}
+    with localcontext() as ctx:
+        ctx.prec = max(64, max(len(str(f["price"])) for pool in pools.values() for f in pool)+32)
+        for items in _lp_offers(sub,pools,dates,scope,allocation,passengers,route_type,group_price):
+            if "return" in dates and (sub.get("same_day_round_trip") or hard.get("same_day_round_trip")):
+                o, r = (next(iter(item["flights"].values())) for item in items)
+                windows = compute_same_day_windows(hard, None, _flight_airport(o, "arrival_airport"))
+                if not build_same_day_combos([o],[r],windows or dates["outbound"],dates["outbound"],constraints=hard):
+                    continue
+            total = sum(item["amount"] for item in items)
+            rank = total, tuple(item["identity"] for item in items)
+            if best and total > best[0][0]:
+                continue
+            if not best or total < best[0][0]:
+                tied = {}
+            for leg,item in zip(dates,items):
+                for cabin,f in item["flights"].items():
+                    names = tied.setdefault(leg+":"+cabin,set())
+                    names.add(f.get("price_source") or f.get("source"))
+                    for p in f.get("source_price_details") or []:
+                        if p.get("source") in required[cabin] and Decimal(str(p["price"]))==Decimal(str(f["price"])):
+                            names.add(p["source"])
+            if not best or rank < best[0]:
+                best = rank, items
+    if not best:
+        return _lp_unknown("no_valid_offers")
+    chosen = {}
+    for leg,item in zip(dates,best[1]):
+        for cabin,f in item["flights"].items():
+            k = leg+":"+cabin
+            slots[k].update(selected_price_source=f.get("price_source") or f.get("source"),
+                            selected_flight_combo=f["flight_combo"], tied_price_sources=sorted(tied[k]))
+            chosen[k] = f
+    ids = {k:_lp_hash(dict(schema="low-price-slot-evidence-v1",slot=k,fetch_units=v["fetch_unit_ids"])) for k,v in slots.items()}
+    stamp = canonicalize_observed_at(max(t for s in slots.values() for t in s["unit_times"].values()))
+    return dict(**fields,bucket_key=bucket,evidence_id=_lp_hash(dict(schema="low-price-evidence-v1",slots=ids)),
+                selected_flights=chosen,component_slots=slots,coverage_policy=coverage,coverage_complete=True,amount_cny=best[0][0],
+                amount_raw_text=format(best[0][0],"f"),can_evaluate_current=True,can_append_sample=True,
+                observed_at_utc=stamp.observed_at_utc,observed_at_shanghai=stamp.observed_at_shanghai)
+
+
 def _compat_low_price_trip_type(merged_preferences: dict | None) -> str | None:
     """仅从既有配置明确证明行程类型；证明不了返回 None（不猜成单程）。"""
     prefs = merged_preferences or {}
@@ -8882,18 +9110,12 @@ def resolve_low_price_alert_state(
     if trip_type == "return_only":
         # 返程阶段既有政策：不作购买判断，不重启低价判断。
         return "not_applicable", None
-    if trip_type == "round_trip":
-        # 第一步尚无同口径往返历史比较能力；不得用去程单程阈值触发往返提醒。
-        return "unknown", "roundtrip_history_not_supported"
-    if trip_type != "one_way":
+    if trip_type not in {"one_way", "round_trip"}:
         return "unknown", "trip_context_unknown"
     if lowest_price is None:
         return "unknown", "no_valid_offers"
     if target_price_effective is None:
-        history = _extract_history_prices(price_insights)
-        if not history:
-            return "unknown", "history_unavailable"
-        return "unknown", "history_insufficient"
+        return "unknown", "history_unavailable"
     if lowest_price <= target_price_effective:
         return "triggered", "entered_low_zone"
     return "not_triggered", "above_threshold"
@@ -9097,6 +9319,9 @@ def analyze_all_flights(
         )
     early_merged = {**(user_preferences or {}), **(hard_constraints or {})}
     early_strategy = early_merged.get("budget_strategy", "explicit")
+    local_low_price = early_strategy == "low_price_alert" and low_price_trip_type != "return_only"
+    if local_low_price:
+        price_insights = None  # No external threshold fallback for this strategy.
 
     def early_low_price_fields() -> dict:
         # R34：早退分支也要带明确低价状态；error 语义不变。
@@ -9181,7 +9406,7 @@ def analyze_all_flights(
         merged_preferences = user_preferences or {}
     mixed_cabin_allocation = merged_preferences.get("cabin_allocation")
     mixed_business_flights = []
-    if isinstance(mixed_cabin_allocation, dict):
+    if isinstance(mixed_cabin_allocation, dict) and not local_low_price:
         mixed_business_flights = [
             flight
             for flight in usable_flights

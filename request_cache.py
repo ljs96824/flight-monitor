@@ -12,6 +12,11 @@ import json
 import re
 import time
 from datetime import datetime, timedelta
+from decimal import Decimal, InvalidOperation
+from uuid import uuid4
+
+from observation_time import canonicalize_observed_at, timestamp_kind
+from project_time import SHANGHAI_TZ
 from pathlib import Path
 
 from atomic_json_store import (
@@ -516,6 +521,8 @@ def _read_persistent(
     result = payload.get("result")
     if _result_cache_status(result) != "persistent":
         return None
+    if not _verified_event(result):
+        _stamp_event(result, _unknown_event("legacy_persistent_cache_missing_origin"))
     return result, payload.get("fetched_at")
 
 
@@ -547,6 +554,38 @@ def _panel_snapshot_for_key(key: tuple, freshness_hours: float) -> dict | None:
         freshness_hours=freshness_hours,
         db_path=db_path,
     )
+
+
+def _unknown_event(reason):
+    return dict(evidence_qualified=False, evidence_unqualified_reason=reason, fetch_event_id=None,
+                observed_at_utc=None, observation_round_id=None, panel_snapshot_written=False)
+
+
+def _verified_event(result):
+    return (result.get("evidence_qualified") is True and bool(result.get("fetch_event_id"))
+            and bool(result.get("observed_at_utc")) and bool(result.get("observation_round_id")))
+
+
+def _stamp_event(result, fields):
+    result.update(fields)
+    result["can_display"] = bool(result.get("flights"))
+    for flight in result.get("flights") or []:
+        if isinstance(flight, dict):
+            flight.update(fields)
+
+
+def _panel_event_matches(result, snapshot):
+    if (not _verified_event(result) or result.get("panel_snapshot_written") is not True
+            or snapshot.get("round_id") != result["observation_round_id"] or not snapshot.get("observed_at")):
+        return False
+    try:
+        def signature(rows, price_key):
+            return sorted((normalize_combo(r.get("flight_combo") or r.get("flight_no")),
+                           Decimal(str(r[price_key]))) for r in rows)
+        return (canonicalize_observed_at(snapshot["observed_at"]).observed_at_utc == result["observed_at_utc"]
+                and signature(snapshot["rows"], "price_cny") == signature(_positive_price_flights(result), "price"))
+    except (InvalidOperation, ValueError, TypeError, KeyError):
+        return False
 
 
 def _rebuild_panel_result(
@@ -608,6 +647,8 @@ def _rebuild_panel_result(
     panel_result["collection_state"] = "panel_reused"
     panel_result["collection_label"] = _panel_label(observed_at)
     panel_result["observation_round_id"] = snapshot.get("round_id")
+    if not _panel_event_matches(result, snapshot):
+        _stamp_event(panel_result, _unknown_event("panel_event_provenance_unverified"))
     return panel_result
 
 
@@ -765,7 +806,7 @@ def _flush_equipment_summary(round_id: str | None) -> None:
         )
 
 
-def _record_observations_after_fetch(source, key: tuple, result, cabin_class: str) -> None:
+def _record_observations_after_fetch(source, key: tuple, result, cabin_class: str, *, observed_at=None) -> dict | None:
     source_name = key[0]
     if source_name not in LISTING_OBSERVATION_SOURCES:
         return
@@ -791,6 +832,7 @@ def _record_observations_after_fetch(source, key: tuple, result, cabin_class: st
             depart_date=fetch_depart_date,
             cabin_class=cabin_class,
             source=source_name,
+            **(dict(observed_at=observed_at) if observed_at is not None else {}),
             db_path=db_path,
         )
         safe_log(
@@ -800,6 +842,7 @@ def _record_observations_after_fetch(source, key: tuple, result, cabin_class: st
             f"\u8df3\u8fc7\u91cd\u590d={observation_result['skipped']} "
             f"\u53e3\u5f84=\u5355\u4eba\u5355\u7a0bCNY"
         )
+        return observation_result
     except Exception as exc:
         safe_log(f"[\u89c2\u6d4b\u843d\u5e93\u5931\u8d25] round={round_id} \u6e90={source_name} \u539f\u56e0={exc}")
 
@@ -1072,6 +1115,7 @@ def cached_fetch(
         _archive_listing_result(source_name, key, result)
         safe_log(f"[源熔断] 源={source_name} 原因={quota_reason} 生效范围=本进程")
         return returned(copy.deepcopy(result), "fresh")
+    raw_collected_at = result.get("collected_at")
     collected_at = str(result.get("collected_at") or datetime.now().isoformat(timespec="seconds"))
     result["collected_at"] = collected_at
     result["collection_state"] = "fresh"
@@ -1083,7 +1127,25 @@ def cached_fetch(
         flight["collection_state"] = "fresh"
         flight["collection_label"] = result["collection_label"]
     _record_equipment_summary(source_name, result)
-    _record_observations_after_fetch(source, key, result, cabin_class)
+    if result.get("source_status") == "success" and result.get("evidence_qualified") is not False:
+        stamp = canonicalize_observed_at(
+            raw_collected_at
+            if raw_collected_at and timestamp_kind(raw_collected_at) == "aware"
+            else datetime.now(SHANGHAI_TZ)
+        )
+        round_id = observations_store.get_current_round()[0] or _current_stats_round_id or f"standalone:{uuid4().hex}"
+        positive_count = len(_positive_price_flights(result))
+        receipt = _record_observations_after_fetch(source, key, result, cabin_class,
+                                                   observed_at=stamp.observed_at_shanghai)
+        _stamp_event(result, dict(evidence_qualified=True, evidence_unqualified_reason=None,
+                    observed_at_utc=stamp.observed_at_utc, observation_round_id=round_id,
+                    fetch_event_id=f"fev1:{uuid4().hex}",
+                    panel_snapshot_written=bool(receipt and positive_count and
+                        receipt.get("written") == positive_count and receipt.get("skipped") == 0)))
+    else:
+        _record_observations_after_fetch(source, key, result, cabin_class)
+        _stamp_event(result, _unknown_event("internal_source_cache_unverified" if
+                     result.get("source_status") == "cache" else "source_event_unverified"))
     stored = copy.deepcopy(result)
     cache_status = _result_cache_status(stored)
     if cache_status == "persistent":

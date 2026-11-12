@@ -154,6 +154,7 @@ class ArchiveFailureOrderingTest(unittest.TestCase):
             stack.enter_context(redirect_stdout(logs))
             stack.enter_context(patch.object(socket.socket, "connect", side_effect=AssertionError("NO_NETWORK")))
             stack.enter_context(patch.object(cache, "datetime", FixedDateTime))
+            stack.enter_context(patch.object(cache, "uuid4", return_value=types.SimpleNamespace(hex="r35-synthetic-event")))
             sleep = stack.enter_context(patch.object(cache.time, "sleep"))
             key = cache.cache_key(source, "PVG", "KIX", DEPARTURE)
             self.assertEqual(cache._request_cache, {}, "CLEAN_POOL")
@@ -202,6 +203,23 @@ class ArchiveFailureOrderingTest(unittest.TestCase):
                 flight.update(fields)
         if source.outcome == "io_once":
             result["retry_count"] = 1
+        if source.outcome != "quota":
+            if result["source_status"] == "success":
+                round_id = (observations_store.get_current_round()[0] or cache._current_stats_round_id
+                            or "standalone:r35-synthetic-event")
+                evidence = {"evidence_qualified": True, "evidence_unqualified_reason": None,
+                            "observed_at_utc": "2026-09-20T04:00:00+00:00", "observation_round_id": round_id,
+                            "fetch_event_id": "fev1:r35-synthetic-event",
+                            "panel_snapshot_written": (source.outcome == "positive"
+                                and source.name in cache.LISTING_OBSERVATION_SOURCES
+                                and bool(observations_store.get_current_round()[0]))}
+            else:
+                evidence = {"evidence_qualified": False, "evidence_unqualified_reason": "source_event_unverified",
+                            "fetch_event_id": None, "observed_at_utc": None, "observation_round_id": None,
+                            "panel_snapshot_written": False}
+            result.update(evidence, can_display=bool(result["flights"]))
+            for flight in result["flights"]:
+                flight.update(evidence)
         return result
 
     def pool_status(self, outcome):

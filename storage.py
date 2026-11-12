@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import json
+import math
+import re
+from decimal import Decimal
+from datetime import timezone
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
@@ -51,8 +55,8 @@ FLIGHT_DETAIL_COLUMNS = [
 
 
 @contextmanager
-def _connect() -> Iterator[sqlite3.Connection]:
-    connection = sqlite3.connect(DB_PATH)
+def _connect(path: str | Path | None = None, *, uri: bool = False) -> Iterator[sqlite3.Connection]:
+    connection = sqlite3.connect(path if path is not None else DB_PATH, uri=uri)
     connection.row_factory = sqlite3.Row
     try:
         with connection:
@@ -80,6 +84,334 @@ def _current_round_id() -> str | None:
         _lineage_degraded_logged = True
         safe_log("[价格lineage降级] round_id不可用,本记录保持NULL")
     return None
+
+
+LOW_PRICE_ALERT_METHOD_VERSION = "low_price_alert_v1"
+_LP_OBS = "low_price_alert_observations_v1"
+_LP_CLAIMS = "low_price_alert_component_claims_v1"
+_LP_EVAL = "low_price_alert_evaluations_v1"
+_LP_DDL = """
+CREATE TABLE low_price_alert_observations_v1 (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    schema_version TEXT NOT NULL CHECK (schema_version = 'v1'),
+    method_version TEXT NOT NULL,
+    bucket_key TEXT NOT NULL,
+    evidence_id TEXT NOT NULL,
+    trip_type TEXT NOT NULL CHECK (trip_type IN ('one_way', 'round_trip')),
+    route TEXT NOT NULL,
+    depart_date TEXT NOT NULL,
+    return_date TEXT NOT NULL DEFAULT '',
+    cabin_scope TEXT NOT NULL,
+    price_scope TEXT NOT NULL,
+    passenger_signature TEXT NOT NULL,
+    route_rate_key TEXT NOT NULL,
+    constraint_fingerprint TEXT NOT NULL,
+    coverage_policy_json TEXT NOT NULL,
+    amount_cny REAL NOT NULL CHECK (amount_cny > 0),
+    amount_raw_text TEXT NOT NULL,
+    observed_at_utc TEXT NOT NULL,
+    observed_at_shanghai TEXT NOT NULL,
+    component_slots_json TEXT NOT NULL,
+    recorded_at_utc TEXT NOT NULL,
+    UNIQUE(bucket_key, evidence_id)
+);
+
+CREATE INDEX idx_lpa_obs_v1_bucket_obs_rec
+    ON low_price_alert_observations_v1(bucket_key, observed_at_utc, recorded_at_utc, id);
+
+CREATE TABLE low_price_alert_component_claims_v1 (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    schema_version TEXT NOT NULL CHECK (schema_version = 'v1'),
+    bucket_key TEXT NOT NULL,
+    slot_key TEXT NOT NULL,
+    fetch_unit_id TEXT NOT NULL,
+    evidence_id TEXT NOT NULL,
+    unit_observed_at_utc TEXT NOT NULL,
+    recorded_at_utc TEXT NOT NULL,
+    UNIQUE(bucket_key, slot_key, fetch_unit_id)
+);
+
+CREATE INDEX idx_lpa_claims_v1_bucket_slot
+    ON low_price_alert_component_claims_v1(bucket_key, slot_key);
+
+CREATE TABLE low_price_alert_evaluations_v1 (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    schema_version TEXT NOT NULL CHECK (schema_version = 'v1'),
+    method_version TEXT NOT NULL,
+    bucket_key TEXT NOT NULL,
+    evidence_id TEXT NOT NULL,
+    since_utc TEXT NOT NULL DEFAULT '',
+    evaluated_amount_cny REAL NOT NULL CHECK (evaluated_amount_cny > 0),
+    evaluated_amount_raw_text TEXT NOT NULL,
+    cutoff_observed_at_utc TEXT NOT NULL,
+    first_evaluated_at_utc TEXT NOT NULL,
+    first_max_observation_id INTEGER NOT NULL CHECK (first_max_observation_id >= 0),
+    prior_n INTEGER NOT NULL CHECK (prior_n >= 0),
+    prior_evidence_ids_json TEXT NOT NULL,
+    prior_amounts_raw_json TEXT NOT NULL,
+    threshold_cny REAL,
+    threshold_raw_text TEXT,
+    state TEXT NOT NULL CHECK (state IN ('triggered', 'not_triggered', 'unknown')),
+    reason TEXT NOT NULL,
+    can_append_sample INTEGER NOT NULL CHECK (can_append_sample IN (0, 1)),
+    sample_write_status TEXT NOT NULL CHECK (
+        sample_write_status IN ('inserted', 'skipped_partial_reuse', 'existing_evidence_noop')
+    ),
+    UNIQUE(bucket_key, evidence_id, since_utc)
+);
+
+CREATE INDEX idx_lpa_eval_v1_bucket_evidence
+    ON low_price_alert_evaluations_v1(bucket_key, evidence_id, since_utc);
+"""
+
+
+class LowPriceEvidenceConflictError(RuntimeError):
+    pass
+
+
+class LowPriceInvalidAmountError(ValueError):
+    pass
+
+
+class LowPriceStorageSchemaError(RuntimeError):
+    pass
+
+
+class LowPriceStorageReadError(RuntimeError):
+    pass
+
+
+def canonical_decimal_text_from_plain(raw_text: str) -> str:
+    if not isinstance(raw_text, str) or not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", raw_text):
+        raise LowPriceInvalidAmountError("expected plain ASCII decimal")
+    integer, _, fraction = raw_text.partition(".")
+    integer = integer.lstrip("0") or "0"
+    fraction = fraction.rstrip("0")
+    return integer + "." + fraction if fraction else integer
+
+
+def validate_low_price_amount_and_scope(amount_cny, amount_raw_text, *, trip_type, cabin_scope, price_scope):
+    raw = canonical_decimal_text_from_plain(amount_raw_text)
+    exact = Decimal(raw)
+    if isinstance(amount_cny, bool) or not isinstance(amount_cny, (float, int, Decimal)):
+        raise LowPriceInvalidAmountError("non-numeric amount")
+    numeric = Decimal(str(amount_cny)) if isinstance(amount_cny, float) else Decimal(amount_cny)
+    projection = float(exact)
+    if not numeric.is_finite() or numeric != exact or not math.isfinite(projection) or projection <= 0:
+        raise LowPriceInvalidAmountError("non-positive, non-finite or inconsistent amount")
+    suffix = {"one_way": "oneway", "round_trip": "roundtrip"}.get(trip_type)
+    mixed = cabin_scope.startswith("mixed:")
+    if (not suffix or not (mixed or cabin_scope in {"economy", "business"})
+            or price_scope not in {"all_passengers_" + suffix, "per_person_" + suffix}
+            or (mixed and not price_scope.startswith("all_passengers_"))):
+        raise LowPriceInvalidAmountError("incompatible price scope")
+    return projection, raw, exact
+
+
+def _claim_pairs(slots, trip, cabin):
+    cabins = {cabin}
+    if cabin.startswith("mixed:"):
+        allocation = json.loads(cabin.partition(":")[2])
+        cabins = {c for c, counts in allocation.items() if any(counts.values())}
+    legs = ["outbound", "return"] if trip == "round_trip" else ["outbound"]
+    if not cabins or set(slots) != {f"{leg}:{c}" for leg in legs for c in cabins}:
+        raise LowPriceStorageSchemaError("incomplete component slots")
+    pairs = set()
+    for key, slot in slots.items():
+        ids = slot["fetch_unit_ids"]
+        if not isinstance(ids, list) or not ids or not all(isinstance(i, str) and i for i in ids):
+            raise LowPriceStorageSchemaError("invalid component identity")
+        pairs.update((key, i) for i in ids)
+    return pairs
+
+
+def _low_price_schema(conn, create):
+    tables = (_LP_OBS, _LP_CLAIMS, _LP_EVAL)
+    objects = dict(conn.execute("SELECT name,type FROM sqlite_master WHERE name IN (?,?,?)", tables))
+    if not objects:
+        if not create:
+            return False
+        for sql in _LP_DDL.split(";"):
+            if sql.strip():
+                conn.execute(sql)
+    elif objects != dict.fromkeys(tables, "table"):
+        raise LowPriceStorageSchemaError("partial or incompatible low-price schema")
+    # Compare table definitions, not index names alone. Never repair a partial ledger.
+    for table in tables:
+        actual = conn.execute("SELECT sql FROM sqlite_master WHERE name=?", (table,)).fetchone()[0]
+        expected = _LP_DDL.split("CREATE TABLE " + table, 1)[1].split(";", 1)[0]
+        if " ".join(actual.split()) != " ".join(("CREATE TABLE " + table + expected).split()):
+            raise LowPriceStorageSchemaError("incompatible schema: " + table)
+    expected, inserted, obs_keys = set(), set(), set()
+    try:
+        for row in conn.execute(f"SELECT * FROM {_LP_OBS}"):
+            _verify_projection(row)
+            json.loads(row["coverage_policy_json"])
+            if row["schema_version"] != "v1":
+                raise LowPriceStorageSchemaError("unexpected observation version")
+            key = row["bucket_key"], row["evidence_id"]
+            obs_keys.add(key)
+            pairs = _claim_pairs(json.loads(row["component_slots_json"]), row["trip_type"], row["cabin_scope"])
+            expected.update((*key, slot, unit) for slot, unit in pairs)
+        for row in conn.execute(f"SELECT * FROM {_LP_EVAL}"):
+            if row["schema_version"] != "v1":
+                raise LowPriceStorageSchemaError("unexpected evaluation version")
+            ids, amounts = json.loads(row["prior_evidence_ids_json"]), json.loads(row["prior_amounts_raw_json"])
+            if not isinstance(ids, list) or not isinstance(amounts, list) or len(ids) != len(amounts) or len(ids) != row["prior_n"]:
+                raise LowPriceStorageSchemaError("invalid frozen observations")
+            if row["sample_write_status"] == "inserted" and row["can_append_sample"] == 1:
+                inserted.add((row["bucket_key"], row["evidence_id"]))
+        actual = list(conn.execute(f"SELECT bucket_key,evidence_id,slot_key,fetch_unit_id,schema_version FROM {_LP_CLAIMS}"))
+        if (len(actual) != len(expected) or {tuple(r)[:4] for r in actual} != expected
+                or any(r[4] != "v1" for r in actual) or inserted != obs_keys):
+            raise LowPriceStorageSchemaError("inconsistent observation/claim/evaluation ledger")
+    except (ValueError, TypeError, KeyError, ArithmeticError, AttributeError) as exc:
+        raise LowPriceStorageSchemaError("invalid low-price ledger payload") from exc
+    return True
+
+
+def _verify_projection(row):
+    exact = Decimal(row["amount_raw_text"])
+    value, _, _ = validate_low_price_amount_and_scope(exact, row["amount_raw_text"],
+        trip_type=row["trip_type"], cabin_scope=row["cabin_scope"], price_scope=row["price_scope"])
+    if value != row["amount_cny"]:
+        raise LowPriceStorageSchemaError("invalid stored REAL projection")
+
+
+@contextmanager
+def _low_price_connection(db_path, write):
+    path = Path(db_path or DB_PATH).resolve()
+    try:
+        try:
+            with path.open("rb") as header:
+                if header.read(16) != b"SQLite format 3\x00":
+                    raise LowPriceStorageReadError("invalid SQLite header")
+        except FileNotFoundError:
+            if not write:
+                yield None
+                return
+            path.parent.mkdir(parents=True, exist_ok=True)
+        uri = path.as_uri() + ("?mode=rwc" if write else "?mode=ro")
+        with _connect(uri, uri=True) as conn:
+            with conn:
+                if not write:
+                    conn.execute("PRAGMA query_only=ON")
+                conn.execute("BEGIN IMMEDIATE" if write else "BEGIN")
+                yield conn if _low_price_schema(conn, write) else None
+    except (sqlite3.DatabaseError, OSError) as exc:
+        raise LowPriceStorageReadError("low-price history database unavailable") from exc
+
+
+def init_low_price_alert_schema(db_path=None):
+    with _low_price_connection(db_path, True):
+        return Path(db_path or DB_PATH)
+
+
+def _low_price_input(conn, bucket, method, eid, cutoff, slots, since, limit, as_of, max_id):
+    frozen = conn.execute(f"SELECT * FROM {_LP_EVAL} WHERE bucket_key=? AND evidence_id=? AND since_utc=?",
+                          (bucket, eid, since)).fetchone()
+    if frozen:
+        return {"snapshot_hit": True, "snapshot": dict(frozen), "prior_rows": []}
+    prior = []
+    for row in conn.execute(f"""SELECT * FROM {_LP_OBS}
+            WHERE bucket_key=? AND method_version=? AND evidence_id!=? AND observed_at_utc<=?
+            AND observed_at_utc>=? AND recorded_at_utc<=? AND id<=?
+            ORDER BY observed_at_utc DESC,id DESC""", (bucket, method, eid, cutoff, since, as_of, max_id)):
+        old = json.loads(row["component_slots_json"])
+        if any(set(units).intersection(old.get(k, {}).get("fetch_unit_ids", ())) for k, units in slots.items()):
+            continue
+        prior.append(dict(row))
+        if len(prior) >= limit:
+            break
+    return {"snapshot_hit": False, "prior_rows": prior}
+
+
+def read_low_price_alert_evaluation_input(bucket_key, *, method_version, evidence_id, cutoff_observed_at_utc,
+                                         slot_fetch_unit_map, since_utc="", limit=14,
+                                         as_of_recorded_at_utc=None, db_path=None):
+    with _low_price_connection(db_path, False) as conn:
+        if conn is None:
+            return {"snapshot_hit": False, "prior_rows": []}
+        return _low_price_input(conn, bucket_key, method_version, evidence_id, cutoff_observed_at_utc,
+                                slot_fetch_unit_map, since_utc, limit, as_of_recorded_at_utc or "9999", 2**63-1)
+
+
+def _lp_insert(conn, table, data):
+    conn.execute(f"INSERT INTO {table} ({','.join(data)}) VALUES ({','.join('?' for _ in data)})", tuple(data.values()))
+
+
+def _frozen_result(snapshot, replay):
+    result = dict(snapshot)
+    first = result["sample_write_status"]
+    result.update(evaluated_evidence_id=result["evidence_id"], snapshot_reused=replay,
+                  first_sample_write_status=first, first_can_append_sample=bool(result["can_append_sample"]),
+                  can_append_sample=not replay and first == "inserted",
+                  sample_write_status="replayed_noop" if replay else first,
+                  sample_delta=int(not replay and first == "inserted"),
+                  prior_amounts_raw=json.loads(result["prior_amounts_raw_json"]),
+                  prior_evidence_ids=json.loads(result["prior_evidence_ids_json"]))
+    return result
+
+
+def evaluate_and_persist_low_price_alert(offer, *, since_utc="", limit=14, db_path=None, recorded_at_utc=None):
+    if not offer["can_evaluate_current"]:
+        raise ValueError("unqualified low-price evidence")
+    price, raw, exact = validate_low_price_amount_and_scope(offer["amount_cny"], offer["amount_raw_text"],
+        trip_type=offer["trip_type"], cabin_scope=offer["cabin_scope"], price_scope=offer["price_scope"])
+    slots = offer["component_slots"]
+    pairs = sorted(_claim_pairs(slots, offer["trip_type"], offer["cabin_scope"]))
+    bucket, eid = offer["bucket_key"], offer["evidence_id"]
+    components = json.dumps(slots, sort_keys=True, ensure_ascii=False)
+    method, cutoff = offer["method_version"], offer["observed_at_utc"]
+    with _low_price_connection(db_path, True) as conn:
+        now = recorded_at_utc or datetime.now(timezone.utc).isoformat(timespec="seconds")
+        maximum = conn.execute(f"SELECT COALESCE(MAX(id),0) FROM {_LP_OBS} WHERE bucket_key=?", (bucket,)).fetchone()[0]
+        old = conn.execute(f"SELECT * FROM {_LP_OBS} WHERE bucket_key=? AND evidence_id=?", (bucket, eid)).fetchone()
+        if old and (old["amount_raw_text"] != raw or old["component_slots_json"] != components
+                    or any(old[k] != offer[k] for k in ("method_version","trip_type","cabin_scope","price_scope"))):
+            raise LowPriceEvidenceConflictError("same evidence has different offer")
+        data = _low_price_input(conn, bucket, method, eid, cutoff,
+                                {k: v["fetch_unit_ids"] for k,v in slots.items()}, since_utc, limit, now, maximum)
+        if data["snapshot_hit"]:
+            if data["snapshot"]["evaluated_amount_raw_text"] != raw:
+                raise LowPriceEvidenceConflictError("same evaluation has different amount")
+            return _frozen_result(data["snapshot"], True)
+        prior = data["prior_rows"]
+        amounts = [r["amount_raw_text"] for r in prior]
+        n = len(prior)
+        threshold = sorted(amounts, key=Decimal)[round((n-1)*0.30)] if n >= 5 else None
+        if threshold is None:
+            state, reason = "unknown", "history_insufficient" if n else "history_unavailable"
+        elif exact <= Decimal(threshold):
+            state, reason = "triggered", "entered_low_zone"
+        else:
+            state, reason = "not_triggered", "above_threshold"
+        common = dict(schema_version="v1", bucket_key=bucket, evidence_id=eid)
+        if old:
+            status = "existing_evidence_noop"
+        elif not offer.get("can_append_sample", True) or any(conn.execute(
+                f"SELECT 1 FROM {_LP_CLAIMS} WHERE bucket_key=? AND slot_key=? AND fetch_unit_id=?",
+                (bucket,k,u)).fetchone() for k,u in pairs):
+            status = "skipped_partial_reuse"
+        else:
+            status = "inserted"
+            obs = {k: offer[k] for k in ("trip_type","route","depart_date","return_date","cabin_scope",
+                                         "price_scope","passenger_signature","route_rate_key","constraint_fingerprint",
+                                         "observed_at_utc","observed_at_shanghai")}
+            _lp_insert(conn, _LP_OBS, dict(**common, **obs, method_version=method, amount_cny=price, amount_raw_text=raw,
+                       recorded_at_utc=now, coverage_policy_json=json.dumps(offer["coverage_policy"], sort_keys=True),
+                       component_slots_json=components))
+            for k,u in pairs:
+                _lp_insert(conn, _LP_CLAIMS, dict(**common, slot_key=k, fetch_unit_id=u,
+                           unit_observed_at_utc=slots[k]["unit_times"][u], recorded_at_utc=now))
+        snapshot = dict(**common, method_version=method,since_utc=since_utc,evaluated_amount_cny=price,
+                        evaluated_amount_raw_text=raw,cutoff_observed_at_utc=cutoff,first_evaluated_at_utc=now,
+                        first_max_observation_id=maximum,prior_n=n,prior_evidence_ids_json=json.dumps([r["evidence_id"] for r in prior]),
+                        prior_amounts_raw_json=json.dumps(amounts),threshold_cny=float(threshold) if threshold else None,
+                        threshold_raw_text=threshold,state=state,reason=reason,can_append_sample=int(status=="inserted"),
+                        sample_write_status=status)
+        _lp_insert(conn, _LP_EVAL, snapshot)
+        return _frozen_result(snapshot, False)
 
 
 def init_db() -> None:

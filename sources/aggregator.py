@@ -889,6 +889,8 @@ class FlightAggregator:
         successful_results = []
         source_errors = []
         collection_freshness = []
+        fetch_evidence_units = []
+        self.last_fetch_evidence_units = fetch_evidence_units
         price_insights = None
         raw_by_source = {}
         request_cache_statuses = []
@@ -970,6 +972,14 @@ class FlightAggregator:
                         }
                     )
                     source_status = result.get("source_status")
+                    unit = {field: result.get(field) for field in (
+                        "evidence_qualified", "observed_at_utc", "observation_round_id", "fetch_event_id",
+                        "panel_snapshot_written", "evidence_unqualified_reason",
+                    )}
+                    unit.update(source=str(source_name).lower(), origin_airport=origin, dest_airport=dest,
+                                depart_date=date_str, cabin_class=cabin_class, source_status=source_status,
+                                role=source_role, weight=source_weight)
+                    fetch_evidence_units.append(unit)
                     if source_status:
                         source_statuses.append(source_status)
                     raw_flights = result.get("flights", []) or []
@@ -1025,6 +1035,7 @@ class FlightAggregator:
                             "state": collection_state,
                             "label": result.get("collection_label"),
                             "collected_at": flight.get("collected_at"),
+                            **unit,
                         }
                         raw_combo = flight.get("flight_combo") or flight.get("flight_no")
                         normalized_combo = normalize_combo(raw_combo)
@@ -1312,6 +1323,8 @@ class FlightAggregator:
             "source_stats": source_stats,
             "sources_used": "+".join(sources_used),
             "source_errors": source_errors,
+            "fetch_evidence_units": fetch_evidence_units,
+            "attempted_airport_pairs": [[origin, dest]],
             "dual_source_price_anomalies": dual_source_price_anomalies,
             "price_anomalies": self._find_price_anomalies(successful_results) + dual_source_price_anomalies,
             "raw_by_source": raw_by_source,

@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from decimal import Decimal
 
 from cabin_allocation import validate_cabin_allocation
 from flight_combo_utils import normalize_combo
-from price_estimator import build_display_prices, round_display_price
+from price_estimator import build_display_prices, passenger_fare_rates, round_display_price
 
 
 MIXED_CABIN_DISCLOSURE = (
@@ -25,6 +26,52 @@ def _flight_key(flight) -> str:
     if not raw:
         raw = flight.get("flight_no")
     return normalize_combo(raw)
+
+
+def strict_leg_identity(flight, depart_date):
+    """Pair cabins only when the date, marketing flights and full airport path are known."""
+    segments = flight.get("segments") or []
+    if not segments or not _flight_key(flight):
+        return None
+    airports = tuple((str(s.get("dep_airport") or "").upper(), str(s.get("arr_airport") or "").upper())
+                     for s in segments)
+    stamp = str(segments[0].get("dep_time") or flight.get("departure_time") or "")
+    if stamp[:10] != depart_date or not all(a and b for a, b in airports):
+        return None
+    return depart_date, _flight_key(flight), airports
+
+
+def match_mixed_cabin_oneway_strict(flights, depart_date, *, allocation, passengers, route_type):
+    counts = validate_cabin_allocation(allocation, passengers)["allocation"]
+    required = {c for c, members in counts.items() if any(members.values())}
+    groups = {}
+    for flight in flights:
+        cabin = flight.get("cabin_class") or "economy"
+        key = strict_leg_identity(flight, depart_date)
+        if cabin in required and key is not None:
+            group = groups.setdefault(key, {})
+            existing = group.get(cabin)
+            def rank(f):
+                return Decimal(str(f["price"])), str(f.get("price_source") or f.get("source") or "")
+            if existing is None or rank(flight) < rank(existing):
+                group[cabin] = flight
+    _, rates = passenger_fare_rates(route_type)
+    options = []
+    for key, group in sorted(groups.items()):
+        if set(group) != required:
+            continue
+        amount = sum(Decimal(str(group[c]["price"])) * counts[c][kind] * Decimal(str(rates[kind]))
+                     for c in sorted(required) for kind in counts[c])
+        options.append(dict(amount=amount, flights=group, identity=key, disclosure=MIXED_CABIN_DISCLOSURE))
+    return options
+
+
+def match_mixed_cabin_roundtrip_strict(outbound, inbound, depart_date, return_date, *, allocation, passengers, route_type):
+    opts = dict(allocation=allocation, passengers=passengers, route_type=route_type)
+    return [(o, r) for o in match_mixed_cabin_oneway_strict(outbound, depart_date, **opts)
+            for r in match_mixed_cabin_oneway_strict(inbound, return_date, **opts)
+            if o["identity"][2][0][0] == r["identity"][2][-1][1]
+            and o["identity"][2][-1][1] == r["identity"][2][0][0]]
 
 
 def _business_price_map(flights) -> dict[str, dict]:

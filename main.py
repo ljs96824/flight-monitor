@@ -30,6 +30,8 @@ from project_time import SHANGHAI_TZ
 from analyzer import (
     apply_default_rules,
     analyze_all_flights,
+    build_current_low_price_offer,
+    apply_low_price_evaluation,
     analyze_price_calendar,
     analyze_round_trip,
     build_price_hint_from_calendar,
@@ -70,6 +72,7 @@ from observation_time import canonicalize_observed_at
 from observations_store import get_current_round, reset_current_round, set_current_round
 from notifier import (
     build_notification_payload,
+    build_local_low_price_payload,
     persist_notification_payload,
     render_detail_html,
     render_pushplus_sections,
@@ -94,6 +97,8 @@ from sources.aggregator import (
     route_type_for,
 )
 from storage import (
+    evaluate_and_persist_low_price_alert,
+    LOW_PRICE_ALERT_METHOD_VERSION,
     get_constraint_epoch_boundary,
     get_constraint_history_limit,
     get_roundtrip_price_history,
@@ -230,7 +235,7 @@ def _source_error_items(aggregator=None, data=None) -> list[dict]:
     for item in errors:
         if not isinstance(item, dict):
             continue
-        key = (item.get("source"), item.get("cabin_class"), item.get("error"))
+        key = _source_error_key(item)
         if key in seen:
             continue
         seen.add(key)
@@ -288,7 +293,7 @@ LOW_PRICE_NOTICE_TEXT_ROUNDTRIP = (
     "去程单程历史不能代表往返总价；本消息仅说明提醒能力暂不可用，不是低价提醒。"
 )
 LOW_PRICE_NOTICE_TEXT_DEFAULT = (
-    "本次取得了航班报价，但当前缺少可用于该订阅的同口径历史，"
+    "当前缺少可用于该订阅的去重后的合格报价观测，"
     "暂时不能判断是否进入低价区。此消息不是低价提醒。"
 )
 
@@ -312,6 +317,9 @@ def _low_price_notice_config_hash(
     sources = sorted({type(source).__name__ for source in (search_sources or [])})
     payload = {
         "schema": "low-price-notice-v1",
+        "method_version": LOW_PRICE_ALERT_METHOD_VERSION,
+        "cabin_target": [hard.get("cabin_arrangement") or sub.get("cabin_arrangement"),
+                        hard.get("cabin_policy"), hard.get("cabin_allocation") or sub.get("cabin_allocation")],
         "rule": {"threshold_percentile": 0.30, "min_samples": 5},
         "budget_strategy": str(strategy),
         "route": [str(sub.get("origin") or ""), str(sub.get("destination") or "")],
@@ -1509,7 +1517,12 @@ def _deliver_notification(sub: dict, route: str, message_kwargs: dict) -> bool:
         message_kwargs = {**message_kwargs, "route_info": route_info}
 
         print("[推送] 开始构建payload")
-        payload = build_notification_payload(
+        analysis = message_kwargs.get("analysis_result") or {}
+        use_local = (analysis.get("budget_strategy") == "low_price_alert"
+                     and (analysis.get("low_price_alert_context") or {}).get("state") == "triggered"
+                     and not analysis.get("collection_failures") and route_info.get("processing_phase") != "return_only")
+        builder = build_local_low_price_payload if use_local else build_notification_payload
+        payload = builder(
             analysis_result=message_kwargs.get("analysis_result"),
             outbound_analysis=message_kwargs.get("outbound_analysis"),
             return_analysis=message_kwargs.get("return_analysis"),
@@ -1793,16 +1806,22 @@ def _merge_source_stats(target: dict, incoming: dict) -> None:
             current["cabin_counts"][cabin] = current["cabin_counts"].get(cabin, 0) + int(count or 0)
 
 
-def _merge_source_errors(target: list[dict], incoming) -> None:
+def _source_error_key(item):
+    return tuple(item.get(k) for k in ("leg", "origin_airport", "dest_airport", "depart_date",
+                                       "source", "cabin_class", "error"))
+
+
+def _merge_source_errors(target: list[dict], incoming, **context) -> None:
     seen = {
-        (item.get("source"), item.get("cabin_class"), item.get("error"))
+        _source_error_key(item)
         for item in target
         if isinstance(item, dict)
     }
     for item in incoming or []:
         if not isinstance(item, dict):
             continue
-        key = (item.get("source"), item.get("cabin_class"), item.get("error"))
+        item = {**item, **context}
+        key = _source_error_key(item)
         if key in seen:
             continue
         seen.add(key)
@@ -1867,6 +1886,7 @@ def collect_for_airport_matrix(
             **collect_kwargs,
         )
         if data:
+            data["attempted_airport_pairs"] = [[origins[0], destinations[0]]]
             for flight in data.get("flights", []) or []:
                 flight["search_origin"] = flight.get("search_origin") or origins[0]
                 flight["search_destination"] = flight.get("search_destination") or destinations[0]
@@ -1885,6 +1905,8 @@ def collect_for_airport_matrix(
         "flights": [],
         "price_insights": {},
         "dual_source_price_anomalies": [],
+        "fetch_evidence_units": [],
+        "attempted_airport_pairs": [],
         "source_stats": {},
         "source_errors": [],
         "raw_by_source": {},
@@ -1929,6 +1951,10 @@ def collect_for_airport_matrix(
         else:
             collect_kwargs["request_reason"] = "机场组合回退"
         data = _aggregator_collect(aggregator, origin, destination, date_str, passengers=passengers, **collect_kwargs)
+        merged["attempted_airport_pairs"].append([origin, destination])
+        units = (data or {}).get("fetch_evidence_units", getattr(aggregator, "last_fetch_evidence_units", []))
+        if isinstance(units, list):
+            merged["fetch_evidence_units"].extend(units)
         if index == 0:
             primary_cache_status = (
                 data.get("request_cache_status")
@@ -1939,6 +1965,7 @@ def collect_for_airport_matrix(
             _merge_source_errors(
                 merged["source_errors"],
                 getattr(aggregator, "last_source_errors", None),
+                origin_airport=origin, dest_airport=destination, depart_date=date_str,
             )
             continue
         for flight in data.get("flights", []):
@@ -1950,7 +1977,8 @@ def collect_for_airport_matrix(
         if not merged.get("collected_at") and data.get("collected_at"):
             merged["collected_at"] = data["collected_at"]
         _merge_source_stats(merged["source_stats"], data.get("source_stats", {}))
-        _merge_source_errors(merged["source_errors"], data.get("source_errors", []))
+        _merge_source_errors(merged["source_errors"], data.get("source_errors", []),
+                             origin_airport=origin, dest_airport=destination, depart_date=date_str)
         merged["dual_source_price_anomalies"].extend(
             data.get("dual_source_price_anomalies", []) or []
         )
@@ -2732,7 +2760,8 @@ def _process_subscription_locked(
         if price_calendar_result:
             analysis["price_calendar"] = price_calendar_result
         analysis["source_stats"] = data.get("source_stats", {})
-        analysis["source_errors"] = data.get("source_errors", [])
+        analysis["source_errors"] = []
+        _merge_source_errors(analysis["source_errors"], data.get("source_errors", []), leg="outbound")
         analysis["collection_failures"] = []
         analysis["collection_freshness"] = data.get("collection_freshness", [])
         analysis["constraint_fingerprint"] = constraint_fp
@@ -2764,6 +2793,7 @@ def _process_subscription_locked(
         round_trip = _as_bool(raw_round_trip)
         return_date = raw_return_date
         return_analysis = None
+        return_data = None
 
         if round_trip and return_date:
             return_route = f"{sub['destination']}-{sub['origin']}"
@@ -2783,7 +2813,7 @@ def _process_subscription_locked(
             return_source_errors = _source_error_items(agg, return_data)
             _merge_source_errors(
                 analysis["source_errors"],
-                return_source_errors,
+                return_source_errors, leg="return",
             )
             return_collected_at = (return_data or {}).get("collected_at") or datetime.now().isoformat(timespec="seconds")
             normalized_return_flights = [
@@ -2871,7 +2901,7 @@ def _process_subscription_locked(
                 )
                 _merge_source_errors(
                     analysis["source_errors"],
-                    return_analysis.get("source_errors", []),
+                    return_analysis.get("source_errors", []), leg="return",
                 )
                 return_min_price = (
                     return_analysis.get("price_range", [0])[0]
@@ -3050,6 +3080,19 @@ def _process_subscription_locked(
         elif round_trip:
             print("[往返] 缺少 return_date，跳过返程采集")
             print(f"[DEBUG] 返程analysis是否存在: {return_analysis is not None}")
+
+        if analysis.get("budget_strategy") == "low_price_alert" and low_price_trip_type in {"one_way", "round_trip"}:
+            offer = build_current_low_price_offer(sub, {"outbound":analysis, "return":return_analysis},
+                {"outbound":data, "return":return_data}, trip_type=low_price_trip_type, route_type=route_type,
+                origins=active_origins, destinations=active_dests, passengers=request_passengers,
+                constraint_fp=constraint_fp)
+            context = offer
+            if offer["can_evaluate_current"]:
+                since = canonicalize_observed_at(constraint_history_since).observed_at_utc if constraint_history_since else ""
+                context = evaluate_and_persist_low_price_alert(offer, since_utc=since, limit=constraint_history_limit or 14)
+                context.update(selected_flights=offer["selected_flights"], price_scope=offer["price_scope"],
+                               cabin_scope=offer["cabin_scope"])
+            apply_low_price_evaluation(analysis, context)
 
         signal_record = log_signal(
             route=route,
