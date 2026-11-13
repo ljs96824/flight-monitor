@@ -36,6 +36,13 @@ def estimate(sub, profile=ONE_SOURCE, *, set_env=None, unset_env=()):
 
 
 class SavedApiEstimateTest(unittest.TestCase):
+    def test_complete_matrix_estimate_keeps_the_active_subset(self):
+        sub = {"origin": "PVG", "destination": "KIX", "origin_airports": ["PVG", "SHA", "HGH"],
+               "origin_airports_active": ["PVG", "SHA", "PVG"],
+               "destination_airports": ["KIX", "ITM", "NRT"],
+               "destination_airports_active": ["KIX", "ITM"], "cabin_classes": ["economy"]}
+        self.assertEqual(estimate(sub), 4)
+
     def test_string_fields_count_as_one_item(self):
         cases = (
             ("cabin_string_economy", {"origin": "PVG", "destination": "KIX", "cabin_classes": "economy"}, ONE_SOURCE, 1),

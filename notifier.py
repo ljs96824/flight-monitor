@@ -195,9 +195,20 @@ def _generic_long_pushplus_warning() -> str:
     )
 
 
+def _check_airport_disclosure(content, prepared_content):
+    if not isinstance(content, PushRender):
+        return
+    for section in content.sections:
+        if "个机场组合已完成" in section.html and section.html not in prepared_content:
+            reason = "[PushPlus披露冲突] 长度预算无法容纳完整机场覆盖披露"
+            safe_log(reason)
+            raise ValueError(reason)
+
+
 def _prepare_pushplus_content(content: str | PushRender) -> str:
     if isinstance(content, PushRender):
         prepared = prepare_push_render(content)
+        _check_airport_disclosure(content, prepared.content)
         print(
             f"[推送] 结构化消息: mode={prepared.mode} "
             f"长度={len(prepared.content)} 小节={list(prepared.kept_section_ids)}"
@@ -1235,7 +1246,11 @@ def send(content: str | PushRender, title: str = "航班监控通知") -> bool:
 
     if not structured and len(original_content) > PUSHPLUS_COMPACT_CHARS:
         _log_notification(original_content)
-    msg = _prepare_pushplus_content(content)
+    try:
+        msg = _prepare_pushplus_content(content)
+    except ValueError:
+        _log_notification(original_content)
+        return False
     resolved_title = (
         content.title
         if structured and content.title
@@ -1249,6 +1264,11 @@ def send(content: str | PushRender, title: str = "航班监控通知") -> bool:
     print(f"PushPlus返回异常: {result}")
     if result is None and structured:
         minimal = prepare_push_render(content, compact_chars=0, max_chars=0).content
+        try:
+            _check_airport_disclosure(content, minimal)
+        except ValueError:
+            _log_notification(original_content)
+            return False
         if minimal != msg:
             result = _post_pushplus(pushplus_token, resolved_title, minimal)
             if result and result.get("code") == 200:
@@ -5564,6 +5584,7 @@ def _payload_price_calendar(route_info: dict, analysis_result: dict) -> dict:
         "return_date": calendar.get("return_date"),
         "return_min_price": calendar.get("return_min_price"),
         "note": calendar.get("note") or "为单程最低参考价，实付以支付页为准。",
+        **({"coverage_scope_note": calendar["coverage_scope_note"]} if calendar.get("coverage_scope_note") else {}),
     }
 
 
@@ -6478,6 +6499,53 @@ def _build_collection_failure_context(
     }
 
 
+def _airport_coverage_legs(payload):
+    context = payload.get("source_degradation") or {}
+    legs = context.get("leg_coverages") or (payload.get("source_stats") or {}).get("_airport_coverage") or {}
+    return legs if isinstance(legs, dict) else {}
+
+
+def _airport_coverage_lines(payload):
+    lines = []
+    entries = [(direction, cov, False) for direction, cov in _airport_coverage_legs(payload).items()]
+    entries.extend((cov.get("direction", "outbound"), cov, True)
+                   for cov in (payload.get("source_stats") or {}).get("_same_day_fallback_coverage", [])
+                   if isinstance(cov, dict))
+    labels = {"covered_quoted": "已覆盖，有报价", "covered_empty": "已覆盖，本次查询零结果",
+              "covered_reused": "使用既有证据覆盖", "panel_uncollected": "未取得有效证据",
+              "data_unusable": "数据不可用／证据不足", "uncovered_failed": "请求失败",
+              "uncovered_skipped": "未完成覆盖"}
+    for direction, cov, fallback in entries:
+        if not isinstance(cov, dict) or (cov.get("planned_pair_count", 0) <= 1 and cov.get("complete", True)):
+            continue
+        covered, uncovered = [], []
+        for row in cov.get("pair_records", []):
+            detail = []
+            for cabin, item in (row.get("cabins") or {}).items():
+                text = labels.get(item.get("state"), str(item.get("state") or "未知"))
+                if item.get("reason"):
+                    text += ":" + str(item["reason"])
+                if item.get("state") == "covered_reused" and item.get("collected_at"):
+                    text += ",原采集 " + str(item["collected_at"])
+                detail.append(str(cabin) + ":" + text)
+            value = f"{row.get('origin')}→{row.get('destination')}({'; '.join(detail)})"
+            (covered if row.get("covered") else uncovered).append(value)
+        if not cov.get("pair_records") and not cov.get("complete", True):
+            uncovered = [f"{o}→{d}({cov.get('reason') or '未完成核验'})" for o, d in cov.get("planned_pairs", [])]
+        label = ("备选" if fallback else "") + ("返程" if direction == "return" else "去程")
+        line = (f"{label}覆盖({cov.get('depart_date')}):"
+                f"{cov.get('covered_pair_count', 0)}/{cov.get('planned_pair_count', 0)} 个机场组合已完成 | "
+                f"已覆盖:{'、'.join(covered) or '无'} | 未覆盖:{'、'.join(uncovered) or '无'}")
+        if not cov.get("complete", True):
+            line += " | 当前方案仅基于已覆盖范围，跨轮涨跌：不可比较／覆盖不完整"
+        lines.append(line)
+    return lines
+
+
+def _airport_coverage_html(payload):
+    return "".join(f"<div>{html.escape(line)}</div>" for line in _airport_coverage_lines(payload))
+
+
 def _build_source_degradation_context(
     *,
     source_stats: dict | None,
@@ -6489,6 +6557,21 @@ def _build_source_degradation_context(
 ) -> dict:
     """Build result-side source degradation evidence without changing prices."""
     source_stats = source_stats if isinstance(source_stats, dict) else {}
+    legs = source_stats.get("_airport_coverage") or {}
+    coverage_context = {}
+    if isinstance(legs, dict) and any(isinstance(c, dict) and c.get("complete") is False for c in legs.values()):
+        uncovered = {leg: [row for row in cov.get("pair_records", []) if not row.get("covered")]
+                     for leg, cov in legs.items() if isinstance(cov, dict)}
+        has_quotes = any(item.get("state") in {"covered_quoted", "covered_reused"}
+                         for cov in legs.values() if isinstance(cov, dict)
+                         for row in cov.get("pair_records", []) for item in row.get("cabins", {}).values())
+        coverage_context = dict(active=True, airport_coverage_incomplete=True,
+                                data_incomplete=not has_quotes, leg_coverages=legs,
+                                uncovered_pairs_by_direction=uncovered,
+                                push_type="数据源受限" if has_quotes else "数据不完整",
+                                reason_detail="机场覆盖不完整")
+        coverage_context["reason"] = "不可比较／覆盖不完整；" + "；".join(
+            _airport_coverage_lines({"source_degradation": coverage_context}))
     previous_sources = _parse_snapshot_sources(last_snapshot)
     failure_context = _build_collection_failure_context(
         collection_failures,
@@ -6496,7 +6579,9 @@ def _build_source_degradation_context(
         current_sources=current_sources,
     )
     if failure_context.get("active"):
-        return failure_context
+        return {**coverage_context, **failure_context}
+    if coverage_context:
+        return coverage_context
     positive_sources = {
         str(name).strip().lower()
         for name, entry in source_stats.items()
@@ -9798,8 +9883,9 @@ def _pushplus_calendar_summary_lines(payload: dict) -> list[str]:
         for row in (calendar.get("uncollected_rows") or [])
         if isinstance(row, dict) and row.get("date")
     ]
+    scope_note = str(calendar.get("coverage_scope_note") or "")
     if not insight and not rows and not uncollected_rows:
-        return []
+        return [html.escape(scope_note)] if scope_note else []
     is_roundtrip_scope, _unit = _calendar_scope_unit(calendar)
     primary_plan = ((payload.get("recommended_plans") or [{}]) or [{}])[0] or {}
     passenger_pricing = payload.get("passenger_pricing") or primary_plan.get("passenger_pricing") or {}
@@ -9817,6 +9903,8 @@ def _pushplus_calendar_summary_lines(payload: dict) -> list[str]:
         lines = ["\u5355\u7a0b\u4ef7\u683c\u8d8b\u52bf\u6458\u8981(\u4ec5\u4f9b\u53c2\u8003\u51fa\u53d1\u65e5\u9009\u62e9):"]
     else:
         lines = ["\u4f4e\u4ef7\u65e5\u5386\u6458\u8981:"]
+    if scope_note:
+        lines.append(scope_note)
     if insight:
         lines.append(insight)
     for row in sorted(rows, key=lambda item: _to_float(item.get("min_price")) or float("inf"))[:3]:
@@ -11694,8 +11782,9 @@ def _email_action_panel_body(
     price_reason: str,
     interactive_channels: bool = False,
 ) -> str:
+    coverage_box = _airport_coverage_html(payload)
     if _notification_phase_label(payload):
-        return (
+        return coverage_box + (
             f"<div>{html.escape(_notification_phase_label(payload))}</div>"
             f"<div>{html.escape(str(payload.get('no_primary_reason') or ''))}</div>"
             f"<div>购买判断:{html.escape(str((payload.get('purchase_budget_decision') or {}).get('reason') or ''))}</div>"
@@ -11717,7 +11806,7 @@ def _email_action_panel_body(
                 include_channel_picker=False,
             ),
         ]
-        return "".join(block for block in blocks if block)
+        return coverage_box + "".join(block for block in blocks if block)
     if _no_primary_plan_state(payload):
         alternatives = payload.get("same_day_alternatives") or []
         reason = _no_primary_reason(payload)
@@ -11747,7 +11836,7 @@ def _email_action_panel_body(
                 include_channel_picker=False,
             ),
         ]
-        return "".join(block for block in blocks if block)
+        return coverage_box + "".join(block for block in blocks if block)
 
     conclusion = _clarify_monitoring_copy(str(payload.get("recommendation") or "可以观察"))
     primary_line = _email_primary_plan_line(payload, primary_plan)
@@ -11776,7 +11865,7 @@ def _email_action_panel_body(
             include_channel_picker=False,
         ),
     ]
-    return "".join(block for block in blocks if block)
+    return coverage_box + "".join(block for block in blocks if block)
 
 
 def _email_primary_plan_line(payload: dict, primary_plan: dict) -> str:
@@ -12942,6 +13031,7 @@ def _data_freshness_source_rows(payload: dict) -> list[str]:
 
 
 def _data_freshness_headline(payload: dict) -> str:
+    coverage_lines = _airport_coverage_lines(payload)
     reused = [
         (parsed, item)
         for item in _data_freshness_legs(payload)
@@ -12949,13 +13039,16 @@ def _data_freshness_headline(payload: dict) -> str:
         and (parsed := _freshness_timestamp(item.get("collected_at"))) is not None
     ]
     if not reused:
-        return ""
+        return "\n".join(coverage_lines)
     oldest, _item = min(reused, key=lambda pair: pair[0])
-    return f"数据时点:含面板复用，最旧为{oldest.strftime('%Y-%m-%d %H:%M')}"
+    return "\n".join([f"数据时点:含面板复用，最旧为{oldest.strftime('%Y-%m-%d %H:%M')}", *coverage_lines])
 
 
 def _email_source_body(payload: dict) -> str:
     rows = _email_source_rows(payload)
+    coverage_html = _airport_coverage_html(payload)
+    if coverage_html:
+        rows.insert(0, coverage_html)
     rows.extend(_data_freshness_source_rows(payload))
     rows.append("<div>🔹 候选方案:已去重并筛选</div>")
     agreement = payload.get("dual_source_agreement") or {}
@@ -13013,6 +13106,8 @@ def _email_technical_source_body(payload: dict) -> str:
         return _email_source_body(payload)
     rows = []
     for key, value in source_stats.items():
+        if str(key).startswith("_"):
+            continue
         if isinstance(value, dict):
             status = value.get("status", "")
             count = value.get("count", "")
@@ -13578,6 +13673,8 @@ def _email_no_primary_price_signal_body(payload: dict) -> str:
 
 
 def _email_trend_card_body(payload: dict) -> str:
+    if (payload.get("source_degradation") or {}).get("airport_coverage_incomplete"):
+        return "<div>本轮机场覆盖不完整（不可比较／覆盖不完整），不作本轮整体涨跌判断；原始历史已保留。</div>"
     if _data_incomplete_state(payload):
         return (
             "<div style='color:#666;font-size:12px;'>"
@@ -13845,6 +13942,8 @@ def _calendar_display_savings(
 
 def _email_price_calendar_body(payload: dict) -> str:
     calendar = payload.get("price_calendar") or {}
+    scope_note = str(calendar.get("coverage_scope_note") or "")
+    scope_html = f"<div>{html.escape(scope_note)}</div>" if scope_note else ""
     rows = calendar.get("rows") or []
     uncollected_rows = [
         row
@@ -13852,7 +13951,7 @@ def _email_price_calendar_body(payload: dict) -> str:
         if isinstance(row, dict) and row.get("date")
     ]
     if not rows and not uncollected_rows:
-        return "<div style='color:#888;font-size:12px;'>暂无低价日历数据。</div>"
+        return scope_html + "<div style='color:#888;font-size:12px;'>暂无低价日历数据。</div>"
     if not rows:
         items = "".join(
             "<div>"
@@ -13861,7 +13960,7 @@ def _email_price_calendar_body(payload: dict) -> str:
             "</div>"
             for row in uncollected_rows[:10]
         )
-        return (
+        return scope_html + (
             "<div style='font-weight:600;margin-bottom:8px;color:#111;'>"
             "弹性日期面板评估</div>"
             "<div style='margin-bottom:8px;color:#666;font-size:12px;'>"
@@ -14089,7 +14188,7 @@ def _email_price_calendar_body(payload: dict) -> str:
         f"\u65e5\u5386\u5355\u4ef7={rows[0].get('min_price') if rows and isinstance(rows[0], dict) else None}, "
         f"\u662f\u5426\u5df2\u00d7\u4eba\u6570={calendar_prices_multiplied}"
     )
-    return "".join(table)
+    return scope_html + "".join(table)
 
 
 def _email_tcurve_body(payload: dict) -> str:
@@ -14894,6 +14993,9 @@ def render_detail_html(payload: dict) -> str:
 def persist_notification_payload(payload: dict) -> None:
     """Persist latest push price/snapshot after a channel has accepted the message."""
     payload = payload or {}
+    if ((payload.get("source_degradation") or {}).get("airport_coverage_incomplete")
+            or _data_incomplete_state(payload)):
+        return
     snapshot = payload.get("snapshot") or {}
     route = snapshot.get("route")
     depart_date = snapshot.get("depart_date")

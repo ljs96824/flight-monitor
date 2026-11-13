@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import json
 import re
+import sqlite3
 import time
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -597,59 +598,66 @@ def _rebuild_panel_result(
     freshness_hours: float,
 ) -> dict | None:
     """以面板价格为准，用同键完整缓存补足航段结构。"""
-    persisted = _read_persistent_payload(key, cache_dir)
-    if persisted is None or not _fresh(
-        persisted.get("fetched_at"),
-        max(1, int(float(freshness_hours) * 60 * 60)),
-    ):
+    if not isinstance(snapshot, dict) or not isinstance(snapshot.get("rows"), list):
         return None
-    if not _persistent_payload_matches_source(persisted, key, source):
+    if any(not isinstance(row, dict) for row in snapshot["rows"]):
         return None
-    result = persisted.get("result")
-    if not isinstance(result, dict):
-        return None
-    observed_at = str(snapshot.get("observed_at") or "")
-    cache_time = _parse_cache_time(persisted.get("fetched_at"))
-    observed_time = _parse_cache_time(observed_at)
-    if cache_time is None or observed_time is None:
-        return None
-    if cache_time + timedelta(minutes=2) < observed_time:
-        return None
-
-    cached_by_combo = {}
-    for flight in result.get("flights") or []:
-        if not isinstance(flight, dict):
-            continue
-        combo = normalize_combo(flight.get("flight_combo") or flight.get("flight_no"))
-        if combo and combo not in cached_by_combo:
-            cached_by_combo[combo] = flight
-
-    rebuilt = []
-    for row in snapshot.get("rows") or []:
-        combo = normalize_combo(row.get("flight_combo"))
-        cached_flight = cached_by_combo.get(combo)
-        if not combo or cached_flight is None:
+    try:
+        persisted = _read_persistent_payload(key, cache_dir)
+        if persisted is None or not _fresh(
+            persisted.get("fetched_at"),
+            max(1, int(float(freshness_hours) * 60 * 60)),
+        ):
             return None
-        flight = copy.deepcopy(cached_flight)
-        flight["flight_combo"] = combo
-        flight["price"] = float(row["price_cny"])
-        flight["collected_at"] = observed_at
-        flight["collection_state"] = "panel_reused"
-        flight["collection_label"] = _panel_label(observed_at)
-        flight["observation_round_id"] = snapshot.get("round_id")
-        rebuilt.append(flight)
-    if not rebuilt:
-        return None
+        if not _persistent_payload_matches_source(persisted, key, source):
+            return None
+        result = persisted.get("result")
+        if not isinstance(result, dict):
+            return None
+        observed_at = str(snapshot.get("observed_at") or "")
+        cache_time = _parse_cache_time(persisted.get("fetched_at"))
+        observed_time = _parse_cache_time(observed_at)
+        if cache_time is None or observed_time is None:
+            return None
+        if cache_time + timedelta(minutes=2) < observed_time:
+            return None
 
-    panel_result = copy.deepcopy(result)
-    panel_result["flights"] = rebuilt
-    panel_result["collected_at"] = observed_at
-    panel_result["collection_state"] = "panel_reused"
-    panel_result["collection_label"] = _panel_label(observed_at)
-    panel_result["observation_round_id"] = snapshot.get("round_id")
-    if not _panel_event_matches(result, snapshot):
-        _stamp_event(panel_result, _unknown_event("panel_event_provenance_unverified"))
-    return panel_result
+        cached_by_combo = {}
+        for flight in result.get("flights") or []:
+            if not isinstance(flight, dict):
+                continue
+            combo = normalize_combo(flight.get("flight_combo") or flight.get("flight_no"))
+            if combo and combo not in cached_by_combo:
+                cached_by_combo[combo] = flight
+
+        rebuilt = []
+        for row in snapshot.get("rows") or []:
+            combo = normalize_combo(row.get("flight_combo"))
+            cached_flight = cached_by_combo.get(combo)
+            if not combo or cached_flight is None:
+                return None
+            flight = copy.deepcopy(cached_flight)
+            flight["flight_combo"] = combo
+            flight["price"] = float(row["price_cny"])
+            flight["collected_at"] = observed_at
+            flight["collection_state"] = "panel_reused"
+            flight["collection_label"] = _panel_label(observed_at)
+            flight["observation_round_id"] = snapshot.get("round_id")
+            rebuilt.append(flight)
+        if not rebuilt:
+            return None
+
+        panel_result = copy.deepcopy(result)
+        panel_result["flights"] = rebuilt
+        panel_result["collected_at"] = observed_at
+        panel_result["collection_state"] = "panel_reused"
+        panel_result["collection_label"] = _panel_label(observed_at)
+        panel_result["observation_round_id"] = snapshot.get("round_id")
+        if not _panel_event_matches(result, snapshot):
+            _stamp_event(panel_result, _unknown_event("panel_event_provenance_unverified"))
+        return panel_result
+    except (sqlite3.Error, ValueError, TypeError, KeyError, InvalidOperation, OSError):
+        return None
 
 
 def panel_reuse_result(
@@ -663,17 +671,20 @@ def panel_reuse_result(
     freshness_hours: float = 6,
     cache_dir: Path | None = None,
 ) -> dict | None:
-    key = cache_key(source, origin, dest, date_str, passengers, cabin_class)
-    snapshot = _panel_snapshot_for_key(key, freshness_hours)
-    if snapshot is None:
+    try:
+        key = cache_key(source, origin, dest, date_str, passengers, cabin_class)
+        snapshot = _panel_snapshot_for_key(key, freshness_hours)
+        if snapshot is None:
+            return None
+        return _rebuild_panel_result(
+            key,
+            snapshot,
+            source=source,
+            cache_dir=cache_dir,
+            freshness_hours=freshness_hours,
+        )
+    except (sqlite3.Error, ValueError, TypeError, KeyError, InvalidOperation, OSError):
         return None
-    return _rebuild_panel_result(
-        key,
-        snapshot,
-        source=source,
-        cache_dir=cache_dir,
-        freshness_hours=freshness_hours,
-    )
 
 
 def _request_is_panel_only(

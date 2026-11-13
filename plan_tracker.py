@@ -359,8 +359,37 @@ def extract_pushed_plan_records(plans: list[dict] | None) -> dict:
     return records
 
 
+def _pushed_airport_pair(flight):
+    flight = flight or {}
+    segments = flight.get("segments") or []
+    first = segments[0] if segments and isinstance(segments[0], dict) else flight
+    last = segments[-1] if segments and isinstance(segments[-1], dict) else flight
+    origin = next((first.get(k) or flight.get(k) for k in
+                   ("dep_airport", "departure_airport", "origin", "search_origin") if first.get(k) or flight.get(k)), "")
+    dest = next((last.get(k) or flight.get(k) for k in
+                 ("arr_airport", "arrival_airport", "destination", "search_destination") if last.get(k) or flight.get(k)), "")
+    return str(origin).strip().upper(), str(dest).strip().upper()
+
+
 def save_pushed_plans(sub_id, plans: list[dict] | None, data_dir=None) -> dict:
     records = extract_pushed_plan_records(plans)
+    for index, plan in enumerate(plans or []):
+        key = "plan_a" if index == 0 else f"plan_{chr(97 + index)}"
+        record = records.get(key)
+        if not record or not isinstance(plan, dict):
+            continue
+        legs = ("outbound", "return") if record.get("is_roundtrip") else ("",)
+        for leg in legs:
+            flight = _plan_leg_flight(plan, leg) if leg else _plan_primary_flight(plan)
+            # Legacy payloads without an attributed search pair retain their archive shape.
+            if not flight.get("search_origin") or not flight.get("search_destination"):
+                continue
+            origin, dest = _pushed_airport_pair(flight)
+            prefix = leg + "_" if leg else ""
+            if origin:
+                record[prefix + "dep_airport"] = origin
+            if dest:
+                record[prefix + "arr_airport"] = dest
     if not records:
         return {}
     path = _storage_path(sub_id, data_dir)
@@ -570,6 +599,51 @@ def _current_collection_uses_cache(current_items: list[dict] | None) -> bool:
     return any(_item_from_cache(item) for item in current_items or [] if isinstance(item, dict))
 
 
+def _coverage_tracking_change(plan, items, degradation):
+    if not (degradation or {}).get("airport_coverage_incomplete"):
+        return None
+    uncovered = degradation.get("uncovered_pairs_by_direction") or {}
+    rt = bool(plan.get("is_roundtrip") or plan.get("scope") == "roundtrip")
+    if rt:
+        directions = ("outbound", "return")
+        numbers = [plan.get("outbound_flight"), plan.get("return_flight")]
+        combo = _find_roundtrip_combo(items, *numbers)
+        matched = bool(combo or all(find_flight(items, n) for n in numbers))
+        desc = _roundtrip_desc(*numbers)
+        previous = _to_float(plan.get("mixed_cabin_total") or plan.get("unit_roundtrip_price") or plan.get("roundtrip_price"))
+        current = (_mixed_total(combo) if plan.get("mixed_cabin") else _current_roundtrip_from_combo(combo)[0]) if combo else None
+        scope = MIXED_TRACKING_SCOPE if plan.get("mixed_cabin") else ROUNDTRIP_TRACKING_SCOPE
+    else:
+        directions = ("outbound" if "outbound" in uncovered else "return",)
+        desc = plan.get("flight_no")
+        if not desc:
+            return None
+        same = find_flight(items, desc)
+        matched, previous, current, scope = bool(same), _to_float(plan.get("price")), _to_float((same or {}).get("price")), "single"
+    affected = []
+    for leg in directions:
+        prefix = leg + "_" if rt else ""
+        pair = (plan.get(prefix + "dep_airport"), plan.get(prefix + "arr_airport"))
+        entries = uncovered.get(leg) or []
+        pairs = [(e.get("origin"), e.get("destination")) if isinstance(e, dict) else tuple(e) for e in entries]
+        if entries and (not all(pair) or pair in pairs):
+            affected.append("→".join(pair) if all(pair) else "机场对未登记")
+    if not matched and not affected:
+        return None
+    if not matched:
+        reason = str(degradation.get("reason_detail") or "机场覆盖不完整")
+        for word in ("消失", "售罄", "不可售", "停飞"):
+            reason = reason.replace(word, "待核实")
+        msg = (f"上次推荐的{desc}所在机场组合({' / '.join(affected)})本轮未完整核验（{reason}），"
+               "在售与库存状态待下轮或渠道核实。")
+        status = "unverified_coverage"
+    else:
+        msg = f"上次推荐的{desc}本轮仍有报价；本轮机场矩阵未完整核验，暂不作整体涨跌比较。"
+        status = "source_unavailable"
+    return dict(status=status, flight_no=desc, previous_price=previous, current_price=current,
+                price_diff=None, scope=scope, msg=msg, source_degradation=dict(degradation))
+
+
 def _missing_quote_confidence(
     current_items: list[dict] | None,
     matched_any: bool = False,
@@ -638,6 +712,9 @@ def _track_mixed_roundtrip_plan(
     current_items: list[dict] | None,
     source_degradation: dict | None = None,
 ) -> dict:
+    coverage_change = _coverage_tracking_change(plan_a, current_items, source_degradation)
+    if coverage_change is not None:
+        return coverage_change
     outbound_no = str(plan_a.get("outbound_flight") or "").strip()
     return_no = str(plan_a.get("return_flight") or "").strip()
     desc = _roundtrip_desc(outbound_no, return_no)
@@ -747,6 +824,9 @@ def _track_roundtrip_plan(
     current_items: list[dict] | None,
     source_degradation: dict | None = None,
 ) -> dict | None:
+    coverage_change = _coverage_tracking_change(plan_a, current_items, source_degradation)
+    if coverage_change is not None:
+        return coverage_change
     if plan_a.get("mixed_cabin") or plan_a.get("price_scope") == MIXED_TRACKING_SCOPE:
         return _track_mixed_roundtrip_plan(plan_a, current_items, source_degradation)
     outbound_no = str(plan_a.get("outbound_flight") or "").strip()
@@ -997,6 +1077,9 @@ def track_plan_status(
 ) -> dict | None:
     last = load_pushed_plans(sub_id, data_dir)
     plan_a = (last.get("last_pushed") or {}).get("plan_a") or {}
+    coverage_change = _coverage_tracking_change(plan_a, current_flights, source_degradation)
+    if coverage_change is not None:
+        return coverage_change
     if plan_a.get("is_roundtrip") or plan_a.get("scope") == "roundtrip":
         return _track_roundtrip_plan(plan_a, current_flights, source_degradation)
 

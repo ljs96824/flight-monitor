@@ -81,7 +81,7 @@ class SubscriptionLoadingTest(unittest.TestCase):
         self.assertEqual(normalized["max_budget"], 8000)
         self.assertEqual(normalized["target_price"], 6000)
 
-    def test_airport_matrix_decision_counts_fresh_and_cached_results_equally(self):
+    def test_airport_matrix_completes_fresh_and_cached_results_equally(self):
         class FakeAggregator:
             def __init__(self, cache_status):
                 self.cache_status = cache_status
@@ -114,8 +114,10 @@ class SubscriptionLoadingTest(unittest.TestCase):
                         "2026-08-20",
                     )
 
-                self.assertEqual(len(data["flights"]), 5)
-                self.assertEqual(aggregator.calls, [("SHA", "PEK", "2026-08-20")])
+                self.assertEqual(len(data["flights"]), 10)
+                self.assertEqual(aggregator.calls, [("SHA", "PEK", "2026-08-20"), ("PVG", "PEK", "2026-08-20")])
+                self.assertEqual(data["airport_coverage"]["planned_pair_count"], 2)
+                self.assertEqual(data["airport_coverage"]["covered_pair_count"], 2)
                 decision_lines = [
                     str(call.args[0])
                     for call in log.call_args_list
@@ -124,9 +126,8 @@ class SubscriptionLoadingTest(unittest.TestCase):
                 self.assertEqual(len(decision_lines), 1)
                 self.assertIn("主组合=SHA->PEK", decision_lines[0])
                 self.assertIn("有效方案数=5", decision_lines[0])
-                self.assertIn("阈值=5", decision_lines[0])
-                self.assertIn(f"数据来源={source_label}", decision_lines[0])
-                self.assertIn("决策=跳过", decision_lines[0])
+                self.assertIn("完整机场矩阵", decision_lines[0])
+                self.assertIn("决策=继续搜PVG->PEK", decision_lines[0])
 
     def test_collect_for_airport_matrix_filters_to_requested_active_airports(self):
         class FakeAggregator:
