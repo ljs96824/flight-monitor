@@ -652,7 +652,44 @@ def _airports(subscription: dict, active_key: str, all_key: str, fallback_key: s
     raw = subscription.get(active_key) or subscription.get(all_key) or _value(subscription, fallback_key)
     if isinstance(raw, str):
         raw = [item.strip() for item in raw.replace("、", ",").split(",") if item.strip()]
-    return [str(item).strip().upper() for item in (raw or []) if str(item).strip()]
+    return list(dict.fromkeys(str(item).strip().upper() for item in (raw or []) if str(item).strip()))
+
+
+def _airport_matrix_pairs(origins, destinations):
+    if not origins or not destinations:
+        return []
+    return list(dict.fromkeys(
+        [(origins[0], destinations[0])]
+        + [(origins[0], d) for d in destinations[1:]]
+        + [(o, destinations[0]) for o in origins[1:]]
+        + [(o, d) for o in origins[1:] for d in destinations[1:]]
+    ))
+
+
+def _subscription_plan_view(subscription, today):
+    if (not _as_bool(_value(subscription, "round_trip"))
+            or _as_bool(_value(subscription, "same_day_round_trip"))
+            or _value(subscription, "date_flexibility") not in (0, "0", None)):
+        return subscription
+    try:
+        depart = date.fromisoformat(str(_value(subscription, "depart_date")))
+        returning = date.fromisoformat(str(_value(subscription, "return_date")))
+    except (ValueError, TypeError):
+        return subscription
+    if not depart < today <= returning:
+        return subscription
+    origins = _airports(subscription, "origin_airports_active", "origin_airports", "origin")
+    dests = _airports(subscription, "destination_airports_active", "destination_airports", "destination")
+    view = dict(subscription)
+    view.update(origin=_value(subscription, "destination"), destination=_value(subscription, "origin"),
+                origin_airports_active=dests, origin_airports=dests,
+                destination_airports_active=origins, destination_airports=origins,
+                depart_date=returning.isoformat(), round_trip=False, same_day_round_trip=False,
+                return_date=None, date_flexibility=_value(subscription, "return_date_flexibility"))
+    for name in ("basic", "preferences", "hard_constraints", "constraints"):
+        if isinstance(subscription.get(name), dict):
+            view[name] = dict(subscription[name], round_trip=False, same_day_round_trip=False, return_date=None)
+    return view
 
 
 def _cabin_classes(subscription: dict) -> list[str]:
@@ -888,6 +925,7 @@ def build_collection_plan(
     )
 
     for index, subscription in enumerate(subscriptions):
+        subscription = _subscription_plan_view(subscription, shanghai_today())
         origins = _airports(subscription, "origin_airports_active", "origin_airports", "origin")
         dests = _airports(
             subscription,
@@ -917,46 +955,29 @@ def build_collection_plan(
         passengers = _passengers(subscription)
         consumer = _subscription_consumer_ref(subscription, index)
         domestic_calendar = bool(include_calendars and route_type == "domestic")
-        _add_direction_requests(
-            plan,
-            search_sources=list(search_sources),
-            enrichment_sources=list(enrichment_sources),
-            origin=origin,
-            dest=dest,
-            depart_date=depart_date,
-            cabins=cabins,
-            passengers=passengers,
-            consumer=consumer,
-            group_prefix=f"sub:{consumer}:outbound",
-            flex_dates=_flex_dates(depart_date, _value(subscription, "date_flexibility")),
-            include_calendar=domestic_calendar,
-            fresh_scope=plan.fresh_scope,
-            route_type=route_type,
-        )
+        for pair_index, (pair_origin, pair_dest) in enumerate(_airport_matrix_pairs(origins, dests)):
+            _add_direction_requests(
+                plan, search_sources=list(search_sources), enrichment_sources=list(enrichment_sources),
+                origin=pair_origin, dest=pair_dest, depart_date=depart_date, cabins=cabins,
+                passengers=passengers, consumer=consumer, group_prefix=f"sub:{consumer}:outbound",
+                flex_dates=_flex_dates(depart_date, _value(subscription, "date_flexibility")),
+                include_calendar=domestic_calendar and pair_index == 0,
+                fresh_scope=plan.fresh_scope, route_type=route_type,
+            )
 
         same_day = _as_bool(_value(subscription, "same_day_round_trip"))
         round_trip = _as_bool(_value(subscription, "round_trip")) or same_day
         return_date = str(_value(subscription, "return_date") or (depart_date if same_day else ""))
         if round_trip and return_date:
-            _add_direction_requests(
-                plan,
-                search_sources=list(search_sources),
-                enrichment_sources=list(enrichment_sources),
-                origin=dest,
-                dest=origin,
-                depart_date=return_date,
-                cabins=cabins,
-                passengers=passengers,
-                consumer=consumer,
-                group_prefix=f"sub:{consumer}:return",
-                flex_dates=_flex_dates(
-                    return_date,
-                    _value(subscription, "return_date_flexibility"),
-                ),
-                include_calendar=domestic_calendar,
-                fresh_scope=plan.fresh_scope,
-                route_type=route_type,
-            )
+            for pair_index, (pair_origin, pair_dest) in enumerate(_airport_matrix_pairs(dests, origins)):
+                _add_direction_requests(
+                    plan, search_sources=list(search_sources), enrichment_sources=list(enrichment_sources),
+                    origin=pair_origin, dest=pair_dest, depart_date=return_date, cabins=cabins,
+                    passengers=passengers, consumer=consumer, group_prefix=f"sub:{consumer}:return",
+                    flex_dates=_flex_dates(return_date, _value(subscription, "return_date_flexibility")),
+                    include_calendar=domestic_calendar and pair_index == 0,
+                    fresh_scope=plan.fresh_scope, route_type=route_type,
+                )
 
     for index, item in enumerate(basket_requests):
         origin = str(item.get("origin") or "").upper()

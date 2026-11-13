@@ -45,7 +45,7 @@ from analyzer import (
 from collector import _normalize_detail_flight, save_raw_response
 from api_usage import load_usage_strict, usage_ledger_health, usage_snapshot
 from basket_sentinel import basket_run_expectation, read_basket_round_evidence, run_basket_sentinel
-from collection_plan import build_collection_plan, load_collection_settings, unplannable_trip_date
+from collection_plan import _airport_matrix_pairs, build_collection_plan, load_collection_settings, unplannable_trip_date
 from collection_singleflight import (
     acquire_collection_singleflight,
     collection_busy_status,
@@ -88,7 +88,7 @@ from request_cache import (
 from plan_tracker import feedback_acknowledgement
 from provenance import build_route_provenance_context_from_info
 from retention import log_retention_dry_run
-from source_profiles import get_source_profile
+from source_profiles import get_source_profile, source_supports_cabin
 from sources.aggregator import (
     FlightAggregator,
     _redact_api_key,
@@ -1410,8 +1410,23 @@ def _collect_same_day_fallback_flights(
     request_reason: str | None = None,
 ) -> list[dict]:
     cache_path = _fallback_cache_path(origins, dests, date_str, cabin_classes)
+    direction = "return" if request_reason == "次日返程备选" else "outbound"
+    fallbacks = {}
+    if agg is not None:
+        fallbacks = getattr(agg, "last_same_day_fallback_coverage", {})
+        if not isinstance(fallbacks, dict):
+            fallbacks = {}
+        agg.last_same_day_fallback_coverage = fallbacks
     cached = _fresh_cached_flights(cache_path)
     if cached is not None:
+        info = parse_json_text(cache_path.read_text(encoding="utf-8"))
+        fallbacks[date_str] = info.get("airport_coverage") or {
+            "direction": direction, "depart_date": date_str,
+            "planned_pairs": [list(p) for p in _airport_matrix_pairs(origins, dests)],
+            "planned_pair_count": len(set(origins)) * len(set(dests)),
+            "covered_pair_count": 0, "complete": False,
+            "reason": "既有备选缓存未记录完整机场覆盖范围",
+        }
         return cached
     data = collect_for_airport_matrix(
         agg,
@@ -1422,7 +1437,9 @@ def _collect_same_day_fallback_flights(
         route_type=route_type,
         passengers=passengers,
         request_reason=request_reason,
+        direction=direction,
     )
+    fallbacks[date_str] = _leg_airport_coverage(agg, data, direction)
     flights = [
         _normalize_detail_flight(flight, flight.get("data_source") or flight.get("source"))
         for flight in (data or {}).get("flights", [])
@@ -1434,6 +1451,8 @@ def _collect_same_day_fallback_flights(
         "date": date_str,
         "flights": flights,
     }
+    if fallbacks[date_str]:
+        payload["airport_coverage"] = fallbacks[date_str]
     try:
         check_json_nesting(payload)
     except ValueError as exc:
@@ -1855,7 +1874,68 @@ def _aggregator_collect(aggregator, origin, destination, date_str, passengers=No
         kwargs["passengers"] = passengers
     if "request_reason" not in params:
         kwargs.pop("request_reason", None)
+    if "panel_only" not in params:
+        kwargs.pop("panel_only", None)
     return aggregator.collect(origin, destination, date_str, **kwargs)
+
+def _leg_airport_coverage(aggregator, data, direction):
+    value = (data or {}).get("airport_coverage") or getattr(aggregator, "last_airport_coverage", {})
+    return {**value, "direction": direction} if isinstance(value, dict) and value else {}
+
+
+def _airport_pair_coverage(origin, destination, cabins, required, units, data, errors, panel_only):
+    by_cabin = {}
+    for cabin in cabins:
+        expected = required.get(cabin)
+        rows = [u for u in units if isinstance(u, dict) and u.get("cabin_class", "economy") == cabin
+                and not u.get("is_enrichment") and u.get("role") != "enrichment"
+                and (expected is None or str(u.get("source", "")).lower() in expected)]
+        quoted = [u for u in rows if _valid_price(u.get("valid_flight_count"))]
+        if quoted:
+            fresh = any(u.get("collection_state") not in {"panel_reused", "cache", "cache_reused"}
+                        for u in quoted)
+            state, reason = ("covered_quoted" if fresh else "covered_reused"), ""
+        elif panel_only:
+            state, reason = "panel_uncollected", "未取得该范围的有效证据（今日未采，未发起补采）"
+        elif expected == []:
+            state, reason = "uncovered_skipped", "未配置适用报价源"
+        elif rows:
+            unresolved = expected is not None and set(expected) - {str(u.get("source", "")).lower() for u in rows}
+            bad = any(u.get("raw_schema_valid") is False or
+                      (u.get("raw_result_count") not in (None, 0) and not u.get("valid_flight_count")) or
+                      (u.get("raw_flight_count") not in (None, 0) and not u.get("valid_flight_count"))
+                      for u in rows if u.get("source_status") in {"empty", "success", "cache"})
+            empty = all(u.get("source_status") == "empty" and u.get("raw_schema_valid") is True
+                        and u.get("raw_result_count") == 0 and u.get("raw_flight_count") == 0
+                        and u.get("valid_flight_count") == 0 for u in rows)
+            if bad:
+                state, reason = "data_unusable", "原始记录或结构不可用"
+            elif empty and not unresolved:
+                state, reason = "covered_empty", ""
+            else:
+                skipped = any(str(u.get("source_status") or "").startswith(("skipped", "not_configured")) for u in rows)
+                state = "uncovered_skipped" if skipped else "uncovered_failed"
+                reason = "; ".join(str(u.get("skipped_reason") or u.get("reason") or u.get("error")
+                                       or u.get("source_status") or "报价证据缺失") for u in rows)
+                if unresolved:
+                    reason += "; 适用报价源证据缺失"
+        elif expected is None and any(_valid_price(f.get("price")) and
+                                      (f.get("cabin_class") or "economy") == cabin
+                                      for f in (data or {}).get("flights", [])):
+            state, reason = "covered_quoted", ""
+        else:
+            state = "uncovered_failed"
+            reason = "; ".join(str(e.get("error") or "请求未完成") for e in errors) or "未取得报价源证据"
+        by_cabin[cabin] = {"state": state, "reason": reason, "sources": rows,
+                           "collected_at": min((str(u["collected_at"]) for u in rows if u.get("collected_at")), default=None)}
+    covered = all(v["state"] in {"covered_quoted", "covered_reused", "covered_empty"} for v in by_cabin.values())
+    states = [v["state"] for v in by_cabin.values()]
+    state = next((s for s in states if s not in {"covered_quoted", "covered_reused", "covered_empty"}),
+                 "covered_quoted" if "covered_quoted" in states else
+                 "covered_reused" if "covered_reused" in states else "covered_empty")
+    return {"origin": origin, "destination": destination, "state": state, "covered": covered,
+            "cabins": by_cabin, "reason": "; ".join(v["reason"] for v in by_cabin.values() if v["reason"])}
+
 
 def collect_for_airport_matrix(
     aggregator: FlightAggregator,
@@ -1866,136 +1946,95 @@ def collect_for_airport_matrix(
     route_type: str | None = None,
     passengers=None,
     request_reason: str | None = None,
+    *,
+    panel_only: bool | None = None,
+    direction: str = "outbound",
 ) -> dict | None:
-    origins = _clean_airport_codes(origins)
-    destinations = _clean_airport_codes(destinations)
+    origins = list(dict.fromkeys(_clean_airport_codes(origins)))
+    destinations = list(dict.fromkeys(_clean_airport_codes(destinations)))
     if not origins or not destinations:
         return None
-
-    if len(origins) == 1 and len(destinations) == 1:
-        collect_kwargs = {"cabin_classes": cabin_classes}
-        if route_type:
-            collect_kwargs["route_type"] = route_type
-        data = _aggregator_collect(
-            aggregator,
-            origins[0],
-            destinations[0],
-            date_str,
-            passengers=passengers,
-            request_reason=request_reason,
-            **collect_kwargs,
-        )
-        if data:
-            data["attempted_airport_pairs"] = [[origins[0], destinations[0]]]
-            for flight in data.get("flights", []) or []:
-                flight["search_origin"] = flight.get("search_origin") or origins[0]
-                flight["search_destination"] = flight.get("search_destination") or destinations[0]
-        return _filter_data_to_airports(data, origins, destinations)
-
-    combinations = [(origins[0], destinations[0])]
-    combinations.extend((origins[0], dest) for dest in destinations[1:])
-    combinations.extend((origin, destinations[0]) for origin in origins[1:])
-    combinations.extend(
-        (origin, dest)
-        for origin in origins[1:]
-        for dest in destinations[1:]
-    )
-
-    merged = {
-        "flights": [],
-        "price_insights": {},
-        "dual_source_price_anomalies": [],
-        "fetch_evidence_units": [],
-        "attempted_airport_pairs": [],
-        "source_stats": {},
-        "source_errors": [],
-        "raw_by_source": {},
-        "sources_used": "",
-        "source": "",
-        "collected_at": datetime.now().isoformat(timespec="seconds"),
-        "collection_freshness": [],
-    }
-    sources_used = []
-    primary_cache_status = None
-
+    cabins = cabin_classes if isinstance(cabin_classes, (list, tuple)) else [cabin_classes or "economy"]
+    cabins = list(dict.fromkeys(c or "economy" for c in cabins))
+    sources = getattr(aggregator, "search_sources", None)
+    required = {c: None if sources is None else [
+        str(getattr(s, "name", type(s).__name__)).lower() for s in sources
+        if getattr(s, "role", "") not in {"enrichment", "reference"} and source_supports_cabin(s, c)
+    ] for c in cabins}
+    combinations = _airport_matrix_pairs(origins, destinations)
+    coverage = dict(direction=direction, depart_date=date_str, cabins=cabins,
+                    planned_pairs=[list(p) for p in combinations], planned_pair_count=len(combinations),
+                    covered_pairs=[], uncovered_pairs=[], pair_records=[], complete=False)
+    merged = dict(flights=[], price_insights={}, dual_source_price_anomalies=[], fetch_evidence_units=[],
+                  attempted_airport_pairs=[], source_stats={}, source_errors=[], raw_by_source={},
+                  sources_used="", source="", collected_at=datetime.now().isoformat(timespec="seconds"),
+                  collection_freshness=[])
+    sources_used, single_data = [], None
     for index, (origin, destination) in enumerate(combinations):
-        current_count = len(_dedupe_flights(merged["flights"]))
-        if index > 0:
-            source_label = {
-                "fresh": "新鲜",
-                "cache": "缓存",
-                "panel": "面板复用",
-            }.get(primary_cache_status, "未知")
-            should_skip = current_count >= AIRPORT_COMBINATION_MIN_OPTIONS
-            action = (
-                "跳过"
-                if should_skip
-                else f"继续搜{origin}->{destination}"
-            )
-            safe_log(
-                f"[机场组合决策] 主组合={combinations[0][0]}->{combinations[0][1]} "
-                f"有效方案数={current_count} 阈值={AIRPORT_COMBINATION_MIN_OPTIONS} "
-                f"数据来源={source_label} 决策={action}"
-            )
-            if should_skip:
-                break
-
+        if index:
+            safe_log(f"[机场组合决策] 主组合={origins[0]}->{destinations[0]} "
+                     f"有效方案数={len(_dedupe_flights(merged['flights']))} "
+                     f"决策=继续搜{origin}->{destination}（完整机场矩阵）")
         print(f"[城市搜索] 采集 {origin}→{destination} {date_str}")
-        collect_kwargs = {"cabin_classes": cabin_classes}
+        kwargs = {"cabin_classes": cabin_classes}
         if route_type:
-            collect_kwargs["route_type"] = route_type
-        if index == 0:
-            collect_kwargs["request_reason"] = request_reason
-        elif request_reason:
-            collect_kwargs["request_reason"] = f"{request_reason}/机场组合回退"
-        else:
-            collect_kwargs["request_reason"] = "机场组合回退"
-        data = _aggregator_collect(aggregator, origin, destination, date_str, passengers=passengers, **collect_kwargs)
+            kwargs["route_type"] = route_type
+        if panel_only is not None:
+            kwargs["panel_only"] = panel_only
+        reason = request_reason if index == 0 else (
+            "机场组合回退" if request_reason is None else f"{request_reason}/机场组合回退"
+        )
+        try:
+            data = _aggregator_collect(aggregator, origin, destination, date_str,
+                                       passengers=passengers, request_reason=reason, **kwargs)
+            units = (data or {}).get("fetch_evidence_units", getattr(aggregator, "last_fetch_evidence_units", []))
+            errors = (data or {}).get("source_errors", getattr(aggregator, "last_source_errors", [])) or []
+        except Exception as exc:
+            data, units = None, []
+            errors = [{"source": "collection", "error": _redact_api_key(str(exc))}]
+        units = units if isinstance(units, list) else []
+        record = _airport_pair_coverage(origin, destination, cabins, required, units, data, errors, panel_only)
+        coverage["pair_records"].append(record)
+        coverage["covered_pairs" if record["covered"] else "uncovered_pairs"].append([origin, destination])
         merged["attempted_airport_pairs"].append([origin, destination])
-        units = (data or {}).get("fetch_evidence_units", getattr(aggregator, "last_fetch_evidence_units", []))
-        if isinstance(units, list):
-            merged["fetch_evidence_units"].extend(units)
-        if index == 0:
-            primary_cache_status = (
-                data.get("request_cache_status")
-                if isinstance(data, dict)
-                else getattr(aggregator, "last_request_cache_status", None)
-            )
+        merged["fetch_evidence_units"].extend(units)
+        _merge_source_errors(merged["source_errors"], errors, leg=direction, origin_airport=origin,
+                             dest_airport=destination, depart_date=date_str)
         if not data:
-            _merge_source_errors(
-                merged["source_errors"],
-                getattr(aggregator, "last_source_errors", None),
-                origin_airport=origin, dest_airport=destination, depart_date=date_str,
-            )
             continue
+        single_data = data
         for flight in data.get("flights", []):
-            flight["search_origin"] = origin
-            flight["search_destination"] = destination
+            flight["search_origin"] = flight.get("search_origin") or origin
+            flight["search_destination"] = flight.get("search_destination") or destination
         merged["flights"].extend(data.get("flights", []))
         if not merged["price_insights"] and data.get("price_insights"):
             merged["price_insights"] = data["price_insights"]
-        if not merged.get("collected_at") and data.get("collected_at"):
-            merged["collected_at"] = data["collected_at"]
         _merge_source_stats(merged["source_stats"], data.get("source_stats", {}))
-        _merge_source_errors(merged["source_errors"], data.get("source_errors", []),
-                             origin_airport=origin, dest_airport=destination, depart_date=date_str)
-        merged["dual_source_price_anomalies"].extend(
-            data.get("dual_source_price_anomalies", []) or []
-        )
+        merged["dual_source_price_anomalies"].extend(data.get("dual_source_price_anomalies", []) or [])
         merged["raw_by_source"].update(data.get("raw_by_source", {}))
         merged["collection_freshness"].extend(data.get("collection_freshness", []) or [])
-        for source in str(data.get("sources_used") or data.get("source") or "").split("+"):
-            if source and source not in sources_used:
-                sources_used.append(source)
-
-    merged = _filter_data_to_airports(merged, origins, destinations)
-    merged["flights"] = _dedupe_flights(merged["flights"])
-    merged["total_count"] = len(merged["flights"])
-    merged["source_stats"]["after_dedup"] = len(merged["flights"])
-    merged["sources_used"] = "+".join(sources_used)
-    merged["source"] = merged["sources_used"]
+        for name in str(data.get("sources_used") or data.get("source") or "").split("+"):
+            if name and name not in sources_used:
+                sources_used.append(name)
+    coverage.update(covered_pair_count=len(coverage["covered_pairs"]),
+                    uncovered_pair_count=len(coverage["uncovered_pairs"]),
+                    complete=not coverage["uncovered_pairs"])
+    aggregator.last_airport_coverage = coverage
     aggregator.last_source_errors = list(merged["source_errors"])
-    return merged if merged["flights"] else None
+    if len(combinations) == 1 and single_data:
+        result = _filter_data_to_airports(single_data, origins, destinations)
+        result["attempted_airport_pairs"] = merged["attempted_airport_pairs"]
+    else:
+        result = _filter_data_to_airports(merged, origins, destinations)
+        result["flights"] = _dedupe_flights(result["flights"])
+        result["total_count"] = len(result["flights"])
+        result["source_stats"]["after_dedup"] = len(result["flights"])
+        result["sources_used"] = "+".join(sources_used)
+        result["source"] = result["sources_used"]
+    result["airport_coverage"] = coverage
+    if coverage.get("planned_pair_count", 0) > 1 or coverage.get("complete") is False:
+        result.setdefault("source_stats", {})["_airport_coverage"] = {direction: coverage}
+    return result if result.get("flights") else None
 
 
 def collect_nearby_dates(
@@ -2059,6 +2098,7 @@ def collect_nearby_dates(
                     route_type=route_type,
                     passengers=_subscription_passengers(sub),
                     request_reason="弹性日期",
+                    panel_only=True if panel_only_evaluation else None,
                 )
                 flights = data.get("flights", []) if data else []
                 prices = [
@@ -2099,7 +2139,8 @@ def collect_nearby_dates(
                         "selected": False,
                         "sources": contributed_sources,
                         "collected_at": min(collected_values) if collected_values else None,
-                        "collection_state": "panel_reused" if reused else "fresh",
+                        "collection_state": "panel_missing" if not prices else "panel_reused" if reused else "fresh",
+                        "airport_coverage": _leg_airport_coverage(primary_aggregator, data, "outbound"),
                         "today_uncollected": not bool(prices),
                         "note": "今日未采" if not prices else "",
                     }
@@ -2402,9 +2443,13 @@ def _process_return_phase(sub, context, agg, constraint_fp, route_type, request_
     data = collect_for_airport_matrix(
         agg, origins, destinations, depart_date,
         cabin_classes=sub.get("cabin_classes"), route_type=route_type, passengers=request_passengers,
+        direction="return",
     )
     source_errors = _source_error_items(agg, data)
+    return_coverage = _leg_airport_coverage(agg, data, "return")
     data = copy.deepcopy(data or {})
+    if return_coverage.get("planned_pair_count", 0) > 1 or return_coverage.get("complete") is False:
+        data.setdefault("source_stats", {})["_airport_coverage"] = {"return": return_coverage}
     collected_at = data.get("collected_at") or datetime.now().isoformat(timespec="seconds")
     normalized = [
         _normalize_detail_flight(item, item.get("data_source") or item.get("source"))
@@ -2433,7 +2478,8 @@ def _process_return_phase(sub, context, agg, constraint_fp, route_type, request_
         departure_reference_now=_departure_reference_now(),
         low_price_trip_type="return_only",
     )
-    save_flight_details(route, depart_date, _constraint_history_flights(analysis), constraint_fingerprint=constraint_fp)
+    if return_coverage.get("complete", True):
+        save_flight_details(route, depart_date, _constraint_history_flights(analysis), constraint_fingerprint=constraint_fp)
     identity = _subscription_identifier(sub, route)
     since = get_constraint_epoch_boundary(route, depart_date, None, constraint_fp, subscription_id=identity)
     limit = get_constraint_history_limit(route, depart_date, None, constraint_fp, subscription_id=identity, default_limit=14)
@@ -2681,13 +2727,11 @@ def _process_subscription_locked(
             departure_reference_now=_departure_reference_now(),
             low_price_trip_type=low_price_trip_type,
         )
+        outbound_airport_coverage = _leg_airport_coverage(agg, data, "outbound")
         constraint_history_flights = _constraint_history_flights(analysis)
-        save_flight_details(
-            route,
-            sub["depart_date"],
-            constraint_history_flights,
-            constraint_fingerprint=constraint_fp,
-        )
+        if low_price_trip_type != "round_trip" and outbound_airport_coverage.get("complete", True):
+            save_flight_details(route, sub["depart_date"], constraint_history_flights,
+                                constraint_fingerprint=constraint_fp)
         lowest_price_history = get_lowest_price_history(
             route,
             sub["depart_date"],
@@ -2733,6 +2777,8 @@ def _process_subscription_locked(
                         sub["depart_date"],
                         current_min_price,
                     )
+                    if len(active_origins) * len(active_dests) > 1:
+                        price_calendar_result["coverage_scope_note"] = f"仅覆盖主机场组合({calendar_origin}→{calendar_dest})"
                     print(
                         "[低价日历] 完成: "
                         f"{len(price_calendar_result.get('rows') or [])}个日期, "
@@ -2809,8 +2855,17 @@ def _process_subscription_locked(
                 cabin_classes=sub.get("cabin_classes"),
                 route_type=route_type,
                 passengers=request_passengers,
+                direction="return",
             )
             return_source_errors = _source_error_items(agg, return_data)
+            return_airport_coverage = _leg_airport_coverage(agg, return_data, "return")
+            if return_airport_coverage.get("planned_pair_count", 0) > 1 or return_airport_coverage.get("complete") is False:
+                data.setdefault("source_stats", {}).setdefault("_airport_coverage", {})["return"] = return_airport_coverage
+            complete_history_coverage = (outbound_airport_coverage.get("complete", True)
+                                         and return_airport_coverage.get("complete", True))
+            if complete_history_coverage:
+                save_flight_details(route, sub["depart_date"], constraint_history_flights,
+                                    constraint_fingerprint=constraint_fp)
             _merge_source_errors(
                 analysis["source_errors"],
                 return_source_errors, leg="return",
@@ -2840,7 +2895,7 @@ def _process_subscription_locked(
             )
             print(f"[往返] 返程采集结果={len(return_flights)}个航班")
             print(f"[DEBUG] 返程采集完成: {len(return_flights)}个航班")
-            if not return_flights and return_source_errors:
+            if not return_flights and (return_source_errors or not return_airport_coverage.get("complete", True)):
                 collection_failure = _build_collection_leg_failure(
                     "return",
                     return_date,
@@ -2884,12 +2939,9 @@ def _process_subscription_locked(
                 return_constraint_history_flights = _constraint_history_flights(
                     return_analysis
                 )
-                save_flight_details(
-                    return_route,
-                    return_date,
-                    return_constraint_history_flights,
-                    constraint_fingerprint=constraint_fp,
-                )
+                if complete_history_coverage:
+                    save_flight_details(return_route, return_date, return_constraint_history_flights,
+                                        constraint_fingerprint=constraint_fp)
                 return_analysis["dual_source_price_anomalies"] = (
                     return_data or {}
                 ).get("dual_source_price_anomalies", [])
@@ -2937,6 +2989,10 @@ def _process_subscription_locked(
                                 return_calendar=return_calendar,
                                 return_date=return_date,
                             )
+                            if len(active_origins) * len(active_dests) > 1:
+                                price_calendar_result["coverage_scope_note"] = (
+                                    f"仅覆盖主机场组合(去程{calendar_origin}→{calendar_dest} / "
+                                    f"返程{calendar_dest}→{calendar_origin})")
                             analysis["price_calendar"] = price_calendar_result
                             print(
                                 "[低价日历] 往返参考价完成: "
@@ -3019,34 +3075,44 @@ def _process_subscription_locked(
                         )
                     except Exception as exc:
                         print(f"[当天往返备选] 次日返程补采失败: {exc}")
+                    fallback_coverage = getattr(agg, "last_same_day_fallback_coverage", {})
+                    if isinstance(fallback_coverage, dict):
+                        visible_coverage = [
+                            value for value in fallback_coverage.values()
+                            if isinstance(value, dict)
+                            and (value.get("planned_pair_count", 0) > 1 or value.get("complete") is False)
+                        ]
+                        if visible_coverage:
+                            data.setdefault("source_stats", {})["_same_day_fallback_coverage"] = visible_coverage
                 mixed_history = round_trip_analysis.get("mixed_cabin_history") or {}
                 snapshot_outbound = mixed_history.get("outbound") or round_trip_analysis.get("outbound_min")
                 snapshot_return = mixed_history.get("return") or round_trip_analysis.get("return_min")
                 snapshot_total = mixed_history.get("total") or round_trip_analysis.get("total_min")
-                save_roundtrip_snapshot(
-                    route,
-                    sub["depart_date"],
-                    return_date,
-                    snapshot_outbound,
-                    snapshot_return,
-                    snapshot_total,
-                    datetime.now().isoformat(),
-                    constraint_fingerprint=constraint_fp,
-                    sources=(mixed_history.get("sources") or sorted(
-                        set(
-                            _sources_for_price(
-                                constraint_history_flights,
-                                round_trip_analysis.get("outbound_min"),
+                if complete_history_coverage:
+                    save_roundtrip_snapshot(
+                        route,
+                        sub["depart_date"],
+                        return_date,
+                        snapshot_outbound,
+                        snapshot_return,
+                        snapshot_total,
+                        datetime.now().isoformat(),
+                        constraint_fingerprint=constraint_fp,
+                        sources=(mixed_history.get("sources") or sorted(
+                            set(
+                                _sources_for_price(
+                                    constraint_history_flights,
+                                    round_trip_analysis.get("outbound_min"),
+                                )
                             )
-                        )
-                        | set(
-                            _sources_for_price(
-                                return_constraint_history_flights,
-                                round_trip_analysis.get("return_min"),
+                            | set(
+                                _sources_for_price(
+                                    return_constraint_history_flights,
+                                    round_trip_analysis.get("return_min"),
+                                )
                             )
-                        )
-                    )),
-                )
+                        )),
+                    )
                 roundtrip_history = get_roundtrip_price_history(
                     route,
                     sub["depart_date"],
@@ -3206,6 +3272,7 @@ def _process_subscription_locked(
                 "notification_goals": sub.get("notification_goals", {}),
                 "nearby_dates": nearby_dates,
                 "price_calendar": price_calendar_result,
+                "same_day_fallback_coverage": data.get("source_stats", {}).get("_same_day_fallback_coverage", []),
                 "previous_prices": previous_prices,
                 "lowest_price_history": lowest_price_history,
                 "source_stats": data.get("source_stats", {}),

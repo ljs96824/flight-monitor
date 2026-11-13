@@ -8901,12 +8901,22 @@ def _lp_target(sub, passengers):
     return None, None, "cabin_scope_ambiguous"
 
 
+MATRIX_MODE_FULL_MATRIX_V1 = "full_matrix_v1"
+
+
 def _lp_slots(required, dates, leg_data):
     slots = {}
     unverified = False
     for leg, day in dates.items():
         data = leg_data.get(leg) or {}
-        pairs = sorted(set(map(tuple, data.get("attempted_airport_pairs") or [])))
+        coverage = data.get("airport_coverage") or {}
+        if coverage.get("complete") is False:
+            return {}, "source_coverage_incomplete"
+        attempted = set(map(tuple, data.get("attempted_airport_pairs") or []))
+        pairs = sorted(set(map(tuple, data.get("_planned_airport_pairs") or
+                               coverage.get("planned_pairs") or attempted)))
+        if not set(pairs).issubset(attempted):
+            return {}, "source_coverage_incomplete"
         if not pairs:
             return {}, "source_coverage_incomplete"
         for cabin, sources in required.items():
@@ -8924,6 +8934,10 @@ def _lp_slots(required, dates, leg_data):
                                (u.get("source"), u.get("cabin_class"), u.get("origin_airport"),
                                 u.get("dest_airport"), u.get("depart_date")) == (source,cabin,origin,dest,day)]
                     if not arrived or any(u.get("source_status") not in ("success","empty","cache") for u in arrived):
+                        return {}, "source_coverage_incomplete"
+                    if any(u.get("raw_schema_valid") is False or
+                           (u.get("raw_result_count") not in (None, 0) and u.get("valid_flight_count") == 0)
+                           for u in arrived):
                         return {}, "source_coverage_incomplete"
                     for u in arrived:
                         if u["source_status"] == "empty":
@@ -8987,7 +9001,7 @@ def build_current_low_price_offer(sub, analyses, leg_data, *, trip_type, route_t
     airports = dict(outbound_origins=sorted(set(origins)), outbound_destinations=sorted(set(destinations)),
                     return_origins=sorted(set(destinations)) if rt else [], return_destinations=sorted(set(origins)) if rt else [],
                     origin_airport_preference=sub.get("origin_airport_preference"),
-                    matrix_mode="primary_short_circuit_v1" if len(origins)*len(destinations)>1 else "single_pair_v1")
+                    matrix_mode=MATRIX_MODE_FULL_MATRIX_V1 if len(origins)*len(destinations)>1 else "single_pair_v1")
     coverage = dict(airport_coverage_policy=airports, source_coverage_policy=dict(
                     route_profile=route_type, required_pricing_sources_by_cabin=required))
     members = normalize_passenger_counts(passengers if group_price else {"adult":1})
@@ -8997,7 +9011,13 @@ def build_current_low_price_offer(sub, analyses, leg_data, *, trip_type, route_t
                   passenger_signature=_lp_json(members),route_rate_key=passenger_fare_rates(route_type)[0],
                   constraint_fingerprint=constraint_fp)
     bucket = _lp_hash(dict(schema="low-price-bucket-v1",**fields,**coverage))
-    slots, error = _lp_slots(required, dates, leg_data)
+    planned_leg_data = {
+        leg: {**(leg_data.get(leg) or {}), "_planned_airport_pairs": [
+            [o, d] for o in (destinations if leg == "return" else origins)
+            for d in (origins if leg == "return" else destinations)]}
+        for leg in dates
+    }
+    slots, error = _lp_slots(required, dates, planned_leg_data)
     if (analyses.get("outbound") or {}).get("collection_failures"):
         error = "source_coverage_incomplete"
     if error:

@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from dataclasses import fields, replace
+from datetime import date
 from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
@@ -1020,6 +1021,22 @@ class CollectionPlanTest(unittest.TestCase):
         self.assertEqual(stable, stable_before)
         self.assertEqual(legacy, legacy_before)
         self.assertNotIn("subscription_id", legacy)
+
+    def test_active_matrix_and_return_only_use_the_same_plan_projection(self):
+        from collection_plan import build_collection_plan
+        source = FakeSource("juhe", [])
+        subscription = {"origin": "PVG", "destination": "KIX", "route_type": "international",
+                        "origin_airports_active": ["PVG", "SHA", "PVG"],
+                        "destination_airports_active": ["KIX", "ITM"],
+                        "depart_date": "2026-10-01", "return_date": "2026-10-05", "round_trip": True,
+                        "date_flexibility": 0, "return_date_flexibility": 1}
+        with patch("collection_plan.shanghai_today", return_value=date(2026, 10, 3)):
+            plan = build_collection_plan(subscriptions=[subscription], include_calendars=False,
+                                         source_builder=lambda *args, **kw: ([source], []))
+        self.assertEqual(plan.unique_count, 12)
+        self.assertEqual(len(plan.panel_only_keys), 8)
+        self.assertTrue(all(k[1] in {"KIX", "ITM"} and k[2] in {"PVG", "SHA"} for k in plan.request_keys))
+        self.assertNotIn("2026-10-01", {k[3] for k in plan.request_keys})
 
     def test_collection_plan_consumer_refs_are_opaque_stable_and_privacy_safe(self):
         from collection_plan import basket_consumer_ref, build_collection_plan

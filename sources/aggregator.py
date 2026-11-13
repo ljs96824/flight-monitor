@@ -723,6 +723,28 @@ def build_default_sources(
     return search_sources, enrichment_sources
 
 
+def _validate_raw_empty_schema(source_name, result):
+    raw = result.get("raw")
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict) or result.get("reason") == "HTTP成功但无有效方案":
+        return False
+    if str(source_name).lower() == "juhe":
+        if raw.get("error_code") not in (None, 0, "0"):
+            return False
+        value = raw.get("result")
+        if value is not None and not isinstance(value, (dict, list)):
+            return False
+        if isinstance(value, dict):
+            return all(value.get(k) is None or isinstance(value[k], list)
+                       for k in ("list", "flightInfo", "flights", "data"))
+        return True
+    if str(source_name).lower() in {"serpapi", "hasdata", "searchapi"}:
+        return "error" not in raw and all(k not in raw or isinstance(raw[k], list)
+                                          for k in ("best_flights", "other_flights"))
+    return True
+
+
 class FlightAggregator:
     def __init__(
         self,
@@ -748,6 +770,7 @@ class FlightAggregator:
         passengers: dict | None = None,
         force_fresh: bool = False,
         request_reason: str | None = None,
+        panel_only: bool | None = None,
     ) -> dict | None:
         self.last_outcome_reads = 0
 
@@ -762,6 +785,7 @@ class FlightAggregator:
                 include_cache_status=include_cache_status,
                 force_fresh=force_fresh,
                 request_reason=request_reason,
+                panel_only=panel_only,
             )
 
         return self._collect_with_resolver(
@@ -853,6 +877,7 @@ class FlightAggregator:
         include_cache_status: bool,
         force_fresh: bool,
         request_reason: str | None,
+        panel_only: bool | None = None,
     ):
         return cached_fetch(
             source,
@@ -865,6 +890,7 @@ class FlightAggregator:
             force_fresh=force_fresh,
             include_cache_status=include_cache_status,
             request_reason=request_reason,
+            **({"panel_only": panel_only} if panel_only is not None else {}),
         )
 
     def _collect_with_resolver(
@@ -984,8 +1010,18 @@ class FlightAggregator:
                         source_statuses.append(source_status)
                     raw_flights = result.get("flights", []) or []
                     flights = [
-                        flight for flight in raw_flights if _valid_price(flight.get("price"))
+                        flight for flight in raw_flights
+                        if isinstance(flight, dict) and _valid_price(flight.get("price"))
                     ]
+                    unit.update(
+                        raw_result_count=result.get("raw_result_count", len(raw_flights)),
+                        raw_flight_count=result.get("raw_flight_count", len(raw_flights)),
+                        valid_flight_count=len(flights),
+                        raw_schema_valid=_validate_raw_empty_schema(source_name, result),
+                        collection_state=collection_state, collected_at=source_collected_at,
+                        reason=result.get("reason"), skipped_reason=result.get("skipped_reason"),
+                        error=result.get("error"), is_enrichment=False,
+                    )
                     safe_log(
                         f"[价格检查] {source_name} {cabin_class} 有效价格航班: "
                         f"{len(flights)}/{len(raw_flights)}"
@@ -1085,6 +1121,14 @@ class FlightAggregator:
                     raise
                 except Exception as exc:
                     error = _redact_api_key(str(exc))
+                    fetch_evidence_units.append(dict(
+                        source=str(source_name).lower(), origin_airport=origin, dest_airport=dest,
+                        depart_date=date_str, cabin_class=cabin_class, source_status="failed",
+                        role=source_role, weight=source_weight, raw_result_count=None,
+                        raw_flight_count=None, valid_flight_count=0, raw_schema_valid=False,
+                        collection_state="failed", collected_at=None, reason=error,
+                        skipped_reason=None, error=error, is_enrichment=False,
+                    ))
                     if not source_optional:
                         source_errors.append(
                             {
