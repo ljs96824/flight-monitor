@@ -5915,19 +5915,309 @@ def match_time_preference(flight: dict, soft_prefs: dict) -> tuple[bool, str]:
     return True, ""
 
 
+_BAGGAGE_PENDING = "当前报价的托运行李权益未确认；"
+_NO_CONFIRMED_BAGGAGE = "暂无已确认满足托运要求的方案"
+
+
+def is_checked_baggage_required(preferences: dict | None) -> bool:
+    preferences = preferences or {}
+    required = {"required", "must", "checked_required", "必须托运", "必须", "需要"}
+    return (preferences.get("need_baggage") in required
+            or preferences.get("baggage") in required
+            or preferences.get("checked_baggage_required") is True)
+
+
+def resolve_effective_budget_scopes(preferences: dict | None) -> tuple[str, str]:
+    preferences = preferences or {}
+    if preferences.get("cabin_arrangement") in {"business_all", "mixed"}:
+        return "all", "all"
+    maximum = normalize_budget_scope(preferences.get("max_budget_scope") or preferences.get("budget_scope"))
+    return maximum, normalize_budget_scope(preferences.get("target_price_scope") or maximum)
+
+
+def _baggage_nodes(value):
+    if isinstance(value, dict):
+        yield value
+        for nested in value.values():
+            yield from _baggage_nodes(nested)
+    elif isinstance(value, (list, tuple)):
+        for nested in value:
+            yield from _baggage_nodes(nested)
+
+
+def _baggage_payloads(flight):
+    yield flight
+    for key in ("extra", "fare_rules", "baggage", "baggage_detail", "baggage_services",
+                "checked_baggage_fee", "checked_baggage_fee_spec", "extra_bag_price", "total_checked_baggage_fee"):
+        yield from _baggage_nodes(flight.get(key))
+
+
+def _baggage_is_inferred(flight):
+    return any(node.get("source") == "国内标准规则推断" for node in _baggage_payloads(flight))
+
+
+def _baggage_negative_match(flight):
+    return any(node.get("baggage_offer_matched") is False or node.get("baggage_applicability") in
+               {"flight_number_match_only", "cross_offer", "unmatched", "inferred"}
+               for node in _baggage_payloads(flight))
+
+
+def check_baggage_evidence_applicability(flight: dict, *, passengers=None) -> tuple[bool, str]:
+    if _baggage_is_inferred(flight):
+        return False, "domestic_rule_inferred"
+    if _baggage_negative_match(flight):
+        return False, "cross_offer_unverified"
+    quote_id = flight.get("quote_offer_id") or flight.get("offer_id")
+    service_nodes = {id(node) for service in (_baggage_services(flight) or [])
+                     for node in _baggage_nodes(service)}
+    segment_ids = {str(s.get("id") or s.get("segment_id")) for s in flight.get("segments") or []
+                   if isinstance(s, dict) and (s.get("id") or s.get("segment_id"))}
+    counts = _baggage_passengers(passengers)
+    people = set(flight.get("passenger_ids") or (
+        [f"{kind}_{i + 1}" for kind in ("adult", "child", "elderly") for i in range(counts[kind])]
+        if counts else []))
+    positive = False
+    for node in _baggage_payloads(flight):
+        if node.get("applicable_to_current_quote") is False:
+            return False, "cross_offer_unverified"
+        baggage_id = node.get("baggage_offer_id")
+        if baggage_id and quote_id and baggage_id != quote_id:
+            return False, "cross_offer_unverified"
+        if node.get("quote_offer_id") and baggage_id and node["quote_offer_id"] != baggage_id:
+            return False, "cross_offer_unverified"
+        if node is not flight and node.get("offer_id") and quote_id and node["offer_id"] != quote_id:
+            return False, "cross_offer_unverified"
+        if id(node) not in service_nodes:
+            if node.get("segment_ids") and segment_ids and not segment_ids.issubset(set(map(str, node["segment_ids"]))):
+                return False, "cross_offer_unverified"
+            if node.get("passenger_ids") and people and not people.issubset(set(node["passenger_ids"])):
+                return False, "cross_offer_unverified"
+        positive = positive or node.get("baggage_offer_matched") is True or node.get("applicable_to_current_quote") is True
+        positive = positive or node.get("baggage_applicability") == "quote_matched" or bool(quote_id and baggage_id == quote_id)
+    source = str(flight.get("price_source") or flight.get("data_source") or "").lower()
+    if source == "juhe" and not positive:
+        return False, "cross_offer_unverified"
+    return True, ""
+
+
+def _positive_baggage_number(value):
+    try:
+        return not isinstance(value, bool) and math.isfinite(float(value)) and float(value) > 0
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
 def _has_free_checked_baggage(flight: dict) -> bool:
-    fare_rules = flight.get("fare_rules") or {}
-    baggage = fare_rules.get("baggage") or {}
-    if baggage.get("checked_pieces") or baggage.get("checked_kg"):
-        return True
-
+    if _baggage_negative_match(flight) or _baggage_is_inferred(flight):
+        return False
+    quote_id = flight.get("quote_offer_id") or flight.get("offer_id")
+    if any(node.get("baggage_offer_id") and quote_id and node["baggage_offer_id"] != quote_id
+           for node in _baggage_payloads(flight)):
+        return False
     extra = flight.get("extra") or {}
-    detail = extra.get("baggage_detail") or {}
-    checked = detail.get("checked") or {}
-    if checked.get("quantity", 0) > 0 and checked.get("is_free", False):
+    rules = (flight.get("fare_rules") or {}).get("baggage") or {}
+    if rules.get("included") is False or rules.get("included_in_fare") is False:
+        return False
+    if rules.get("included") is True or rules.get("included_in_fare") is True:
         return True
+    if _positive_baggage_number(rules.get("checked_pieces")) or _positive_baggage_number(rules.get("checked_kg")):
+        return True
+    checked = (extra.get("baggage_detail") or flight.get("baggage_detail") or {}).get("checked") or {}
+    if checked.get("is_free") is not False and (
+            _positive_baggage_number(checked.get("quantity")) or _positive_baggage_number(checked.get("weight_kg"))):
+        return True
+    baggage = extra.get("baggage") or flight.get("baggage")
+    if isinstance(baggage, list):
+        return any(isinstance(item, dict) and item.get("type") in {"checked", "hold", "checked_baggage"}
+                   and item.get("is_free") is not False
+                   and (_positive_baggage_number(item.get("quantity")) or _positive_baggage_number(item.get("weight_kg")))
+                   for item in baggage)
+    return False
 
-    return bool(extra.get("baggage"))
+
+def _baggage_services(flight):
+    for services in (flight.get("baggage_services"), (flight.get("extra") or {}).get("baggage_services"),
+                     ((flight.get("fare_rules") or {}).get("baggage") or {}).get("services")):
+        if services is not None:
+            return services
+    return None
+
+
+def _baggage_fee_spec(flight):
+    for node in _baggage_payloads(flight):
+        for key in ("checked_baggage_fee_spec", "checked_baggage_fee"):
+            if isinstance(node.get(key), dict):
+                return node[key]
+    return None
+
+
+def _baggage_passengers(passengers):
+    if passengers is None:
+        return {"adult": 1, "child": 0, "elderly": 0, "infant": 0}
+    if not isinstance(passengers, dict):
+        return None
+    counts = {key: passengers.get(key, 0) for key in ("adult", "child", "elderly", "infant")}
+    if any(type(n) is not int or n < 0 for n in counts.values()):
+        return None
+    return counts if sum(counts[key] for key in ("adult", "child", "elderly")) > 0 else None
+
+
+def resolve_checked_baggage_fee_in_scope(outbound_flight: dict, *, passengers, visible_scope: str,
+                                         round_trip: bool = False, return_flight: dict | None = None) -> dict:
+    """Prove service coverage before summing; never apply ticket discounts to bags."""
+    unknown = {"calculable": False, "amount": None, "subreason": "paid_fee_scope_unknown",
+               "disclosure": "", "infant_note": ""}
+    all_scope = visible_scope.startswith("all_passengers")
+    counts = _baggage_passengers(passengers)
+    if counts is None or (passengers is None and all_scope):
+        return unknown
+    seated = sum(counts[key] for key in ("adult", "child", "elderly"))
+    if counts["infant"]:
+        unknown = {**unknown, "infant_note": "婴儿行李额按适用客票规则核实"}
+    ids = outbound_flight.get("passenger_ids") or [
+        f"{kind}_{i + 1}" for kind in ("adult", "child", "elderly") for i in range(counts[kind])]
+    if len(ids) != seated or len(set(ids)) != seated:
+        return unknown
+    legs = [outbound_flight] + ([return_flight] if round_trip and return_flight is not None else [])
+    totals = dict.fromkeys(ids, 0.0)
+    total, homogeneous, disclosure = 0.0, True, ""
+    packages = set()
+    roundtrip_covered = False
+    for leg in legs:
+        applicable, _ = check_baggage_evidence_applicability(leg, passengers=passengers)
+        if not applicable:
+            return unknown
+        if _has_free_checked_baggage(leg):
+            continue
+        services = _baggage_services(leg)
+        if services is not None:
+            if not isinstance(services, list) or not services or passengers is None:
+                return unknown
+            segments = {str(s.get("id") or s.get("segment_id")) for s in leg.get("segments") or []
+                        if isinstance(s, dict) and (s.get("id") or s.get("segment_id"))} or {"leg"}
+            covered = set()
+            for service in services:
+                if not isinstance(service, dict):
+                    return unknown
+                if service.get("selected") is False:
+                    continue
+                included = service.get("included_in_fare")
+                if included is not True and included is not False:
+                    return unknown
+                scope = service.get("itinerary_scope")
+                service_segments = set(map(str, service.get("segment_ids") or []))
+                if scope in {"leg", "oneway_itinerary", "roundtrip"}:
+                    service_segments = segments
+                if not service_segments or not service_segments.issubset(segments):
+                    return unknown
+                people = service.get("passenger_ids")
+                if service.get("passenger_scope") in {"all_seated_passengers", "all_passengers"}:
+                    people = ids
+                if not people or not set(people).issubset(set(ids)):
+                    return unknown
+                covered.update((person, seg) for person in people for seg in service_segments)
+                package = service.get("service_id")
+                if scope == "roundtrip":
+                    if not package:
+                        return unknown
+                    roundtrip_covered = True
+                    if package in packages:
+                        continue
+                    packages.add(package)
+                if included:
+                    continue
+                quantity, amount = service.get("quantity"), service.get("amount")
+                if (type(quantity) is not int or quantity <= 0 or isinstance(amount, bool)
+                        or not isinstance(amount, (int, float)) or not math.isfinite(amount) or amount < 0
+                        or str(service.get("currency") or "").upper() not in {"CNY", "RMB"}):
+                    return unknown
+                cost = float(amount) * quantity
+                total += cost
+                if len(people) == 1:
+                    totals[people[0]] += cost
+                elif service.get("fee_unit") in {"per_person", "per_passenger"} and quantity == len(people):
+                    for person in people:
+                        totals[person] += float(amount)
+                else:
+                    homogeneous = False
+            if covered != {(person, seg) for person in ids for seg in segments}:
+                return unknown
+        else:
+            spec = _baggage_fee_spec(leg)
+            if not spec:
+                return unknown
+            amount = spec.get("amount")
+            if (spec.get("applicable_to_current_quote") is not True or spec.get("included_in_fare") is not False
+                    or spec.get("fee_unit") not in {"per_person", "per_passenger"}
+                    or str(spec.get("currency") or "").upper() not in {"CNY", "RMB"}
+                    or spec.get("itinerary_scope") not in {"leg", "oneway_itinerary", "roundtrip"}
+                    or isinstance(amount, bool) or not isinstance(amount, (int, float))
+                    or not math.isfinite(amount) or amount < 0):
+                return unknown
+            package = spec.get("service_id") or "roundtrip_unit"
+            if spec["itinerary_scope"] == "roundtrip":
+                roundtrip_covered = True
+                if package in packages:
+                    continue
+                packages.add(package)
+            total += float(amount) * seated
+            for person in ids:
+                totals[person] += float(amount)
+            if seated > 1:
+                disclosure = "按每名占座乘客各补购1份估算"
+    if round_trip and return_flight is None and not roundtrip_covered:
+        return unknown
+    if not all_scope and seated > 1 and (not homogeneous or len(set(totals.values())) != 1):
+        return {**unknown, "disclosure": "乘客间补购服务异构或仅含全员整包价，单人口径无法唯一折算"}
+    return {"calculable": True, "amount": total if all_scope else next(iter(totals.values())),
+            "subreason": None, "disclosure": disclosure, "infant_note": unknown["infant_note"]}
+
+
+def _pending_baggage(reason):
+    message = (_BAGGAGE_PENDING + "国内常规规则仅供参考，请以该票价产品的支付页票规为准。"
+               if reason == "domestic_rule_inferred" else _BAGGAGE_PENDING + "请核实当前产品的托运权益与补购费用。")
+    return {"state": "pending_confirmation", "subreason": reason, "message": message}
+
+
+def evaluate_checked_baggage_eligibility(flight: dict, *, passengers=None, route_type=None) -> dict:
+    rules = (flight.get("fare_rules") or {}).get("baggage") or {}
+    if _baggage_is_inferred(flight):
+        return _pending_baggage("domestic_rule_inferred")
+    shell = (not flight.get("has_baggage_info") and not flight.get("extra") and rules.get("included") is None
+             and not rules.get("checked_pieces") and not rules.get("checked_kg")
+             and rules.get("extra_bag_price") is None and not _baggage_fee_spec(flight)
+             and _baggage_services(flight) is None and not flight.get("baggage") and not flight.get("baggage_detail"))
+    if shell:
+        return _pending_baggage("rule_unknown")
+    applicable, reason = check_baggage_evidence_applicability(flight, passengers=passengers)
+    if not applicable:
+        return _pending_baggage(reason)
+    if _has_free_checked_baggage(flight):
+        return {"state": "included_in_fare", "subreason": None, "message": "票价已含托运"}
+    if any(node.get("checked_baggage_allowed") is False or node.get("can_purchase") is False
+           or node.get("purchase_allowed") is False for node in _baggage_payloads(flight)):
+        return {"state": "explicitly_ineligible", "subreason": None, "message": "当前票价产品不允许补购托运"}
+    fee = resolve_checked_baggage_fee_in_scope(flight, passengers=passengers,
+                                             visible_scope="all_passengers_oneway" if passengers is not None else "per_person_oneway")
+    if fee["calculable"]:
+        services = _baggage_services(flight)
+        if services and all(service.get("included_in_fare") is True for service in services):
+            return {"state": "included_in_fare", "subreason": None, "message": "票价已含托运"}
+        return {"state": "paid_allowed_known_fee", "subreason": None, "message": "允许付费托运（未包含在票价内）", "fee": fee}
+    has_spec = _baggage_fee_spec(flight) is not None or _baggage_services(flight) is not None
+    numeric_raw = isinstance(rules.get("extra_bag_price"), (int, float))
+    return _pending_baggage("paid_fee_scope_unknown" if has_spec or numeric_raw else "paid_fee_unknown")
+
+
+def _scoped_offer_price(flight, preferences, scope, *, round_trip=False, return_flight=None):
+    price = price_in_scope(flight.get("price"), preferences.get("passengers"), scope=scope,
+                           route_type=preferences.get("route_type"), round_trip=round_trip,
+                           return_per_person_oneway=(return_flight or {}).get("price"))
+    if is_checked_baggage_required(preferences):
+        fee = resolve_checked_baggage_fee_in_scope(flight, passengers=preferences.get("passengers"),
+                                                  visible_scope=scope, round_trip=round_trip, return_flight=return_flight)
+        return price + fee["amount"] if fee["calculable"] else None
+    return price
 
 
 def _has_refund_change_flexibility(flight: dict, required: bool = False) -> bool:
@@ -7166,10 +7456,15 @@ def _diagnosis_price_text(value) -> str:
     return f"¥{number:,.0f}"
 
 
+def _constraints_round_trip(constraints):
+    constraints = constraints or {}
+    return not (constraints.get("round_trip") is False and not constraints.get("same_day_round_trip") and not constraints.get("return_date"))
+
+
 def _diagnosis_budget_scope(constraints: dict | None) -> str:
     constraints = constraints or {}
-    scope = constraints.get("max_budget_scope") or constraints.get("budget_scope") or "per_person"
-    return _budget_visible_scope(normalize_budget_scope(scope), True)
+    scope, _ = resolve_effective_budget_scopes(constraints)
+    return _budget_visible_scope(scope, _constraints_round_trip(constraints))
 
 
 def _diagnosis_passengers(constraints: dict | None) -> dict:
@@ -7201,6 +7496,7 @@ def _budget_excluded_candidate_rows(stage_counts: dict | None, constraints: dict
     raw_candidates = stage_counts.get("budget_excluded_candidates") or []
     if not raw_candidates:
         return []
+    round_trip = _constraints_round_trip(constraints)
     passengers = _diagnosis_passengers(constraints)
     route_type = constraints.get("route_type") or ""
     compare_scope = _diagnosis_budget_scope(constraints)
@@ -7208,8 +7504,8 @@ def _budget_excluded_candidate_rows(stage_counts: dict | None, constraints: dict
     max_budget = _to_float(constraints.get("max_budget") or constraints.get("budget") or constraints.get("price_ceiling"))
     budget_limit = None
     if max_budget is not None:
-        budget_pp = budget_to_pp(max_budget, passengers, scope=compare_scope, route_type=route_type, round_trip=True)
-        budget_limit = price_in_scope(budget_pp, passengers, scope=compare_scope, route_type=route_type, round_trip=True)
+        budget_pp = budget_to_pp(max_budget, passengers, scope=compare_scope, route_type=route_type, round_trip=round_trip)
+        budget_limit = price_in_scope(budget_pp, passengers, scope=compare_scope, route_type=route_type, round_trip=round_trip)
     target_value = _to_float(constraints.get("target_price") or constraints.get("ideal_price"))
     rows = []
     for raw in raw_candidates:
@@ -7217,20 +7513,20 @@ def _budget_excluded_candidate_rows(stage_counts: dict | None, constraints: dict
             continue
         outbound_price = _to_float(_budget_candidate_value(raw, "outbound_price"))
         return_price = _to_float(_budget_candidate_value(raw, "return_price"))
-        if outbound_price is None or return_price is None:
+        if outbound_price is None or (round_trip and return_price is None):
             direct_price = _to_float(raw.get("budget_compare_price") or raw.get("price"))
             if direct_price is None:
                 continue
             compare_price = direct_price
             single_adult_roundtrip = _to_float(raw.get("single_adult_roundtrip"))
         else:
-            single_adult_roundtrip = itinerary_price_pp(outbound_price, return_per_person_oneway=return_price)
+            single_adult_roundtrip = itinerary_price_pp(outbound_price, round_trip=round_trip, return_per_person_oneway=return_price)
             compare_price = price_in_scope(
                 outbound_price,
                 passengers,
                 scope=compare_scope,
                 route_type=route_type,
-                round_trip=True,
+                round_trip=round_trip,
                 return_per_person_oneway=return_price,
             )
         outbound_no = str(_budget_candidate_value(raw, "outbound_flight") or "去程待确认")
@@ -7582,6 +7878,11 @@ def build_no_result_diagnosis(
         or pairing_fallback_reason
         or diagnose_no_result(counts, constraints)
     )
+    if is_checked_baggage_required(constraints) and any(
+            item.get("pending_baggage_confirmation") or item.get("filter_reason_code") == "baggage_pending_confirmation"
+            for item in flights + excluded):
+        counts["reason"] = _NO_CONFIRMED_BAGGAGE
+        summary["reason"] = _NO_CONFIRMED_BAGGAGE
     safe_reason = str(counts["reason"])
     print(f"[无方案理由诊断] diagnose_no_result返回={safe_reason}")
     print(f"[无方案理由诊断] 实际展示的理由文案={safe_reason}")
@@ -8237,6 +8538,9 @@ def _attach_filter_reason_details(
     for flight in flights or []:
         if not isinstance(flight, dict):
             continue
+        if flight.get("filter_reason_code") in {"need_baggage", "baggage_pending_confirmation"}:
+            flight["filter_reason_value"] = flight.get("exclude_reason") or flight.get("reference_reason") or ""
+            continue
         constraint, value = _filter_constraint_detail(flight, preferences or {})
         flight["filter_reason_code"] = constraint
         flight["filter_reason_value"] = value
@@ -8304,7 +8608,12 @@ def _log_low_price_filter_rejections(
 def _apply_user_preferences(
     flights: list[dict], preferences: dict | None
 ) -> tuple[list[dict], list[dict], dict]:
-    preferences = preferences or {}
+    preferences = copy.deepcopy(preferences or {})
+    baggage_required = is_checked_baggage_required(preferences)
+    baggage_references = []
+    budget_scope, target_scope = resolve_effective_budget_scopes(preferences)
+    visible_budget = _budget_visible_scope(budget_scope, False)
+    visible_target = _budget_visible_scope(target_scope, False)
     direct_only = preferences.get("direct_only", "flexible")
     transfer_policy = preferences.get("transfer_policy", "reasonable")
     direct_required = direct_only in {"must", "direct_only", "must_direct"} or transfer_policy in {
@@ -8366,9 +8675,6 @@ def _apply_user_preferences(
     passenger_friendly_mode = bool(passenger_profile.get("has_child") or passenger_profile.get("has_elderly"))
     if passenger_rules.get("prefer_direct"):
         preferences.setdefault("direct_preferred", True)
-    if passenger_rules.get("require_baggage_clarity"):
-        preferences.setdefault("need_baggage", "required")
-        need_baggage = "required" if need_baggage == "unknown" else need_baggage
     if passenger_profile.get("needs_refund_flexibility") and refund_flexibility == "unknown":
         refund_flexibility = "preferred"
     direct_preferred = bool(preferences.get("direct_preferred")) or "direct_preferred" in companion_constraints
@@ -8477,19 +8783,47 @@ def _apply_user_preferences(
                 penalty += 2
                 penalties.append("非全服务航司")
 
+        if baggage_required:
+            eligibility = evaluate_checked_baggage_eligibility(
+                flight, passengers=preferences.get("passengers"), route_type=preferences.get("route_type"))
+            if eligibility["state"] == "paid_allowed_known_fee" and max_budget is not None:
+                fee = resolve_checked_baggage_fee_in_scope(
+                    flight, passengers=preferences.get("passengers"), visible_scope=visible_budget)
+                if not fee["calculable"]:
+                    eligibility = _pending_baggage("paid_fee_scope_unknown")
+            flight["checked_baggage_required"] = True
+            flight["checked_baggage_eligibility"] = eligibility
+            if eligibility["state"] == "explicitly_ineligible":
+                excluded.append({**flight, "exclude_reason": eligibility["message"], "filter_reason_code": "need_baggage"})
+                continue
+            if eligibility["state"] == "pending_confirmation":
+                baggage_references.append({**flight, "reference_only": True, "pending_baggage_confirmation": True,
+                                           "reference_reason": eligibility["message"],
+                                           "filter_reason_code": "baggage_pending_confirmation"})
+                continue
+
         if not roundtrip_purchase_context:
-            if max_budget and max_budget > 0 and price > max_budget:
-                excluded.append({**flight, "exclude_reason": "\u8d85\u8fc7\u6700\u9ad8\u53ef\u63a5\u53d7\u4ef7\u683c"})
+            compare = _scoped_offer_price(flight, preferences, visible_budget)
+            target_compare = _scoped_offer_price(flight, preferences, visible_target)
+            flight["budget_compare_price"] = compare
+            flight["budget_compare_scope"] = visible_budget
+            flight["target_compare_price"] = target_compare
+            flight["target_compare_scope"] = visible_target
+            flight["at_or_below_target"] = bool(target_price is not None and target_compare is not None and target_compare <= target_price)
+            if max_budget and max_budget > 0 and compare is not None and compare > max_budget:
+                label = "全员单程" if budget_scope == "all" else "单人单程"
+                excluded.append({**flight, "exclude_reason": f"超过最高可接受价格({label} ¥{compare:,.0f} > ¥{max_budget:,.0f})",
+                                 "filter_reason_code": "max_budget"})
                 continue
             if budget and budget > 0:
-                notes.append("\u6700\u9ad8\u53ef\u63a5\u53d7\u4ef7\u683c\u5185")
-            if target_price and target_price > 0:
-                if price <= target_price:
-                    notes.append("\u4f4e\u4e8e\u7406\u60f3\u5165\u624b\u4ef7")
-                elif price <= target_price + price_tolerance:
+                notes.append("最高可接受价格内")
+            if target_price and target_price > 0 and target_compare is not None:
+                if target_compare <= target_price:
+                    notes.append("低于理想入手价")
+                elif target_compare <= target_price + price_tolerance:
                     notes.append("在理想价浮动范围内")
                 else:
-                    penalties.append(f"\u8ddd\u79bb\u7406\u60f3\u5165\u624b\u4ef7\u00a5{price - target_price:,.0f}")
+                    penalties.append(f"距离理想入手价¥{target_compare - target_price:,.0f}")
 
         if direct_required and stops > 0:
             excluded_flight = {**flight, "exclude_reason": "用户设置必须直飞"}
@@ -8564,12 +8898,15 @@ def _apply_user_preferences(
             else:
                 penalties.append("红眼/过早航班")
 
-        if need_baggage == "required":
+        if baggage_required:
             if _has_free_checked_baggage(flight):
                 notes.append("含免费托运")
             else:
-                penalty += 3
-                penalties.append("托运行李需官网确认")
+                notes.append("允许付费托运，费用已单独计入预算")
+
+        if not baggage_required and passenger_rules.get("require_baggage_clarity") and not _has_free_checked_baggage(flight):
+            penalty += 3
+            penalties.append("托运行李需官网确认")
 
         if refund_flexibility == "preferred":
             if _has_refund_change_flexibility(flight):
@@ -8714,7 +9051,7 @@ def _apply_user_preferences(
         kept.append(flight)
 
     if not kept:
-        if direct_required and not direct_flights and direct_reference_candidates:
+        if direct_required and not direct_flights and direct_reference_candidates and not baggage_references:
             reference_flights = [
                 {
                     **flight,
@@ -8731,9 +9068,10 @@ def _apply_user_preferences(
             }
         return [], excluded, {
             "fallback": False,
-            "message": "没有航班满足当前硬约束",
+            "message": _NO_CONFIRMED_BAGGAGE if baggage_references else "没有航班满足当前硬约束",
+            "reference_flights": baggage_references,
         }
-    return kept, excluded, {"fallback": False}
+    return kept, excluded, {"fallback": False, "reference_flights": baggage_references}
 
 
 def _apply_lcc_policy(
@@ -9420,7 +9758,8 @@ def analyze_all_flights(
     original_options = len(usable_flights)
     if hard_constraints:
         merged_preferences = {**(user_preferences or {}), **hard_constraints}
-        if "baggage" in hard_constraints and "need_baggage" not in merged_preferences:
+        if (hard_constraints.get("baggage") not in (None, "")
+                and merged_preferences.get("need_baggage") in (None, "", "unknown")):
             merged_preferences["need_baggage"] = hard_constraints.get("baggage")
     else:
         merged_preferences = user_preferences or {}
@@ -9490,6 +9829,7 @@ def analyze_all_flights(
     usable_flights, preference_excluded, preference_summary = _apply_user_preferences(
         usable_flights, merged_preferences
     )
+    detail_reference_flights.extend(preference_summary.get("reference_flights") or [])
     scoring_reference_flights = list(usable_flights)
     usable_flights, lcc_excluded = _apply_lcc_policy(
         usable_flights,
@@ -9506,9 +9846,12 @@ def analyze_all_flights(
     print(f"[过滤后] {len(usable_flights)}个航班")
     if not usable_flights:
         return {
-            "error": "no_flights",
+            "error": "no_flights", "all_flights": [], "roundtrip_candidate_flights": [], "recommendations": [],
+            "recommended_plans": [], "economy_recommendations": [],
             "excluded_flights": _excluded_flight_summary(excluded_flights),
             "reference_flights": detail_reference_flights,
+            "user_preferences": merged_preferences,
+            **({"no_primary_reason": _NO_CONFIRMED_BAGGAGE} if is_checked_baggage_required(merged_preferences) else {}),
         }
 
     # 1. 按价格排名
@@ -9571,6 +9914,17 @@ def analyze_all_flights(
     if price_tolerance is None:
         price_tolerance = 100
 
+    max_scope, target_scope = resolve_effective_budget_scopes(merged_preferences)
+    budget_limits = passenger_budget_limits(
+        max_budget_effective, target_price_effective, passengers=merged_preferences.get("passengers"),
+        route_type=merged_preferences.get("route_type"), round_trip=roundtrip_purchase_context,
+        max_budget_scope=max_scope, target_price_scope=target_scope)
+    ideal_pp = budget_limits["ideal_price_pp_oneway"]
+    main_scope = budget_limits["max_budget_compare_scope"]
+    same_axis_target = (price_in_scope(ideal_pp, merged_preferences.get("passengers"), scope=main_scope,
+                        route_type=merged_preferences.get("route_type"), round_trip=roundtrip_purchase_context)
+                        if ideal_pp is not None else None)
+
     for flight in usable_flights:
         price_score = (
             ((float(flight["price"]) - min_p) / (max_p - min_p)) if max_p > min_p else 0
@@ -9610,8 +9964,8 @@ def analyze_all_flights(
             flight.pop("price_advice", None)
         else:
             advice = price_tolerance_advice(
-                flight.get("price"),
-                target_price_effective,
+                _scoped_offer_price(flight, merged_preferences, main_scope),
+                same_axis_target,
                 price_tolerance,
                 max_budget_effective,
             )
@@ -9624,7 +9978,7 @@ def analyze_all_flights(
             - float(flight.get("preference_penalty") or 0),
             1,
         )
-        calc_final_score(flight, target_price_effective, travel_profile)
+        calc_final_score(flight, ideal_pp, travel_profile)
 
     priority_config = _normalize_priorities(priorities)
     qualified_flights = []
@@ -9770,8 +10124,8 @@ def analyze_all_flights(
     price_band = None
     if not roundtrip_purchase_context:
         price_band = price_tolerance_advice(
-            lowest_price,
-            target_price_effective,
+            _scoped_offer_price(by_price[0], merged_preferences, main_scope),
+            same_axis_target,
             price_tolerance,
             max_budget_effective,
         )
@@ -9780,8 +10134,8 @@ def analyze_all_flights(
             flight.pop("price_advice", None)
         else:
             advice = price_tolerance_advice(
-                flight.get("price"),
-                target_price_effective,
+                _scoped_offer_price(flight, merged_preferences, main_scope),
+                same_axis_target,
                 price_tolerance,
                 max_budget_effective,
             )
@@ -9795,9 +10149,9 @@ def analyze_all_flights(
         (price_insights or {}).get("price_history") if price_insights else None,
     )
     decision_summary = generate_decision_summary(
-        lowest_price,
-        target_price_effective,
-        max_budget_effective,
+        lowest_price if roundtrip_purchase_context else _scoped_offer_price(decision_flight, merged_preferences, main_scope),
+        ideal_pp if roundtrip_purchase_context else same_axis_target,
+        budget_limits["max_budget_pp_oneway"] if roundtrip_purchase_context else max_budget_effective,
         confidence_breakdown,
         decision_flight.get("execution_grade"),
     )
@@ -9805,7 +10159,7 @@ def analyze_all_flights(
         lowest_price,
         (price_insights or {}).get("price_history") if price_insights else None,
         merged_preferences.get("days_to_dept"),
-        target_price_effective,
+        ideal_pp,
         decision_flight.get("execution_grade"),
     )
 
@@ -9836,6 +10190,11 @@ def analyze_all_flights(
         "price_insights": price_insights,
         "price_anomalies": price_anomalies,
         "current_min_price": lowest_price,
+        "budget_limits": budget_limits,
+        "budget_compare_scope": main_scope,
+        "target_compare_scope": budget_limits["ideal_price_compare_scope"],
+        "budget_price_compare": _scoped_offer_price(decision_flight, merged_preferences, main_scope),
+        "ideal_price_pp_oneway": ideal_pp,
         "max_budget": max_budget_effective,
         "target_price": target_price,
         "target_price_effective": target_price_effective,
@@ -10977,8 +11336,7 @@ def analyze_round_trip(
         or return_analysis.get("route_type")
         or ""
     )
-    budget_scope = normalize_budget_scope(combined_preferences.get("max_budget_scope") or combined_preferences.get("budget_scope"))
-    target_budget_scope = normalize_budget_scope(combined_preferences.get("target_price_scope") or budget_scope)
+    budget_scope, target_budget_scope = resolve_effective_budget_scopes(combined_preferences)
     mixed_cabin_allocation = combined_preferences.get("cabin_allocation")
     mixed_cabin_active = bool(
         isinstance(mixed_cabin_allocation, dict)
@@ -11278,7 +11636,27 @@ def analyze_round_trip(
                 combined_preferences,
             )
 
-    combinations.sort(key=lambda item: item["total_price"])
+    baggage_required = is_checked_baggage_required(combined_preferences)
+    if baggage_required:
+        confirmed = []
+        for combo in combinations:
+            out, ret = combo.get("outbound") or {}, combo.get("return") or {}
+            fee = resolve_checked_baggage_fee_in_scope(out, passengers=combined_preferences.get("passengers"),
+                                                      visible_scope="all_passengers_roundtrip", round_trip=True, return_flight=ret)
+            compare_fee = resolve_checked_baggage_fee_in_scope(
+                out, passengers=combined_preferences.get("passengers"),
+                visible_scope=_budget_visible_scope(budget_scope, True), round_trip=True, return_flight=ret)
+            if not fee["calculable"] or (max_budget is not None and not compare_fee["calculable"]):
+                continue
+            combo["baggage_fee_all"] = fee["amount"]
+            combo["checked_baggage_required"] = True
+            combo["selection_cost_all"] = (combo.get("raw_passenger_total_price") or combo.get("passenger_total_price")
+                                             or price_in_scope(combo["outbound_price"], pricing_passengers,
+                                                 scope="all_passengers_roundtrip", route_type=pricing_route_type,
+                                                 return_per_person_oneway=combo["return_price"], round_trip=True)) + fee["amount"]
+            confirmed.append(combo)
+        combinations = confirmed
+    combinations.sort(key=lambda item: item.get("selection_cost_all", item["total_price"]))
     combinations = _dedupe_roundtrip_combinations(combinations)
     _print_roundtrip_plan_comparison(
         combinations,
@@ -11369,12 +11747,22 @@ def analyze_round_trip(
         budget_price_compare = budget_price
         budget_outbound_compare = budget_outbound_min
         budget_return_compare = budget_return_min
+    if baggage_required and best_combo:
+        compare_fee = resolve_checked_baggage_fee_in_scope(
+            best_combo.get("outbound") or {}, passengers=combined_preferences.get("passengers"),
+            visible_scope=budget_compare_scope, round_trip=True, return_flight=best_combo.get("return"))
+        if compare_fee["calculable"]:
+            budget_price_compare += compare_fee["amount"]
+        budget_price = best_combo["selection_cost_all"]
+    ideal_pp = budget_limits.get("ideal_price_pp_oneway")
+    same_axis_target = (price_in_scope(ideal_pp, pricing_passengers, scope=budget_compare_scope,
+                        route_type=pricing_route_type, round_trip=True) if ideal_pp is not None else None)
     price_analysis = analyze_roundtrip_prices(
         history,
         budget_price_compare,
         budget_outbound_compare,
         budget_return_compare,
-        target_price=budget_limits.get("ideal_price_compare"),
+        target_price=same_axis_target,
         max_budget=budget_limits.get("max_budget_compare"),
         days_to_dept=outbound_analysis.get("days_to_dept"),
         budget_is_roundtrip=True,
@@ -11399,7 +11787,7 @@ def analyze_round_trip(
         or return_analysis.get("travel_profile")
         or build_travel_profile((outbound_analysis.get("user_preferences") or {}))
     )
-    summary_target = budget_limits.get("ideal_price_compare")
+    summary_target = same_axis_target
     summary_budget = budget_limits.get("max_budget_compare")
     summary_budget_total = budget_limits.get("max_budget_total")
     decision_summary = generate_decision_summary(
@@ -11506,7 +11894,8 @@ def analyze_round_trip(
         "previous": previous,
         **({"mixed_cabin_matching": mixed_cabin_matching} if mixed_cabin_active else {}),
         **({"mixed_cabin_history": mixed_history} if mixed_history else {}),
-        "advice": _roundtrip_budget_advice(budget_price, summary_target, summary_budget, budget_is_roundtrip=True),
+        "advice": _roundtrip_budget_advice(budget_price_compare, summary_target, summary_budget, budget_is_roundtrip=True),
+        **({"no_primary_reason": _NO_CONFIRMED_BAGGAGE} if baggage_required and not combinations else {}),
     }
 
 

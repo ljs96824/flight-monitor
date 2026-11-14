@@ -44,6 +44,8 @@ def build_constraint_summary(
     max_budget=None,
     passengers: dict | None = None,
     route_type: str | None = None,
+    *,
+    round_trip: bool | None = None,
 ) -> list[str]:
     """按既有邮件顺序生成可追溯的用户约束摘要。"""
     constraints = constraints or {}
@@ -96,6 +98,7 @@ def build_constraint_summary(
             f"(全员,=单人¥{input_max_budget:,.0f}×{factor:g})"
         )
     else:
-        scope_label = "全员往返" if max_scope == "all" else "单人往返"
+        is_roundtrip = round_trip if round_trip is not None else not (constraints.get("round_trip") is False and not constraints.get("same_day_round_trip") and not constraints.get("return_date"))
+        scope_label = ("全员" if max_scope == "all" else "单人") + ("往返" if is_roundtrip else "单程")
         summary.append(f"最高可接受价¥{max_budget_value:,.0f}({scope_label})")
     return summary

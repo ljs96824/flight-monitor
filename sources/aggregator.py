@@ -177,6 +177,38 @@ def _segment_score(segments) -> int:
     return score
 
 
+OFFER_PROOF_KEYS = frozenset({
+    "baggage_applicability", "baggage_offer_matched", "quote_offer_id", "baggage_offer_id",
+    "offer_id", "baggage_evidence_source", "baggage_enrichment_source",
+})
+BAGGAGE_EVIDENCE_KEYS = frozenset({
+    "extra", "fare_rules", "has_baggage_info", "baggage", "baggage_detail", "baggage_services",
+    "checked_baggage_fee", "checked_baggage_fee_spec", "extra_bag_price", "total_checked_baggage_fee",
+})
+
+
+def _has_native_baggage_payload(flight):
+    extra = flight.get("extra") or {}
+    rules = (flight.get("fare_rules") or {}).get("baggage") or {}
+    return (any(_non_empty(flight.get(key)) for key in BAGGAGE_EVIDENCE_KEYS - {"has_baggage_info", "extra", "fare_rules"})
+            or any(_non_empty(extra.get(key)) for key in ("baggage", "baggage_detail", "baggage_services", "checked_baggage_fee_spec"))
+            or rules.get("included") is not None or bool(rules.get("checked_pieces") or rules.get("checked_kg"))
+            or rules.get("extra_bag_price") is not None)
+
+
+def _unbound_baggage_copy(value):
+    if isinstance(value, dict):
+        return {key: _unbound_baggage_copy(item) for key, item in value.items() if key not in OFFER_PROOF_KEYS}
+    if isinstance(value, list):
+        return [_unbound_baggage_copy(item) for item in value]
+    return copy.deepcopy(value)
+
+
+def _mark_unbound_baggage(flight, source):
+    flight["baggage_applicability"] = "flight_number_match_only"
+    flight["baggage_offer_matched"] = False
+    flight["baggage_enrichment_source"] = str(source or "unknown")
+
 def _merge_flight_fields(target: dict, source: dict) -> dict:
     """Merge duplicate flight records without letting sparse lower-price rows erase details."""
     for key in ("segments", "layovers", "flights", "legs"):
@@ -189,7 +221,7 @@ def _merge_flight_fields(target: dict, source: dict) -> dict:
             target[key] = source_value
 
     for key, value in source.items():
-        if key in {
+        if key in OFFER_PROOF_KEYS | {
             "price",
             "source",
             "data_source",
@@ -203,7 +235,11 @@ def _merge_flight_fields(target: dict, source: dict) -> dict:
         }:
             continue
         if not _non_empty(target.get(key)) and _non_empty(value):
-            target[key] = value
+            if key in BAGGAGE_EVIDENCE_KEYS:
+                target[key] = _unbound_baggage_copy(value)
+                _mark_unbound_baggage(target, source.get("price_source") or source.get("data_source") or source.get("source"))
+            else:
+                target[key] = copy.deepcopy(value)
 
     _merge_booking_options(target, source)
     target_collection = target.setdefault("source_collection", {})
@@ -1174,6 +1210,7 @@ class FlightAggregator:
 
         total_raw = len(all_flights)
         seen = {}
+        native_baggage_by_combo = {}
         sources_by_combo = {}
         source_times_by_combo = {}
         for flight in all_flights:
@@ -1202,20 +1239,18 @@ class FlightAggregator:
                     sources_by_combo[normalized_combo].append(source)
 
             current_flight = seen.get(normalized_combo, {})
-            if normalized_combo in seen:
-                _append_sources(seen[normalized_combo], new_sources)
-                _merge_flight_fields(seen[normalized_combo], flight)
-                _append_source_price(seen[normalized_combo], source_name, flight.get("price"))
-            if normalized_combo not in seen or _should_replace_flight(
-                current_flight, flight, domestic_route
-            ):
+            if normalized_combo not in seen or _should_replace_flight(current_flight, flight, domestic_route):
                 previous = seen.get(normalized_combo)
-                seen[normalized_combo] = dict(flight)
+                native_baggage_by_combo[normalized_combo] = _has_native_baggage_payload(flight)
+                seen[normalized_combo] = copy.deepcopy(flight)
                 seen[normalized_combo]["price_source"] = candidate_price_source
                 _append_source_price(seen[normalized_combo], source_name, flight.get("price"))
                 if previous:
                     _merge_flight_fields(seen[normalized_combo], previous)
-                _append_sources(seen[normalized_combo], sources_by_combo[normalized_combo])
+            else:
+                _merge_flight_fields(seen[normalized_combo], flight)
+                _append_source_price(seen[normalized_combo], source_name, flight.get("price"))
+            _append_sources(seen[normalized_combo], sources_by_combo[normalized_combo])
 
         unique_flights = list(seen.values())
         for flight in unique_flights:
@@ -1277,7 +1312,7 @@ class FlightAggregator:
                         flight["cabin_class"] = flight.get("cabin_class") or cabin_class
                         combo = _flight_key(flight)
                         if combo and flight.get("extra"):
-                            enrichment_data[combo] = flight["extra"]
+                            enrichment_data[combo] = (flight["extra"], source_name)
 
                 except (MissingRequestOutcome, InvalidRequestOutcomeStatus):
                     raise
@@ -1304,13 +1339,15 @@ class FlightAggregator:
         enriched_count = 0
         for flight in unique_flights:
             combo = _flight_key(flight)
-            if combo in enrichment_data:
-                extra = flight.get("extra") or {}
-                extra.update(enrichment_data[combo])
+            if combo in enrichment_data and not native_baggage_by_combo.get(combo):
+                value, enrichment_source = enrichment_data[combo]
+                extra = copy.deepcopy(flight.get("extra") or {})
+                extra.update(_unbound_baggage_copy(value))
                 flight["extra"] = extra
                 flight["has_baggage_info"] = True
+                _mark_unbound_baggage(flight, enrichment_source)
                 enriched_count += 1
-            else:
+            elif not flight.get("has_baggage_info"):
                 flight["has_baggage_info"] = False
 
         source_stats["total_raw"] = total_raw
@@ -1407,7 +1444,7 @@ class FlightAggregator:
                     continue
 
                 data_source = flight.get("data_source") or source
-                normalized_flight = {**flight, "flight_combo": combo}
+                normalized_flight = {**copy.deepcopy(flight), "flight_combo": combo}
                 price_sources = _source_names(data_source)
                 candidate_price_source = (
                     str(flight.get("price_source") or "").lower()
