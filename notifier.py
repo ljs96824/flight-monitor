@@ -43,6 +43,10 @@ from departure_guard import (
     UNKNOWN_NOTE as DEPARTURE_UNKNOWN_NOTE,
 )
 from analyzer import (
+    is_checked_baggage_required,
+    resolve_effective_budget_scopes,
+    resolve_checked_baggage_fee_in_scope,
+    _has_free_checked_baggage as _verified_free_checked_baggage,
     MIN_SAMPLE_FOR_PRICE_SIGNAL,
     build_execution_advice,
     build_budget_gap,
@@ -602,8 +606,7 @@ def _flight_status_tags(flight: dict | None, route_info: dict | None = None, ana
             " | ".join(domestic_tags[:4]),
             _lcc_status_tag_for_flight(flight),
         )
-    price = _to_float(flight.get("price"))
-    target = _to_float(_preference_value(route_info, analysis_result, "target_price")) if route_info or analysis_result else None
+    price, target = _single_leg_comparison(flight, route_info, analysis_result)
     if target and price:
         price_tag = "接近理想" if price <= target * 1.05 else "中等"
     else:
@@ -662,9 +665,25 @@ def _status_availability_label(flight: dict | None) -> str:
     return ""
 
 
-def _human_recommendation_text(flight: dict | None, route_info: dict | None = None, analysis_result: dict | None = None) -> str:
-    price = _to_float((flight or {}).get("price"))
+def _single_leg_comparison(flight, route_info=None, analysis_result=None):
+    flight, route_info, analysis_result = flight or {}, route_info or {}, analysis_result or {}
+    if "target_compare_price" in flight:
+        target = _to_float(_preference_value(route_info, analysis_result, "target_price"))
+        return flight.get("target_compare_price"), target
     target = _to_float(_preference_value(route_info, analysis_result, "target_price"))
+    if target is None:
+        return _to_float(flight.get("price")), None
+    preferences = {key: _preference_value(route_info, analysis_result, key) for key in
+                   ("cabin_arrangement", "max_budget_scope", "target_price_scope", "budget_scope", "passengers", "route_type")}
+    _, target_scope = resolve_effective_budget_scopes(preferences)
+    scope = "all_passengers_oneway" if target_scope == "all" else "per_person_oneway"
+    value = _plan_price_in_budget_scope({"main_flight": flight}, flight.get("price"), preferences["passengers"],
+                                       preferences["route_type"], False, scope)
+    return value, target
+
+
+def _human_recommendation_text(flight: dict | None, route_info: dict | None = None, analysis_result: dict | None = None) -> str:
+    price, target = _single_leg_comparison(flight, route_info, analysis_result)
     if price and target and price <= target * 1.05:
         return f"支付页≤{_price_text(price * 1.05)}且票规可接受时，可购买前验证"
     return "点击购买页确认最终价格和票规后再判断"
@@ -1404,10 +1423,10 @@ def format_baggage(extra):
 
     if not bag:
         lines = []
-        if extra.get("baggage"):
+        if _has_free_checked_baggage({"extra": extra}):
             lines.append("🧳 行李：含托运行李（详情以航司规定为准）")
         else:
-            lines.append("🧳 行李：请查询航司官网确认托运额度")
+            lines.append("🧳 行李：不含免费托运，支付页需确认" if extra.get("baggage") else "🧳 行李：请查询航司官网确认托运额度")
     return lines
 
 
@@ -1785,10 +1804,15 @@ def _compact_cabin_rule_line(flight: dict) -> str:
 
 
 def _compact_baggage_line(flight: dict) -> str:
+    eligibility = flight.get("checked_baggage_eligibility") or {}
+    if eligibility.get("state") == "pending_confirmation" or flight.get("pending_baggage_confirmation"):
+        return "行李:权益未确认(支付页核实)"
+    if eligibility.get("state") == "paid_allowed_known_fee":
+        return "行李:允许付费托运(未含在票价内)"
     fare_rules = flight.get("fare_rules") or {}
     baggage_rules = fare_rules.get("baggage") or {}
     checked_pieces = int(baggage_rules.get("checked_pieces") or 0)
-    if checked_pieces > 0:
+    if checked_pieces > 0 and _has_free_checked_baggage(flight):
         checked_kg = baggage_rules.get("checked_kg")
         if checked_kg:
             return f"🧳 托运：免费{checked_pieces}件≤{checked_kg}kg"
@@ -1874,16 +1898,7 @@ def _collected_datetime(flight: dict) -> datetime | None:
 
 
 def _has_free_checked_baggage(flight: dict) -> bool:
-    extra = flight.get("extra") or {}
-    baggage_detail = extra.get("baggage_detail") or {}
-    checked = baggage_detail.get("checked") or {}
-    if (checked.get("quantity") or 0) > 0:
-        return True
-    fare_rules = flight.get("fare_rules") or {}
-    fare_baggage = fare_rules.get("baggage") or {}
-    if (fare_baggage.get("checked_pieces") or 0) > 0:
-        return True
-    return bool(extra.get("baggage"))
+    return _verified_free_checked_baggage(flight)
 
 
 def _execution_target_price(
@@ -1903,6 +1918,15 @@ def _execution_target_price(
     for candidate in candidates:
         value = _to_float(candidate)
         if value and value > 0:
+            scope = _preference_value(route_info, analysis_result, "target_price_scope") or _preference_value(route_info, analysis_result, "max_budget_scope")
+            if _preference_value(route_info, analysis_result, "cabin_arrangement") in {"business_all", "mixed"}:
+                scope = "all"
+            is_roundtrip = bool(_preference_value(route_info, analysis_result, "round_trip") or _preference_value(route_info, analysis_result, "same_day_round_trip"))
+            if scope in {"all", "all_passengers", "total"} or is_roundtrip:
+                return budget_to_pp(value, _preference_value(route_info, analysis_result, "passengers"),
+                                    scope=("all_passengers_" if scope in {"all", "all_passengers", "total"} else "per_person_")
+                                          + ("roundtrip" if is_roundtrip else "oneway"),
+                                    route_type=_preference_value(route_info, analysis_result, "route_type"), round_trip=is_roundtrip)
             return value
     return price * 1.05 if price and price > 0 else None
 
@@ -4692,6 +4716,17 @@ def _purchase_mode_note(mode: str) -> str:
 
 def _pushplus_baggage_line_for_flight(flight: dict | None) -> str:
     flight = flight or {}
+    eligibility = flight.get("checked_baggage_eligibility") or {}
+    if eligibility.get("state") == "pending_confirmation" or flight.get("pending_baggage_confirmation"):
+        return "行李:权益未确认(支付页核实)"
+    if eligibility.get("state") == "paid_allowed_known_fee":
+        return "行李:允许付费托运(未含在票价内)"
+    extra = flight.get("extra") or {}
+    detail = extra.get("baggage_detail") or {}
+    checked = detail.get("checked") or {}
+    if (flight.get("has_baggage_info") and checked and not checked.get("quantity")
+            and not _has_free_checked_baggage(flight)):
+        return "行李:不含免费托运(支付页核实)"
     estimate = flight.get("price_estimate") or {}
     for item in estimate.get("extra_items") or []:
         name = str(item.get("name") or "")
@@ -4726,8 +4761,10 @@ def _pushplus_baggage_line_for_flight(flight: dict | None) -> str:
     checked = detail.get("checked") or {}
     if checked.get("quantity"):
         return f"行李:已含{checked.get('quantity')}件托运"
-    if extra.get("baggage") or flight.get("has_baggage_info"):
+    if _has_free_checked_baggage(flight):
         return "行李:已含托运"
+    if extra.get("baggage") or flight.get("has_baggage_info"):
+        return "行李:不含免费托运(支付页核实)"
     return "行李:支付页需确认"
 
 
@@ -6121,6 +6158,8 @@ def _payload_budget_scopes(subscription: dict | None) -> tuple[str, str]:
                     return value
         return None
 
+    if first_value("cabin_arrangement") in {"business_all", "mixed"}:
+        return "all", "all"
     max_scope = _normalize_payload_budget_scope(first_value("max_budget_scope", "budget_scope"))
     target_scope = _normalize_payload_budget_scope(first_value("target_price_scope") or max_scope)
     return max_scope, target_scope
@@ -6178,7 +6217,7 @@ def _budget_value_in_scope(value, passengers, route_type, visible_scope, is_roun
 def _plan_price_in_budget_scope(primary_plan, fallback_price, passengers, route_type, is_roundtrip, visible_scope):
     primary_plan = primary_plan or {}
     if primary_plan.get("mixed_cabin"):
-        if visible_scope != "all_passengers_roundtrip":
+        if visible_scope != ("all_passengers_roundtrip" if is_roundtrip else "all_passengers_oneway"):
             raise AssertionError(
                 "混舱预算必须使用全员往返总价口径: "
                 f"visible_scope={visible_scope}"
@@ -6214,6 +6253,15 @@ def _plan_price_in_budget_scope(primary_plan, fallback_price, passengers, route_
             round_trip=is_roundtrip,
             return_per_person_oneway=return_price,
         )
+        flight = primary_plan.get("outbound_flight") if is_roundtrip else primary_plan.get("main_flight")
+        flight = flight or primary_plan
+        if primary_plan.get("checked_baggage_required") or flight.get("checked_baggage_required"):
+            fee = resolve_checked_baggage_fee_in_scope(
+                flight, passengers=passengers, visible_scope=visible_scope,
+                round_trip=is_roundtrip, return_flight=primary_plan.get("return_flight"))
+            if not fee["calculable"]:
+                return None
+            scoped += fee["amount"]
         return _round_payload_price(scoped)
 
     unit_roundtrip = _to_float(tiers.get("unit_roundtrip") or primary_plan.get("adult_roundtrip_price"))
@@ -6961,7 +7009,7 @@ def _no_result_candidate_flights(
 ) -> list[dict]:
     sources: list[tuple[dict, str]] = []
 
-    def _extend(analysis: dict | None, direction: str, keys=("all_flights", "recommendations")):
+    def _extend(analysis: dict | None, direction: str, keys=("all_flights", "recommendations", "reference_flights")):
         if not isinstance(analysis, dict):
             return
         for key in keys:
@@ -6978,7 +7026,7 @@ def _no_result_candidate_flights(
         _extend(round_trip, "outbound", ("closest_same_day_outbound_options", "outbound_top3"))
         _extend(round_trip, "return", ("return_top3",))
     else:
-        _extend(analysis_result, "outbound", ("all_flights", "recommendations", "economy_recommendations"))
+        _extend(analysis_result, "outbound", ("all_flights", "recommendations", "economy_recommendations", "reference_flights"))
 
     result = []
     seen = set()
@@ -7111,8 +7159,8 @@ def _build_single_leg_rejection_rows(
             "flight": dict(flight),
             "price": _to_float(flight.get("price")),
             "direction": direction,
-            "reason": str(default_reason or "不满足当前约束"),
-            "filter_reason_code": str(default_reason_code or ""),
+            "reason": str(flight.get("reference_reason") or default_reason or "不满足当前约束"),
+            "filter_reason_code": str(flight.get("filter_reason_code") or default_reason_code or ""),
             "filter_reason_value": "",
             "stops": flight.get("stops", 0),
         }

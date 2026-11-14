@@ -1730,6 +1730,13 @@ def subscription_preferences(sub: dict) -> dict:
     basic = sub.get("basic") or {}
     hard = sub.get("hard_constraints") or {}
     constraints = sub.get("constraints") or {}
+    need_baggage = next((value for value in (
+        sub.get("need_baggage"), sub.get("baggage"),
+        hard.get("baggage"), hard.get("need_baggage"),
+        constraints.get("baggage"), constraints.get("need_baggage"),
+        preferences.get("need_baggage"), preferences.get("baggage"),
+        soft.get("need_baggage"), soft.get("baggage"),
+    ) if value not in (None, "")), "unknown")
     travel_scenarios = soft.get("travel_scenarios") or sub.get("travel_scenarios")
     if isinstance(travel_scenarios, str):
         travel_scenarios = [item.strip() for item in travel_scenarios.split(",") if item.strip()]
@@ -1751,7 +1758,7 @@ def subscription_preferences(sub: dict) -> dict:
         "outbound_arrival_slots": sub.get("outbound_arrival_slots"),
         "return_departure_slots": sub.get("return_departure_slots"),
         "return_arrival_slots": sub.get("return_arrival_slots"),
-        "need_baggage": sub.get("need_baggage", "unknown"),
+        "need_baggage": need_baggage,
         "refund_flexibility": sub.get("refund_flexibility", "unknown"),
         "trip_type": sub.get("trip_type", "tourism"),
         "companions": sub.get("companions", "solo"),
@@ -2825,7 +2832,7 @@ def _process_subscription_locked(
             current_min_price,
             lowest_price_history,
             days_to_dept,
-            analysis.get("target_price_effective"),
+            analysis.get("ideal_price_pp_oneway", analysis.get("target_price_effective")),
         )
         analysis["buy_vs_wait_risk"] = _merge_constraint_history_trend(
             analysis.get("buy_vs_wait_risk"),
