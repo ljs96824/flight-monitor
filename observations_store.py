@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Iterable, Iterator
 
 from flight_combo_utils import normalize_combo
+from duration_utils import parse_duration_minutes
 from log_utils import safe_log
 from method_registry import method_version
 from observation_time import canonicalize_observed_at, timestamp_kind
@@ -378,30 +379,7 @@ def _to_price(value) -> float | None:
 
 
 def _parse_duration_minutes(value) -> int | None:
-    if value in (None, ""):
-        return None
-    if isinstance(value, (int, float)):
-        minutes = int(value)
-        return minutes if minutes > 0 else None
-    text = str(value).strip()
-    if not text:
-        return None
-    if text.isdigit():
-        minutes = int(text)
-        return minutes if minutes > 0 else None
-    colon = re.match(r"^(\d{1,2}):(\d{1,2})$", text)
-    if colon:
-        return int(colon.group(1)) * 60 + int(colon.group(2))
-    hours = 0
-    minutes = 0
-    hour_match = re.search(r"(\d+)\s*(?:h|hr|hour|hours|\u5c0f\u65f6|\u5c0f\u6642)", text, re.IGNORECASE)
-    minute_match = re.search(r"(\d+)\s*(?:m|min|minute|minutes|\u5206\u949f|\u5206\u9418)", text, re.IGNORECASE)
-    if hour_match:
-        hours = int(hour_match.group(1))
-    if minute_match:
-        minutes = int(minute_match.group(1))
-    total = hours * 60 + minutes
-    return total if total > 0 else None
+    return parse_duration_minutes(value)
 
 
 def _flight_duration_min(flight: dict, source: str) -> int | None:

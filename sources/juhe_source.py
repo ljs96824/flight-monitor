@@ -17,6 +17,7 @@ from pathlib import Path
 from atomic_json_store import JSON_READ_ERRORS, check_json_nesting, parse_json_text, replace_lone_surrogates
 from filename_utils import sanitize_filename
 from domestic_fare_rules import get_aircraft_name
+from duration_utils import build_connection_layover, parse_duration_minutes
 from log_utils import safe_log
 from sources.base import FlightSource
 from subscription_preflight import shanghai_today
@@ -66,27 +67,7 @@ def _first(item: dict, *keys, default=""):
 
 
 def _duration_minutes(value) -> int | None:
-    if value in (None, ""):
-        return None
-    if isinstance(value, (int, float)):
-        minutes = int(value)
-        return minutes if minutes > 0 else None
-    text = str(value).strip()
-    if not text:
-        return None
-    if text.isdigit():
-        minutes = int(text)
-        return minutes if minutes > 0 else None
-    hours = 0
-    minutes = 0
-    hour_match = re.search(r"(\d+)\s*(?:h|hr|hour|hours|\u5c0f\u65f6|\u5c0f\u6642)", text, re.IGNORECASE)
-    minute_match = re.search(r"(\d+)\s*(?:m|min|minute|minutes|\u5206\u949f|\u5206\u9418)", text, re.IGNORECASE)
-    if hour_match:
-        hours = int(hour_match.group(1))
-    if minute_match:
-        minutes = int(minute_match.group(1))
-    total = hours * 60 + minutes
-    return total if total > 0 else None
+    return parse_duration_minutes(value)
 
 
 def _as_flight_items(raw: dict) -> list[dict]:
@@ -433,6 +414,36 @@ class JuheSource(FlightSource):
                 "layovers": [],
                 "raw": item,
             }
+            raw_segments = item.get("segments")
+            raw_segments = [s for s in raw_segments if isinstance(s, dict)] if isinstance(raw_segments, list) else []
+            if raw_segments:
+                segments = []
+                for raw_segment in raw_segments:
+                    part = {
+                        "flight_no": _first(raw_segment, "flightNo", "flight_no"),
+                        "airline": _first(raw_segment, "airlineName", "airline"),
+                        "airline_code": _first(raw_segment, "airline"),
+                        "dep_airport": _first(raw_segment, "departure", "departureAirport", "depAirport"),
+                        "dep_city": _first(raw_segment, "departureName"),
+                        "dep_time": _combine_date_time(raw_segment.get("departureDate"), raw_segment.get("departureTime")),
+                        "arr_airport": _first(raw_segment, "arrival", "arrivalAirport", "arrAirport"),
+                        "arr_city": _first(raw_segment, "arrivalName"),
+                        "arr_time": _combine_date_time(raw_segment.get("arrivalDate"), raw_segment.get("arrivalTime")),
+                        "aircraft": get_aircraft_name(_first(raw_segment, "equipment", "planeType", "aircraft")),
+                        "duration_min": _duration_minutes(raw_segment.get("flightTime")),
+                    }
+                    if raw_segment.get("opAirline"):
+                        part["operating_airline"] = raw_segment["opAirline"]
+                    if raw_segment.get("opFlightNo"):
+                        part["operating_flight_no"] = raw_segment["opFlightNo"]
+                    if _is_codeshare(raw_segment.get("isCodeShare")):
+                        part["is_codeshare"] = True
+                    segments.append(part)
+                row["segments"] = segments
+                row["stops"] = max(stops, len(segments) - 1)
+                row["layovers"] = [build_connection_layover(a, b) for a, b in zip(segments, segments[1:])]
+                if len(segments) > 1:
+                    row["airlines"] = list(dict.fromkeys(s["airline"] for s in segments if s["airline"]))
             normalized.append(row)
         return normalized
 

@@ -1,9 +1,11 @@
 import json
 import os
+import math
 from datetime import datetime
 from pathlib import Path
 
 import flight_time
+from duration_utils import are_same_local_clock_airports, build_connection_layover, compute_endpoint_elapsed_minutes, parse_duration_minutes
 from sources.aggregator import FlightAggregator, build_default_sources, normalize_combo
 from sources.fare_rules import standardize_fare_rules
 from request_cache import cached_fetch
@@ -239,12 +241,16 @@ def _normalize_detail_flight(flight: dict, source_name: str | None = None) -> di
         for index in range(len(segments) - 1):
             arr_time = segments[index].get("arr_time")
             next_dep_time = segments[index + 1].get("dep_time")
-            wait = calc_layover_minutes(arr_time, next_dep_time)
-            layovers.append({
-                "city": segments[index].get("arr_city", ""),
-                "airport": segments[index].get("arr_airport", ""),
-                "wait_minutes": wait,
-            })
+            layover = build_connection_layover(segments[index], segments[index + 1], mark_computed_zero=False)
+            # Preserve the characterized, missing-total legacy fixture path only.
+            if ("total_duration_min" not in detail and detail.get("duration_hours") is None
+                    and all(parse_duration_minutes(s.get("duration_min")) is not None for s in segments)
+                    and layover.get("wait_unverified_reason") == "timezone_unverified"
+                    and are_same_local_clock_airports(segments[index].get("arr_airport"), segments[index + 1].get("dep_airport"))):
+                layover.pop("wait_unverified_reason")
+            if not layover.get("wait_unverified_reason"):
+                layover["wait_minutes"] = calc_layover_minutes(arr_time, next_dep_time)
+            layovers.append(layover)
         detail["layovers"] = layovers
 
     # 重新计算已有layover中wait_minutes为0的
@@ -256,6 +262,8 @@ def _normalize_detail_flight(flight: dict, source_name: str | None = None) -> di
         if layover.pop("_wait_computed", False) is True and layover.get("wait_minutes") == 0:
             # Consume internal provenance; do not expose it in delivery payloads.
             continue
+        if layover.get("wait_unverified_reason"):
+            continue
 
         arr_time = segments[index].get("arr_time")
         next_dep_time = segments[index + 1].get("dep_time")
@@ -263,17 +271,44 @@ def _normalize_detail_flight(flight: dict, source_name: str | None = None) -> di
         if recalculated > 0:
             layover["wait_minutes"] = recalculated
 
-    if "total_duration_min" not in detail:
-        if detail.get("duration_hours") is not None:
-            detail["total_duration_min"] = int(float(detail["duration_hours"]) * 60)
-        else:
-            detail["total_duration_min"] = sum(
-                segment.get("duration_min") or 0 for segment in segments
-            ) + sum(layover.get("wait_minutes") or 0 for layover in layovers)
-
-    detail["total_hours"] = detail.get("total_hours") or round(
-        (detail.get("total_duration_min") or 0) / 60, 1
+    explicit = None
+    for key in ("total_duration_min", "duration_min", "duration", "duration_str", "duration_text", "duration_minutes"):
+        explicit = parse_duration_minutes(detail.get(key))
+        if explicit is not None:
+            break
+    if explicit is None:
+        hours = detail.get("duration_hours")
+        if not isinstance(hours, bool):
+            try:
+                hours = float(hours)
+                explicit = parse_duration_minutes(hours * 60) if math.isfinite(hours) else None
+            except (TypeError, ValueError, OverflowError):
+                pass
+    segment_durations = [parse_duration_minutes(s.get("duration_min")) for s in segments]
+    waits = [s.get("wait_minutes") for s in layovers]
+    complete = bool(segments) and all(d is not None for d in segment_durations)
+    complete = complete and len(layovers) == len(segments) - 1 and all(
+        not s.get("wait_unverified_reason") and isinstance(w, (int, float))
+        and not isinstance(w, bool) and math.isfinite(w) and w >= 0
+        for s, w in zip(layovers, waits)
     )
+    derived, basis = None, None
+    if complete:
+        derived = parse_duration_minutes(sum(segment_durations) + sum(waits))
+        basis = "complete_segments_and_layovers"
+    elif segments and not any(s.get("wait_unverified_reason") == "segment_time_inverted" for s in layovers):
+        derived = compute_endpoint_elapsed_minutes(
+            segments[0].get("dep_time"), segments[0].get("dep_airport"),
+            segments[-1].get("arr_time"), segments[-1].get("arr_airport"),
+        )
+        basis = "endpoint_elapsed"
+    if explicit is not None and derived is not None and explicit != derived:
+        detail["duration_conflict"] = {"explicit_min": explicit, "derived_min": derived, "basis": basis}
+    detail["total_duration_min"] = explicit if explicit is not None else derived
+    if detail["total_duration_min"] is None:
+        detail["total_hours"] = None
+    else:
+        detail["total_hours"] = detail.get("total_hours") or round(detail["total_duration_min"] / 60, 1)
     detail["stops"] = detail.get(
         "stops", detail.get("stopovers", max(0, len(segments) - 1))
     )

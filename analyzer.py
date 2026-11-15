@@ -51,6 +51,7 @@ from price_calendar import (
     roundtrip_calendar_rows as _roundtrip_calendar_rows,
 )
 from domestic_fare_rules import get_aircraft_name
+from duration_utils import parse_duration_minutes
 from flight_combo_utils import normalize_combo
 from departure_guard import (
     PASSED_REASON as DEPARTURE_PASSED_REASON,
@@ -5606,19 +5607,78 @@ def _has_airport_change_transfer(flight: dict) -> bool:
             return True
     segments = [segment for segment in flight.get("segments") or [] if isinstance(segment, dict)]
     for prev_segment, next_segment in zip(segments, segments[1:]):
-        arrival_airport = (
-            prev_segment.get("arrival_airport")
-            or prev_segment.get("arrival")
-            or prev_segment.get("arrival_airport_code")
-        )
-        next_departure_airport = (
-            next_segment.get("departure_airport")
-            or next_segment.get("departure")
-            or next_segment.get("departure_airport_code")
-        )
-        if arrival_airport and next_departure_airport and str(arrival_airport).upper() != str(next_departure_airport).upper():
+        arrival_airport = _connection_segment_airport(prev_segment, True)
+        next_departure_airport = _connection_segment_airport(next_segment, False)
+        if arrival_airport and next_departure_airport and str(arrival_airport).strip().upper() != str(next_departure_airport).strip().upper():
             return True
     return False
+
+
+def _valid_wait_number(layover):
+    if not isinstance(layover, dict) or layover.get("wait_unverified_reason"):
+        return None
+    value = layover.get("wait_minutes")
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
+        return float(value)
+    return None
+
+
+def _connection_segment_airport(segment, arrival):
+    keys = ("arr_airport", "arrival_airport", "arrival", "arrival_airport_code") if arrival else (
+        "dep_airport", "departure_airport", "departure", "departure_airport_code")
+    return next((str(segment[k]).strip().upper() for k in keys if str(segment.get(k) or "").strip()), "")
+
+
+def evaluate_connection_safety(flight: dict, threshold: float) -> dict:
+    segments = [s for s in (flight.get("segments") or []) if isinstance(s, dict)]
+    required = max(_stops_count(flight, default=0), max(0, len(segments) - 1))
+    if required == 0:
+        return {"status": "not_applicable", "code": "", "reason": ""}
+    raw = flight.get("layovers")
+    layovers = raw if isinstance(raw, list) else []
+    values = [_valid_wait_number(item) for item in layovers]
+    if any(v is not None and v < threshold for v in values):
+        return {"status": "insufficient", "code": "connection_time_insufficient", "reason": f"中转时间低于{threshold:g}分钟"}
+    unverified = not isinstance(raw, list) or len(layovers) < required or any(v is None for v in values)
+    if len(segments) > 1:
+        unverified = unverified or len(layovers) != len(segments) - 1
+        for index, (previous, following) in enumerate(zip(segments, segments[1:])):
+            if index >= len(layovers) or not isinstance(layovers[index], dict):
+                unverified = True
+                continue
+            a, b = _connection_segment_airport(previous, True), _connection_segment_airport(following, False)
+            actual_a = str(layovers[index].get("airport") or "").strip().upper()
+            actual_b = str(layovers[index].get("next_airport") or "").strip().upper()
+            if (a and actual_a and a != actual_a) or (b and actual_b and b != actual_b):
+                unverified = True
+    if unverified:
+        inverted = any(isinstance(item, dict) and item.get("wait_unverified_reason") == "segment_time_inverted" for item in layovers)
+        return {
+            "status": "unverified",
+            "code": "connection_time_inverted" if inverted else "connection_time_unverified",
+            "reason": "航段时间顺序异常，无法核实中转衔接时间，仅作价格参考" if inverted else "中转衔接时间未知或不完整，无法确认满足最短安全中转时间，仅作价格参考",
+        }
+    return {"status": "ok", "code": "", "reason": ""}
+
+
+def _connection_reference(flight, verdict):
+    return {**flight, "reference_only": True, "preference_reference": True,
+            "pending_connection_confirmation": True, "filter_reason_code": verdict["code"],
+            "reference_reason": verdict["reason"]}
+
+
+def _active_connection_thresholds(preferences):
+    profile = build_travel_profile(preferences)
+    passengers = profile.get("passenger_profile") or {}
+    rules = profile.get("passenger_rules") or {}
+    thresholds = []
+    if passengers.get("has_child") or passengers.get("has_elderly"):
+        minimum = int(rules.get("min_connection_min") or 0)
+        if minimum:
+            thresholds.append(minimum)
+    if profile.get("risk_averse") == "high" and preferences.get("transfer_policy", "reasonable") != "price_first":
+        thresholds.append(90)
+    return thresholds
 
 
 def _format_hours(minutes: int) -> str:
@@ -7770,6 +7830,9 @@ def build_no_result_diagnosis(
         if exact_record:
             summary.update(exact_record)
             summary["source"] = "candidate_rejection"
+        elif (cheapest_candidate or {}).get("reference_reason"):
+            summary["reason"] = cheapest_candidate["reference_reason"]
+            summary["source"] = "reference_evidence"
         elif fallback_reason:
             summary["reason"] = str(fallback_reason)
             summary["source"] = "pairing_failure"
@@ -7878,6 +7941,8 @@ def build_no_result_diagnosis(
         or pairing_fallback_reason
         or diagnose_no_result(counts, constraints)
     )
+    if flights and not excluded and all(f.get("reference_only") for f in flights):
+        counts["reason"] = "暂无满足当前要求的可执行方案"
     if is_checked_baggage_required(constraints) and any(
             item.get("pending_baggage_confirmation") or item.get("filter_reason_code") == "baggage_pending_confirmation"
             for item in flights + excluded):
@@ -7913,8 +7978,8 @@ def build_no_result_alternatives(
         if price is None or price <= 0:
             continue
         record = reason_by_identity.get(_no_result_flight_identity(flight)) or {
-            "reason": str(default_reason or "不满足当前约束"),
-            "filter_reason_code": str(default_reason_code or ""),
+            "reason": str(flight.get("reference_reason") or default_reason or "不满足当前约束"),
+            "filter_reason_code": str(flight.get("filter_reason_code") or default_reason_code or ""),
             "filter_reason_value": "",
         }
         dep_min = _flight_departure_minutes(flight)
@@ -8611,6 +8676,7 @@ def _apply_user_preferences(
     preferences = copy.deepcopy(preferences or {})
     baggage_required = is_checked_baggage_required(preferences)
     baggage_references = []
+    connection_references = []
     budget_scope, target_scope = resolve_effective_budget_scopes(preferences)
     visible_budget = _budget_visible_scope(budget_scope, False)
     visible_target = _budget_visible_scope(target_scope, False)
@@ -8855,7 +8921,10 @@ def _apply_user_preferences(
         elif transfer_policy in {"price_first", "cheap_ok"} and stops > 0:
             notes.append("价格优先，保留中转方案")
 
-        if stops > 0 and not allow_overnight_transfer and _max_layover_minutes(flight) > 480:
+        safety_active = passenger_friendly_mode or (travel_profile.get("risk_averse") == "high" and transfer_policy != "price_first")
+        max_wait = (max((_valid_wait_number(l) or 0 for l in (flight.get("layovers") or []) if isinstance(l, dict)), default=0)
+                    if safety_active else _max_layover_minutes(flight))
+        if stops > 0 and not allow_overnight_transfer and max_wait > 480:
             excluded.append({**flight, "exclude_reason": "系统默认不推荐过夜中转"})
             continue
         if stops > 0 and not allow_self_transfer and _is_likely_self_transfer(flight):
@@ -8873,9 +8942,14 @@ def _apply_user_preferences(
                 excluded.append({**flight, "exclude_reason": "老人/儿童同行：默认不推荐换机场中转"})
                 continue
             min_connection = int(passenger_rules.get("min_connection_min") or 0)
-            if stops > 0 and min_connection and (_min_layover_minutes(flight) or 9999) < min_connection:
-                excluded.append({**flight, "exclude_reason": f"老人/儿童同行：中转安全时间低于{min_connection}分钟"})
-                continue
+            if stops > 0 and min_connection:
+                verdict = evaluate_connection_safety(flight, min_connection)
+                if verdict["status"] == "insufficient":
+                    excluded.append({**flight, "exclude_reason": f"老人/儿童同行：中转安全时间低于{min_connection}分钟"})
+                    continue
+                if verdict["status"] == "unverified":
+                    connection_references.append(_connection_reference(flight, verdict))
+                    continue
             if not same_day_meeting_time_override and passenger_rules.get("allow_red_eye") is False and _is_red_eye(flight):
                 excluded.append({**flight, "exclude_reason": "老人/儿童同行：默认不推荐红眼或凌晨到达"})
                 continue
@@ -8883,10 +8957,14 @@ def _apply_user_preferences(
             travel_profile.get("risk_averse") == "high"
             and transfer_policy != "price_first"
             and stops > 0
-            and (_min_layover_minutes(flight) or 9999) < 90
         ):
-            excluded.append({**flight, "exclude_reason": "出行风险画像：中转时间低于90分钟"})
-            continue
+            verdict = evaluate_connection_safety(flight, 90)
+            if verdict["status"] == "insufficient":
+                excluded.append({**flight, "exclude_reason": "出行风险画像：中转时间低于90分钟"})
+                continue
+            if verdict["status"] == "unverified":
+                connection_references.append(_connection_reference(flight, verdict))
+                continue
 
         if not same_day_meeting_time_override and red_eye == "reject" and _is_red_eye(flight):
             excluded.append({**flight, "exclude_reason": "用户不接受红眼/过早航班"})
@@ -9051,7 +9129,7 @@ def _apply_user_preferences(
         kept.append(flight)
 
     if not kept:
-        if direct_required and not direct_flights and direct_reference_candidates and not baggage_references:
+        if direct_required and not direct_flights and direct_reference_candidates and not baggage_references and not connection_references:
             reference_flights = [
                 {
                     **flight,
@@ -9069,9 +9147,9 @@ def _apply_user_preferences(
         return [], excluded, {
             "fallback": False,
             "message": _NO_CONFIRMED_BAGGAGE if baggage_references else "没有航班满足当前硬约束",
-            "reference_flights": baggage_references,
+            "reference_flights": baggage_references + connection_references,
         }
-    return kept, excluded, {"fallback": False, "reference_flights": baggage_references}
+    return kept, excluded, {"fallback": False, "reference_flights": baggage_references + connection_references}
 
 
 def _apply_lcc_policy(
@@ -9658,6 +9736,37 @@ def calc_final_score(flight: dict, target_price=None, profile: dict | None = Non
     return flight["final_score"]
 
 
+_duration_reference_log_state = {"round_id": None, "seen": set()}
+
+
+def _has_valid_positive_price(flight):
+    value = flight.get("price")
+    number = _to_float(value)
+    return not isinstance(value, bool) and number is not None and math.isfinite(number) and number > 0
+
+
+def _dedupe_reference_flights(flights):
+    result, seen = [], {}
+    for flight in flights:
+        segments = flight.get("segments") or [{}]
+        first, last = segments[0], segments[-1]
+        key = (flight_itinerary_identity_key(flight),
+               flight.get("departure_airport") or first.get("dep_airport"),
+               flight.get("arrival_airport") or last.get("arr_airport"),
+               flight.get("departure_time") or first.get("dep_time"),
+               flight.get("arrival_time") or last.get("arr_time"), Decimal(str(flight["price"])))
+        if key in seen:
+            prior = seen[key]
+            reason = flight.get("reference_reason")
+            if reason and reason not in prior.get("reference_reason", ""):
+                prior["reference_reason"] = prior.get("reference_reason", "") + "；" + reason
+        else:
+            row = dict(flight)
+            seen[key] = row
+            result.append(row)
+    return result
+
+
 def analyze_all_flights(
     flights: list[dict],
     price_insights: dict = None,
@@ -9691,13 +9800,12 @@ def analyze_all_flights(
     if not flights:
         return {"error": "no_flights", **early_low_price_fields()}
 
-    usable_flights = [
+    priced_flights = [
         flight
         for flight in flights
-        if (_to_float(flight.get("price")) or 0) > 0
-        and flight.get("total_duration_min") is not None
+        if _has_valid_positive_price(flight)
     ]
-    if not usable_flights:
+    if not priced_flights:
         return {
             "error": "no_valid_prices",
             "total_options": 0,
@@ -9712,7 +9820,32 @@ def analyze_all_flights(
 
     detail_reference_flights = []
     actionable_flights = []
-    for flight in usable_flights:
+    duration_excluded = []
+    thresholds = _active_connection_thresholds(early_merged)
+    round_id = get_current_round()[0]
+    if round_id is None or _duration_reference_log_state["round_id"] != round_id:
+        _duration_reference_log_state.update(round_id=round_id, seen=set())
+    for flight in priced_flights:
+        minutes = parse_duration_minutes(flight.get("total_duration_min"))
+        if minutes is None:
+            verdicts = [evaluate_connection_safety(flight, t) for t in thresholds]
+            if any(v["status"] == "insufficient" for v in verdicts):
+                duration_excluded.append({**flight, "exclude_reason": "中转时间低于适用安全门槛", "filter_reason_code": "connection_time_insufficient"})
+                continue
+            reason = "总行程时长缺失或无法可靠解析，仅作价格参考，不参与推荐评分。"
+            pending = next((v for v in verdicts if v["status"] == "unverified"), None)
+            if pending:
+                reason = ("总行程时长缺失或无法可靠解析，且航段时间顺序异常，仅作价格参考，不参与推荐评分。"
+                          if pending["code"] == "connection_time_inverted" else
+                          "总行程时长缺失或无法可靠解析，且中转衔接时间待确认，仅作价格参考，不参与推荐评分。")
+            detail_reference_flights.append({**flight, "reference_only": True, "preference_reference": True,
+                                            "filter_reason_code": "duration_missing_or_unverified", "reference_reason": reason})
+            log_key = (flight.get("flight_combo"), flight.get("data_source") or flight.get("source"))
+            seen = _duration_reference_log_state["seen"]
+            if log_key not in seen and len(seen) < 10:
+                safe_log(f"[时长缺失参考] combo={log_key[0]} source={log_key[1]} 转为仅作价格参考")
+                seen.add(log_key)
+            continue
         if flight.get("reference_only") or not has_enough_detail(flight):
             reference = {
                 **flight,
@@ -9722,13 +9855,15 @@ def analyze_all_flights(
             }
             detail_reference_flights.append(reference)
         else:
-            actionable_flights.append(flight)
+            actionable_flights.append(flight if isinstance(flight.get("total_duration_min"), int) else {**flight, "total_duration_min": minutes})
+    detail_reference_flights = _dedupe_reference_flights(detail_reference_flights)
     usable_flights = actionable_flights
-    departure_excluded = []
+    departure_excluded = list(duration_excluded)
     if departure_reference_now is not None and usable_flights:
-        usable_flights, departure_excluded = split_by_planned_departure(
+        usable_flights, planned_departure_excluded = split_by_planned_departure(
             usable_flights, departure_reference_now
         )
+        departure_excluded.extend(planned_departure_excluded)
         if departure_excluded:
             print(f"[计划起飞已过] 排除{len(departure_excluded)}个航班")
         if not usable_flights:
@@ -9737,10 +9872,13 @@ def analyze_all_flights(
                 "error": "no_flights",
                 "excluded_flights": _excluded_flight_summary(departure_excluded),
                 "reference_flights": detail_reference_flights,
+                **early_low_price_fields(),
             }
     if not usable_flights:
         return {
-            "error": "no_actionable_flights",
+            "error": "no_actionable_flights" if detail_reference_flights else "no_flights",
+            "no_primary_reason": "暂无满足当前要求的可执行方案",
+            "excluded_flights": _excluded_flight_summary(duration_excluded),
             "total_options": 0,
             "total_reference_options": len(detail_reference_flights),
             "all_flights": [],
@@ -9788,6 +9926,8 @@ def analyze_all_flights(
                 "reference_flights": detail_reference_flights,
                 "total_reference_options": len(detail_reference_flights),
                 "economy_candidate_reason": economy_reason,
+                "no_primary_reason": "暂无满足当前要求的可执行方案",
+                **early_low_price_fields(),
             }
     roundtrip_purchase_context = bool(
         merged_preferences.get("round_trip")
@@ -9830,6 +9970,7 @@ def analyze_all_flights(
         usable_flights, merged_preferences
     )
     detail_reference_flights.extend(preference_summary.get("reference_flights") or [])
+    detail_reference_flights = _dedupe_reference_flights(detail_reference_flights)
     scoring_reference_flights = list(usable_flights)
     usable_flights, lcc_excluded = _apply_lcc_policy(
         usable_flights,
@@ -9851,7 +9992,9 @@ def analyze_all_flights(
             "excluded_flights": _excluded_flight_summary(excluded_flights),
             "reference_flights": detail_reference_flights,
             "user_preferences": merged_preferences,
-            **({"no_primary_reason": _NO_CONFIRMED_BAGGAGE} if is_checked_baggage_required(merged_preferences) else {}),
+            **early_low_price_fields(),
+            **({"no_primary_reason": _NO_CONFIRMED_BAGGAGE} if is_checked_baggage_required(merged_preferences) and any(f.get("pending_baggage_confirmation") for f in detail_reference_flights)
+               else {"no_primary_reason": "暂无满足当前要求的可执行方案"} if detail_reference_flights else {}),
         }
 
     # 1. 按价格排名
