@@ -238,8 +238,16 @@ class WaitMinutesZeroSemanticsTest(unittest.TestCase):
         for name in ("transfer_missing", "missing_key", "none", "zero", "negative", "float_half", "zero_120", "only_120"):
             with self.subTest(case=name):
                 with redirect_stdout(io.StringIO()):
-                    kept, _, _ = self.a._apply_user_preferences([copy.deepcopy(_flight(name))], copy.deepcopy(profile))
-                self.assertEqual(len(kept), 1)
+                    kept, excluded, summary = self.a._apply_user_preferences([copy.deepcopy(_flight(name))], copy.deepcopy(profile))
+                if name == "only_120":
+                    self.assertEqual(len(kept), 1)
+                elif name in {"transfer_missing", "missing_key", "none"}:
+                    self.assertEqual(kept, [])
+                    self.assertEqual(excluded, [])
+                    self.assertEqual(len(summary["reference_flights"]), 1)
+                else:
+                    self.assertEqual(kept, [])
+                    self.assertEqual(len(excluded), 1)
         short = _flight("zero")
         short["layovers"] = [{"wait_minutes": 30}]
         with redirect_stdout(io.StringIO()):
