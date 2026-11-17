@@ -734,6 +734,21 @@ def _preference_summary(values) -> str:
         arrival = "白天到达"
     else:
         arrival = "到达不限"
+    for axis in ("departure", "arrival"):
+        directions = []
+        for prefix, label in (("outbound", "去程"), ("return", "返程")):
+            start = _first(values, f"{prefix}_{axis}_window_start")
+            end = _first(values, f"{prefix}_{axis}_window_end")
+            if start and end:
+                directions.append(f"{label}{start}-{end}")
+        start = _first(values, f"shared_{axis}_window_start")
+        end = _first(values, f"shared_{axis}_window_end")
+        text = "；".join(directions) if directions else f"{start}-{end}" if start and end else ""
+        if text:
+            if axis == "departure":
+                time_text = f"出发{text}"
+            else:
+                arrival = f"到达{text}"
     baggage = {
         "required": "需托运",
         "not_needed": "不需托运",
@@ -1271,6 +1286,7 @@ def subscription_to_form_values(subscription: Mapping | None) -> dict:
     original_departure_time_policy = values.get("departure_time_policy") or ""
     original_arrival_time_policy = values.get("arrival_time_policy") or ""
     legacy_time_values = {
+        "time_window_sources": hard.get("time_window_sources") or soft.get("time_window_sources"),
         "departure_slots": values.get("departure_slots"),
         "arrival_slots": values.get("arrival_slots"),
         "outbound_departure_slots": values.get("outbound_departure_slots"),
@@ -1298,6 +1314,7 @@ def subscription_to_form_values(subscription: Mapping | None) -> dict:
             "ux2_time_touched": "false",
             "ux2_original_departure_time_policy": original_departure_time_policy,
             "ux2_original_arrival_time_policy": original_arrival_time_policy,
+            **({"red_eye_policy_source": hard["red_eye_policy_source"]} if hard.get("red_eye_policy_source") else {}),
         }
     )
     for legacy_name in LEGACY_RAW_TIME_WINDOW_FIELDS:

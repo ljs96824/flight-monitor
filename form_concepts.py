@@ -204,6 +204,20 @@ def project_time_concept_fields(values: Mapping, *, round_trip: bool) -> dict:
         not saved_mode and shared["time_preference"] == "custom"
     )
     shared_arrival_is_custom = shared["arrival_preference"] == "custom"
+    sources = values.get("time_window_sources")
+    if isinstance(sources, Mapping) and sources:
+        shared_departure_is_custom = sources.get("departure") == "explicit"
+        shared_arrival_is_custom = sources.get("arrival") == "explicit"
+        for prefix, projected in (("", shared), ("outbound_", outbound), ("return_", returned)):
+            arrival_source = sources.get(f"{prefix}arrival")
+            if arrival_source == "explicit":
+                projected["arrival_preference"] = "custom"
+            elif arrival_source == "derived_daytime":
+                projected["arrival_preference"] = "daytime"
+            elif arrival_source == "derived_no_late":
+                projected["arrival_preference"] = "no_late"
+            else:
+                projected["arrival_preference"] = "any"
     result = {
         "ux2_concept_form": "true",
         "time_preference": (
@@ -237,17 +251,22 @@ def project_time_concept_fields(values: Mapping, *, round_trip: bool) -> dict:
         for key, value in projected.items():
             result[f"{prefix}_{key}"] = value
         use_override = round_trip and raw != shared_raw
+        departure_override = use_override
+        arrival_override = use_override
+        if isinstance(sources, Mapping) and sources:
+            departure_override = round_trip and sources.get(f"{prefix}_departure") == "explicit"
+            arrival_override = round_trip and sources.get(f"{prefix}_arrival") == "explicit"
         result[f"{prefix}_departure_window_start"] = (
-            projected["departure_time_start"] if use_override else ""
+            projected["departure_time_start"] if departure_override else ""
         )
         result[f"{prefix}_departure_window_end"] = (
-            projected["departure_time_end"] if use_override else ""
+            projected["departure_time_end"] if departure_override else ""
         )
         result[f"{prefix}_arrival_window_start"] = (
-            projected["arrival_time_start"] if use_override else ""
+            projected["arrival_time_start"] if arrival_override else ""
         )
         result[f"{prefix}_arrival_window_end"] = (
-            projected["arrival_time_end"] if use_override else ""
+            projected["arrival_time_end"] if arrival_override else ""
         )
     return result
 
@@ -691,6 +710,17 @@ def _arrival_window_mode(direction: Mapping) -> str:
     return "unlimited"
 
 
+def _derived_axis_source(direction: Mapping, axis: str) -> str:
+    arrival = direction["arrival_preference"]
+    if axis == "arrival" and arrival == "no_late":
+        return "derived_no_late"
+    if (axis == "departure" and direction["mode"] == "daytime") or (
+        axis == "arrival" and (arrival == "daytime" or (arrival == "any" and direction["mode"] == "daytime"))
+    ):
+        return "derived_daytime"
+    return "derived_unlimited" if direction["allow_redeye"] else "derived_no_redeye"
+
+
 def derive_time_concept_fields(values, *, round_trip: bool) -> dict:
     """按分方向、通用、自上而下偏好的优先级派生原有时段字段。"""
     shared = _direction_time(values)
@@ -772,6 +802,11 @@ def derive_time_concept_fields(values, *, round_trip: bool) -> dict:
         if round_trip
         else {shared["allow_redeye"]}
     )
+    arrival_preferences = (
+        {outbound["arrival_preference"], returned["arrival_preference"]}
+        if round_trip
+        else {shared["arrival_preference"]}
+    )
     if separate and (
         outbound["departure_slots"] != returned["departure_slots"]
         or outbound["arrival_slots"] != returned["arrival_slots"]
@@ -781,7 +816,7 @@ def derive_time_concept_fields(values, *, round_trip: bool) -> dict:
         or outbound["arrival_end"] != returned["arrival_end"]
     ):
         legacy_mode = "custom"
-    elif "custom" in modes:
+    elif "custom" in modes or "custom" in arrival_preferences:
         legacy_mode = "custom"
     elif modes == {"daytime"}:
         legacy_mode = "daytime"
@@ -795,11 +830,6 @@ def derive_time_concept_fields(values, *, round_trip: bool) -> dict:
         "no_redeye": "no_redeye",
         "daytime": "daytime",
     }.get(legacy_mode, "any")
-    arrival_preferences = (
-        {outbound["arrival_preference"], returned["arrival_preference"]}
-        if round_trip
-        else {shared["arrival_preference"]}
-    )
     if "no_late" in arrival_preferences:
         arrival_policy = "no_midnight"
     elif "daytime" in arrival_preferences or legacy_mode == "daytime":
@@ -874,4 +904,18 @@ def derive_time_concept_fields(values, *, round_trip: bool) -> dict:
             else "false"
         ),
     }
+    if legacy_mode == "custom":
+        sources = {}
+        for axis, pair in (("departure", shared_departure), ("arrival", shared_arrival)):
+            sources[axis] = "explicit" if pair else _derived_axis_source(shared, axis)
+            for prefix, direction in (("outbound", outbound), ("return", returned)):
+                directional_pair = _complete_window_pair(
+                    values, f"{prefix}_{axis}_window_start", f"{prefix}_{axis}_window_end"
+                )
+                sources[f"{prefix}_{axis}"] = (
+                    sources[axis] if not round_trip else
+                    "explicit" if directional_pair else
+                    "inherited_explicit" if pair else _derived_axis_source(direction, axis)
+                )
+        result["time_window_sources"] = sources
     return result

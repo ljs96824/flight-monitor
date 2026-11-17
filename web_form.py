@@ -13,6 +13,7 @@ import math
 import os
 import queue
 import re
+from collections.abc import Mapping
 import threading
 import traceback
 from datetime import datetime, timedelta, timezone
@@ -2453,6 +2454,32 @@ def build_subscription(form) -> dict:
     if transport_mode:
         subscription["constraints"]["transport_mode"] = transport_mode
         subscription["hard_constraints"]["transport_mode"] = transport_mode
+    if monitor_mode == "precise" and time_mode == "custom":
+        sources = (ux2_time_fields or {}).get("time_window_sources") or {
+            axis: "derived_slots" for axis in (
+                "departure", "arrival", "outbound_departure", "outbound_arrival",
+                "return_departure", "return_arrival",
+            )
+        }
+        subscription["hard_constraints"]["time_window_sources"] = {
+            key: value for key, value in sources.items()
+            if round_trip or key in {"departure", "arrival"}
+        }
+        subscription["soft_preferences"]["time_window_sources"] = dict(sources)
+        explicit_src = form.get("red_eye_policy_source")
+        independent = (
+            "no_redeye" in companion_constraints
+            or parse_bool(form.get("no_redeye_strict"))
+            or explicit_src == "explicit_hard_disallow"
+            or (
+                explicit_src != "default_from_form"
+                and not ux2_time_fields
+                and form.get("red_eye_policy") in {"not_allowed", "reject", "strict"}
+            )
+        )
+        subscription["hard_constraints"]["red_eye_policy_source"] = (
+            "explicit_hard_disallow" if independent else "default_from_form"
+        )
     return subscription
 
 
@@ -2469,12 +2496,22 @@ def _first_time_window_text(value) -> str:
 
 def _success_time_window_text(hard: dict) -> str:
     items = []
+    sources = hard.get("time_window_sources")
+    proven = {"explicit", "inherited_explicit"}
+    directional_custom = not isinstance(sources, Mapping) or any(
+        sources.get(f"{prefix}_{axis}") == "explicit"
+        for prefix in ("outbound", "return") for axis in ("departure", "arrival")
+    )
     for label, key in (
         ("去程出发", "outbound_departure_time_windows"),
         ("去程到达", "outbound_arrival_time_windows"),
         ("返程出发", "return_departure_time_windows"),
         ("返程到达", "return_arrival_time_windows"),
     ):
+        if not directional_custom or (
+            isinstance(sources, Mapping) and sources.get(key.removesuffix("_time_windows")) not in proven
+        ):
+            continue
         text = _first_time_window_text(hard.get(key))
         if text:
             items.append(f"{label}{text}")
@@ -2483,6 +2520,8 @@ def _success_time_window_text(hard: dict) -> str:
             ("出发", "departure_time_windows"),
             ("到达", "arrival_time_windows"),
         ):
+            if isinstance(sources, Mapping) and sources.get(key.removesuffix("_time_windows")) not in proven:
+                continue
             text = _first_time_window_text(hard.get(key))
             if text:
                 items.append(f"{label}{text}")

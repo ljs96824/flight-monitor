@@ -1,4 +1,5 @@
 import inspect
+import copy
 import hashlib
 import json
 import logging
@@ -928,11 +929,35 @@ def _invalid_location_subscription(
     return invalid
 
 
+CUSTOM_TIME_PREFERENCE_KEYS = (
+    "time_preference", "time_preference_mode", "departure_time_windows", "arrival_time_windows",
+    "outbound_departure_time_windows", "outbound_arrival_time_windows",
+    "return_departure_time_windows", "return_arrival_time_windows",
+    "time_window_sources", "red_eye_policy_source",
+)
+
+
+def _custom_time_preferences(sub: dict, *, hard_first: bool = False) -> dict:
+    order = (
+        ("hard_constraints", "constraints", "soft_preferences", "preferences")
+        if hard_first else ("soft_preferences", "preferences", "hard_constraints", "constraints")
+    )
+    containers = [sub.get(key) or {} for key in order] + [sub]
+    result = {}
+    for key in CUSTOM_TIME_PREFERENCE_KEYS:
+        for container in containers:
+            if isinstance(container, dict) and container.get(key) is not None:
+                result[key] = copy.deepcopy(container[key])
+                break
+    return result
+
+
 def _normalize_subscription(item: dict) -> dict:
     from cabin_allocation import find_explicit_cabin_allocation, validate_cabin_allocation
 
     # R18：按原始写法检查列表字段形态，报出的字段位置与订阅文件里的写法一致。
     _check_list_field_shapes(item)
+    item = copy.deepcopy(item)
     item = migrate_old_subscription(item)
     hard_constraints = dict(item.get("hard_constraints") or {})
     soft_preferences = dict(item.get("soft_preferences") or {})
@@ -984,6 +1009,20 @@ def _normalize_subscription(item: dict) -> dict:
     if same_day_round_trip and not return_date:
         return_date = item.get("depart_date", "")
     round_trip = _as_bool(item.get("round_trip", hard_constraints.get("round_trip", False))) or same_day_round_trip
+    effective_time = _custom_time_preferences(item)
+    if (effective_time.get("time_preference_mode") or effective_time.get("time_preference")) == "custom":
+        sources = hard_constraints.get("time_window_sources") or soft_preferences.get("time_window_sources")
+        if not isinstance(sources, dict) or not sources:
+            sources = {axis: "legacy_unverified" for axis in (
+                "departure", "arrival", "outbound_departure", "outbound_arrival",
+                "return_departure", "return_arrival",
+            )}
+            hard_constraints["time_window_sources"] = {
+                key: value for key, value in sources.items()
+                if round_trip or key in {"departure", "arrival"}
+            }
+            soft_preferences["time_window_sources"] = dict(sources)
+            hard_constraints["red_eye_policy_source"] = "legacy_unverified"
     origin_value = item.get("origin") or basic.get("origin") or ""
     destination_value = (
         item.get("destination")
@@ -1808,6 +1847,7 @@ def subscription_preferences(sub: dict) -> dict:
         "max_extra_duration_hours": sub.get("max_extra_duration_hours"),
         "max_total_duration_hours": sub.get("max_total_duration_hours"),
         "origin_airport_preference": sub.get("origin_airport_preference", "all"),
+        **_custom_time_preferences(sub),
     }
 
 
@@ -2418,12 +2458,8 @@ def _return_phase_preferences(sub: dict, context: dict) -> dict:
         "date_flexibility": sub.get("return_date_flexibility", 0),
     })
     preferences = subscription_preferences(view)
-    soft = view.get("soft_preferences") or {}
-    for key in ("time_preference_mode", "time_preference", "departure_time_windows", "arrival_time_windows",
-                "return_departure_time_windows", "return_arrival_time_windows"):
-        if key in soft:
-            preferences[key] = copy.deepcopy(soft[key])
     constraints = copy.deepcopy(view.get("hard_constraints") or {})
+    constraints.update(_custom_time_preferences(view, hard_first=True))
     for item in (preferences, constraints):
         item.update({
             "direction": "return", "round_trip": False,
