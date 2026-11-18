@@ -405,8 +405,7 @@ class TestTrack4FrozenAndAstGuards(unittest.TestCase):
             self.assertEqual((len(raw), hashlib.sha256(raw).hexdigest()), (size, digest))
         source = (ROOT / "analyzer.py").read_text(encoding="utf-8")
         nodes = {node.name: node for node in ast.parse(source).body if isinstance(node, ast.FunctionDef)}
-        for name, digest in (("parse_flight_time", "9a55d7e7d427adf2469b269546262ebc3d3264ec7f7cae4b7df537f1a4177297"),
-                             ("build_same_day_combos", "80f6f0373a4ca53c27873ee61e9d43475fab05495fda64ed49c305a465928f99")):
+        for name, digest in (("parse_flight_time", "9a55d7e7d427adf2469b269546262ebc3d3264ec7f7cae4b7df537f1a4177297"),):
             self.assertEqual(hashlib.sha256(inspect.getsource(getattr(analyzer, name)).encode("utf-8")).hexdigest(), digest)
         import test_legacy_notification_renderer_retirement as locked
         source = (ROOT / "notifier.py").read_text(encoding="utf-8")

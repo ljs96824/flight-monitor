@@ -1951,9 +1951,9 @@ def compute_same_day_windows(
 ) -> dict:
     """Reverse-calculate flight windows from business time, transport and buffer."""
     constraints = _same_day_constraints(subscription)
-    business_start = _parse_time_minutes(constraints.get("business_start"))
-    business_end = _parse_time_minutes(constraints.get("business_end"))
-    if business_start is None or business_end is None:
+    business_start = _parse_window_bound_minutes(constraints.get("business_start"))
+    business_end = _parse_window_bound_minutes(constraints.get("business_end"))
+    if business_start is None or business_end is None or business_end < business_start:
         return {}
     mode = str(constraints.get("transport_mode") or "taxi").strip().lower()
     logistics = get_airport_logistics(dest_airport or "")
@@ -2171,12 +2171,77 @@ def compute_same_day_windows(
     }, dest_airport)
 
 
+def _same_day_window_mode(constraints: dict, windows: dict | None = None) -> str:
+    windows = windows or {}
+    start = constraints.get("business_start") or windows.get("business_start")
+    end = constraints.get("business_end") or windows.get("business_end")
+    if str(start or "").strip() or str(end or "").strip():
+        start_min = _parse_window_bound_minutes(start)
+        end_min = _parse_window_bound_minutes(end)
+        if start_min is None or end_min is None or end_min < start_min:
+            return "invalid_meeting_window"
+        return "meeting_window"
+    return "meeting_window" if windows else "default_day_trip"
+
+
+def _parse_explicit_min_stay_minutes(min_stay_hours) -> tuple[bool, float | None]:
+    if min_stay_hours is None:
+        return True, None
+    if isinstance(min_stay_hours, bool) or not isinstance(min_stay_hours, (int, float)):
+        return False, None
+    try:
+        hours = float(min_stay_hours)
+    except OverflowError:
+        return False, None
+    if not math.isfinite(hours) or hours < 0:
+        return False, None
+    return True, hours * 60
+
+
+def _same_day_valid_quote(flight: dict, *, allow_timetable: bool = False) -> bool:
+    if allow_timetable and "price" not in flight:
+        return True
+    price = _to_float(flight.get("price"))
+    return price is not None and math.isfinite(price) and price > 0
+
+
+def _same_day_return_is_chronological(flight: dict, date_str: str | None) -> bool:
+    departure = _flight_departure_datetime(flight, date_str)
+    arrival = _flight_arrival_datetime(flight, date_str)
+    if departure is not None and arrival is not None:
+        return arrival >= departure
+    dep_min = _flight_departure_minutes(flight)
+    arr_min = _flight_arrival_minutes(flight)
+    return dep_min is None or arr_min is None or arr_min >= dep_min
+
+
+def _same_day_default_leg_passes(flight: dict, date_str: str | None, profile: dict, leg: str) -> bool:
+    dep_min = _flight_departure_minutes(flight)
+    arr_min = _flight_arrival_minutes(flight)
+    if dep_min is None or arr_min is None:
+        return False
+    target = _same_day_target_date(date_str or _flight_date_text(flight, "departure"))
+    if target is not None:
+        departure = _flight_departure_datetime(flight, date_str)
+        if departure is None or departure.date() != target:
+            return False
+        if leg == "outbound":
+            arrival = _flight_arrival_datetime(flight, date_str)
+            if arrival is None or arrival.date() != target:
+                return False
+    return (
+        dep_min >= profile[f"{leg}_depart_after"]
+        and arr_min <= profile[f"{leg}_arrive_by"]
+        and (leg == "outbound" or _same_day_return_is_chronological(flight, date_str))
+    )
+
+
 def build_same_day_combos(
     outbound_flights: list[dict] | None,
     return_flights: list[dict] | None,
     windows_or_date: dict | str | None = None,
     date_str: str | None = None,
-    min_stay_hours: float = 4,
+    min_stay_hours: float | None = None,
     constraints: dict | None = None,
 ) -> list[dict]:
     """Build feasible same-day business round-trip combinations."""
@@ -2188,12 +2253,18 @@ def build_same_day_combos(
     normalized_constraints = _same_day_constraints(constraints or {})
     default_profile = _same_day_default_profile(normalized_constraints.get("day_trip_period"))
     relaxed_profile = _same_day_relaxed_profile(normalized_constraints.get("day_trip_period"))
-    has_time_window_constraints = bool(
-        normalized_constraints.get("business_start") and normalized_constraints.get("business_end")
-    )
+    valid_stay, explicit_min_stay = _parse_explicit_min_stay_minutes(min_stay_hours)
+    mode = _same_day_window_mode(normalized_constraints, windows)
+    if not valid_stay or mode == "invalid_meeting_window":
+        return []
+    meeting_mode = mode == "meeting_window"
     outbound_flights = outbound_flights or []
     return_flights = return_flights or []
-    if has_time_window_constraints and isinstance(windows, dict):
+    if meeting_mode and not windows:
+        sample_dest = next((_flight_airport(flight, "arrival_airport") for flight in outbound_flights if flight), "")
+        windows = compute_same_day_windows({"constraints": normalized_constraints}, None, sample_dest)
+    window_constraints = normalized_constraints if (windows or {}).get("reserve_breakdown") else {}
+    if meeting_mode and windows and window_constraints:
         window_airports = [
             *[_flight_airport(flight or {}, "arrival_airport") for flight in outbound_flights],
             *[_flight_airport(flight or {}, "departure_airport") for flight in return_flights],
@@ -2212,18 +2283,22 @@ def build_same_day_combos(
             outbound_arr = _flight_arrival_minutes(outbound or {})
             outbound_arr_dt = _flight_arrival_datetime(outbound or {}, date_str)
             outbound_price = _to_float((outbound or {}).get("price"))
-            if outbound_dep is None or outbound_arr is None or outbound_price is None:
+            if outbound_dep is None or outbound_arr is None or not _same_day_valid_quote(outbound or {}):
                 continue
             dest_airport = _flight_airport(outbound or {}, "arrival_airport")
-            active_windows = _same_day_windows_for_airport(windows, constraints or {}, dest_airport)
+            active_windows = _same_day_windows_for_airport(
+                windows, window_constraints, dest_airport,
+            ) if meeting_mode else {}
             if isinstance(windows, dict) and active_windows and dest_airport:
                 windows.update(_merge_same_day_airport_window_maps(
                     windows,
                     _attach_same_day_airport_window_maps(active_windows, dest_airport),
                 ))
-            if active_windows:
-                arrive_by = active_windows.get("outbound_arrive_by_minutes")
-                arrive_by_dt, return_after_dt = _same_day_window_datetimes(active_windows, date_str)
+            if meeting_mode:
+                boundary_date = date_str or _flight_date_text(outbound, "departure")
+                arrive_by_dt, return_after_dt = _same_day_window_datetimes(active_windows, boundary_date)
+                if arrive_by_dt is None:
+                    continue
                 arrive_limit = arrive_by_dt or active_windows.get("outbound_arrive_by")
                 print(
                     f"[会议窗口] 去程到达上限={arrive_limit} "
@@ -2244,9 +2319,7 @@ def build_same_day_combos(
                 if not passed:
                     continue
             else:
-                if outbound_dep < int(profile["outbound_depart_after"]):
-                    continue
-                if outbound_arr > int(profile["outbound_arrive_by"]):
+                if not _same_day_default_leg_passes(outbound, date_str, profile, "outbound"):
                     continue
             for return_flight in return_flights:
                 return_dep = _flight_departure_minutes(return_flight or {})
@@ -2254,17 +2327,22 @@ def build_same_day_combos(
                 return_dep_dt = _flight_departure_datetime(return_flight or {}, date_str)
                 return_arr_dt = _flight_arrival_datetime(return_flight or {}, date_str)
                 return_price = _to_float((return_flight or {}).get("price"))
-                if return_dep is None or return_arr is None or return_price is None:
+                if return_dep is None or return_arr is None or not _same_day_valid_quote(return_flight or {}):
                     continue
                 return_airport = _flight_airport(return_flight or {}, "departure_airport")
-                return_windows = _same_day_windows_for_airport(windows, constraints or {}, return_airport)
+                return_windows = _same_day_windows_for_airport(
+                    windows, window_constraints, return_airport,
+                ) if meeting_mode else {}
                 if isinstance(windows, dict) and return_windows and return_airport:
                     windows.update(_merge_same_day_airport_window_maps(
                         windows,
                         _attach_same_day_airport_window_maps(return_windows, return_airport),
                     ))
-                if active_windows or return_windows:
-                    _, return_after_dt = _same_day_window_datetimes(return_windows, date_str)
+                if meeting_mode:
+                    return_date = date_str or _flight_date_text(return_flight, "departure") or boundary_date
+                    _, return_after_dt = _same_day_window_datetimes(return_windows, return_date)
+                    if return_after_dt is None or return_after_dt < arrive_by_dt:
+                        continue
                     passed = _same_day_return_passes_window(return_flight or {}, return_windows, date_str)
                     print(
                         f"[\u4f1a\u8bae\u6bd4\u8f83] \u8fd4\u7a0b{return_flight.get('flight_no') or return_flight.get('flight_combo')} "
@@ -2276,9 +2354,7 @@ def build_same_day_combos(
                     if not passed:
                         continue
                 else:
-                    if return_dep < int(profile["return_depart_after"]):
-                        continue
-                    if return_arr > int(profile["return_arrive_by"]):
+                    if not _same_day_default_leg_passes(return_flight, date_str, profile, "return"):
                         continue
                 if return_arr_dt is not None and return_dep_dt is not None:
                     if return_arr_dt < return_dep_dt:
@@ -2289,7 +2365,9 @@ def build_same_day_combos(
                     stay_minutes = (return_dep_dt - outbound_arr_dt).total_seconds() / 60
                 else:
                     stay_minutes = return_dep - outbound_arr
-                min_stay_minutes = min_stay_hours * 60 if active_windows else int(profile["min_stay_minutes"])
+                min_stay_minutes = explicit_min_stay
+                if min_stay_minutes is None:
+                    min_stay_minutes = 0 if meeting_mode else profile["min_stay_minutes"]
                 if stay_minutes < min_stay_minutes:
                     continue
                 outbound_margin = None
@@ -2362,7 +2440,7 @@ def build_same_day_combos(
                     combo["same_day_default_score"] = _same_day_default_combo_score(combo, profile)
                     combo["same_day_default_relaxed"] = bool(profile.get("relaxed"))
                 combos.append(combo)
-        if combos or has_time_window_constraints:
+        if combos or meeting_mode:
             break
     for combo in combos:
         if combo.get("same_day_round_trip"):
@@ -2397,22 +2475,23 @@ def _same_day_no_feasible_note(
     return_flights: list[dict] | None,
     constraints: dict | None,
 ) -> str:
+    normalized = _same_day_constraints(constraints or {})
+    date_str = _date_from_same_day_source(constraints or {})
+    target_date = _same_day_target_date(date_str)
+    mode = _same_day_window_mode(normalized)
+    if mode == "invalid_meeting_window":
+        return "本次无方案主因是【时间窗口】：会议起止时间不完整、格式无效或结束早于开始，无法形成有效当天往返窗口。"
     outbound_candidates = [
-        flight for flight in outbound_flights or [] if _flight_arrival_datetime(flight or {}, _date_from_same_day_source(constraints or {})) is not None
+        flight for flight in outbound_flights or []
+        if _same_day_valid_quote(flight or {}, allow_timetable=True)
+        and _flight_arrival_datetime(flight or {}, date_str) is not None
     ]
     return_candidates = [
-        flight for flight in return_flights or [] if _flight_departure_datetime(flight or {}, _date_from_same_day_source(constraints or {})) is not None
+        flight for flight in return_flights or []
+        if _same_day_valid_quote(flight or {}, allow_timetable=True)
+        and _flight_departure_datetime(flight or {}, date_str) is not None
+        and _same_day_return_is_chronological(flight or {}, date_str)
     ]
-    if not outbound_candidates or not return_candidates:
-        return "本次无方案主因是【时间窗口】：缺少去程或返程完整时间，无法组成当天往返。建议前一晚到达或继续监控。"
-
-    date_str = _date_from_same_day_source(constraints or {})
-    target_date = None
-    if date_str:
-        try:
-            target_date = datetime.strptime(str(date_str)[:10], "%Y-%m-%d").date()
-        except ValueError:
-            target_date = None
 
     same_day_arrivals = []
     for flight in outbound_candidates:
@@ -2431,16 +2510,48 @@ def _same_day_no_feasible_note(
             continue
         same_day_returns.append((departure_dt, flight))
 
-    window_reference_flight = min(same_day_arrivals, key=lambda item: item[0])[1] if same_day_arrivals else outbound_candidates[0]
+    window_reference_flight = min(same_day_arrivals, default=(None, {}), key=lambda item: item[0])[1]
+    if not window_reference_flight and outbound_candidates:
+        window_reference_flight = outbound_candidates[0]
     dest_airport = _flight_airport(window_reference_flight, "arrival_airport")
-    windows = compute_same_day_windows(constraints or {}, None, dest_airport)
-    if not windows:
-        return "本次无方案主因是【时间窗口】：缺少会议时间或机场窗口，无法判断当天往返。建议前一晚到达或补充会议时间。"
+    windows = compute_same_day_windows(constraints or {}, None, dest_airport) if mode == "meeting_window" else {}
+    if outbound_candidates and not same_day_arrivals:
+        earliest = min(_flight_arrival_datetime(flight, date_str) for flight in outbound_candidates)
+        limit = windows.get("outbound_arrive_by") or _minutes_to_text(
+            _same_day_relaxed_profile(normalized.get("day_trip_period"))["outbound_arrive_by"]
+        )
+        day = "次日" if target_date and (earliest.date() - target_date).days == 1 else earliest.strftime("%m-%d ")
+        return (
+            f"本次无方案主因是【去程时间】：当天无当日到达去程航班"
+            f"（最早为{day}{_time_text(earliest)}到达，需当日{limit}前落地）。建议前一晚到达。"
+        )
+    if mode == "default_day_trip":
+        stays = []
+        for profile in (_same_day_default_profile(normalized.get("day_trip_period")),
+                        _same_day_relaxed_profile(normalized.get("day_trip_period"))):
+            arrivals = [dt for dt, flight in same_day_arrivals
+                        if _same_day_default_leg_passes(flight, date_str, profile, "outbound")]
+            returns = [dt for dt, flight in same_day_returns
+                       if _same_day_default_leg_passes(flight, date_str, profile, "return")]
+            stays = [(ret - arr).total_seconds() / 60 for arr in arrivals for ret in returns]
+            if any(stay >= profile["min_stay_minutes"] for stay in stays):
+                break
+        if not arrivals:
+            return "本次无方案主因是【去程时间】：标准档和放宽档均无符合要求的当日到达航班。建议前一晚到达。"
+        if not returns:
+            return "本次无方案主因是【返程时间】：去程可赶到，但标准档和放宽档均无符合要求的当日返程。"
+        longest = max(0, int(max(stays)))
+        return (
+            "本次无方案主因是【时间窗口】：未能组成满足标准档（至少5小时）或放宽档（至少4小时）的完整往返，"
+            f"最长同日停留{longest // 60}小时{longest % 60}分钟。建议前一晚到达。"
+        )
+    if not same_day_arrivals:
+        return "本次无方案主因是【去程时间】：没有当日到达的有效去程航班。建议前一晚到达。"
 
     closest_options = _closest_same_day_outbound_options(outbound_candidates, windows, date_str, limit=1, constraints=constraints)
     return_ok = sum(
         1
-        for flight in return_candidates
+        for _, flight in same_day_returns
         if _same_day_return_passes_window(
             flight or {},
             _same_day_windows_for_airport(
@@ -2451,6 +2562,19 @@ def _same_day_no_feasible_note(
             date_str,
         )
     )
+    return_limits = {}
+    for _, flight in same_day_returns:
+        airport = _flight_airport(flight, "departure_airport")
+        window = _same_day_windows_for_airport(windows, constraints, airport)
+        if window.get("return_depart_after"):
+            return_limits[airport] = window["return_depart_after"]
+    if len(return_limits) > 1 and len(set(return_limits.values())) > 1:
+        return_limit_text = " / ".join(f"{airport} {limit}".strip() for airport, limit in return_limits.items())
+    elif return_limits:
+        airport, limit = next(iter(return_limits.items()))
+        return_limit_text = f"{airport} {limit}" if airport and airport != dest_airport and len(return_limits) == 1 else limit
+    else:
+        return_limit_text = windows.get("return_depart_after") or "窗口下限"
 
     def _physical_impossibility_note() -> str:
         if not same_day_arrivals:
@@ -2470,7 +2594,6 @@ def _same_day_no_feasible_note(
         minimum_passage = arrival_exit + transport_min
         if minimum_passage <= 0:
             return ""
-        normalized = _same_day_constraints(constraints or {})
         meeting_start = parse_flight_time(normalized.get("business_start"), date_str)
         if meeting_start is None:
             return ""
@@ -2489,24 +2612,36 @@ def _same_day_no_feasible_note(
     physical_note = _physical_impossibility_note()
 
     advice_parts = []
-    relaxed_constraints = dict(_same_day_constraints(constraints or {}))
-    relaxed_label = "放宽预留"
-    if windows.get("buffer_model") == "airport_split":
+    relaxed_constraints = dict(normalized)
+    relaxed_label = ""
+    if windows.get("buffer_model") == "airport_split" and windows.get("transport_margin_mode") != "tight":
         relaxed_constraints["transport_margin_mode"] = "tight"
         relaxed_label = "路途冗余改为紧凑"
-    elif windows.get("buffer_model") == "meeting_fixed":
+    elif windows.get("buffer_model") == "meeting_fixed" and windows.get("meeting_importance") != "normal":
         relaxed_constraints["meeting_importance"] = "normal"
-        for key in ("arrival_exit_min", "delay_buffer_min", "pre_meeting_buffer_min", "airport_advance_min"):
-            relaxed_constraints[key] = ""
         relaxed_label = "会议重要程度改为普通商务"
-    else:
+    elif windows.get("buffer_model") not in {"airport_split", "meeting_fixed"} and (windows.get("buffer_h") or 0) > 2:
         relaxed_constraints["buffer_hours"] = 2
         relaxed_label = "缩短预留至2小时"
-    relaxed_windows = compute_same_day_windows({"constraints": relaxed_constraints}, None, dest_airport)
-    if relaxed_windows:
+    relaxed_windows = compute_same_day_windows({"constraints": relaxed_constraints}, None, dest_airport) if relaxed_label else {}
+    airports = {
+        *(_flight_airport(flight, "arrival_airport") for _, flight in same_day_arrivals),
+        *(_flight_airport(flight, "departure_airport") for _, flight in same_day_returns),
+    }
+    boundaries = []
+    for airport in airports if relaxed_windows else ():
+        before = _same_day_windows_for_airport(windows, normalized, airport)
+        after = _same_day_windows_for_airport(relaxed_windows, relaxed_constraints, airport)
+        boundaries.append((
+            after["outbound_arrive_by_minutes"] - before["outbound_arrive_by_minutes"],
+            before["return_depart_after_minutes"] - after["return_depart_after_minutes"],
+        ))
+    if boundaries and all(out >= 0 and ret >= 0 for out, ret in boundaries) and any(
+        out > 0 or ret > 0 for out, ret in boundaries
+    ):
         relaxed_count = sum(
             1
-            for flight in outbound_candidates
+            for _, flight in same_day_arrivals
             if _same_day_outbound_passes_window(
                 flight or {},
                 _same_day_windows_for_airport(
@@ -2517,7 +2652,15 @@ def _same_day_no_feasible_note(
                 date_str,
             )
         )
-        advice_parts.append(f"{relaxed_label}后，到达上限{relaxed_windows.get('outbound_arrive_by')}，有{relaxed_count}个去程可选")
+        combo_count = len(build_same_day_combos(
+            [flight for _, flight in same_day_arrivals],
+            [flight for _, flight in same_day_returns],
+            relaxed_windows, date_str, constraints=relaxed_constraints,
+        ))
+        combo_text = f"可配对{combo_count}个完整往返方案" if combo_count else "完整往返仍为0个"
+        advice_parts.append(
+            f"{relaxed_label}后，到达上限{relaxed_windows.get('outbound_arrive_by')}，有{relaxed_count}个去程可选（{combo_text}）"
+        )
     advice_parts.append("或前一晚到达")
     advice = "；".join(advice_parts)
 
@@ -2535,7 +2678,10 @@ def _same_day_no_feasible_note(
                 if return_ok > 0
                 else "\u8fd4\u7a0b\u6682\u65e0\u7b26\u5408\u822a\u73ed,\u4f46\u4e3b\u56e0\u4ecd\u5148\u6309\u53bb\u7a0b\u65f6\u95f4\u5224\u5b9a"
             )
-            next_step = physical_note or "\u5efa\u8bae\u524d\u4e00\u665a\u5230\u8fbe\u6216\u8c03\u4f4e\u9884\u7559/\u4f1a\u8bae\u91cd\u8981\u5ea6\u3002"
+            next_step = physical_note or (
+                "建议前一晚到达或调低预留缓冲。" if not advice_parts[:-1]
+                else f"建议前一晚到达或调低预留/会议重要度。{advice_parts[0]}。"
+            )
             return (
                 f"\u672c\u6b21\u65e0\u65b9\u6848\u4e3b\u56e0\u662f\u3010\u53bb\u7a0b\u65f6\u95f4\u3011:\u6700\u65e9{flight_no} {arrival_text}\u5230,"
                 f"\u9700{window_text}\u524d\u843d\u5730,\u665a{diff_text};"
@@ -2543,16 +2689,17 @@ def _same_day_no_feasible_note(
                 f"{next_step}"
             )
         if return_ok == 0:
-            return f"本次无方案主因是【返程时间】：去程可赶到，但返程需 {windows.get('return_depart_after')} 后出发，当天没有符合返程窗口的航班。建议：次日返程或调整会议结束时间。"
+            return f"本次无方案主因是【返程时间】：去程可赶到，但返程需 {return_limit_text} 后出发，当天没有符合返程窗口的航班。建议：次日返程或调整会议结束时间。"
         return f"本次无方案主因是【时间窗口】：没有完整往返组合同时满足去程到会和返程起飞窗口。建议：{advice}。"
 
     if return_ok == 0:
         latest_departure = None
         if same_day_returns:
-            latest_dt = max(dt for dt, _ in same_day_returns)
-            latest_departure = latest_dt.strftime("%H:%M")
+            latest_dt, latest_flight = max(same_day_returns, key=lambda row: row[0])
+            latest_airport = _flight_airport(latest_flight, "departure_airport")
+            latest_departure = f"{latest_airport} {_time_text(latest_dt)}".strip()
         latest_text = f"，当天最晚返程 {latest_departure}" if latest_departure else ""
-        return f"本次无方案主因是【返程时间】：返程需 {windows.get('return_depart_after')} 后出发{latest_text}，无符合航班。建议次日返程或调整会议结束时间。"
+        return f"本次无方案主因是【返程时间】：返程需 {return_limit_text} 后出发{latest_text}，无符合航班。建议次日返程或调整会议结束时间。"
 
     return f"本次无方案主因是【时间窗口】：当天没有航班能组成完整往返。建议：{advice}。"
 
@@ -2986,36 +3133,76 @@ def build_same_day_alternatives(
 
     flight = pick_earliest_same_day(outbound_flights, date_str, windows, "raw_valid_outbound", constraints=constraints)
     if flight:
-        arrival_minutes = _flight_arrival_minutes(flight or {})
-        business_start = _parse_time_minutes(windows.get("business_start"))
+        active = _same_day_windows_for_airport(windows, constraints, _flight_airport(flight, "arrival_airport"))
+        boundary_date = date_str or _flight_date_text(flight, "departure")
+        arrival = _flight_arrival_datetime(flight, boundary_date)
+        limit, _ = _same_day_window_datetimes(active, boundary_date)
+        normalized = _same_day_constraints(constraints or {})
+        if not active and _same_day_window_mode(normalized) == "default_day_trip":
+            limit_min = _same_day_relaxed_profile(normalized.get("day_trip_period"))["outbound_arrive_by"]
+            limit, _ = _same_day_window_datetimes({"outbound_arrive_by_minutes": limit_min}, boundary_date)
+        late_minutes = max(0, round((arrival - limit).total_seconds() / 60)) if arrival and limit else None
+        reserve = active.get("reserve_breakdown")
+        breakdown = reserve.get("outbound") if isinstance(reserve, dict) else None
+        legacy = (isinstance(reserve, dict) and reserve.get("legacy") is True) or (
+            isinstance(breakdown, dict) and breakdown.get("legacy") is True
+        )
         meeting_arrival = None
-        late_minutes = None
-        if arrival_minutes is not None:
-            meeting_arrival = arrival_minutes + int(windows.get("transport_min") or 0)
-            if business_start is not None:
-                late_minutes = max(0, meeting_arrival - business_start)
-        if late_minutes and late_minutes >= 60:
-            late_text = f"预计到会晚{late_minutes // 60}小时{late_minutes % 60}分钟"
-        elif late_minutes:
-            late_text = f"预计到会晚{late_minutes}分钟"
+        estimated_late = None
+        if (isinstance(breakdown, dict) and reserve.get("legacy") is False
+                and breakdown.get("legacy") is False):
+            if (active.get("buffer_model") or reserve.get("model")) == "meeting_fixed":
+                parts = ("arrival_exit_min", "destination_transport_min", "destination_transport_margin_min")
+            else:
+                parts = ("airport_buffer_min", "transport_min", "margin_min")
+            minutes = [_optional_int(breakdown.get(part)) for part in parts]
+            meeting_start = parse_flight_time(active.get("business_start") or normalized.get("business_start"), boundary_date)
+            if arrival and meeting_start and all(part is not None and part >= 0 for part in minutes):
+                meeting_arrival = arrival + timedelta(minutes=sum(minutes))
+                estimated_late = max(0, round((meeting_arrival - meeting_start).total_seconds() / 60))
+        meeting_time = _time_text(meeting_arrival) if meeting_arrival else ""
+        if late_minutes and limit:
+            window_type = "旧版预留窗口" if legacy else "最晚落地窗口"
+            excess = f"超出{window_type}({_time_text(limit)}){late_minutes}分钟"
+            if estimated_late is None:
+                note = f"{excess}，无法据此核实预计到会时间"
+                tradeoff = ("超出旧版预留窗口，仅在会议时间可弹性时考虑" if legacy
+                            else "超出要求落地窗口，仅在行程时间可弹性时考虑")
+            elif estimated_late > 0:
+                note = f"{excess}，预计约{meeting_time}到会（预计晚于会议开始{estimated_late}分钟）"
+                tradeoff = "有迟到风险，仅在会议可弹性时考虑"
+            else:
+                note = f"{excess}（压缩规划预留，按出站与交通估算约{meeting_time}到会，尚未晚于会议开始）"
+                tradeoff = "压缩规划预留，仅在会议可接受紧凑衔接时考虑"
+            unmet_reason = note
+        elif late_minutes == 0:
+            window_label = "去程符合会议窗口" if active else "去程符合到达窗口"
+            if best_current_return:
+                tradeoff = note = "去程符合到达窗口，但同日停留或配对条件未满足"
+            elif best_next_return:
+                tradeoff = f"{window_label}，需改为次日返程"
+                note = f"{window_label}，当天无合规返程，需改为次日返程"
+            else:
+                tradeoff = note = f"{window_label}，暂不能组成完整往返"
+            unmet_reason = tradeoff
         else:
-            late_text = "时间仍较紧，需自行确认会议弹性"
-        if flight.get("meeting_arrival_note"):
-            late_text = flight.get("meeting_arrival_note")
+            tradeoff = note = unmet_reason = "无法核实到达窗口，需自行确认行程条件"
         alternatives.append(
             _same_day_roundtrip_alternative(
                 "same_day_earliest",
                 "备选C·当天最早班",
                 flight,
                 best_return,
-                "有迟到风险，仅在会议可弹性时考虑",
-                late_text,
+                tradeoff,
+                note,
                 date_str,
                 passengers,
                 route_type,
                 {
-                    "meeting_arrival_time": _minutes_to_text(meeting_arrival) if meeting_arrival is not None else "",
+                    "unmet_reason": unmet_reason,
+                    "meeting_arrival_time": meeting_time,
                     "late_minutes": late_minutes,
+                    "estimated_meeting_late_minutes": estimated_late,
                 },
                 max_budget=max_budget,
                 budget_scope_label=budget_scope_label,
@@ -7808,6 +7995,86 @@ def _no_result_exclusion_record(item: dict) -> dict:
         ),
     }
 
+def _same_day_no_result_reason(counts: dict, stage_counts: dict, budget_rows: list[dict]) -> str:
+    outbound_total = _optional_int(stage_counts.get("outbound_collected"), counts["valid_price_count"])
+    return_total = _optional_int(stage_counts.get("return_collected"), counts["valid_price_count"])
+    outbound_ok = _optional_int(stage_counts.get("after_meeting_outbound"), 0)
+    return_ok = _optional_int(stage_counts.get("return_after_lowerbound"),
+                              _optional_int(stage_counts.get("after_meeting_return"), 0))
+    combos = _optional_int(stage_counts.get("same_day_combos"), 0)
+    after_mixed = _optional_int(stage_counts.get("after_mixed_cabin"))
+    after_baggage = _optional_int(stage_counts.get("after_baggage"))
+    after_budget = _optional_int(stage_counts.get("after_budget"))
+    baggage_pool = combos if after_mixed is None else after_mixed
+    qualified = baggage_pool if after_baggage is None else after_baggage
+    counts.update(
+        outbound_collected=outbound_total, return_collected=return_total,
+        after_meeting_outbound=outbound_ok, return_after_lowerbound=return_ok, same_day_combos=combos,
+        after_budget=None, budget_evaluated=False,
+    )
+
+    def reason(key, label, pool, text, *, suffix=True):
+        counts["primary_cause"] = key
+        counts["max_bottleneck"] = {
+            "key": key, "label": label, "count": pool,
+            "ratio": 100.0 if pool else 0.0, "pool_scope": pool_scopes[key],
+        }
+        return text + "剩余0个完全匹配。" if suffix else text
+
+    pool_scopes = {
+        "invalid_meeting_window": "候选航班池", "outbound_time": "去程池", "return_time": "返程池",
+        "time_window": "同日配对候选对池", "mixed_cabin": "时间达标往返组合池",
+        "baggage_pending_confirmation": "时间达标往返组合池", "budget": "合格往返组合池",
+        "post_pairing_unverified": "合格往返组合池",
+    }
+    if stage_counts.get("same_day_mode") == "invalid_meeting_window":
+        return reason("invalid_meeting_window", "时间窗口", outbound_total + return_total,
+                      "本次无方案主因是【时间窗口】:会议起止时间不完整、格式无效或结束早于开始,无法形成有效当天往返窗口。")
+    if outbound_ok <= 0:
+        ret = f"返程有{return_ok}个可选,非阻塞" if return_ok > 0 else "返程暂无符合航班,但主因仍先按去程时间判定"
+        return reason("outbound_time", "去程时间", outbound_total,
+                      f"本次无方案主因是【去程时间】:去程窗口内0个可选;{ret}。")
+    if return_ok <= 0:
+        return reason("return_time", "返程时间", return_total,
+                      "本次无方案主因是【返程时间】:去程窗口已有可选,但返程下限后无可选航班。")
+    if combos <= 0:
+        return reason("time_window", "时间窗口", outbound_ok * return_ok,
+                      f"本次无方案主因是【时间窗口】:去程有{outbound_ok}个、返程有{return_ok}个单腿达标航班,"
+                      "但未能组成满足同日时序与停留条件的完整往返。")
+    if after_mixed is not None and after_mixed <= 0:
+        mixed_reason = str(stage_counts.get("mixed_cabin_reason") or "无完整双舱配对").replace("预算", "价格上限")
+        return reason("mixed_cabin", "混舱资格", combos,
+                      f"本次无方案主因是【混舱资格】:已有{combos}个满足时间要求的往返组合,但{mixed_reason}。")
+    if after_baggage is not None and after_baggage <= 0:
+        return reason("baggage_pending_confirmation", "托运行李待确认", baggage_pool,
+                      _NO_CONFIRMED_BAGGAGE, suffix=False)
+
+    raw_budget = stage_counts.get("budget_excluded_candidates") or []
+    if (
+        qualified > 0 and after_budget is not None and after_budget <= 0
+        and raw_budget and len(budget_rows) == len(raw_budget)
+        and all(isinstance(raw, dict) and all(
+            _same_day_valid_quote({"price": _budget_candidate_value(raw, key)})
+            for key in ("outbound_price", "return_price")
+        ) for raw in raw_budget)
+        and all(row["over_budget"] and math.isfinite(row["max_budget"]) and math.isfinite(row["price"])
+                for row in budget_rows)
+    ):
+        first = budget_rows[0]
+        scope = first["price_scope_label"] or "同口径"
+        counts.update(budget_evaluated=True, after_budget=0)
+        return reason("budget", "预算", qualified, (
+            "本次无方案主因是【预算】:"
+            f"最低候选 {_diagnosis_price_text(first['price'])} {scope} vs "
+            f"预算 {_diagnosis_price_text(first['max_budget'])} {scope},"
+            f"超出 {_diagnosis_price_text(first['budget_overage'])}。"
+        ))
+    return reason("post_pairing_unverified", "主因待核实", qualified, (
+        "本次无方案主因待核实:已有满足时间要求的往返组合,"
+        "但缺少完整往返同口径价格超限排除证据。"
+    ))
+
+
 def build_no_result_diagnosis(
     all_flights: list[dict] | None,
     excluded_flights: list[dict] | None = None,
@@ -7948,95 +8215,19 @@ def build_no_result_diagnosis(
             summary["reason"] = "该候选的逐航班拒因未保留"
             summary["source"] = "reason_unavailable"
         summary["price_scope"] = "per_person_oneway"
-    strict_same_day_reason = None
-    def _stage_int(value):
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return None
-
-    if stage_counts.get("same_day_combos") is not None:
-        outbound_ok = _stage_int(stage_counts.get("after_meeting_outbound"))
-        return_ok = _stage_int(stage_counts.get("return_after_lowerbound"))
-        if return_ok is None:
-            return_ok = _stage_int(stage_counts.get("after_meeting_return"))
-        after_budget_count = _stage_int(stage_counts.get("after_budget"))
-        if outbound_ok is not None and outbound_ok <= 0:
-            return_clause = (
-                f"返程有{return_ok}个可选,非阻塞"
-                if (return_ok or 0) > 0
-                else "返程暂无符合航班,但主因仍先按去程时间判定"
-            )
-            strict_same_day_reason = f"本次无方案主因是【去程时间】:去程窗口内0个可选;{return_clause};预算在去程时间之后判断。剩余0个完全匹配。"
-            counts["primary_cause"] = "outbound_time"
-            outbound_total = _stage_int(stage_counts.get("outbound_collected"))
-            if outbound_total is None:
-                outbound_total = valid_price_count
-            blocked = max(0, outbound_total - max(0, outbound_ok))
-            counts["max_bottleneck"] = {
-                "key": "outbound_time",
-                "label": "去程时间",
-                "count": blocked,
-                "ratio": round(blocked / max(outbound_total, 1) * 100, 1),
-                "pool_scope": "去程池",
-            }
-        elif return_ok is not None and return_ok <= 0:
-            strict_same_day_reason = "本次无方案主因是【返程时间】:去程窗口已有可选,但返程下限后无可选航班。剩余0个完全匹配。"
-            counts["primary_cause"] = "return_time"
-            return_total = _stage_int(stage_counts.get("return_collected"))
-            if return_total is None:
-                return_total = valid_price_count
-            blocked = max(0, return_total - max(0, return_ok))
-            counts["max_bottleneck"] = {
-                "key": "return_time",
-                "label": "返程时间",
-                "count": blocked,
-                "ratio": round(blocked / max(return_total, 1) * 100, 1),
-                "pool_scope": "返程池",
-            }
-        elif after_budget_count is not None and after_budget_count <= 0:
-            if summary.get("primary_cause") == "budget" and summary.get("lowest") is not None:
-                lowest = _to_float(summary.get("lowest"))
-                max_budget = _to_float(summary.get("max_budget"))
-                scope_label = summary.get("price_scope_label") or "同口径"
-                if max_budget is not None and lowest is not None and lowest < max_budget:
-                    raise AssertionError(
-                        "预算主因口径矛盾: "
-                        f"最低候选{_diagnosis_price_text(lowest)}低于预算{_diagnosis_price_text(max_budget)}, "
-                        "但仍被判定为超预算"
-                    )
-                overage = _to_float(summary.get("budget_overage"))
-                if overage is None and max_budget is not None and lowest is not None:
-                    overage = lowest - max_budget
-                strict_same_day_reason = (
-                    "本次无方案主因是【预算】:"
-                    f"最低候选 {_diagnosis_price_text(lowest)} {scope_label} vs "
-                    f"预算 {_diagnosis_price_text(max_budget)} {scope_label},"
-                    f"超出 {_diagnosis_price_text(overage)}。剩余0个完全匹配。"
-                )
-            else:
-                max_budget = _to_float((constraints or {}).get("max_budget") or (constraints or {}).get("price_ceiling"))
-                budget_text = f"¥{max_budget:,.0f}" if max_budget else "当前预算"
-                strict_same_day_reason = f"本次无方案主因是【预算】:去程和返程时间均有可选,但完整往返组合超过{budget_text}。剩余0个完全匹配。"
-            counts["primary_cause"] = "budget"
-            combo_total = _stage_int(stage_counts.get("same_day_combos")) or 0
-            blocked = max(0, combo_total - max(0, after_budget_count))
-            counts["max_bottleneck"] = {
-                "key": "budget",
-                "label": "预算",
-                "count": blocked,
-                "ratio": round(blocked / max(combo_total, 1) * 100, 1),
-                "pool_scope": "完整往返组合池",
-            }
+    strict_same_day_reason = (
+        _same_day_no_result_reason(counts, stage_counts, budget_candidate_rows)
+        if same_day_combos is not None else None
+    )
     pairing_fallback_reason = None
-    if fallback_reason and not matching_excluded and not budget_candidate_rows:
+    if strict_same_day_reason is None and fallback_reason and not matching_excluded and not budget_candidate_rows:
         pairing_count = len(prices) or valid_price_count or total_candidates
         pairing_fallback_reason = (
             f"本次无方案主因是【完整往返】:{fallback_reason};"
             f"去程有{pairing_count}个候选,恢复返程后需重新配对。"
         )
         counts["primary_cause"] = "roundtrip_pairing"
-        counts["after_budget"] = 0
+        counts["after_budget"] = stage_counts.get("after_budget")
         counts["max_bottleneck"] = {
             "key": "roundtrip_pairing",
             "label": "完整往返",
@@ -8049,13 +8240,23 @@ def build_no_result_diagnosis(
         or pairing_fallback_reason
         or diagnose_no_result(counts, constraints)
     )
-    if flights and not excluded and all(f.get("reference_only") for f in flights):
+    if strict_same_day_reason is None and flights and not excluded and all(f.get("reference_only") for f in flights):
         counts["reason"] = "暂无满足当前要求的可执行方案"
-    if is_checked_baggage_required(constraints) and any(
+    if strict_same_day_reason is None and is_checked_baggage_required(constraints) and any(
             item.get("pending_baggage_confirmation") or item.get("filter_reason_code") == "baggage_pending_confirmation"
             for item in flights + excluded):
         counts["reason"] = _NO_CONFIRMED_BAGGAGE
+        counts["primary_cause"] = "baggage_pending_confirmation"
+        counts["max_bottleneck"] = {
+            "key": "baggage_pending_confirmation", "label": "托运行李待确认",
+            "count": valid_price_count, "ratio": 100.0 if valid_price_count else 0.0, "pool_scope": "候选航班池",
+        }
+    if counts.get("primary_cause") == "baggage_pending_confirmation":
         summary["reason"] = _NO_CONFIRMED_BAGGAGE
+    if counts.get("primary_cause") != "budget":
+        summary.pop("primary_cause", None)
+        if strict_same_day_reason is not None and budget_candidate_rows:
+            summary["reason"] = counts["reason"]
     safe_reason = str(counts["reason"])
     print(f"[无方案理由诊断] diagnose_no_result返回={safe_reason}")
     print(f"[无方案理由诊断] 实际展示的理由文案={safe_reason}")
@@ -11691,11 +11892,14 @@ def analyze_round_trip(
             depart_date_for_same_day,
             constraints=combined_preferences,
         )
-        if windows:
+        normalized_same_day = _same_day_constraints(combined_preferences)
+        same_day_mode = _same_day_window_mode(normalized_same_day, windows)
+        standard_counts = {}
+        if same_day_mode == "meeting_window":
             ob_ok = [
                 flight
                 for flight in outbound_candidates
-                if _flight_arrival_minutes(flight or {}) is not None
+                if _same_day_valid_quote(flight) and _flight_arrival_minutes(flight or {}) is not None
                 and _same_day_outbound_passes_window(
                     flight or {},
                     _same_day_windows_for_airport(
@@ -11725,11 +11929,29 @@ def analyze_round_trip(
                 return_candidates[int(row["index"])]
                 for row in same_day_return_window_debug
                 if row.get("passed") and int(row.get("index", -1)) < len(return_candidates)
+                and _same_day_valid_quote(return_candidates[int(row["index"])])
+                and _same_day_return_is_chronological(return_candidates[int(row["index"])], depart_date_for_same_day)
             ]
+        elif same_day_mode == "invalid_meeting_window":
+            ob_ok, rt_ok = [], []
         else:
-            ob_ok = list(outbound_candidates)
-            rt_ok = list(return_candidates)
+            period = normalized_same_day.get("day_trip_period")
+
+            def leg_options(candidates, profile, leg):
+                return [
+                    flight for flight in candidates if _same_day_valid_quote(flight)
+                    and _same_day_default_leg_passes(flight, depart_date_for_same_day, profile, leg)
+                ]
+
+            standard = _same_day_default_profile(period)
+            ob_ok, rt_ok = leg_options(outbound_candidates, standard, "outbound"), leg_options(return_candidates, standard, "return")
+            if not same_day_combos or same_day_combos[0].get("same_day_default_relaxed"):
+                standard_counts.update(after_standard_outbound=len(ob_ok), after_standard_return=len(rt_ok), standard_combos=0)
+                relaxed = _same_day_relaxed_profile(period)
+                ob_ok, rt_ok = leg_options(outbound_candidates, relaxed, "outbound"), leg_options(return_candidates, relaxed, "return")
         same_day_filter_counts = {
+            "same_day_mode": same_day_mode,
+            **standard_counts,
             "outbound_collected": len(outbound_candidates),
             "return_collected": len(return_candidates),
             "total_candidates": len(outbound_candidates) + len(return_candidates),
@@ -11874,6 +12096,11 @@ def analyze_round_trip(
         )
         combinations = list(mixed_cabin_matching.get("priceable") or [])
         if same_day_round_trip:
+            same_day_filter_counts.update(
+                mixed_cabin_active=True,
+                after_mixed_cabin=len(combinations),
+                mixed_cabin_reason=mixed_cabin_matching.get("economy_candidate_reason") or "无完整双舱配对",
+            )
             same_day_combos = list(combinations)
 
     for combo in combinations:
@@ -11916,6 +12143,8 @@ def analyze_round_trip(
                                                  return_per_person_oneway=combo["return_price"], round_trip=True)) + fee["amount"]
             confirmed.append(combo)
         combinations = confirmed
+        if same_day_round_trip:
+            same_day_filter_counts.update(baggage_required=True, after_baggage=len(combinations))
     combinations.sort(key=lambda item: item.get("selection_cost_all", item["total_price"]))
     combinations = _dedupe_roundtrip_combinations(combinations)
     _print_roundtrip_plan_comparison(
