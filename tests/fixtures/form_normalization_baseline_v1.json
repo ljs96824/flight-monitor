@@ -1385,6 +1385,7 @@
             "evening",
             "night"
           ],
+          "red_eye_policy_source": "default_from_form",
           "redundancy_min": 25,
           "reimburse_per_person": null,
           "return_arrival_slots": [
@@ -1427,6 +1428,14 @@
           "time_preference": "custom",
           "time_preference_mode": "custom",
           "time_source": "user_defined",
+          "time_window_sources": {
+            "arrival": "explicit",
+            "departure": "explicit",
+            "outbound_arrival": "explicit",
+            "outbound_departure": "explicit",
+            "return_arrival": "explicit",
+            "return_departure": "explicit"
+          },
           "transfer_policy": "reasonable",
           "transport_margin_mode": "standard",
           "trip_nature": "",
@@ -1629,6 +1638,14 @@
           "target_price_scope": "per_person",
           "time_preference": "custom",
           "time_preference_mode": "custom",
+          "time_window_sources": {
+            "arrival": "explicit",
+            "departure": "explicit",
+            "outbound_arrival": "explicit",
+            "outbound_departure": "explicit",
+            "return_arrival": "explicit",
+            "return_departure": "explicit"
+          },
           "travel_purposes": [
             "personal"
           ],

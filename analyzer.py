@@ -5747,32 +5747,18 @@ def _priority_boundary_notes(flight: dict, priorities: dict) -> list[str]:
 
 
 def _hour_from_time(value: str | None) -> int | None:
-    parsed = parse_flight_time(value)
-    if parsed is not None:
-        return parsed.hour
-    text = str(value or "").replace("T", " ")
-    match = re.search(r"(\d{1,2}):(\d{2})", text)
-    if not match:
-        return None
-    try:
-        hour = int(match.group(1))
-    except (TypeError, ValueError):
-        return None
-    return hour if 0 <= hour <= 23 else None
+    minute = _parse_flight_clock_minutes(value)
+    return None if minute is None else minute // 60
 
 
 def _first_departure_hour(flight: dict) -> int | None:
-    segments = flight.get("segments") or []
-    if segments:
-        return _hour_from_time(segments[0].get("dep_time") or segments[0].get("departure_time"))
-    return _hour_from_time(flight.get("departure_time") or flight.get("dep_time"))
+    minute = _extract_flight_endpoint_minutes(flight, "departure")
+    return None if minute is None else minute // 60
 
 
 def _last_arrival_hour(flight: dict) -> int | None:
-    segments = flight.get("segments") or []
-    if segments:
-        return _hour_from_time(segments[-1].get("arr_time") or segments[-1].get("arrival_time"))
-    return _hour_from_time(flight.get("arrival_time") or flight.get("arr_time"))
+    minute = _extract_flight_endpoint_minutes(flight, "arrival")
+    return None if minute is None else minute // 60
 
 
 def time_slot_from_hour(hour: int | None) -> str | None:
@@ -5878,43 +5864,96 @@ def _is_daytime_flight(flight: dict) -> bool:
     return dep_ok and arr_ok
 
 
-def _time_to_minutes(value) -> int | None:
-    if value is None:
+def _parse_window_bound_minutes(value, *, allow_end_24: bool = False) -> int | None:
+    if not isinstance(value, str):
         return None
-    text = str(value).strip()
-    match = re.search(r"(\d{1,2}):(\d{2})", text)
+    match = re.fullmatch(r"(\d{1,2}):(\d{2})", value.strip())
     if not match:
         return None
     hour = int(match.group(1))
     minute = int(match.group(2))
+    if allow_end_24 and hour == 24 and minute == 0:
+        return 1440
     if not 0 <= hour <= 23 or not 0 <= minute <= 59:
         return None
     return hour * 60 + minute
+
+
+def _parse_time_window_item(window) -> tuple[int, int] | None:
+    if isinstance(window, str):
+        match = re.fullmatch(r"\s*(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})\s*", window)
+        if not match:
+            return None
+        window = match.groups()
+    if not isinstance(window, (list, tuple)) or len(window) != 2:
+        return None
+    start = _parse_window_bound_minutes(window[0])
+    end = _parse_window_bound_minutes(window[1], allow_end_24=True)
+    return None if start is None or end is None else (start, end)
+
+
+def _parse_flight_clock_minutes(value) -> int | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    if re.search(r"\d{4}-\d{1,2}-\d{1,2}", text):
+        parsed = parse_flight_time(text, None)
+        return None if parsed is None else parsed.hour * 60 + parsed.minute
+    match = re.fullmatch(r"(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\s*\+\d{1,2})?", text)
+    if not match:
+        return None
+    hour, minute = int(match[1]), int(match[2])
+    second = int(match[3] or 0)
+    return hour * 60 + minute if 0 <= hour <= 23 and 0 <= minute <= 59 and 0 <= second <= 59 else None
+
+
+def _extract_flight_endpoint_minutes(flight: dict, axis: str) -> int | None:
+    segments = flight.get("segments")
+    keys = ("dep_time", "departure_time") if axis == "departure" else ("arr_time", "arrival_time")
+    if isinstance(segments, (list, tuple)) and segments:
+        endpoint = segments[0] if axis == "departure" else segments[-1]
+        if isinstance(endpoint, dict):
+            raw = next((endpoint.get(key) for key in keys if endpoint.get(key)), None)
+            minute = _parse_flight_clock_minutes(raw)
+            if minute is not None:
+                return minute
+    for key in reversed(keys):
+        minute = _parse_flight_clock_minutes(flight.get(key))
+        if minute is not None:
+            return minute
+    return None
+
+
+def _time_to_minutes(value) -> int | None:
+    return _parse_flight_clock_minutes(value)
 
 
 def _hour_to_minutes(hour: int | None) -> int | None:
     return None if hour is None else int(hour) * 60
 
 
-def _matches_time_windows(hour: int | None, windows) -> bool:
-    if hour is None or not windows:
-        return True
-    minute = _hour_to_minutes(hour)
-    if minute is None:
-        return True
+def _minute_matches_windows(minute: int, windows, *, inclusive_end: bool) -> bool:
     for window in windows:
-        if not isinstance(window, (list, tuple)) or len(window) < 2:
+        parsed = _parse_time_window_item(window)
+        if parsed is None:
             continue
-        start = _time_to_minutes(window[0])
-        end = _time_to_minutes(window[1])
-        if start is None or end is None:
-            continue
-        if start <= end:
-            if start <= minute < end:
-                return True
-        elif minute >= start or minute < end:
+        start, end = parsed
+        right = minute <= end if inclusive_end else minute < end
+        if (start <= minute and right) if start <= end else (minute >= start or right):
             return True
     return False
+
+
+def _matches_time_windows(time_or_hour, windows, *, inclusive_end: bool = False) -> bool:
+    if time_or_hour is None or not windows:
+        return True
+    if isinstance(time_or_hour, str):
+        minute = _parse_flight_clock_minutes(time_or_hour)
+    else:
+        minute = _hour_to_minutes(time_or_hour) if 0 <= time_or_hour <= 23 else time_or_hour
+    if minute is None:
+        return True
+    return _minute_matches_windows(minute, windows, inclusive_end=inclusive_end)
 
 
 def _direction_time_windows(preferences: dict, direction: str) -> tuple[object, object]:
@@ -5925,9 +5964,50 @@ def _direction_time_windows(preferences: dict, direction: str) -> tuple[object, 
         dep_windows = preferences.get("outbound_departure_time_windows")
         arr_windows = preferences.get("outbound_arrival_time_windows")
     return (
-        dep_windows or preferences.get("departure_time_windows") or [],
-        arr_windows or preferences.get("arrival_time_windows") or [],
+        dep_windows or preferences.get("departure_time_windows", []),
+        arr_windows or preferences.get("arrival_time_windows", []),
     )
+
+
+def _effective_time_axes(preferences: dict) -> dict:
+    direction = preferences.get("direction", "outbound")
+    windows = _direction_time_windows(preferences, direction)
+    sources = preferences.get("time_window_sources")
+    mode = preferences.get("time_preference_mode") or preferences.get("time_preference")
+    result = {}
+    for axis, value in zip(("departure", "arrival"), windows):
+        if isinstance(sources, dict) and sources:
+            source = sources.get(f"{direction}_{axis}") or sources.get(axis) or "derived_unlimited"
+        else:
+            source = "explicit" if mode == "custom" and value else "derived_unlimited"
+        result[axis] = (value, source)
+    return result
+
+
+def _evaluate_axis_redeye_rejection(flight, preferences, *, passenger_friendly_mode, companion_constraints):
+    axes = _effective_time_axes(preferences)
+    policy_source = preferences.get("red_eye_policy_source")
+    independent = bool(
+        preferences.get("no_redeye_strict") or "no_redeye" in companion_constraints
+        or policy_source == "explicit_hard_disallow"
+        or (policy_source is None and any(
+            preferences.get(key) in {"reject", "not_allowed", "strict"}
+            for key in ("red_eye", "red_eye_policy")
+        ))
+    )
+    for axis, (windows, source) in axes.items():
+        minute = _extract_flight_endpoint_minutes(flight, axis)
+        if minute is None or 360 <= minute < 1380:
+            continue
+        explicit_hit = source in {"explicit", "inherited_explicit"} and bool(windows) and (
+            _minute_matches_windows(minute, windows, inclusive_end=True)
+        )
+        if explicit_hit and not passenger_friendly_mode and not independent and policy_source != "legacy_unverified":
+            continue
+        if independent and explicit_hit:
+            return "用户不接受红眼/过早航班（独立禁红眼硬约束未放开）"
+        return "用户不接受红眼/过早航班"
+    return None
 
 
 def match_time_preference(flight: dict, soft_prefs: dict) -> tuple[bool, str]:
@@ -5937,6 +6017,43 @@ def match_time_preference(flight: dict, soft_prefs: dict) -> tuple[bool, str]:
         or "unlimited"
     )
     mode = "unlimited" if mode == "any" else mode
+    axes = _effective_time_axes(soft_prefs)
+    if mode == "custom" or any(source in {"explicit", "inherited_explicit"} for _windows_value, source in axes.values()):
+        daytime_penalty = False
+        return_late = False
+        for axis, (windows, source) in axes.items():
+            minute = _extract_flight_endpoint_minutes(flight, axis)
+            hour = None if minute is None else minute // 60
+            if source in {"explicit", "inherited_explicit", "legacy_unverified"}:
+                if windows is None:
+                    windows = []
+                if not isinstance(windows, (list, tuple)) or any(_parse_time_window_item(w) is None for w in windows):
+                    return False, "自定义可接受时段配置格式无效"
+                if not windows:
+                    continue
+                if minute is None:
+                    label = "出发" if axis == "departure" else "到达"
+                    return False, f"无法核实{label}时刻是否满足可接受时段"
+                if not _minute_matches_windows(minute, windows, inclusive_end=source != "legacy_unverified"):
+                    return False, "不在你设置的可接受时段内"
+            elif source == "derived_daytime":
+                daytime_penalty |= hour is not None and not 6 <= hour < 20
+            elif source == "derived_no_late":
+                if hour is not None and hour < 6:
+                    return False, "到达时间不符合订阅偏好"
+            elif source == "derived_no_redeye":
+                late_return = axis == "arrival" and soft_prefs.get("same_day_round_trip") and soft_prefs.get("direction") == "return"
+                if hour is not None and (hour < 6 or (hour >= 23 and not late_return)):
+                    return False, "红眼/凌晨航班，已排除"
+                return_late |= bool(late_return and hour is not None and hour >= 23)
+            elif source == "derived_slots" and windows and minute is not None:
+                if not _minute_matches_windows(minute, windows, inclusive_end=False):
+                    return False, "不在你设置的可接受时段内"
+        if daytime_penalty:
+            return True, "非白天，排序降权"
+        if return_late:
+            return True, "当天往返：返程晚班视为正常，深夜限制放宽至午夜前到达"
+        return True, ""
     if mode == "unlimited":
         return True, ""
 
@@ -5962,15 +6079,6 @@ def match_time_preference(flight: dict, soft_prefs: dict) -> tuple[bool, str]:
         if dep_red_eye or arr_red_eye:
             return False, "红眼/凌晨航班，已排除"
         return True, ""
-
-    if mode == "custom":
-        direction = soft_prefs.get("direction", "outbound")
-        dep_windows, arr_windows = _direction_time_windows(soft_prefs, direction)
-        dep_ok = _matches_time_windows(dep_hour, dep_windows)
-        arr_ok = _matches_time_windows(arr_hour, arr_windows)
-        if dep_ok and arr_ok:
-            return True, ""
-        return False, "不在你设置的可接受时段内"
 
     return True, ""
 
@@ -8555,7 +8663,11 @@ def _filter_constraint_detail(flight: dict, preferences: dict) -> tuple[str, str
         return "arrival_slots", _filter_detail_times(flight)
     if "到达时间" in reason:
         return "arrival_time_policy", _filter_detail_times(flight)
-    if "时间不符合" in reason:
+    if reason == "自定义可接受时段配置格式无效":
+        return "invalid_time_window_config", reason
+    if "无法核实" in reason and "可接受时段" in reason:
+        return "time_preference", f"clock_unverified,{_filter_detail_times(flight)}"
+    if "时间不符合" in reason or "可接受时段" in reason:
         return "time_preference", _filter_detail_times(flight)
     if reason == "用户不接受廉航":
         return "airline_policy", f"airlines={_filter_detail_airlines(flight)}"
@@ -8967,8 +9079,13 @@ def _apply_user_preferences(
                 continue
 
         if not same_day_meeting_time_override and red_eye == "reject" and _is_red_eye(flight):
-            excluded.append({**flight, "exclude_reason": "用户不接受红眼/过早航班"})
-            continue
+            rejection = _evaluate_axis_redeye_rejection(
+                flight, preferences, passenger_friendly_mode=passenger_friendly_mode,
+                companion_constraints=companion_constraints,
+            )
+            if rejection:
+                excluded.append({**flight, "exclude_reason": rejection})
+                continue
         if not same_day_meeting_time_override and red_eye in {"accept", "flexible", "cheap_ok"} and _is_red_eye(flight):
             penalty += 2 if red_eye in {"accept", "flexible"} else 1
             if cheapest_non_red_eye and price < cheapest_non_red_eye:
