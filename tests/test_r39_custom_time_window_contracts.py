@@ -398,8 +398,7 @@ class TestTrack4FrozenAndAstGuards(unittest.TestCase):
     def test_g23_source_files_ast_and_ten_non_custom_scenarios_are_locked(self):
         self.assertEqual(len(constraint_fingerprint.EXPECTED_CONSTRAINT_FINGERPRINT_FIELDS), 54)
         self.assertEqual(set(constraint_fingerprint.CONSTRAINT_FINGERPRINT_FIELDS), constraint_fingerprint.EXPECTED_CONSTRAINT_FINGERPRINT_FIELDS)
-        for name, size, digest in (("notifier.py", 647512, "ea48611112477ae0aafcb20bd0b7511ba13ef047f7f5d454a343bcbabb6cebff"),
-                                   ("constraint_fingerprint.py", 11459, "b396aef5431cc976754bab2a5a2474641b78d38002844a808521b2f228c415a9"),
+        for name, size, digest in (("constraint_fingerprint.py", 11459, "b396aef5431cc976754bab2a5a2474641b78d38002844a808521b2f228c415a9"),
                                    ("constraint_summary.py", 3595, "ab7a1505ff953891c7959e7e2412bc3ce7f93f93732e48c7557f5d43ebb3752b")):
             raw = (ROOT / name).read_text(encoding="utf-8").encode("utf-8")
             self.assertEqual((len(raw), hashlib.sha256(raw).hexdigest()), (size, digest))

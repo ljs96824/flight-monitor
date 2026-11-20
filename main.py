@@ -1930,6 +1930,111 @@ def _leg_airport_coverage(aggregator, data, direction):
     return {**value, "direction": direction} if isinstance(value, dict) and value else {}
 
 
+def _is_empty_fetch_unit(unit):
+    return (
+        unit.get("source_status") == "empty"
+        and unit.get("raw_schema_valid") is True
+        and all(type(unit.get(key)) is int and unit[key] == 0 for key in (
+            "raw_result_count", "raw_flight_count", "valid_flight_count",
+        ))
+        and unit.get("is_enrichment") is not True
+        and unit.get("role") != "enrichment"
+    )
+
+
+def _classify_leg_collection_outcome(data, *, panel_only=False):
+    if not isinstance(data, dict):
+        return "panel_uncollected" if panel_only else "collection_failed"
+    flights = data.get("flights")
+    if isinstance(flights, list) and any(isinstance(f, dict) and _valid_price(f.get("price")) for f in flights):
+        return "quoted"
+    coverage = data.get("airport_coverage") or {}
+    scope = data.get("query_scope") or {}
+    if not isinstance(coverage, dict) or not isinstance(scope, dict):
+        return "collection_failed"
+    records = coverage.get("pair_records") or []
+    if not isinstance(records, list):
+        return "collection_failed"
+    states = {row.get("state") for row in records if isinstance(row, dict)}
+    units = [
+        row for row in data.get("fetch_evidence_units") or []
+        if isinstance(row, dict) and not row.get("is_enrichment") and row.get("role") != "enrichment"
+    ]
+    if states == {"panel_uncollected"} or (panel_only and not states and not units):
+        return "panel_uncollected"
+    if states == {"data_unusable"}:
+        return "data_unusable"
+    if coverage.get("complete") is False or (coverage.get("uncovered_pair_count") or 0) > 0:
+        return "incomplete_coverage"
+    if any(
+        row.get("source_status") in {"success", "cache", "empty"} and (
+            row.get("raw_schema_valid") is False or (
+                not row.get("valid_flight_count")
+                and any(row.get(key) not in (None, 0) for key in ("raw_result_count", "raw_flight_count"))
+            )
+        ) for row in units
+    ):
+        return "data_unusable"
+    if flights == [] and _valid_price(data.get("pre_filter_flight_count")):
+        return "filtered_empty"
+    if flights != [] or type(data.get("pre_filter_flight_count")) is not int or data["pre_filter_flight_count"] != 0:
+        return "collection_failed"
+    if coverage.get("complete") is not True or coverage.get("uncovered_pair_count") != 0 or not records:
+        return "collection_failed"
+
+    def pair_set(value):
+        if not isinstance(value, list) or any(
+            not isinstance(pair, (list, tuple)) or len(pair) != 2
+            or not all(isinstance(code, str) and code for code in pair) for pair in value
+        ):
+            return set()
+        return {tuple(pair) for pair in value}
+
+    planned = pair_set(scope.get("planned_pairs"))
+    date_str = scope.get("depart_date")
+    required = scope.get("required_sources_by_cabin")
+    if (not planned or not date_str or coverage.get("depart_date") != date_str
+            or pair_set(coverage.get("planned_pairs")) != planned
+            or pair_set(coverage.get("covered_pairs")) != planned
+            or len(planned) != len(records) or coverage.get("planned_pair_count") != len(planned)
+            or coverage.get("covered_pair_count") != len(planned)
+            or not isinstance(required, dict) or not required
+            or any(not isinstance(names, list) or not names for names in required.values())):
+        return "collection_failed"
+    seen_pairs = set()
+    for pair in records:
+        if not isinstance(pair, dict):
+            return "collection_failed"
+        key = (pair.get("origin"), pair.get("destination"))
+        cabins = pair.get("cabins") or {}
+        if (not isinstance(cabins, dict) or not all(isinstance(code, str) for code in key)
+                or key not in planned or key in seen_pairs or pair.get("covered") is not True
+                or pair.get("state") != "covered_empty"
+                or any(not isinstance(cabins.get(cabin), dict) or cabins[cabin].get("state") != "covered_empty"
+                       for cabin in required)):
+            return "collection_failed"
+        seen_pairs.add(key)
+        for cabin, names in required.items():
+            for source in names:
+                matches = [
+                    row for row in units
+                    if (row.get("origin_airport"), row.get("dest_airport")) == key
+                    and row.get("depart_date") == date_str and row.get("cabin_class") == cabin
+                    and row.get("source") == source
+                ]
+                if not matches or not all(_is_empty_fetch_unit(row) for row in matches):
+                    return "collection_failed"
+                if any(isinstance(err, dict)
+                       and err.get("source") in (None, "collection", source)
+                       and err.get("cabin_class") in (None, "", cabin)
+                       and err.get("origin_airport") in (None, "", key[0])
+                       and err.get("dest_airport") in (None, "", key[1])
+                       and err.get("depart_date") in (None, "", date_str)
+                       for err in data.get("source_errors") or []):
+                    return "collection_failed"
+    return "covered_empty"
+
+
 def _airport_pair_coverage(origin, destination, cabins, required, units, data, errors, panel_only):
     by_cabin = {}
     for cabin in cabins:
@@ -1942,8 +2047,6 @@ def _airport_pair_coverage(origin, destination, cabins, required, units, data, e
             fresh = any(u.get("collection_state") not in {"panel_reused", "cache", "cache_reused"}
                         for u in quoted)
             state, reason = ("covered_quoted" if fresh else "covered_reused"), ""
-        elif panel_only:
-            state, reason = "panel_uncollected", "未取得该范围的有效证据（今日未采，未发起补采）"
         elif expected == []:
             state, reason = "uncovered_skipped", "未配置适用报价源"
         elif rows:
@@ -1952,16 +2055,22 @@ def _airport_pair_coverage(origin, destination, cabins, required, units, data, e
                       (u.get("raw_result_count") not in (None, 0) and not u.get("valid_flight_count")) or
                       (u.get("raw_flight_count") not in (None, 0) and not u.get("valid_flight_count"))
                       for u in rows if u.get("source_status") in {"empty", "success", "cache"})
-            empty = all(u.get("source_status") == "empty" and u.get("raw_schema_valid") is True
-                        and u.get("raw_result_count") == 0 and u.get("raw_flight_count") == 0
-                        and u.get("valid_flight_count") == 0 for u in rows)
+            empty = all(_is_empty_fetch_unit(u) for u in rows)
             if bad:
                 state, reason = "data_unusable", "原始记录或结构不可用"
-            elif empty and not unresolved:
+            elif empty and expected and not unresolved and not any(
+                    e.get("source") in (None, "collection", *expected) and e.get("cabin_class") in (None, "", cabin)
+                    for e in errors):
                 state, reason = "covered_empty", ""
             else:
-                skipped = any(str(u.get("source_status") or "").startswith(("skipped", "not_configured")) for u in rows)
-                state = "uncovered_skipped" if skipped else "uncovered_failed"
+                statuses = {str(u.get("source_status") or "") for u in rows}
+                failed = any(status in {"failed", "failure", "error", "exception", "timeout"} for status in statuses)
+                skipped = any(status.startswith(("skipped", "not_configured")) and status != "skipped_panel_only"
+                              for status in statuses)
+                missing = panel_only and (unresolved or "skipped_panel_only" in statuses
+                                          or any(u.get("collection_state") == "panel_missing" for u in rows))
+                state = ("uncovered_failed" if failed or errors else "uncovered_skipped" if skipped
+                         else "panel_uncollected" if missing else "uncovered_failed")
                 reason = "; ".join(str(u.get("skipped_reason") or u.get("reason") or u.get("error")
                                        or u.get("source_status") or "报价证据缺失") for u in rows)
                 if unresolved:
@@ -1970,6 +2079,8 @@ def _airport_pair_coverage(origin, destination, cabins, required, units, data, e
                                       (f.get("cabin_class") or "economy") == cabin
                                       for f in (data or {}).get("flights", [])):
             state, reason = "covered_quoted", ""
+        elif panel_only and not errors:
+            state, reason = "panel_uncollected", "未取得该范围的有效证据（今日未采，未发起补采）"
         else:
             state = "uncovered_failed"
             reason = "; ".join(str(e.get("error") or "请求未完成") for e in errors) or "未取得报价源证据"
@@ -2014,7 +2125,7 @@ def collect_for_airport_matrix(
                     covered_pairs=[], uncovered_pairs=[], pair_records=[], complete=False)
     merged = dict(flights=[], price_insights={}, dual_source_price_anomalies=[], fetch_evidence_units=[],
                   attempted_airport_pairs=[], source_stats={}, source_errors=[], raw_by_source={},
-                  sources_used="", source="", collected_at=datetime.now().isoformat(timespec="seconds"),
+                  sources_used="", source="", collected_at=None,
                   collection_freshness=[])
     sources_used, single_data = [], None
     for index, (origin, destination) in enumerate(combinations):
@@ -2034,10 +2145,31 @@ def collect_for_airport_matrix(
         try:
             data = _aggregator_collect(aggregator, origin, destination, date_str,
                                        passengers=passengers, request_reason=reason, **kwargs)
-            units = (data or {}).get("fetch_evidence_units", getattr(aggregator, "last_fetch_evidence_units", []))
-            errors = (data or {}).get("source_errors", getattr(aggregator, "last_source_errors", [])) or []
+            scope = getattr(aggregator, "last_call_scope", None)
+            scope_ok = scope is None or isinstance(scope, dict) and (
+                scope.get("origin"), scope.get("destination"), scope.get("depart_date")
+            ) == (origin, destination, date_str)
+            if not scope_ok:
+                raise ValueError("机场组合采集快照范围不匹配")
+            snapshot = getattr(aggregator, "last_call_snapshot", None)
+            if isinstance(snapshot, dict) and snapshot.get("call_scope") != scope:
+                raise ValueError("机场组合采集快照调用不匹配")
+            data = copy.deepcopy(data) if data else None
+            evidence = data or (copy.deepcopy(snapshot) if isinstance(snapshot, dict) else {
+                field: copy.deepcopy(getattr(aggregator, f"last_{field}", default))
+                for field, default in (
+                    ("fetch_evidence_units", []), ("source_errors", []), ("source_stats", {}),
+                    ("collection_freshness", []), ("raw_by_source", {}), ("price_insights", {}),
+                    ("collected_at", None),
+                )
+            })
+            if isinstance(snapshot, dict) and isinstance(snapshot.get("fetch_evidence_units"), list):
+                units = copy.deepcopy(snapshot["fetch_evidence_units"])
+            else:
+                units = evidence.get("fetch_evidence_units", [])
+            errors = evidence.get("source_errors") or []
         except Exception as exc:
-            data, units = None, []
+            data, units, evidence = None, [], {}
             errors = [{"source": "collection", "error": _redact_api_key(str(exc))}]
         units = units if isinstance(units, list) else []
         record = _airport_pair_coverage(origin, destination, cabins, required, units, data, errors, panel_only)
@@ -2047,20 +2179,23 @@ def collect_for_airport_matrix(
         merged["fetch_evidence_units"].extend(units)
         _merge_source_errors(merged["source_errors"], errors, leg=direction, origin_airport=origin,
                              dest_airport=destination, depart_date=date_str)
-        if not data:
-            continue
-        single_data = data
-        for flight in data.get("flights", []):
+        if data:
+            single_data = data
+        for flight in (data or {}).get("flights", []):
             flight["search_origin"] = flight.get("search_origin") or origin
             flight["search_destination"] = flight.get("search_destination") or destination
-        merged["flights"].extend(data.get("flights", []))
-        if not merged["price_insights"] and data.get("price_insights"):
-            merged["price_insights"] = data["price_insights"]
-        _merge_source_stats(merged["source_stats"], data.get("source_stats", {}))
-        merged["dual_source_price_anomalies"].extend(data.get("dual_source_price_anomalies", []) or [])
-        merged["raw_by_source"].update(data.get("raw_by_source", {}))
-        merged["collection_freshness"].extend(data.get("collection_freshness", []) or [])
-        for name in str(data.get("sources_used") or data.get("source") or "").split("+"):
+        merged["flights"].extend((data or {}).get("flights", []))
+        if not merged["price_insights"] and evidence.get("price_insights"):
+            merged["price_insights"] = evidence["price_insights"]
+        _merge_source_stats(merged["source_stats"], evidence.get("source_stats", {}))
+        merged["dual_source_price_anomalies"].extend(evidence.get("dual_source_price_anomalies", []) or [])
+        merged["raw_by_source"].update(evidence.get("raw_by_source") or {})
+        merged["collection_freshness"].extend(evidence.get("collection_freshness") or [])
+        if evidence.get("collected_at"):
+            merged["collected_at"] = min(value for value in (
+                merged["collected_at"], evidence["collected_at"]
+            ) if value)
+        for name in str(evidence.get("sources_used") or evidence.get("source") or "").split("+"):
             if name and name not in sources_used:
                 sources_used.append(name)
     coverage.update(covered_pair_count=len(coverage["covered_pairs"]),
@@ -2078,10 +2213,28 @@ def collect_for_airport_matrix(
         result["source_stats"]["after_dedup"] = len(result["flights"])
         result["sources_used"] = "+".join(sources_used)
         result["source"] = result["sources_used"]
-    result["airport_coverage"] = coverage
-    if coverage.get("planned_pair_count", 0) > 1 or coverage.get("complete") is False:
+    pre_filter = sum(1 for flight in merged["flights"] if _valid_price(flight.get("price")))
+    retained = [flight["price"] for flight in result["flights"] if _valid_price(flight.get("price"))]
+    result.update(
+        airport_coverage=coverage,
+        query_scope=dict(direction=direction, depart_date=date_str, origins=origins, destinations=destinations,
+                         planned_pairs=coverage["planned_pairs"], required_sources_by_cabin=required),
+        fetch_evidence_units=merged["fetch_evidence_units"],
+        source_errors=merged["source_errors"],
+        pre_filter_flight_count=pre_filter,
+        airport_filtered_flights=max(0, pre_filter - sum(
+            _valid_price(flight.get("price")) for flight in
+            _filter_data_to_airports({"flights": merged["flights"]}, origins, destinations)["flights"]
+        )),
+        count=len(result["flights"]),
+        min_price=min(retained, key=float) if retained else None,
+    )
+    outcome = _classify_leg_collection_outcome(result, panel_only=panel_only)
+    result["collection_outcome"] = outcome
+    result["empty_reason"] = "" if outcome == "quoted" else outcome
+    if outcome == "covered_empty" or coverage.get("planned_pair_count", 0) > 1 or coverage.get("complete") is False:
         result.setdefault("source_stats", {})["_airport_coverage"] = {direction: coverage}
-    return result if result.get("flights") else None
+    return result
 
 
 def collect_nearby_dates(
@@ -2090,6 +2243,8 @@ def collect_nearby_dates(
     cabin_classes=None,
     target_min_price=None,
     fresh_scope: str = "all",
+    *,
+    force_panel_only: bool = False,
 ) -> list[dict]:
     try:
         days_range = int(sub.get("date_flexibility") or 0)
@@ -2117,7 +2272,7 @@ def collect_nearby_dates(
     )
 
     panel_only_evaluation = (
-        str(fresh_scope or "").strip().lower() == "primary_only"
+        force_panel_only or str(fresh_scope or "").strip().lower() == "primary_only"
     )
     primary_aggregator = FlightAggregator(calendar_sources, [], route_type=route_type)
 
@@ -2145,7 +2300,7 @@ def collect_nearby_dates(
                     route_type=route_type,
                     passengers=_subscription_passengers(sub),
                     request_reason="弹性日期",
-                    panel_only=True if panel_only_evaluation else None,
+                    panel_only=True if panel_only_evaluation else False,
                 )
                 flights = data.get("flights", []) if data else []
                 prices = [
@@ -2177,6 +2332,16 @@ def collect_nearby_dates(
                 reused = any(
                     item.get("state") == "panel_reused" for item in freshness_rows
                 )
+                outcome = _classify_leg_collection_outcome(data, panel_only=panel_only_evaluation)
+                state, note = {
+                    "quoted": ("panel_reused" if reused else "fresh", ""),
+                    "covered_empty": ("covered_empty", "已查询，未返回报价"),
+                    "filtered_empty": ("filtered_empty", "当前启用机场无报价"),
+                    "data_unusable": ("data_unusable", "数据不可用"),
+                    "incomplete_coverage": ("incomplete_coverage", "覆盖不完整"),
+                    "panel_uncollected": ("panel_missing", "今日未采"),
+                    "collection_failed": ("collection_failed", "采集失败"),
+                }[outcome]
                 stage_results.append(
                     {
                         "date": date_str,
@@ -2185,11 +2350,11 @@ def collect_nearby_dates(
                         "count": len(flights),
                         "selected": False,
                         "sources": contributed_sources,
-                        "collected_at": min(collected_values) if collected_values else None,
-                        "collection_state": "panel_missing" if not prices else "panel_reused" if reused else "fresh",
+                        "collected_at": min(collected_values) if collected_values else (data or {}).get("collected_at"),
+                        "collection_state": state,
                         "airport_coverage": _leg_airport_coverage(primary_aggregator, data, "outbound"),
-                        "today_uncollected": not bool(prices),
-                        "note": "今日未采" if not prices else "",
+                        "today_uncollected": state == "panel_missing",
+                        "note": note,
                     }
                 )
             except Exception as exc:
@@ -2203,9 +2368,9 @@ def collect_nearby_dates(
                         "selected": False,
                         "sources": [],
                         "collected_at": None,
-                        "collection_state": "panel_missing",
-                        "today_uncollected": True,
-                        "note": "今日未采",
+                        "collection_state": "collection_failed",
+                        "today_uncollected": False,
+                        "note": "采集失败",
                     }
                 )
         results.extend(stage_results)
@@ -2493,7 +2658,7 @@ def _process_return_phase(sub, context, agg, constraint_fp, route_type, request_
     data = copy.deepcopy(data or {})
     if return_coverage.get("planned_pair_count", 0) > 1 or return_coverage.get("complete") is False:
         data.setdefault("source_stats", {})["_airport_coverage"] = {"return": return_coverage}
-    collected_at = data.get("collected_at") or datetime.now().isoformat(timespec="seconds")
+    collected_at = data.get("collected_at") or None
     normalized = [
         _normalize_detail_flight(item, item.get("data_source") or item.get("source"))
         for item in data.get("flights", [])
@@ -2502,7 +2667,9 @@ def _process_return_phase(sub, context, agg, constraint_fp, route_type, request_
         item["collected_at"] = item.get("collected_at") or collected_at
     flights = [item for item in _filter_data_to_airports({"flights": normalized}, origins, destinations).get("flights", [])
                if _valid_price(item.get("price"))]
-    if not flights:
+    outcome = _classify_leg_collection_outcome({**data, "flights": flights})
+    empty_continuation_readonly = outcome in {"covered_empty", "filtered_empty"}
+    if not flights and not empty_continuation_readonly:
         reason = "返程采集未返回有效航班"
         safe_log(f"[返程采集失败] 日期={depart_date} 原因={reason}")
         _log_subscription_failure(sub, source_errors=source_errors, reason=reason)
@@ -2521,7 +2688,7 @@ def _process_return_phase(sub, context, agg, constraint_fp, route_type, request_
         departure_reference_now=_departure_reference_now(),
         low_price_trip_type="return_only",
     )
-    if return_coverage.get("complete", True):
+    if not empty_continuation_readonly and return_coverage.get("complete", True):
         save_flight_details(route, depart_date, _constraint_history_flights(analysis), constraint_fingerprint=constraint_fp)
     identity = _subscription_identifier(sub, route)
     since = get_constraint_epoch_boundary(route, depart_date, None, constraint_fp, subscription_id=identity)
@@ -2529,9 +2696,10 @@ def _process_return_phase(sub, context, agg, constraint_fp, route_type, request_
     history = get_lowest_price_history(route, depart_date, limit=limit, constraint_fingerprint=constraint_fp,
                                        include_metadata=True, since=since)
     days = (date.fromisoformat(depart_date) - _shanghai_today()).days
-    current = (analysis.get("price_range") or [0])[0]
+    current = (analysis.get("price_range") or [None])[0]
     nearby = collect_nearby_dates(agg, view, cabin_classes=_reference_cabin_classes(sub), target_min_price=current,
-                                  fresh_scope=collection_options.get("fresh_scope", "primary_only"))
+                                  fresh_scope="primary_only" if empty_continuation_readonly else collection_options.get("fresh_scope", "primary_only"),
+                                  **({"force_panel_only": True} if empty_continuation_readonly else {}))
     analysis.update({
         **context, "days_to_dept": days, "collected_at": collected_at,
         "hard_constraints": projected["constraints"], "soft_preferences": view.get("soft_preferences", {}),
@@ -2541,6 +2709,8 @@ def _process_return_phase(sub, context, agg, constraint_fp, route_type, request_
         "constraint_fingerprint": constraint_fp, "constraint_price_history": history,
         "nearby_dates": nearby, "dual_source_price_anomalies": data.get("dual_source_price_anomalies", []),
     })
+    if empty_continuation_readonly:
+        _attach_empty_leg_metadata(analysis, data, outcome)
     route_info = {
         **view, **context, "route_type": route_type,
         "constraint_fingerprint": constraint_fp, "lowest_price_history": history,
@@ -2561,6 +2731,16 @@ def _process_return_phase(sub, context, agg, constraint_fp, route_type, request_
     if not delivered:
         _log_subscription_failure(sub, reason="返程通知未发送成功")
     return delivered
+
+
+def _attach_empty_leg_metadata(analysis, data, outcome):
+    analysis.update(
+        collection_outcome=outcome,
+        airport_coverage=(data or {}).get("airport_coverage") or {},
+        empty_reason=(data or {}).get("empty_reason") or outcome,
+        pre_filter_flight_count=(data or {}).get("pre_filter_flight_count", 0),
+        airport_filtered_flights=(data or {}).get("airport_filtered_flights", 0),
+    )
 
 
 def _process_subscription_locked(
@@ -2698,7 +2878,9 @@ def _process_subscription_locked(
             passengers=request_passengers,
         )
 
-        if data is None or not data.get("flights"):
+        outbound_outcome = _classify_leg_collection_outcome(data)
+        empty_continuation_readonly = outbound_outcome in {"covered_empty", "filtered_empty"}
+        if data is None or (not data.get("flights") and not empty_continuation_readonly):
             logging.error(f"{route} 采集返回空")
             source_errors = _source_error_items(agg, data)
             _log_subscription_failure(
@@ -2714,7 +2896,7 @@ def _process_subscription_locked(
                 )
             return False
 
-        run_collected_at = data.get("collected_at") or datetime.now().isoformat(timespec="seconds")
+        run_collected_at = data.get("collected_at") or None
         normalized_flights = [
             _normalize_detail_flight(
                 flight, flight.get("data_source") or flight.get("source")
@@ -2736,6 +2918,9 @@ def _process_subscription_locked(
         print(f"[价格检查] 有效价格航班: {len(flights)}/{len(normalized_flights)}")
         data["flights"] = flights
         data["total_count"] = len(flights)
+        if not flights and outbound_outcome == "quoted":
+            outbound_outcome = "filtered_empty"
+            empty_continuation_readonly = True
 
         previous_prices = get_previous_snapshot_prices(
             route,
@@ -2771,8 +2956,10 @@ def _process_subscription_locked(
             low_price_trip_type=low_price_trip_type,
         )
         outbound_airport_coverage = _leg_airport_coverage(agg, data, "outbound")
+        if empty_continuation_readonly:
+            _attach_empty_leg_metadata(analysis, data, outbound_outcome)
         constraint_history_flights = _constraint_history_flights(analysis)
-        if low_price_trip_type != "round_trip" and outbound_airport_coverage.get("complete", True):
+        if not empty_continuation_readonly and low_price_trip_type != "round_trip" and outbound_airport_coverage.get("complete", True):
             save_flight_details(route, sub["depart_date"], constraint_history_flights,
                                 constraint_fingerprint=constraint_fp)
         lowest_price_history = get_lowest_price_history(
@@ -2786,9 +2973,36 @@ def _process_subscription_locked(
         days_to_dept = (
             date.fromisoformat(sub["depart_date"]) - _shanghai_today()
         ).days
-        current_min_price = (
-            analysis.get("price_range", [0])[0] if analysis.get("price_range") else 0
-        )
+        current_min_price = (analysis.get("price_range") or [None])[0]
+        raw_round_trip = sub.get("round_trip", False)
+        raw_return_date = sub.get("return_date") or sub.get("hard_constraints", {}).get("return_date")
+        round_trip, return_date = _as_bool(raw_round_trip), raw_return_date
+        return_analysis, return_data = None, None
+        return_outcome = None
+        if round_trip and return_date:
+            return_panel_only = empty_continuation_readonly
+            return_data = collect_for_airport_matrix(
+                agg, active_dests, active_origins, return_date,
+                cabin_classes=sub.get("cabin_classes"), route_type=route_type,
+                passengers=request_passengers, direction="return",
+                **({"panel_only": True} if return_panel_only else {}),
+            )
+            return_source_errors = _source_error_items(agg, return_data)
+            return_airport_coverage = _leg_airport_coverage(agg, return_data, "return")
+            return_collected_at = (return_data or {}).get("collected_at") or None
+            normalized_return_flights = [
+                _normalize_detail_flight(flight, flight.get("data_source") or flight.get("source"))
+                for flight in (return_data or {}).get("flights", [])
+            ]
+            for flight in normalized_return_flights:
+                flight["collected_at"] = flight.get("collected_at") or return_collected_at
+            normalized_return_flights = _filter_data_to_airports(
+                {"flights": normalized_return_flights}, active_dests, active_origins,
+            )["flights"]
+            return_flights = [f for f in normalized_return_flights if _valid_price(f.get("price"))]
+            returned_scope = None if return_data is None else {**return_data, "flights": return_flights}
+            return_outcome = _classify_leg_collection_outcome(returned_scope, panel_only=return_panel_only)
+            empty_continuation_readonly = empty_continuation_readonly or return_outcome != "quoted"
         price_calendar_result = None
         outbound_price_calendar = None
         calendar_cabin_class = (
@@ -2799,7 +3013,7 @@ def _process_subscription_locked(
         calendar_origin = _first_airport(active_origins, sub["origin"])
         calendar_dest = _first_airport(active_dests, sub["destination"])
         calendar_route = f"{calendar_origin}-{calendar_dest}"
-        if current_min_price and is_domestic_route(calendar_origin, calendar_dest):
+        if not empty_continuation_readonly and current_min_price and is_domestic_route(calendar_origin, calendar_dest):
             try:
                 calendar_source = _calendar_source_for_route(agg, calendar_origin, calendar_dest)
                 if calendar_source:
@@ -2834,7 +3048,8 @@ def _process_subscription_locked(
             sub,
             cabin_classes=_reference_cabin_classes(sub),
             target_min_price=current_min_price,
-            fresh_scope=collection_options.get("fresh_scope", "primary_only"),
+            fresh_scope="primary_only" if empty_continuation_readonly else collection_options.get("fresh_scope", "primary_only"),
+            **({"force_panel_only": True} if empty_continuation_readonly else {}),
         )
         analysis["days_to_dept"] = days_to_dept
         analysis["budget"] = sub.get("budget")
@@ -2858,31 +3073,22 @@ def _process_subscription_locked(
         analysis["dual_source_price_anomalies"] = data.get(
             "dual_source_price_anomalies", []
         )
-        analysis["price_position"] = price_position_description(
-            current_min_price, lowest_price_history
-        )
-        analysis["waiting_risk"] = waiting_risk_description(
-            lowest_price_history, current_min_price, days_to_dept
-        )
-        constraint_buy_wait_risk = calc_buy_vs_wait_risk(
-            current_min_price,
-            lowest_price_history,
-            days_to_dept,
-            analysis.get("ideal_price_pp_oneway", analysis.get("target_price_effective")),
-        )
-        analysis["buy_vs_wait_risk"] = _merge_constraint_history_trend(
-            analysis.get("buy_vs_wait_risk"),
-            constraint_buy_wait_risk,
-        )
-
-        raw_round_trip = sub.get("round_trip", False)
-        raw_return_date = sub.get("return_date") or sub.get("hard_constraints", {}).get("return_date")
+        if not empty_continuation_readonly:
+            analysis["price_position"] = price_position_description(
+                current_min_price, lowest_price_history
+            )
+            analysis["waiting_risk"] = waiting_risk_description(
+                lowest_price_history, current_min_price, days_to_dept
+            )
+            constraint_buy_wait_risk = calc_buy_vs_wait_risk(
+                current_min_price, lowest_price_history, days_to_dept,
+                analysis.get("ideal_price_pp_oneway", analysis.get("target_price_effective")),
+            )
+            analysis["buy_vs_wait_risk"] = _merge_constraint_history_trend(
+                analysis.get("buy_vs_wait_risk"), constraint_buy_wait_risk,
+            )
         print(f"[往返] round_trip={raw_round_trip}")
         print(f"[往返] return_date={raw_return_date}")
-        round_trip = _as_bool(raw_round_trip)
-        return_date = raw_return_date
-        return_analysis = None
-        return_data = None
 
         if round_trip and return_date:
             return_route = f"{sub['destination']}-{sub['origin']}"
@@ -2890,21 +3096,10 @@ def _process_subscription_locked(
             return_dest = sub["origin"]
             print(f"[往返] 开始采集返程 {return_route} {return_date}")
             print(f"[DEBUG] 开始采集返程: {return_origin}→{return_dest} {return_date}")
-            return_data = collect_for_airport_matrix(
-                agg,
-                active_dests,
-                active_origins,
-                return_date,
-                cabin_classes=sub.get("cabin_classes"),
-                route_type=route_type,
-                passengers=request_passengers,
-                direction="return",
-            )
-            return_source_errors = _source_error_items(agg, return_data)
-            return_airport_coverage = _leg_airport_coverage(agg, return_data, "return")
-            if return_airport_coverage.get("planned_pair_count", 0) > 1 or return_airport_coverage.get("complete") is False:
+            if return_outcome == "covered_empty" or return_airport_coverage.get("planned_pair_count", 0) > 1 or return_airport_coverage.get("complete") is False:
                 data.setdefault("source_stats", {}).setdefault("_airport_coverage", {})["return"] = return_airport_coverage
-            complete_history_coverage = (outbound_airport_coverage.get("complete", True)
+            complete_history_coverage = (not empty_continuation_readonly
+                                         and outbound_airport_coverage.get("complete", True)
                                          and return_airport_coverage.get("complete", True))
             if complete_history_coverage:
                 save_flight_details(route, sub["depart_date"], constraint_history_flights,
@@ -2913,32 +3108,13 @@ def _process_subscription_locked(
                 analysis["source_errors"],
                 return_source_errors, leg="return",
             )
-            return_collected_at = (return_data or {}).get("collected_at") or datetime.now().isoformat(timespec="seconds")
-            normalized_return_flights = [
-                _normalize_detail_flight(
-                    flight, flight.get("data_source") or flight.get("source")
-                )
-                for flight in (return_data or {}).get("flights", [])
-            ]
-            for flight in normalized_return_flights:
-                flight["collected_at"] = flight.get("collected_at") or return_collected_at
-            normalized_return_flights = _filter_data_to_airports(
-                {"flights": normalized_return_flights},
-                active_dests,
-                active_origins,
-            ).get("flights", [])
-            return_flights = [
-                flight
-                for flight in normalized_return_flights
-                if _valid_price(flight.get("price"))
-            ]
             print(
                 f"[价格检查] 返程有效价格航班: "
                 f"{len(return_flights)}/{len(normalized_return_flights)}"
             )
             print(f"[往返] 返程采集结果={len(return_flights)}个航班")
             print(f"[DEBUG] 返程采集完成: {len(return_flights)}个航班")
-            if not return_flights and (return_source_errors or not return_airport_coverage.get("complete", True)):
+            if not return_flights and return_outcome not in {"covered_empty", "filtered_empty"}:
                 collection_failure = _build_collection_leg_failure(
                     "return",
                     return_date,
@@ -2946,12 +3122,15 @@ def _process_subscription_locked(
                     active_origins,
                     return_source_errors,
                 )
+                collection_failure["return_outcome"] = return_outcome
+                if not return_source_errors:
+                    collection_failure["reason"] = "返程本次未取得完整查询证据"
                 analysis["collection_failures"].append(collection_failure)
                 safe_log(
                     f"[采集腿失败] 方向=返程 日期={return_date} "
                     f"原因={collection_failure['reason']} 结论=数据不完整"
                 )
-            if return_flights:
+            if return_flights or return_outcome in {"covered_empty", "filtered_empty"}:
                 save_raw_response(return_route, return_date, return_data)
                 return_preferences = {
                     **preferences,
@@ -2998,12 +3177,8 @@ def _process_subscription_locked(
                     analysis["source_errors"],
                     return_analysis.get("source_errors", []), leg="return",
                 )
-                return_min_price = (
-                    return_analysis.get("price_range", [0])[0]
-                    if return_analysis.get("price_range")
-                    else 0
-                )
-                if price_calendar_result and outbound_price_calendar and return_min_price:
+                return_min_price = (return_analysis.get("price_range") or [None])[0]
+                if not empty_continuation_readonly and price_calendar_result and outbound_price_calendar and return_min_price:
                     try:
                         return_calendar_origin = calendar_dest
                         return_calendar_dest = calendar_origin
@@ -3059,10 +3234,11 @@ def _process_subscription_locked(
                     return_sub,
                     cabin_classes=_reference_cabin_classes(sub),
                     target_min_price=return_min_price,
-                    fresh_scope=collection_options.get(
+                    fresh_scope="primary_only" if empty_continuation_readonly else collection_options.get(
                         "fresh_scope",
                         "primary_only",
                     ),
+                    **({"force_panel_only": True} if empty_continuation_readonly else {}),
                 )
                 return_analysis["days_to_dept"] = (
                     date.fromisoformat(return_date) - _shanghai_today()
@@ -3070,6 +3246,9 @@ def _process_subscription_locked(
                 return_analysis["collected_at"] = return_collected_at
                 return_analysis["nearby_dates"] = return_nearby_dates
                 analysis["return_analysis"] = return_analysis
+                if empty_continuation_readonly:
+                    _attach_empty_leg_metadata(return_analysis, return_data, return_outcome)
+            if return_analysis is not None and not empty_continuation_readonly:
                 round_trip_analysis = analyze_round_trip(
                     analysis,
                     return_analysis,
@@ -3183,14 +3362,22 @@ def _process_subscription_locked(
                 )
                 analysis["round_trip"] = True
                 print("[往返] return_analysis 已传入 notification payload")
-            else:
+            elif return_analysis is None:
                 print("[往返] 返程采集为空，无法生成 return_analysis")
+            if empty_continuation_readonly:
+                analysis["round_trip"] = True
+                analysis["return_collection_outcome"] = return_outcome
+                if return_analysis is None and return_airport_coverage:
+                    analysis["return_airport_coverage"] = return_airport_coverage
             print(f"[DEBUG] 返程analysis是否存在: {return_analysis is not None}")
         elif round_trip:
             print("[往返] 缺少 return_date，跳过返程采集")
             print(f"[DEBUG] 返程analysis是否存在: {return_analysis is not None}")
 
-        if analysis.get("budget_strategy") == "low_price_alert" and low_price_trip_type in {"one_way", "round_trip"}:
+        budget_strategy = (analysis.get("budget_strategy") or (sub.get("hard_constraints") or {}).get("budget_strategy")
+                           or sub.get("budget_strategy"))
+        if budget_strategy == "low_price_alert" and low_price_trip_type in {"one_way", "round_trip"}:
+            analysis["budget_strategy"] = budget_strategy
             offer = build_current_low_price_offer(sub, {"outbound":analysis, "return":return_analysis},
                 {"outbound":data, "return":return_data}, trip_type=low_price_trip_type, route_type=route_type,
                 origins=active_origins, destinations=active_dests, passengers=request_passengers,
@@ -3203,13 +3390,12 @@ def _process_subscription_locked(
                                cabin_scope=offer["cabin_scope"])
             apply_low_price_evaluation(analysis, context)
 
-        signal_record = log_signal(
-            route=route,
-            depart_date=sub["depart_date"],
-            analysis_result=analysis,
-            price_insights=data.get("price_insights"),
-        )
-        analysis["confidence"] = signal_record.get("confidence")
+        if not empty_continuation_readonly:
+            signal_record = log_signal(
+                route=route, depart_date=sub["depart_date"], analysis_result=analysis,
+                price_insights=data.get("price_insights"),
+            )
+            analysis["confidence"] = signal_record.get("confidence")
         health_cabin_class = (
             "business"
             if str(
@@ -3227,7 +3413,7 @@ def _process_subscription_locked(
             route_type=route_type,
             cabin_class=health_cabin_class,
             observed_day=canonicalize_observed_at(
-                run_collected_at
+                run_collected_at or None
             ).observed_day_shanghai,
         )
 
@@ -3251,6 +3437,8 @@ def _process_subscription_locked(
                 )
             else:
                 print("[推送] 当前价格未进入低价区间，按订阅策略跳过推送")
+            round_status = "ok"
+            safe_log("[推送] 按低价提醒策略静默结束（未发送完整行情通知）")
             return True
 
         data_freshness_legs = [

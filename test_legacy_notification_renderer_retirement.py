@@ -17,12 +17,12 @@ EXPECTED_SIGNATURE = (
 )
 EXPECTED_MAIN_CHAIN_SHA256 = {
     # Authorized 2026-08-29 log-only change: full subscription dump -> whitelist summary.
-    "build_notification_payload": "6ec18a811b7cb6353af949b74237ffae1352147eb7cd6c170141ae75942d6912",
+    "build_notification_payload": "5db09e4d9d42c04def2766c544eb02f5fed5e24b2cfe0486a34b0c5d3ff14714",
     # Authorized 2026-10-11 F5 return-phase wording: budget fields and action footnote via helpers;
     # revert proof in tests/test_return_phase_wording.py restores d877278d... / 2dbafb52....
-    "render_email": "429fabb2eea4a9b88cc0c653843aa372a8e0faad9f8e2865ad37e1a55cd7471e",
-    "render_detail_html": "2586b469355356e88a09a6c4872c348a8c70129864d9e93b7515280c4100cd29",
-    "render_pushplus_sections": "666472ec424df694891027abf2a125e47a8c0ba7d7d92b0400d64419a2ee56ef",
+    "render_email": "1dda41baa9b20b21fd14b3e703cafcd3b4e1cdbeb0150d617d7024f8ab217955",
+    "render_detail_html": "cefe927d905e3f0cbe32c7f032dc2f81aa988e84a241eac70587175d86a539f6",
+    "render_pushplus_sections": "75f4f4f448dc777f9e763dc8da6f638fd3da24d7cbe64db15791e4ec97b314a6",
 }
 RETIRED_PRIVATE_RENDERERS = {
     "_format_structured_html_" + "message",

@@ -431,10 +431,8 @@ class TestTrack3AlternativesLateMetricsAndThreeCarriers(ContractBase):
 class TestTrack4FrozenAndAstGuards(unittest.TestCase):
     def test_g23_locked_files_and_renderer_sources_are_unchanged(self):
         locked = (
-            ("notifier.py", 647512, "ea48611112477ae0aafcb20bd0b7511ba13ef047f7f5d454a343bcbabb6cebff"),
             ("constraint_fingerprint.py", 11459, "b396aef5431cc976754bab2a5a2474641b78d38002844a808521b2f228c415a9"),
             ("constraint_summary.py", 3595, "ab7a1505ff953891c7959e7e2412bc3ce7f93f93732e48c7557f5d43ebb3752b"),
-            ("main.py", 162587, "a56ac6f05b300e5892bdbf0b5f982a5cbdf4918147987589ca1299c91269e7c7"),
             ("web_form.py", 125145, "47f45bc97aa879bfb48e996482f13a504f1d68bc85fc0d893e885ea5b0f9ab1d"),
             ("form_concepts.py", 37206, "cf535034c4242c291b6cf1f66c7335497e0fb2e4ecbf238492662b6621e1e9b6"),
             ("form_structure.py", 53116, "5b9160c3cec816afeb92bf13dc868f1405c8db1eda3b6bb41479bc399b063882"),

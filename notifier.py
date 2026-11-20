@@ -107,6 +107,7 @@ from storage import (
     save_last_push_price,
     save_push_snapshot,
 )
+from health_check import verified_empty_sources
 from plan_tracker import save_pushed_plans, track_plan_status
 from pushplus_sections import (
     PUSHPLUS_COMPACT_CHARS,
@@ -5635,15 +5636,16 @@ def _nearby_dates_as_calendar(route: str, nearby) -> dict:
         date_text = str(item.get("date") or item.get("label") or "").strip()[:10]
         price = _to_float(item.get("min_price") or item.get("price") or item.get("value"))
         if not date_text or price is None or price <= 0:
-            if date_text and item.get("today_uncollected"):
+            empty = item.get("collection_state") == "covered_empty"
+            if date_text and (item.get("today_uncollected") or empty):
                 uncollected_rows.append(
                     {
                         "date": date_text,
                         "selected": bool(item.get("selected")),
-                        "status": "今日未采",
+                        "status": "已查询，未返回报价" if empty else "今日未采",
                         "sources": [],
                         "sample_n": 0,
-                        "observed_at": None,
+                        "observed_at": item.get("collected_at") if empty else None,
                     }
                 )
             continue
@@ -6564,7 +6566,8 @@ def _airport_coverage_lines(payload):
               "data_unusable": "数据不可用／证据不足", "uncovered_failed": "请求失败",
               "uncovered_skipped": "未完成覆盖"}
     for direction, cov, fallback in entries:
-        if not isinstance(cov, dict) or (cov.get("planned_pair_count", 0) <= 1 and cov.get("complete", True)):
+        if not isinstance(cov, dict) or (cov.get("planned_pair_count", 0) <= 1
+                                        and cov.get("complete", True) and not _covered_empty_state(payload)):
             continue
         covered, uncovered = [], []
         for row in cov.get("pair_records", []):
@@ -6645,6 +6648,9 @@ def _build_source_degradation_context(
         if str(item).strip()
     }
     unavailable = []
+    covered_empty = verified_empty_sources(source_stats)
+    failed_sources = {str(item.get("source") or "").strip().lower()
+                      for item in source_errors or [] if isinstance(item, dict)}
     for source_name, entry in source_stats.items():
         normalized = str(source_name).strip().lower()
         if (
@@ -6653,7 +6659,7 @@ def _build_source_degradation_context(
             or not isinstance(entry, dict)
         ):
             continue
-        if _source_stats_count(entry) == 0:
+        if _source_stats_count(entry) == 0 and (normalized not in covered_empty or normalized in failed_sources):
             unavailable.append(normalized)
     first_candidates = [name for name in unavailable if name in previous_sources]
     continued = str((last_snapshot or {}).get("push_type") or "") == "数据源受限"
@@ -6921,6 +6927,8 @@ def _price_change_scope_suffix(change: dict | None) -> str:
 def _email_subject(payload: dict) -> str:
     push_type = payload.get("push_type") or "价格提醒"
     route = payload.get("route") or "航班监控"
+    if _covered_empty_state(payload) or payload.get("empty_leg_summary"):
+        return _pushplus_title(payload)
     if _notification_phase_label(payload):
         return f"【{push_type}】{route}｜{_notification_phase_label(payload)}"
     alternatives = payload.get("same_day_alternatives") or []
@@ -7544,6 +7552,140 @@ def _track_return_phase_plan(identity, flights, analysis_result, *, data_dir, so
     return tracking
 
 
+def _covered_empty_state(payload: dict) -> bool:
+    return payload.get("covered_empty") is True and not _data_incomplete_state(payload)
+
+
+_UNQUOTED_LEG_OUTCOMES = {
+    "panel_uncollected", "collection_failed", "incomplete_coverage", "data_unusable",
+}
+
+
+def _notification_leg_outcomes(analysis, outbound, inbound):
+    outbound_result = (outbound or analysis).get("collection_outcome") or "quoted"
+    return_result = (inbound or analysis.get("return_analysis") or {}).get("collection_outcome")
+    return outbound_result, return_result or analysis.get("return_collection_outcome")
+
+
+def _is_covered_empty_notification(analysis_result, route_info, outbound_analysis, return_analysis):
+    analysis, route = analysis_result or outbound_analysis or {}, route_info or {}
+    going, returning = _notification_leg_outcomes(analysis, outbound_analysis, return_analysis)
+    return going == "covered_empty" or (route.get("round_trip") and (
+        returning == "covered_empty" or analysis.get("return_collection_outcome") in _UNQUOTED_LEG_OUTCOMES
+    ))
+
+
+def _empty_leg_status_summary(going, returning, *, round_trip=False, return_only=False):
+    if return_only:
+        return "返程阶段查询完成，所查来源未返回返程报价"
+    if not round_trip:
+        return "本次查询完成，所查来源未返回报价"
+    if going == returning == "covered_empty":
+        return "去程与返程所查来源均未返回报价，本轮无法形成完整往返方案"
+    outbound = {
+        "covered_empty": "去程所查来源未返回报价", "quoted": "去程已有报价",
+        "filtered_empty": "去程在当前启用机场范围未取得报价",
+    }.get(going, "去程本次未取得完整查询证据")
+    if returning == "covered_empty":
+        return f"{outbound}；返程所查来源未返回报价，本轮无法形成完整往返方案"
+    if returning == "quoted":
+        return f"{outbound}；返程已有报价，本轮无法形成完整往返方案"
+    if returning == "filtered_empty":
+        return f"{outbound}；返程在当前启用机场范围未取得报价"
+    return f"{outbound}；返程本次未取得完整查询证据"
+
+
+def _build_covered_empty_notification_payload(analysis, outbound, inbound, route, subscription, source_stats):
+    going, returning = _notification_leg_outcomes(analysis, outbound, inbound)
+    is_roundtrip = bool(route.get("round_trip"))
+    return_only = route.get("processing_phase") == "return_only"
+    has_empty_evidence = going == "covered_empty" or returning == "covered_empty"
+    identity = _notification_subscription_id(route, subscription)
+    detail_id = canonical_detail_uuid(identity)
+    stats = source_stats or route.get("source_stats") or analysis.get("source_stats") or {}
+    coverages = dict(stats.get("_airport_coverage") or {})
+    for leg, coverage in (
+        ("return" if return_only else "outbound", (outbound or analysis).get("airport_coverage")),
+        ("return", (inbound or {}).get("airport_coverage") or analysis.get("return_airport_coverage")),
+    ):
+        if coverage:
+            coverages[leg] = coverage
+    if coverages:
+        stats = {**stats, "_airport_coverage": coverages}
+    failures = analysis.get("collection_failures") or []
+    source_errors = route.get("source_errors") or analysis.get("source_errors") or []
+    degradation = _build_source_degradation_context(
+        source_stats=stats, last_snapshot=None, source_errors=source_errors, collection_failures=failures,
+    )
+    summary = _empty_leg_status_summary(going, returning, round_trip=is_roundtrip, return_only=return_only)
+    incomplete = bool(failures or degradation.get("data_incomplete")
+                      or going in _UNQUOTED_LEG_OUTCOMES or returning in _UNQUOTED_LEG_OUTCOMES)
+    tracking = {}
+    if has_empty_evidence and not incomplete and identity and not degradation.get("active"):
+        if return_only:
+            from plan_tracker import DEFAULT_DATA_DIR
+            tracking = track_plan_status(identity, [], data_dir=DEFAULT_DATA_DIR / "return_only", covered_empty=True)
+        else:
+            tracking = track_plan_status(identity, [], covered_empty=True)
+    goals = route.get("notification_goals") or subscription.get("notification_goals") or {}
+    return {
+        "route": f"{route.get('origin') or ''}-{route.get('destination') or ''}".strip("-") or "航班监控",
+        "is_roundtrip": is_roundtrip,
+        "processing_phase": route.get("processing_phase"), "phase_label": route.get("phase_label"),
+        "subscription_id": identity,
+        "push_type": "数据不完整" if incomplete else "本次无报价",
+        "covered_empty": has_empty_evidence and not incomplete, "empty_leg_summary": summary, "no_primary_reason": summary,
+        "collection_outcome": going, "return_collection_outcome": returning,
+        "current_price": None, "recommended_plans": [], "same_day_alternatives": [],
+        "collection_failures": failures, "source_stats": stats, "source_degradation": degradation,
+        "plan_status_change": tracking,
+        "data_freshness": route.get("data_freshness") or {}, "collected_at": route.get("collected_at"),
+        "price_calendar": _payload_price_calendar(route, analysis),
+        "notification_privacy_level": resolve_notification_privacy_level(goals if isinstance(goals, dict) else {}),
+        "detail_url": f"{_subscription_form_url(route).rstrip('/')}/detail?sub={quote(detail_id)}" if detail_id else "",
+    }
+
+
+def _empty_notification_lines(payload):
+    lines = [html.escape(str(payload.get("empty_leg_summary") or ""))]
+    if resolve_notification_privacy_level(payload) == DEFAULT_NOTIFICATION_PRIVACY_LEVEL:
+        lines.extend(html.escape(line) for line in _airport_coverage_lines(payload))
+        freshness = _data_freshness_headline(payload)
+        if freshness:
+            lines.append(html.escape(freshness))
+        tracking = (payload.get("plan_status_change") or {}).get("msg")
+        if tracking:
+            lines.append(html.escape(tracking))
+    return lines
+
+
+def _render_covered_empty_detail_html(payload, subject):
+    cards = [_email_card("查询结果", "<br>".join(_empty_notification_lines(payload)))]
+    if (payload.get("price_calendar") or {}).get("uncollected_rows") and (
+            resolve_notification_privacy_level(payload) == DEFAULT_NOTIFICATION_PRIVACY_LEVEL):
+        cards.append(_email_card("弹性日期", _email_price_calendar_body(payload)))
+    link = valid_detail_url(payload.get("detail_url"))
+    if link:
+        cards.append(detail_link_html(link))
+    return f"<h2>{html.escape(subject)}</h2>" + "".join(cards)
+
+
+def _render_covered_empty_email(payload, subject):
+    return subject, _render_covered_empty_detail_html(payload, subject)
+
+
+def _render_covered_empty_pushplus_sections(payload):
+    title = _email_subject(payload)
+    link, url = _pushplus_detail_section(payload)
+    lines = _empty_notification_lines(payload)
+    return PushRender(title, (
+        _push_section("header", 0, html.escape(title), mandatory=True),
+        _push_section("current_judgment", 0, lines[0], mandatory=True),
+        _push_section("coverage", 1, lines[1:]),
+        link,
+    ), url)
+
+
 def build_notification_payload(
     analysis_result,
     outbound_analysis=None,
@@ -7564,6 +7706,10 @@ def build_notification_payload(
     analysis_result = analysis_result or outbound_analysis or {}
     outbound_analysis = outbound_analysis or analysis_result
     return_analysis = return_analysis or analysis_result.get("return_analysis") or {}
+    if _is_covered_empty_notification(analysis_result, route_info, outbound_analysis, return_analysis):
+        return _build_covered_empty_notification_payload(
+            analysis_result, outbound_analysis, return_analysis, route_info, subscription, source_stats,
+        )
     is_roundtrip = bool(route_info.get("round_trip"))
     source_stats = source_stats or route_info.get("source_stats") or analysis_result.get("source_stats")
     source_errors = (
@@ -9114,6 +9260,10 @@ def _data_incomplete_state(payload: dict) -> bool:
 
 
 def _data_incomplete_reason(payload: dict) -> str:
+    if payload.get("empty_leg_summary"):
+        if resolve_notification_privacy_level(payload) != DEFAULT_NOTIFICATION_PRIVACY_LEVEL:
+            return _private_data_incomplete_reason(payload)
+        return "；".join([payload["empty_leg_summary"], *_airport_coverage_lines(payload)])
     degradation = payload.get("source_degradation") or {}
     reason = str(
         degradation.get("reason")
@@ -9125,6 +9275,8 @@ def _data_incomplete_reason(payload: dict) -> str:
 
 def _private_data_incomplete_reason(payload: dict) -> str:
     """隐私通知仅披露失败方向，不携带 errno、路径或源响应细节。"""
+    if payload.get("empty_leg_summary"):
+        return f"{payload['empty_leg_summary']}，技术细节已隐藏"
     directions = []
     for item in payload.get("collection_failures") or []:
         if not isinstance(item, dict):
@@ -9969,9 +10121,10 @@ def _pushplus_calendar_summary_lines(payload: dict) -> list[str]:
             lines.append(f"{date_text} {_price_text_with_caliber(row.get('min_price'), row_scope, passengers, route_type)}{breakdown}")
         else:
             lines.append(f"{date_text} {_price_text_with_caliber(row.get('min_price'), 'per_person_oneway', passengers, route_type)}")
-    if uncollected_rows:
-        dates = "、".join(str(row.get("date"))[5:10] for row in uncollected_rows[:5])
-        lines.append(f"弹性日期:{dates} 今日未采(未发起补采)")
+    for covered, status in ((False, "今日未采(未发起补采)"), (True, "已查询，未返回报价")):
+        dates = "、".join(str(row.get("date"))[5:10] for row in _calendar_unquoted_rows(uncollected_rows, covered)[:5])
+        if dates:
+            lines.append(f"弹性日期:{dates} {status}")
     return [html.escape(str(line)) for line in lines if str(line).strip()]
 
 
@@ -10060,6 +10213,8 @@ def _pushplus_detail_section(payload: dict) -> tuple[PushSection, str | None]:
 def render_pushplus_sections(payload: dict) -> PushRender:
     """从统一 payload 直接构造 PushPlus 小节，不解析已渲染 HTML。"""
     payload = payload or {}
+    if _covered_empty_state(payload) and not _data_incomplete_state(payload):
+        return _render_covered_empty_pushplus_sections(payload)
     private_render = _render_private_pushplus(payload)
     if private_render is not None and not _data_incomplete_state(payload):
         return PushRender(
@@ -13988,6 +14143,10 @@ def _calendar_display_savings(
     return savings[:3]
 
 
+def _calendar_unquoted_rows(rows, covered):
+    return [row for row in rows if (row.get("status") == "已查询，未返回报价") == covered]
+
+
 def _email_price_calendar_body(payload: dict) -> str:
     calendar = payload.get("price_calendar") or {}
     scope_note = str(calendar.get("coverage_scope_note") or "")
@@ -14004,7 +14163,7 @@ def _email_price_calendar_body(payload: dict) -> str:
         items = "".join(
             "<div>"
             f"{html.escape(str(row.get('date'))[:10])}: "
-            "<span style='color:#888;'>今日未采</span>"
+            f"<span style='color:#888;'>{'已查询，未返回报价' if row.get('status') == '已查询，未返回报价' else '今日未采'}</span>"
             "</div>"
             for row in uncollected_rows[:10]
         )
@@ -14012,7 +14171,8 @@ def _email_price_calendar_body(payload: dict) -> str:
             "<div style='font-weight:600;margin-bottom:8px;color:#111;'>"
             "弹性日期面板评估</div>"
             "<div style='margin-bottom:8px;color:#666;font-size:12px;'>"
-            "本轮按面板评估弹性日期；以下日期今日无可复用观测，未发起补采。"
+            + ("以下日期区分已查询未报价与未采。" if _calendar_unquoted_rows(uncollected_rows, True)
+               else "本轮按面板评估弹性日期；以下日期今日无可复用观测，未发起补采。") +
             "</div>"
             f"{items}"
         )
@@ -14150,13 +14310,14 @@ def _email_price_calendar_body(payload: dict) -> str:
             "</tr>"
         )
     table.append("</tbody></table>")
-    if uncollected_rows:
-        dates = "、".join(str(row.get("date"))[:10] for row in uncollected_rows[:10])
-        table.append(
-            "<div style='margin-top:8px;color:#888;font-size:12px;'>"
-            f"今日未采(未发起补采):{html.escape(dates)}"
-            "</div>"
-        )
+    for covered, status in ((False, "今日未采(未发起补采)"), (True, "已查询，未返回报价")):
+        dates = "、".join(str(row.get("date"))[:10] for row in _calendar_unquoted_rows(uncollected_rows, covered)[:10])
+        if dates:
+            table.append(
+                "<div style='margin-top:8px;color:#888;font-size:12px;'>"
+                f"{status}:{html.escape(dates)}"
+                "</div>"
+            )
 
     savings = _calendar_display_savings(
         calendar,
@@ -14561,6 +14722,8 @@ def render_email(payload: dict) -> tuple[str, str]:
             )
             return subject, body
         return subject, _render_data_incomplete_report(payload, subject)
+    if _covered_empty_state(payload):
+        return _render_covered_empty_email(payload, subject)
     if private_render is not None:
         return private_render
     verify_text = f"支付页≤{_price_text(payload.get('verify_price'))}" if payload.get("verify_price") else "以支付页为准"
@@ -14884,6 +15047,8 @@ def render_detail_html(payload: dict) -> str:
             subject,
             interactive_channels=True,
         )
+    if _covered_empty_state(payload):
+        return _render_covered_empty_detail_html(payload, subject)
     verify_text = f"支付页≤{_price_text(payload.get('verify_price'))}" if payload.get("verify_price") else "以支付页为准"
     price_reason = str(payload.get("price_policy_reason") or "请以预估实付价和支付页最终价为准")
     primary_plan = _plan_for_render((payload.get("recommended_plans") or [{}])[0] or {}, payload)
@@ -15042,7 +15207,7 @@ def persist_notification_payload(payload: dict) -> None:
     """Persist latest push price/snapshot after a channel has accepted the message."""
     payload = payload or {}
     if ((payload.get("source_degradation") or {}).get("airport_coverage_incomplete")
-            or _data_incomplete_state(payload)):
+            or _data_incomplete_state(payload) or _covered_empty_state(payload)):
         return
     snapshot = payload.get("snapshot") or {}
     route = snapshot.get("route")

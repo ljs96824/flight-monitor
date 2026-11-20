@@ -7,7 +7,8 @@ import json
 import math
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 
 from flight_combo_utils import normalize_combo
 from log_utils import safe_log
@@ -759,26 +760,57 @@ def build_default_sources(
     return search_sources, enrichment_sources
 
 
-def _validate_raw_empty_schema(source_name, result):
-    raw = result.get("raw")
-    if raw is None:
-        raw = {}
-    if not isinstance(raw, dict) or result.get("reason") == "HTTP成功但无有效方案":
+def _validate_raw_empty_schema(source_name, result, *, has_usable_flights=False):
+    if not isinstance(result, dict):
         return False
-    if str(source_name).lower() == "juhe":
-        if raw.get("error_code") not in (None, 0, "0"):
-            return False
+    raw = result.get("raw")
+    if not isinstance(raw, dict) or "error" in raw or result.get("error"):
+        return False
+    priced = has_usable_flights and result.get("source_status") in {"success", "cache"}
+    if not priced and (not raw or result.get("reason") == "HTTP成功但无有效方案"):
+        return False
+    source_name = str(source_name).lower()
+    if source_name == "juhe":
         value = raw.get("result")
+        keys = ("flightInfo", "list", "flights", "data", "items")
+        if "data" in raw and raw["data"] is not None and not isinstance(raw["data"], list):
+            return False
         if value is not None and not isinstance(value, (dict, list)):
             return False
+        nested = [value[key] for key in keys if key in value] if isinstance(value, dict) else []
+        if any(v is not None and not isinstance(v, list) for v in nested):
+            return False
+        if priced:
+            return True
+        success_codes = {"error_code": {"0"}, "resultcode": {"0", "200"}}
+        codes = [(key, raw[key]) for key in success_codes if key in raw]
+        if not codes or not all(type(v) in (int, str) and str(v) in success_codes[key] for key, v in codes):
+            return False
         if isinstance(value, dict):
-            return all(value.get(k) is None or isinstance(value[k], list)
-                       for k in ("list", "flightInfo", "flights", "data"))
-        return True
-    if str(source_name).lower() in {"serpapi", "hasdata", "searchapi"}:
-        return "error" not in raw and all(k not in raw or isinstance(raw[k], list)
-                                          for k in ("best_flights", "other_flights"))
-    return True
+            return any(isinstance(v, list) for v in nested) and all(v is None or v == [] for v in nested)
+        return value == [] or (value is None and raw.get("data") == [])
+    if source_name in {"serpapi", "searchapi", "hasdata"}:
+        keys = ("best_flights", "other_flights")
+        if source_name == "hasdata":
+            keys += ("bestFlights", "otherFlights")
+        containers = [raw[key] for key in keys if key in raw]
+        if any(not isinstance(value, list) for value in containers):
+            return False
+        metadata = raw.get("search_metadata")
+        if source_name != "hasdata" and metadata is not None and not isinstance(metadata, dict):
+            return False
+        if priced:
+            return True
+        if (source_name != "hasdata" and isinstance(metadata, dict) and "status" in metadata
+                and str(metadata["status"]).lower() != "success"):
+            return False
+        return bool(containers) and all(not value for value in containers)
+    if source_name == "travelpayouts":
+        value = raw.get("data")
+        if priced:
+            return "data" not in raw or isinstance(value, (dict, list))
+        return raw.get("success") is True and (value == [] or value == {})
+    return bool(priced)
 
 
 class FlightAggregator:
@@ -791,9 +823,26 @@ class FlightAggregator:
         self.search_sources = search_sources
         self.enrichment_sources = enrichment_sources or []
         self.route_type = normalize_route_type(route_type)
+        self._reset_last_call_state(None)
+
+    def _reset_last_call_state(self, call_scope):
+        self.last_call_scope = call_scope
+        self.last_call_snapshot = None
         self.last_request_cache_status = None
-        self.last_source_errors: list[dict] = []
+        self.last_source_errors = []
+        self.last_fetch_evidence_units = []
+        self.last_source_stats = {}
+        self.last_collection_freshness = []
+        self.last_raw_by_source = {}
+        self.last_price_insights = {}
+        self.last_collected_at = None
+        self.last_airport_coverage = {}
         self.last_outcome_reads = 0
+
+    def _call_scope(self, origin, destination, depart_date, cabins, passengers, entrypoint):
+        return dict(origin=origin, destination=destination, depart_date=depart_date,
+                    cabins=list(_normalize_cabin_classes(cabins)), passengers=copy.deepcopy(passengers),
+                    entrypoint=entrypoint, call_id=uuid4().hex)
 
     def collect(
         self,
@@ -808,7 +857,8 @@ class FlightAggregator:
         request_reason: str | None = None,
         panel_only: bool | None = None,
     ) -> dict | None:
-        self.last_outcome_reads = 0
+        self._reset_last_call_state(None)
+        self.last_call_scope = self._call_scope(origin, dest, date_str, cabin_classes, passengers, "collect")
 
         def resolve_source_result(source, cabin_class, *, include_cache_status):
             return self._resolve_from_cache(
@@ -848,7 +898,8 @@ class FlightAggregator:
         passengers: dict | None = None,
         target_combo: str | None = None,
     ) -> dict | None:
-        self.last_outcome_reads = 0
+        self._reset_last_call_state(None)
+        self.last_call_scope = self._call_scope(origin, dest, date_str, cabin_classes, passengers, "collect_from_outcomes")
         outcomes_by_key = {}
         for outcome in outcomes:
             outcome_key = tuple(outcome.request_key)
@@ -942,17 +993,14 @@ class FlightAggregator:
         resolve_source_result,
         allow_source_injection: bool,
     ) -> dict | None:
-        cabin_classes = _normalize_cabin_classes(cabin_classes)
-        self.last_request_cache_status = None
-        self.last_source_errors = []
         run_collected_at = datetime.now().isoformat(timespec="seconds")
+        cabin_classes = _normalize_cabin_classes(cabin_classes)
         source_stats = {}
         all_flights = []
         successful_results = []
         source_errors = []
         collection_freshness = []
         fetch_evidence_units = []
-        self.last_fetch_evidence_units = fetch_evidence_units
         price_insights = None
         raw_by_source = {}
         request_cache_statuses = []
@@ -1020,7 +1068,16 @@ class FlightAggregator:
                         )
                         or "unknown"
                     )
-                    source_collected_at = result.get("collected_at")
+                    source_status = result.get("source_status")
+                    raw_flights = result.get("flights", []) or []
+                    source_collected_at = result.get("collected_at") or min(
+                        (f["collected_at"] for f in raw_flights if isinstance(f, dict) and f.get("collected_at")),
+                        default=None,
+                    )
+                    if (not source_collected_at and collection_state == "fresh"
+                            and request_cache_status not in {"cache", "panel", "round_empty"}
+                            and source_status in {"success", "empty"}):
+                        source_collected_at = datetime.now(timezone(timedelta(hours=8))).isoformat(timespec="seconds")
                     collection_freshness.append(
                         {
                             "source": str(source_name).lower(),
@@ -1033,7 +1090,6 @@ class FlightAggregator:
                             "depart_date": date_str,
                         }
                     )
-                    source_status = result.get("source_status")
                     unit = {field: result.get(field) for field in (
                         "evidence_qualified", "observed_at_utc", "observation_round_id", "fetch_event_id",
                         "panel_snapshot_written", "evidence_unqualified_reason",
@@ -1044,16 +1100,19 @@ class FlightAggregator:
                     fetch_evidence_units.append(unit)
                     if source_status:
                         source_statuses.append(source_status)
-                    raw_flights = result.get("flights", []) or []
                     flights = [
                         flight for flight in raw_flights
                         if isinstance(flight, dict) and _valid_price(flight.get("price"))
+                        and normalize_combo(flight.get("flight_combo") or flight.get("flight_no"))
                     ]
+                    raw_result_count = result.get("raw_result_count", len(raw_flights))
+                    if raw_flights and raw_result_count in (None, 0):
+                        raw_result_count = len(raw_flights)
                     unit.update(
-                        raw_result_count=result.get("raw_result_count", len(raw_flights)),
+                        raw_result_count=raw_result_count,
                         raw_flight_count=result.get("raw_flight_count", len(raw_flights)),
                         valid_flight_count=len(flights),
-                        raw_schema_valid=_validate_raw_empty_schema(source_name, result),
+                        raw_schema_valid=_validate_raw_empty_schema(source_name, result, has_usable_flights=bool(flights)),
                         collection_state=collection_state, collected_at=source_collected_at,
                         reason=result.get("reason"), skipped_reason=result.get("skipped_reason"),
                         error=result.get("error"), is_enrichment=False,
@@ -1094,7 +1153,7 @@ class FlightAggregator:
                     for flight in flights:
                         flight["collected_at"] = (
                             flight.get("collected_at")
-                            or result.get("collected_at")
+                            or source_collected_at
                             or run_collected_at
                         )
                         if not flight.get("source"):
@@ -1381,15 +1440,11 @@ class FlightAggregator:
         else:
             request_cache_status = "fresh"
         self.last_request_cache_status = request_cache_status
-        self.last_source_errors = list(source_errors)
 
         safe_log(
             "source_stats: "
             + json.dumps(source_stats, ensure_ascii=False, indent=2)
         )
-
-        if not unique_flights:
-            return None
 
         sources_used = [
             key
@@ -1397,7 +1452,14 @@ class FlightAggregator:
             if isinstance(value, dict) and "成功" in value.get("status", "")
         ]
 
-        return {
+        collected_at = min(
+            (str(value) for value in (
+                *(row.get("collected_at") for row in collection_freshness),
+                *(flight.get("collected_at") for flight in unique_flights),
+            ) if value),
+            default=run_collected_at if unique_flights else None,
+        )
+        result = {
             "flights": unique_flights,
             "price_insights": price_insights or {},
             "source": "+".join(sources_used),
@@ -1409,10 +1471,22 @@ class FlightAggregator:
             "dual_source_price_anomalies": dual_source_price_anomalies,
             "price_anomalies": self._find_price_anomalies(successful_results) + dual_source_price_anomalies,
             "raw_by_source": raw_by_source,
-            "collected_at": run_collected_at,
+            "collected_at": collected_at,
             "request_cache_status": request_cache_status,
             "collection_freshness": collection_freshness,
         }
+        self.last_source_stats = copy.deepcopy(source_stats)
+        self.last_collection_freshness = copy.deepcopy(collection_freshness)
+        self.last_raw_by_source = copy.deepcopy(raw_by_source)
+        self.last_price_insights = copy.deepcopy(price_insights or {})
+        self.last_collected_at = collected_at
+        scoped_units = [{**copy.deepcopy(unit), "call_scope": copy.deepcopy(self.last_call_scope)}
+                        for unit in fetch_evidence_units]
+        self.last_fetch_evidence_units = scoped_units
+        self.last_source_errors = copy.deepcopy(source_errors)
+        self.last_call_snapshot = copy.deepcopy({**result, "fetch_evidence_units": scoped_units,
+                                                 "call_scope": self.last_call_scope})
+        return result if unique_flights else None
 
     def _ordered_search_sources(
         self,

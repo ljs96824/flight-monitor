@@ -12,7 +12,7 @@ def log_signal(route, depart_date, analysis_result, price_insights=None):
         "timestamp": datetime.now().isoformat(),
         "route": route,
         "depart_date": depart_date,
-        "current_min_price": analysis_result.get("price_range", [0])[0],
+        "current_min_price": (analysis_result.get("price_range") or [None])[0],
         "price_range": analysis_result.get("price_range"),
         "total_options": analysis_result.get("total_options", 0),
         "price_percentile": None,

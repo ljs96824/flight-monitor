@@ -1074,9 +1074,20 @@ def track_plan_status(
     current_flights: list[dict] | None,
     data_dir=None,
     source_degradation: dict | None = None,
+    covered_empty: bool = False,
 ) -> dict | None:
     last = load_pushed_plans(sub_id, data_dir)
     plan_a = (last.get("last_pushed") or {}).get("plan_a") or {}
+    if covered_empty:
+        return {
+            "status": "covered_empty_unquoted",
+            "scope": "roundtrip" if plan_a.get("is_roundtrip") or plan_a.get("scope") == "roundtrip" else "single",
+            "flight_no": plan_a.get("flight_no"),
+            "previous_price": _to_float(plan_a.get("price")),
+            "current_price": None,
+            "price_diff": None,
+            "msg": "本次查询未返回可比较报价，保留上次方案供参考",
+        }
     coverage_change = _coverage_tracking_change(plan_a, current_flights, source_degradation)
     if coverage_change is not None:
         return coverage_change
