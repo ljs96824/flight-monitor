@@ -234,12 +234,17 @@ class DuffelSource(FlightSource):
             for segment in offer_slice.get("segments") or []:
                 for passenger in segment.get("passengers") or []:
                     for bag in passenger.get("baggages") or []:
+                        allowance = bag.get("quantity")
+                        if allowance is None:
+                            allowance = bag.get("weight")
                         baggage.append(
                             {
                                 "type": bag.get("type", ""),
                                 "quantity": bag.get("quantity", 0),
                                 "weight": bag.get("weight"),
                                 "weight_unit": bag.get("weight_unit"),
+                                "is_free": (isinstance(allowance, (int, float)) and not isinstance(allowance, bool)
+                                            and 0 < allowance < float("inf")),
                             }
                         )
         return baggage

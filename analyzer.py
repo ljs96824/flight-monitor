@@ -6363,29 +6363,34 @@ def _positive_baggage_number(value):
 
 
 def _has_free_checked_baggage(flight: dict) -> bool:
-    if _baggage_negative_match(flight) or _baggage_is_inferred(flight):
+    if not isinstance(flight, dict) or _baggage_negative_match(flight) or _baggage_is_inferred(flight):
         return False
     quote_id = flight.get("quote_offer_id") or flight.get("offer_id")
-    if any(node.get("baggage_offer_id") and quote_id and node["baggage_offer_id"] != quote_id
+    if any(node.get("checked_baggage_allowed") is False
+           or (node.get("baggage_offer_id") and quote_id and node["baggage_offer_id"] != quote_id)
            for node in _baggage_payloads(flight)):
         return False
     extra = flight.get("extra") or {}
     rules = (flight.get("fare_rules") or {}).get("baggage") or {}
     if rules.get("included") is False or rules.get("included_in_fare") is False:
         return False
-    if rules.get("included") is True or rules.get("included_in_fare") is True:
-        return True
-    if _positive_baggage_number(rules.get("checked_pieces")) or _positive_baggage_number(rules.get("checked_kg")):
-        return True
+
+    def has_allowance(item):
+        return any(_positive_baggage_number(item.get(key)) for key in ("quantity", "weight_kg", "weight"))
+
     checked = (extra.get("baggage_detail") or flight.get("baggage_detail") or {}).get("checked") or {}
-    if checked.get("is_free") is not False and (
-            _positive_baggage_number(checked.get("quantity")) or _positive_baggage_number(checked.get("weight_kg"))):
+    positive_checked = has_allowance(checked)
+    if positive_checked and checked.get("is_free") is False:
+        return False
+    if rules.get("included") is True or rules.get("included_in_fare") is True:
+        amounts = (rules.get("checked_pieces"), rules.get("checked_kg"))
+        return all(value is None for value in amounts) or any(_positive_baggage_number(value) for value in amounts)
+    if positive_checked and checked.get("is_free") is True:
         return True
     baggage = extra.get("baggage") or flight.get("baggage")
     if isinstance(baggage, list):
         return any(isinstance(item, dict) and item.get("type") in {"checked", "hold", "checked_baggage"}
-                   and item.get("is_free") is not False
-                   and (_positive_baggage_number(item.get("quantity")) or _positive_baggage_number(item.get("weight_kg")))
+                   and item.get("is_free") is True and has_allowance(item)
                    for item in baggage)
     return False
 
