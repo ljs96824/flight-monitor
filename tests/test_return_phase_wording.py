@@ -64,6 +64,17 @@ PRE_F5_DIGESTS = {
     "render_email": "d877278daa9099b02455fd9e26ad221452ec14b1264da3af380f4d1b0fb5a27d",
     "render_detail_html": "2dbafb52012c71315357a34a5a85138c0456e650e7897b545449322ad21f9aa1",
 }
+R41_REVERT = {
+    "render_email": (
+        "    if _covered_empty_state(payload):\n"
+        "        return _render_covered_empty_email(payload, subject)\n"
+    ),
+    "render_detail_html": (
+        "    if _covered_empty_state(payload):\n"
+        "        return _render_covered_empty_detail_html(payload, subject)\n"
+    ),
+}
+
 F5_REVERT = (
     ('_budget_field_text(payload, "ideal_price")', '_price_text(payload.get("ideal_price"))',
      {"render_email": 2, "render_detail_html": 1}),
@@ -219,7 +230,8 @@ class PinnedDigestMigrationTest(unittest.TestCase):
         for name, pre_digest in PRE_F5_DIGESTS.items():
             segment = ast.get_source_segment(source, retirement._module_function(tree, name))
             self.assertEqual(hashlib.sha256(segment.encode()).hexdigest(), retirement.EXPECTED_MAIN_CHAIN_SHA256[name])
-            reverted = segment
+            self.assertEqual(segment.count(R41_REVERT[name]), 1, f"{name}:R41 block")
+            reverted = segment.replace(R41_REVERT[name], "", 1)
             for new, old, counts in F5_REVERT:
                 self.assertEqual(reverted.count(new), counts[name], f"{name}:{new}")
                 reverted = reverted.replace(new, old)

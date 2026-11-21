@@ -694,6 +694,8 @@ def _request_is_panel_only(
     force_fresh: bool,
     reason: str | None,
 ) -> bool:
+    if explicit is True:
+        return True
     if force_fresh:
         return False
     if explicit is not None:
@@ -947,7 +949,7 @@ def cached_fetch(
         fresh_result = copy.deepcopy(skipped_result)
         return returned(fresh_result, "skipped")
 
-    if not force_fresh and source_name in LISTING_OBSERVATION_SOURCES:
+    if (not force_fresh or panel_only is True) and source_name in LISTING_OBSERVATION_SOURCES:
         panel_result = panel_reuse_result(
             source,
             origin,

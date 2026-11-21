@@ -35,8 +35,55 @@ def _source_entries(source_stats: dict | None) -> dict:
     return {
         key: value
         for key, value in (source_stats or {}).items()
-        if key not in METADATA_KEYS and isinstance(value, dict)
+        if not str(key).startswith("_") and key not in METADATA_KEYS and isinstance(value, dict)
     }
+
+
+def _coverage_evidence(source_stats: dict | None) -> tuple[set[str], set[str], set[str]]:
+    legs = (source_stats or {}).get("_airport_coverage")
+    verified, uncollected, invalid = set(), set(), set()
+    if not isinstance(legs, dict):
+        return verified, uncollected, invalid
+    listed = {str(name).strip().lower() for name in _source_entries(source_stats)} - ENRICHMENT_SOURCES
+    for coverage in legs.values():
+        if not isinstance(coverage, dict):
+            continue
+        pairs = coverage.get("pair_records") or []
+        if coverage.get("complete") is False and len(pairs) < (coverage.get("planned_pair_count") or 1):
+            uncollected.update(listed)
+        for pair in pairs:
+            if not isinstance(pair, dict) or not isinstance(pair.get("cabins"), dict):
+                continue
+            for entry in pair["cabins"].values():
+                if not isinstance(entry, dict):
+                    continue
+                units = entry.get("sources") or []
+                if not units and not pair.get("covered"):
+                    uncollected.update(listed)
+                for unit in units:
+                    if not isinstance(unit, dict) or unit.get("is_enrichment") or unit.get("role") == "enrichment":
+                        continue
+                    source = str(unit.get("source") or "").strip().lower()
+                    if not source:
+                        continue
+                    if (pair.get("covered") is True and entry.get("state") == "covered_empty"
+                            and unit.get("source_status") == "empty" and unit.get("raw_schema_valid") is True
+                            and all(type(unit.get(key)) is int and unit[key] == 0 for key in (
+                                "raw_result_count", "raw_flight_count", "valid_flight_count",
+                            ))):
+                        verified.add(source)
+                    elif (unit.get("source_status") == "skipped_panel_only"
+                          and entry.get("state") not in {"data_unusable", "uncovered_failed"}):
+                        uncollected.add(source)
+                    elif (unit.get("source_status") not in {"success", "cache"}
+                          or unit.get("raw_schema_valid") is False or entry.get("state") == "data_unusable"):
+                        invalid.add(source)
+    return verified, uncollected, invalid
+
+
+def verified_empty_sources(source_stats: dict | None) -> set[str]:
+    verified, uncollected, invalid = _coverage_evidence(source_stats)
+    return verified - uncollected - invalid
 
 
 def _recorded_failures(source: str, record: dict) -> int:
@@ -62,14 +109,20 @@ def _apply_source_history_updates(
     entries: dict,
     *,
     now: str,
+    covered_empty: frozenset[str] = frozenset(),
+    failed_with_empty: frozenset[str] = frozenset(),
 ) -> tuple[dict, list[str]]:
     warnings = []
 
     for source, info in entries.items():
+        name = str(source).strip().lower()
+        if name in covered_empty and (info.get("status") in {"empty", "skipped_panel_only", "cache"}
+                                      or _is_success(info.get("status"))):
+            continue
         record = history.get(source, {"consecutive_failures": 0})
         if not isinstance(record, dict):
             record = {"consecutive_failures": 0}
-        if _is_success(info.get("status")):
+        if _is_success(info.get("status")) and name not in failed_with_empty:
             record["consecutive_failures"] = 0
         else:
             record["consecutive_failures"] = _recorded_failures(source, record) + 1
@@ -87,6 +140,9 @@ def _apply_source_history_updates(
 
 def _update_source_history(source_stats: dict | None) -> tuple[dict, list[str]]:
     entries = _source_entries(source_stats)
+    verified, _, invalid = _coverage_evidence(source_stats)
+    history_evidence = {"covered_empty": frozenset(verified - invalid),
+                        "failed_with_empty": frozenset(verified & invalid)}
     now = datetime.now().isoformat()
 
     if not entries:
@@ -111,6 +167,7 @@ def _update_source_history(source_stats: dict | None) -> tuple[dict, list[str]]:
             payload,
             entries,
             now=now,
+            **history_evidence,
         )
         return history
 
@@ -121,7 +178,7 @@ def _update_source_history(source_stats: dict | None) -> tuple[dict, list[str]]:
             "[源健康] source_health_state_degraded "
             f"原因={type(exc).__name__}:{exc}; 本轮仅使用当前source_stats"
         )
-        history, warnings = _apply_source_history_updates({}, entries, now=now)
+        history, warnings = _apply_source_history_updates({}, entries, now=now, **history_evidence)
     return history, warnings
 
 
@@ -136,13 +193,15 @@ def _active_source_count(source_stats: dict | None) -> int:
 
 
 def _successful_listing_sources(source_stats: dict | None) -> set[str]:
+    covered_empty, uncollected, invalid = _coverage_evidence(source_stats)
     successful = set()
     for source, info in _source_entries(source_stats).items():
         normalized = str(source).strip().lower()
         if (
             normalized
             and normalized not in ENRICHMENT_SOURCES
-            and _is_success(info.get("status"))
+            and normalized not in uncollected and normalized not in invalid
+            and (_is_success(info.get("status")) or (normalized in covered_empty and info.get("status") == "empty"))
         ):
             successful.add(normalized)
     return successful
