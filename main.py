@@ -38,6 +38,7 @@ from analyzer import (
     build_price_hint_from_calendar,
     calc_buy_vs_wait_risk,
     determine_cabins,
+    flight_itinerary_identity_key,
     get_total_passengers,
     migrate_old_subscription,
     price_position_description,
@@ -1895,20 +1896,26 @@ def _merge_source_errors(target: list[dict], incoming, **context) -> None:
 
 
 def _dedupe_flights(flights: list[dict]) -> list[dict]:
-    """同一航班组合、同舱位、同起降机场只保留最低价；路线摘要是各来源格式不一的展示文本，不参与判重。"""
-    seen = {}
-    for flight in flights:
-        if not _valid_price(flight.get("price")):
+    """有行程身份时按起降机场保留最低价；身份不足的有效报价各自保留。"""
+    kept = []
+    slots = {}
+    for flight in flights or ():
+        if not isinstance(flight, dict):
             continue
-        key = (
-            str(flight.get("flight_combo", "")).replace(" ", "").upper(),
-            flight.get("cabin_class") or "economy",
-            _flight_airport_value(flight, "departure"),
-            _flight_airport_value(flight, "arrival"),
-        )
-        if key not in seen or float(flight.get("price")) < float(seen[key].get("price")):
-            seen[key] = flight
-    return sorted(seen.values(), key=lambda item: float(item.get("price") or 999999))
+        price = flight.get("price")
+        if isinstance(price, bool) or not _valid_price(price):
+            continue
+        identity = flight_itinerary_identity_key(flight)
+        if identity is not None:
+            key = (*identity, _flight_airport_value(flight, "departure"), _flight_airport_value(flight, "arrival"))
+            if key in slots:
+                index = slots[key]
+                if float(flight["price"]) < float(kept[index]["price"]):
+                    kept[index] = flight
+                continue
+            slots[key] = len(kept)
+        kept.append(flight)
+    return sorted(kept, key=lambda item: float(item["price"]))
 
 
 
@@ -2679,7 +2686,7 @@ def _process_return_phase(sub, context, agg, constraint_fp, route_type, request_
     data["flights"], data["total_count"] = flights, len(flights)
     previous_prices = get_previous_snapshot_prices(route, depart_date, constraint_fingerprint=constraint_fp)
     for item in flights:
-        if item.get("flight_combo") in previous_prices:
+        if flight_itinerary_identity_key(item) is not None and item.get("flight_combo") in previous_prices:
             item["previous_price"] = previous_prices[item["flight_combo"]]
     save_raw_response(route, depart_date, data)
     analysis = analyze_all_flights(
