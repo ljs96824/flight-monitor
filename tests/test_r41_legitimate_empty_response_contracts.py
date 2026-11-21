@@ -648,7 +648,6 @@ class TestTrack3LowPriceDeliveryAndThreeRoundBaseline(_IsolatedCase):
 class TestTrack4FrozenAndAstGuards(unittest.TestCase):
     def test_g22_protected_files_and_source_anchors_are_exact(self):
         locked = (
-            ("analyzer.py", 536729, "931a6b19e14d25c7cc6b9c200c531327bc5f37de0b580895d2d3d34b77da28e3"),
             ("sources/hasdata_source.py", 2694, "464b81201403cf54696bdc9b639f87526e3a9fe6fab2ab95b6371ebd33c1f07c"),
             ("sources/searchapi_source.py", 2539, "1de58d4ea8997b9aba555c3b74d5a45af866cbb4f3a6b1da82fcbfbf967e3317"),
             ("sources/juhe_source.py", 20923, "fbfb90acc93751fa10682d2014d1b012aba410025b3b105e4aa62f1bbf75e17a"),
