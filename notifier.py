@@ -3234,7 +3234,10 @@ def _round_trip_combo_tags(combo: dict, route_info: dict, confidence: dict | Non
 def _combo_direct_first_key(combo: dict) -> tuple[int, float]:
     legs = [combo.get("outbound") or {}, combo.get("return") or {}]
     direct = all(int(flight.get("stops") or 0) == 0 for flight in legs if flight)
-    return (0 if direct else 1, _to_float(combo.get("total_price")) or 999999)
+    price = _to_float(combo.get("selection_cost_all"))
+    if price is None or not math.isfinite(price):
+        price = _to_float(combo.get("total_price")) or 999999
+    return (0 if direct else 1, price)
 
 
 def _round_trip_combinations(analysis_result: dict) -> list[dict]:
