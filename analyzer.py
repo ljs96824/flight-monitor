@@ -66,7 +66,8 @@ from airlines import (
     resolve_lcc_policy,
 )
 from log_utils import safe_log
-from mixed_cabin import (match_mixed_cabin_combinations, match_mixed_cabin_oneway_strict,
+from mixed_cabin import (_business_price_map, _flight_key as _mixed_flight_key,
+                         match_mixed_cabin_combinations, match_mixed_cabin_oneway_strict,
                          match_mixed_cabin_roundtrip_strict, strict_leg_identity)
 from observations_store import get_current_round
 from storage import get_latest_alternatives, get_target_history
@@ -6995,14 +6996,15 @@ def calc_roundtrip_effective_cost(
     return_effective = (return_flight or {}).get("effective_cost") or calc_effective_cost(
         return_flight or {}, subscription, time_value_per_hour
     )
+    return _merge_roundtrip_effective_cost(outbound_effective, return_effective)
+
+
+def _merge_roundtrip_effective_cost(outbound_effective, return_effective):
     keys = ("ticket_price", "transport_cost", "time_cost", "baggage_cost", "family_fatigue_cost", "effective_cost")
-    totals = {
-        key: round(
-            (_to_float(outbound_effective.get(key)) or 0)
-            + (_to_float(return_effective.get(key)) or 0)
-        )
-        for key in keys
-    }
+    totals = {}
+    for key in keys:
+        amount = (_to_float(outbound_effective.get(key)) or 0) + (_to_float(return_effective.get(key)) or 0)
+        totals[key] = round(amount) if math.isfinite(amount) else float("inf")
     totals["scope"] = "roundtrip"
     totals["outbound"] = outbound_effective
     totals["return"] = return_effective
@@ -10732,7 +10734,10 @@ def _mixed_economy_candidate_reason(
     return "；".join(reasons) or "本轮未形成可配对的去返经济舱组合"
 
 
-def _top_flights_for_round_trip(analysis: dict, limit: int = 3) -> list[dict]:
+_ROUNDTRIP_LEG_SAFETY_CAP = 24
+
+
+def _top_flights_for_round_trip(analysis: dict, limit: int | None = 3) -> list[dict]:
     # R33：往返价格候选从满足约束、未经展示截断的候选池取；不再从
     # economy_recommendations（按推荐展示目的压缩过的列表）反推。
     # 新键缺失时回退旧产物的 all_flights（尽力兼容，旧产物已被展示截断）；
@@ -10753,10 +10758,65 @@ def _top_flights_for_round_trip(analysis: dict, limit: int = 3) -> list[dict]:
         ]
     else:
         flights = analysis.get("all_flights") or []
-    return sorted(
-        [flight for flight in flights if (_to_float(flight.get("price")) or 0) > 0],
-        key=lambda flight: _to_float(flight.get("price")) or 999999,
-    )[:limit]
+    priced = []
+    for flight in flights:
+        if not isinstance(flight, dict) or isinstance(flight.get("price"), bool):
+            continue
+        price = _to_float(flight.get("price"))
+        if price is not None and math.isfinite(price) and price > 0:
+            priced.append((price, flight))
+    priced.sort(key=lambda entry: entry[0])
+    return [flight for _, flight in priced[:limit]]
+
+
+def _roundtrip_cost_rank(effective):
+    cost = _to_float(effective.get("effective_cost"))
+    return cost if cost is not None and math.isfinite(cost) else float("inf")
+
+
+def _roundtrip_leg_pool(flights, business_flights, *, preferences, passengers, route_type,
+                        baggage_required, compare_per_person, allocation, effective):
+    business = _business_price_map(business_flights) if allocation else {}
+    eligible = []
+    rank = {}
+    selection_cost = {}
+    for flight in flights:
+        key = id(flight)
+        bare = _to_float(flight["price"])
+        if key not in effective:
+            # Domestic fare-rule inference may annotate its argument.
+            effective[key] = flight.get("effective_cost") or calc_effective_cost(dict(flight), preferences)
+        leg_ticket = price_in_scope(bare, passengers, scope="all_passengers_oneway",
+                                    route_type=route_type, round_trip=False)
+        fee = lower_fee = 0
+        comparable = True
+        if baggage_required:
+            fee_args = {"passengers": preferences.get("passengers"), "round_trip": False}
+            proof = resolve_checked_baggage_fee_in_scope(flight, visible_scope="all_passengers_oneway", **fee_args)
+            if not proof["calculable"]:
+                continue
+            fee = proof["amount"]
+            # A package shared across legs must not be charged twice in the pruning bound.
+            services = _baggage_services(flight) or []
+            shared = ((_baggage_fee_spec(flight) or {}).get("itinerary_scope") == "roundtrip"
+                      or any(isinstance(s, dict) and s.get("itinerary_scope") == "roundtrip" for s in services))
+            lower_fee = 0 if shared else fee
+            if compare_per_person:
+                comparable = resolve_checked_baggage_fee_in_scope(
+                    flight, visible_scope="per_person_oneway", **fee_args)["calculable"]
+        match = business.get(_mixed_flight_key(flight)) if business else None
+        ticket_bound = leg_ticket
+        if match is not None:
+            tree = build_display_prices(None, None, passengers, route_type, cabin_allocation=allocation,
+                                        per_cabin_unit_prices={"outbound": {"economy": bare, "business": match["price"]}})
+            ticket_bound = tree["raw_total"]
+        rank[key] = (match is None, not comparable, ticket_bound + lower_fee, _roundtrip_cost_rank(effective[key]), bare)
+        selection_cost[key] = leg_ticket + fee
+        eligible.append(flight)
+    display = (sorted(eligible, key=lambda f: selection_cost[id(f)]) if baggage_required else flights)[:3]
+    if not allocation or len(eligible) > _ROUNDTRIP_LEG_SAFETY_CAP:
+        eligible.sort(key=lambda f: rank[id(f)])
+    return eligible[:_ROUNDTRIP_LEG_SAFETY_CAP], display
 
 
 def _all_roundtrip_flights_for_same_day(analysis: dict) -> list[dict]:
@@ -11776,8 +11836,6 @@ def analyze_round_trip(
     emit_diagnostics: bool = True,
 ) -> dict:
     """Analyze outbound and return legs together for a round-trip subscription."""
-    outbound_top = _top_flights_for_round_trip(outbound_analysis, 3)
-    return_top = _top_flights_for_round_trip(return_analysis, 3)
     combinations = []
     combined_preferences = {}
     for source in (
@@ -11850,6 +11908,8 @@ def analyze_round_trip(
         else:
             same_day_budget_scope_label = f"单人往返 vs 上限{same_day_max_budget:g}"
     if same_day_round_trip:
+        outbound_top = _top_flights_for_round_trip(outbound_analysis, 3)
+        return_top = _top_flights_for_round_trip(return_analysis, 3)
         outbound_candidates = _all_roundtrip_flights_for_same_day(outbound_analysis)
         return_candidates = _all_roundtrip_flights_for_same_day(return_analysis)
         print(f"[计数诊断] 去程采集={len(outbound_candidates)} 返程采集={len(return_candidates)}")
@@ -12047,11 +12107,24 @@ def analyze_round_trip(
             )
 
     mixed_cabin_matching = {}
+    baggage_required = is_checked_baggage_required(combined_preferences)
     if same_day_round_trip:
+        outbound_pool, return_pool = outbound_top, return_top
         combinations = list(same_day_combos)
     else:
-        for outbound in outbound_top:
-            for return_flight in return_top:
+        outbound_all = _top_flights_for_round_trip(outbound_analysis, None)
+        return_all = _top_flights_for_round_trip(return_analysis, None)
+        outbound_top, return_top = outbound_all[:3], return_all[:3]
+        effective = {}
+        scope = same_day_budget_limits.get("max_budget_compare_scope") or _budget_visible_scope(budget_scope, True)
+        pool_args = dict(preferences=combined_preferences, passengers=pricing_passengers, route_type=pricing_route_type,
+                         baggage_required=baggage_required, compare_per_person=max_budget is not None and not scope.startswith("all_"),
+                         allocation=(validate_cabin_allocation(mixed_cabin_allocation, pricing_passengers)["allocation"]
+                                     if mixed_cabin_active else None), effective=effective)
+        outbound_pool, outbound_display = _roundtrip_leg_pool(outbound_all, outbound_analysis.get("business_flights"), **pool_args)
+        return_pool, return_display = _roundtrip_leg_pool(return_all, return_analysis.get("business_flights"), **pool_args)
+        for outbound in outbound_pool:
+            for return_flight in return_pool:
                 outbound_price = _to_float(outbound.get("price"))
                 return_price = _to_float(return_flight.get("price"))
                 if not outbound_price or outbound_price <= 0 or not return_price or return_price <= 0:
@@ -12063,6 +12136,7 @@ def analyze_round_trip(
                         "outbound_price": outbound_price,
                         "return_price": return_price,
                         "total_price": outbound_price + return_price,
+                        "effective_cost": _merge_roundtrip_effective_cost(effective[id(outbound)], effective[id(return_flight)]),
                         "transaction_total": (
                             (_flight_transaction_price(outbound) or outbound_price)
                             + (_flight_transaction_price(return_flight) or return_price)
@@ -12081,16 +12155,16 @@ def analyze_round_trip(
         )
         stats = mixed_cabin_matching.get("stats") or {}
         mixed_cabin_matching["economy_candidate_counts"] = {
-            "outbound": len(outbound_top),
-            "return": len(return_top),
+            "outbound": len(outbound_pool),
+            "return": len(return_pool),
         }
         if int(stats.get("candidates") or 0) == 0:
             mixed_cabin_matching["economy_candidate_reason"] = (
                 _mixed_economy_candidate_reason(
                     outbound_analysis,
                     return_analysis,
-                    outbound_top,
-                    return_top,
+                    outbound_pool,
+                    return_pool,
                 )
             )
         safe_log(
@@ -12128,7 +12202,6 @@ def analyze_round_trip(
                 combined_preferences,
             )
 
-    baggage_required = is_checked_baggage_required(combined_preferences)
     if baggage_required:
         confirmed = []
         for combo in combinations:
@@ -12150,7 +12223,11 @@ def analyze_round_trip(
         combinations = confirmed
         if same_day_round_trip:
             same_day_filter_counts.update(baggage_required=True, after_baggage=len(combinations))
-    combinations.sort(key=lambda item: item.get("selection_cost_all", item["total_price"]))
+    if same_day_round_trip:
+        combinations.sort(key=lambda item: item.get("selection_cost_all", item["total_price"]))
+    else:
+        combinations.sort(key=lambda item: (item.get("selection_cost_all", item["total_price"]),
+                                            _roundtrip_cost_rank(item["effective_cost"]), item["total_price"]))
     combinations = _dedupe_roundtrip_combinations(combinations)
     _print_roundtrip_plan_comparison(
         combinations,
@@ -12161,6 +12238,10 @@ def analyze_round_trip(
         outbound_min = _to_float(best_combo.get("outbound_price"))
         return_min = _to_float(best_combo.get("return_price"))
         total_min = _to_float(best_combo.get("total_price"))
+    elif baggage_required and not same_day_round_trip and not mixed_cabin_active:
+        outbound_min = _to_float(best_combo.get("outbound_price"))
+        return_min = _to_float(best_combo.get("return_price"))
+        total_min = outbound_min + return_min if best_combo else None
     else:
         outbound_min = _to_float(outbound_top[0].get("price")) if outbound_top else None
         return_min = _to_float(return_top[0].get("price")) if return_top else None
@@ -12332,6 +12413,8 @@ def analyze_round_trip(
                 f"保留完整往返排除组合={len(excluded_roundtrip_combos)}"
             )
 
+    if not same_day_round_trip and baggage_required:
+        outbound_top, return_top = (outbound_display, return_display) if combinations else ([], [])
     mixed_history = {}
     if best_combo and best_combo.get("mixed_cabin"):
         mixed_tree = best_combo.get("mixed_cabin_pricing") or {}
