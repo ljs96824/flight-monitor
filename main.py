@@ -29,6 +29,8 @@ load_dotenv(BASE_DIR / ".env", encoding="utf-8")
 
 from project_time import SHANGHAI_TZ
 from analyzer import (
+    is_refund_change_required,
+    refund_change_preferences,
     apply_default_rules,
     analyze_all_flights,
     build_current_low_price_offer,
@@ -100,7 +102,7 @@ from sources.aggregator import (
 )
 from storage import (
     evaluate_and_persist_low_price_alert,
-    LOW_PRICE_ALERT_METHOD_VERSION,
+    resolve_low_price_method_version,
     get_constraint_epoch_boundary,
     get_constraint_history_limit,
     get_roundtrip_price_history,
@@ -319,7 +321,7 @@ def _low_price_notice_config_hash(
     sources = sorted({type(source).__name__ for source in (search_sources or [])})
     payload = {
         "schema": "low-price-notice-v1",
-        "method_version": LOW_PRICE_ALERT_METHOD_VERSION,
+        "method_version": resolve_low_price_method_version(is_refund_change_required(sub)),
         "cabin_target": [hard.get("cabin_arrangement") or sub.get("cabin_arrangement"),
                         hard.get("cabin_policy"), hard.get("cabin_allocation") or sub.get("cabin_allocation")],
         "rule": {"threshold_percentile": 0.30, "min_samples": 5},
@@ -394,6 +396,9 @@ def _handle_low_price_unknown(sub: dict, analysis: dict, **hash_inputs) -> None:
         if reason == "roundtrip_history_not_supported"
         else LOW_PRICE_NOTICE_TEXT_DEFAULT
     )
+    if reason == "no_valid_offers" and analysis.get("low_price_alert_subreason") == "refund_change_pending_confirmation":
+        text = ("当前采集到的报价退改签资格待确认，参考价不触发低价提醒、亦不计入合格低价历史，"
+                "待出现已确认可退可改报价并积累同口径样本后再评估。")
     goals = normalize_notification_goals(sub.get("notification_goals"))
     method = goals["method"]
     email = goals["email"]
@@ -1770,6 +1775,7 @@ def subscription_preferences(sub: dict) -> dict:
     basic = sub.get("basic") or {}
     hard = sub.get("hard_constraints") or {}
     constraints = sub.get("constraints") or {}
+    refund_flexibility, companions = refund_change_preferences(sub)
     need_baggage = next((value for value in (
         sub.get("need_baggage"), sub.get("baggage"),
         hard.get("baggage"), hard.get("need_baggage"),
@@ -1799,7 +1805,8 @@ def subscription_preferences(sub: dict) -> dict:
         "return_departure_slots": sub.get("return_departure_slots"),
         "return_arrival_slots": sub.get("return_arrival_slots"),
         "need_baggage": need_baggage,
-        "refund_flexibility": sub.get("refund_flexibility", "unknown"),
+        "refund_flexibility": refund_flexibility,
+        **({"companion_constraints": companions} if companions else {}),
         "trip_type": sub.get("trip_type", "tourism"),
         "companions": sub.get("companions", "solo"),
         "passengers": preferences.get("passengers"),

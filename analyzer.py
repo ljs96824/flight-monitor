@@ -9,7 +9,8 @@ import math
 from decimal import Decimal, localcontext
 from observation_time import canonicalize_observed_at
 from source_profiles import ROUTE_SOURCE_PROFILES
-from storage import LOW_PRICE_ALERT_METHOD_VERSION
+from storage import (LOW_PRICE_ALERT_METHOD_VERSION, LOW_PRICE_ALERT_REFUND_STRICT_METHOD_VERSION,
+                     resolve_low_price_method_version)
 from cabin_allocation import find_explicit_cabin_allocation, validate_cabin_allocation, normalize_passenger_counts
 from price_estimator import passenger_fare_rates, passenger_price_factor
 import copy
@@ -6581,24 +6582,124 @@ def _scoped_offer_price(flight, preferences, scope, *, round_trip=False, return_
     return price
 
 
-def _has_refund_change_flexibility(flight: dict, required: bool = False) -> bool:
-    fare_rules = flight.get("fare_rules") or {}
-    change = fare_rules.get("change") or {}
-    refund = fare_rules.get("refund") or {}
-    extra = flight.get("extra") or {}
-    refund_change = extra.get("refund_change") or {}
+_REFUND_PENDING = "当前报价的退改签资格未确认；"
+_NO_CONFIRMED_REFUND_CHANGE = "暂无已确认满足退改要求的方案"
+_REFUND_PENDING_REFERENCE_TITLE = "退改资格待确认的参考最低报价"
 
-    changeable = bool(
-        change.get("allowed")
-        or refund_change.get("changeable")
-        or extra.get("changeable")
-    )
-    refundable = bool(
-        refund.get("allowed")
-        or refund_change.get("refundable")
-        or extra.get("refundable")
-    )
-    return changeable and refundable if required else changeable
+
+def refund_change_preferences(preferences):
+    prefs = preferences or {}
+    containers = [d for d in (prefs, *(prefs.get(k) for k in (
+        "hard_constraints", "constraints", "preferences", "soft_preferences"))) if isinstance(d, dict)]
+    companions = []
+    for d in containers:
+        values = d.get("companion_constraints") or []
+        if isinstance(values, str):
+            values = [v.strip() for v in values.split(",")]
+        if isinstance(values, (list, tuple, set)):
+            companions.extend(v for v in values if v not in companions)
+    value = next((d[k] for d in containers for k in ("refund_flexibility", "refund_policy", "need_refund_change")
+                  if d.get(k) not in (None, "")), None)
+    normalized = value.strip().lower() if isinstance(value, str) else value
+    if normalized is True or normalized in ("required", "must", "must_refundable", "refund_change_required",
+                                            "必须可退改", "必须退改", "需要可退改"):
+        value = "required"
+    elif normalized in (None, "", "unknown"):
+        value = "required" if prefs.get("refund_change_required") is True or "need_refund_change" in companions else "unknown"
+    return value, companions
+
+
+def is_refund_change_required(preferences: dict | None) -> bool:
+    return refund_change_preferences(preferences)[0] == "required"
+
+
+def _refund_dict(value):
+    return value if isinstance(value, dict) else {}
+
+
+def check_refund_change_evidence_applicability(flight: dict, *, passengers=None) -> tuple[bool, str]:
+    extra = _refund_dict(flight.get("extra"))
+    nodes = [flight, extra]
+    for d in (flight, extra):
+        for key in ("refund_change", "fare_rules", "refund", "change", "fare_verification"):
+            nodes.extend(_baggage_nodes(d.get(key)))
+    if any(node.get("source") == "国内标准规则推断" for node in nodes):
+        return False, "domestic_rule_inferred"
+    negatives = ("flight_number_match_only", "cross_offer", "unmatched", "inferred")
+    native = any(node.get("refund_change_offer_matched") is True for node in nodes)
+    quote = flight.get("quote_offer_id") or flight.get("offer_id") or flight.get("quote_id")
+    segments = {str(s.get("id") or s.get("segment_id")) for s in flight.get("segments") or []
+                if isinstance(s, dict) and (s.get("id") or s.get("segment_id"))}
+    counts = _baggage_passengers(passengers) or {}
+    people = set(map(str, flight.get("passenger_ids") or [f"{k}_{i+1}" for k in ("adult", "child", "elderly")
+                                                         for i in range(counts.get(k, 0))]))
+    positive = native
+    for node in nodes:
+        proof = node.get("refund_change_offer_id")
+        if (node.get("applicable_to_current_quote") is False or node.get("refund_change_offer_matched") is False
+                or node.get("refund_change_applicability") in negatives
+                or (not native and (node.get("baggage_offer_matched") is False
+                                    or node.get("baggage_applicability") in negatives))
+                or (quote and any(v and v != quote for v in (proof, node.get("offer_id"), node.get("quote_offer_id"))))):
+            return False, "cross_offer_unverified"
+        for key, needed in (("segment_ids", segments), ("passenger_ids", people)):
+            if key in node and (not isinstance(node[key], (list, tuple, set)) or not needed
+                                or not needed.issubset(set(map(str, node[key])))):
+                return False, "cross_offer_unverified"
+        positive |= (node.get("applicable_to_current_quote") is True
+                     or node.get("refund_change_applicability") == "quote_matched" or bool(quote and quote == proof))
+    if str(flight.get("price_source") or flight.get("data_source") or "").lower() == "juhe" and not positive:
+        return False, "cross_offer_unverified"
+    return True, ""
+
+
+def _refund_term(flight, kind, flag):
+    rule = _refund_dict(_refund_dict(flight.get("fare_rules")).get(kind))
+    extra = _refund_dict(flight.get("extra"))
+    sources = (_refund_dict(extra.get("refund_change")), extra, _refund_dict(flight.get("refund_change")), flight)
+    flags = [rule.get("allowed"), *(d.get(k) for d in sources for k in (flag, kind + "_allowed"))]
+    known = [v for v in flags if isinstance(v, bool)]
+    allowed = False if False in known else True if True in known else None
+    fee = next((v for v in (rule.get("fee"), *(d.get(kind + "_fee") for d in sources))
+                if v not in (None, "") and not isinstance(v, bool)), None)
+    return allowed, fee
+
+
+def _refund_fee_description(fee):
+    text = str(fee).strip()
+    if fee == 0 or text.lower() in {"免费", "free", "0", "0.0", "0.00"}:
+        return "free", "免费"
+    if re.fullmatch(r"(?:[¥￥$£€]|[A-Z]{3}\s*)?\d+(?:\.\d+)?(?:元)?", text):
+        return "paid_known", text
+    return "unknown", "退改费用待确认"
+
+
+def evaluate_refund_change_eligibility(flight: dict, *, passengers=None, route_type=None) -> dict:
+    applicable, reason = check_refund_change_evidence_applicability(flight, passengers=passengers)
+    if applicable:
+        refund, rf = _refund_term(flight, "refund", "refundable")
+        change, cf = _refund_term(flight, "change", "changeable")
+        if refund is False or change is False:
+            if refund is False and change is False:
+                reason, text = "non_refundable_and_non_changeable", "不可退票且不可改签"
+            else:
+                reason, text = ("non_refundable", "不可退票") if refund is False else ("non_changeable", "不可改签")
+            return dict(state="explicitly_ineligible", subreason=reason, message="当前票价产品明确" + text)
+        if refund is True and change is True:
+            rs, rt = _refund_fee_description(rf)
+            cs, ct = _refund_fee_description(cf)
+            return dict(state="eligible", subreason=None, message="已确认可退可改",
+                        refund_fee_status=rs, refund_fee_text=rt, change_fee_status=cs, change_fee_text=ct)
+        reason = "partial_rule_unknown" if refund is True or change is True else "rule_unknown"
+    text = ("国内常规规则仅供参考，请以该票价产品的支付页票规为准。" if reason == "domestic_rule_inferred"
+            else "请核实当前报价支付页的退票与改签条款。")
+    return dict(state="pending_confirmation", subreason=reason, message=_REFUND_PENDING + text)
+
+
+def _has_refund_change_flexibility(flight: dict, required: bool = False) -> bool:
+    if required:
+        return evaluate_refund_change_eligibility(flight)["state"] == "eligible"
+    return check_refund_change_evidence_applicability(flight)[0] and _refund_term(flight, "change", "changeable")[0] is True
 
 
 def _airline_text(flight: dict) -> str:
@@ -8258,6 +8359,15 @@ def build_no_result_diagnosis(
             "key": "baggage_pending_confirmation", "label": "托运行李待确认",
             "count": valid_price_count, "ratio": 100.0 if valid_price_count else 0.0, "pool_scope": "候选航班池",
         }
+    elif strict_same_day_reason is None and is_refund_change_required(constraints) and any(
+            item.get("pending_refund_change_confirmation") or item.get("filter_reason_code") == "refund_change_pending_confirmation"
+            for item in flights + excluded):
+        counts.update(reason=_NO_CONFIRMED_REFUND_CHANGE, primary_cause="refund_change_pending_confirmation",
+                      max_bottleneck=dict(key="refund_change_pending_confirmation", label="退改资格待确认",
+                                          count=valid_price_count, ratio=100.0 if valid_price_count else 0.0,
+                                          pool_scope="候选航班池"))
+        summary.update(reason="退改资格待确认，请以支付页票规为准", pending_refund_change_confirmation=True,
+                       reference_title=_REFUND_PENDING_REFERENCE_TITLE)
     if counts.get("primary_cause") == "baggage_pending_confirmation":
         summary["reason"] = _NO_CONFIRMED_BAGGAGE
     if counts.get("primary_cause") != "budget":
@@ -8845,6 +8955,8 @@ def _filter_detail_airlines(flight: dict) -> str:
 
 def _filter_constraint_detail(flight: dict, preferences: dict) -> tuple[str, str]:
     reason = str(flight.get("exclude_reason") or "不符合当前筛选条件")
+    if flight.get("filter_reason_code") == "need_refund_change" or "不可退" in reason or "不可改" in reason:
+        return "need_refund_change", reason
     if reason == DEPARTURE_PASSED_REASON:
         return DEPARTURE_PASSED_REASON_CODE, _filter_detail_times(flight)
     if reason == "用户设置必须直飞":
@@ -8996,6 +9108,8 @@ def _apply_user_preferences(
     preferences = copy.deepcopy(preferences or {})
     baggage_required = is_checked_baggage_required(preferences)
     baggage_references = []
+    refund_required = is_refund_change_required(preferences)
+    refund_references = []
     connection_references = []
     budget_scope, target_scope = resolve_effective_budget_scopes(preferences)
     visible_budget = _budget_visible_scope(budget_scope, False)
@@ -9118,6 +9232,8 @@ def _apply_user_preferences(
     excluded = []
     direct_reference_candidates = []
     for flight in flights:
+        if refund_required:
+            flight = dict(flight)
         notes = list(flight.get("preference_notes") or [])
         penalties = list(flight.get("preference_penalties") or [])
         penalty = 0
@@ -9169,6 +9285,14 @@ def _apply_user_preferences(
                 penalty += 2
                 penalties.append("非全服务航司")
 
+        if refund_required:
+            terms = evaluate_refund_change_eligibility(flight, passengers=preferences.get("passengers"),
+                                                      route_type=preferences.get("route_type"))
+            flight.update(refund_change_required=True, refund_change_eligibility=terms)
+            if terms["state"] == "explicitly_ineligible":
+                excluded.append(dict(flight, exclude_reason=terms["message"], filter_reason_code="need_refund_change"))
+                continue
+
         if baggage_required:
             eligibility = evaluate_checked_baggage_eligibility(
                 flight, passengers=preferences.get("passengers"), route_type=preferences.get("route_type"))
@@ -9214,7 +9338,8 @@ def _apply_user_preferences(
         if direct_required and stops > 0:
             excluded_flight = {**flight, "exclude_reason": "用户设置必须直飞"}
             excluded.append(excluded_flight)
-            direct_reference_candidates.append(flight)
+            if not refund_required:
+                direct_reference_candidates.append(flight)
             continue
         if direct_only in {"flexible", "cheap_ok"} and stops > 0:
             penalty += 2 if direct_only == "flexible" else 1
@@ -9311,18 +9436,24 @@ def _apply_user_preferences(
             penalty += 3
             penalties.append("托运行李需官网确认")
 
-        if refund_flexibility == "preferred":
+        if refund_required:
+            if str(preferences.get("lcc_policy") or "any").strip() in {"exclude_lcc", "lcc_only"}:
+                _, rejected = _apply_lcc_policy([flight], preferences)
+                if rejected:
+                    excluded.extend(rejected)
+                    continue
+            if terms["state"] == "pending_confirmation":
+                refund_references.append(dict(flight, reference_only=True, pending_refund_change_confirmation=True,
+                                              reference_reason=terms["message"], exclude_reason=terms["message"],
+                                              filter_reason_code="refund_change_pending_confirmation"))
+                continue
+            notes.append("已确认可退可改")
+        elif refund_flexibility == "preferred":
             if _has_refund_change_flexibility(flight):
                 notes.append("退改签较灵活")
             else:
                 penalty += 1
                 penalties.append("退改签需确认")
-        elif refund_flexibility == "required":
-            if _has_refund_change_flexibility(flight, required=True):
-                notes.append("满足可退改")
-            else:
-                penalty += 4
-                penalties.append("未确认可退改")
 
         has_family_companion = passenger_friendly_mode or companions in {"with_elderly", "with_child", "with_elderly_child"}
         if has_family_companion:
@@ -9453,8 +9584,9 @@ def _apply_user_preferences(
         flight["preference_penalty"] = penalty
         kept.append(flight)
 
+    all_references = baggage_references + refund_references + connection_references
     if not kept:
-        if direct_required and not direct_flights and direct_reference_candidates and not baggage_references and not connection_references:
+        if direct_required and not direct_flights and direct_reference_candidates and not all_references:
             reference_flights = [
                 {
                     **flight,
@@ -9471,10 +9603,11 @@ def _apply_user_preferences(
             }
         return [], excluded, {
             "fallback": False,
-            "message": _NO_CONFIRMED_BAGGAGE if baggage_references else "没有航班满足当前硬约束",
-            "reference_flights": baggage_references + connection_references,
+            "message": (_NO_CONFIRMED_BAGGAGE if baggage_references else
+                        _NO_CONFIRMED_REFUND_CHANGE if refund_references else "没有航班满足当前硬约束"),
+            "reference_flights": all_references,
         }
-    return kept, excluded, {"fallback": False, "reference_flights": baggage_references + connection_references}
+    return kept, excluded, {"fallback": False, "reference_flights": all_references}
 
 
 def _apply_lcc_policy(
@@ -9608,9 +9741,9 @@ def _lp_hash(value):
     return hashlib.sha256(_lp_json(value).encode("utf-8")).hexdigest()
 
 
-def _lp_unknown(reason):
+def _lp_unknown(reason, *, subreason=None, detail_message=None):
     return dict(state="unknown", reason=reason, can_evaluate_current=False, can_append_sample=False,
-                sample_delta=0, threshold_cny=None)
+                sample_delta=0, threshold_cny=None, **({"subreason": subreason, "detail_message": detail_message} if subreason else {}))
 
 
 def apply_low_price_evaluation(analysis, context):
@@ -9619,6 +9752,11 @@ def apply_low_price_evaluation(analysis, context):
                     low_price_alert_reason=context["reason"],
                     low_price_alert_triggered=context["state"] == "triggered",
                     target_price_effective=context.get("threshold_cny"))
+    for key, target in (("subreason", "low_price_alert_subreason"), ("detail_message", "low_price_alert_detail")):
+        if key in context:
+            analysis[target] = context[key]
+        else:
+            analysis.pop(target, None)
     return analysis
 
 
@@ -9724,6 +9862,7 @@ def build_current_low_price_offer(sub, analyses, leg_data, *, trip_type, route_t
                                   origins, destinations, passengers, constraint_fp):
     """Price only the requested product; display pools and external percentiles are not evidence."""
     hard = sub.get("hard_constraints") or {}
+    refund_required = is_refund_change_required(sub)
     scope, allocation, error = _lp_target(sub, passengers)
     if error:
         return _lp_unknown(error)
@@ -9751,7 +9890,11 @@ def build_current_low_price_offer(sub, analyses, leg_data, *, trip_type, route_t
                   price_scope=("all_passengers_" if group_price else "per_person_")+("roundtrip" if rt else "oneway"),
                   passenger_signature=_lp_json(members),route_rate_key=passenger_fare_rates(route_type)[0],
                   constraint_fingerprint=constraint_fp)
-    bucket = _lp_hash(dict(schema="low-price-bucket-v1",**fields,**coverage))
+    bucket_fields = dict(schema="low-price-bucket-v1", **fields, **coverage)
+    if refund_required:
+        fields["method_version"] = resolve_low_price_method_version(True)
+        bucket_fields.update(method_version=fields["method_version"], refund_eligibility_regime="required_strict_v1")
+    bucket = _lp_hash(bucket_fields)
     planned_leg_data = {
         leg: {**(leg_data.get(leg) or {}), "_planned_airport_pairs": [
             [o, d] for o in (destinations if leg == "return" else origins)
@@ -9764,9 +9907,14 @@ def build_current_low_price_offer(sub, analyses, leg_data, *, trip_type, route_t
     if error:
         return dict(_lp_unknown(error), bucket_key=bucket, coverage_policy=coverage,
                     coverage_complete=error != "source_coverage_incomplete")
+    pending = set()
     pools = {}
     for leg, day in dates.items():
         pool = []
+        if refund_required:
+            pending.update((leg, f.get("cabin_class") or "economy")
+                           for f in (analyses.get(leg) or {}).get("reference_flights") or []
+                           if f.get("pending_refund_change_confirmation"))
         for flight in (analyses.get(leg) or {}).get("roundtrip_candidate_flights", []):
             c = flight.get("cabin_class") or "economy"
             if (c not in cabins or flight.get("reference_only") or not has_enough_detail(flight)
@@ -9775,6 +9923,12 @@ def build_current_low_price_offer(sub, analyses, leg_data, *, trip_type, route_t
             price = _to_float(flight.get("price"))
             if price is None or not math.isfinite(price) or price <= 0:
                 continue
+            if refund_required:
+                state = evaluate_refund_change_eligibility(flight, passengers=passengers, route_type=route_type)["state"]
+                if state != "eligible":
+                    if state == "pending_confirmation":
+                        pending.add((leg, c))
+                    continue
             source = str(flight.get("price_source") or flight.get("source") or "")
             lineage = (flight.get("source_collection") or {}).get(source) or {}
             if source not in required[c]:
@@ -9795,6 +9949,11 @@ def build_current_low_price_offer(sub, analyses, leg_data, *, trip_type, route_t
                     equal_sources.add(name)
             pool.append(dict(flight, price_source=min(equal_sources)))
         pools[leg] = pool
+    if any(not any((f.get("cabin_class") or "economy") == c for f in pools[leg])
+           for leg, c in pending if c in cabins):
+        return dict(_lp_unknown("no_valid_offers", subreason="refund_change_pending_confirmation",
+                                detail_message="当前报价退改资格待确认，参考价不触发低价提醒且不写入合格历史"),
+                    bucket_key=bucket, coverage_policy=coverage, coverage_complete=True)
     if not all(pools.values()) or not all(s["fetch_unit_ids"] for s in slots.values()):
         return _lp_unknown("no_valid_offers")
     best, tied = None, {}
@@ -10226,6 +10385,10 @@ def analyze_all_flights(
             merged_preferences["need_baggage"] = hard_constraints.get("baggage")
     else:
         merged_preferences = user_preferences or {}
+    refund_required = is_refund_change_required(merged_preferences) or is_refund_change_required(hard_constraints)
+    if refund_required:
+        merged_preferences = {**merged_preferences, "refund_flexibility": "required"}
+    mixed_excluded = []
     mixed_cabin_allocation = merged_preferences.get("cabin_allocation")
     mixed_business_flights = []
     if isinstance(mixed_cabin_allocation, dict) and not local_low_price:
@@ -10239,6 +10402,10 @@ def analyze_all_flights(
             for flight in usable_flights
             if (flight.get("cabin_class") or "economy") == "economy"
         ]
+        if refund_required:
+            mixed_business_flights, mixed_excluded, business_summary = _apply_user_preferences(
+                mixed_business_flights, merged_preferences)
+            detail_reference_flights.extend(business_summary.get("reference_flights") or [])
         if not usable_flights:
             economy_reason = (
                 "经济舱记录缺少完整航段信息"
@@ -10251,7 +10418,11 @@ def analyze_all_flights(
                 "reference_flights": detail_reference_flights,
                 "total_reference_options": len(detail_reference_flights),
                 "economy_candidate_reason": economy_reason,
-                "no_primary_reason": "暂无满足当前要求的可执行方案",
+                **({"excluded_flights": _excluded_flight_summary(mixed_excluded)} if mixed_excluded else {}),
+                "no_primary_reason": (_NO_CONFIRMED_REFUND_CHANGE if refund_required and any(
+                    f.get("pending_refund_change_confirmation") for f in detail_reference_flights) and not any(
+                    f.get("pending_baggage_confirmation") for f in detail_reference_flights)
+                    else "暂无满足当前要求的可执行方案"),
                 **early_low_price_fields(),
             }
     roundtrip_purchase_context = bool(
@@ -10302,6 +10473,7 @@ def analyze_all_flights(
         merged_preferences,
     )
     preference_excluded.extend(lcc_excluded)
+    preference_excluded.extend(mixed_excluded)
     excluded_flights = departure_excluded + direct_policy_excluded + preference_excluded
     _attach_filter_reason_details(excluded_flights, merged_preferences)
     _log_low_price_filter_rejections(
@@ -10310,7 +10482,8 @@ def analyze_all_flights(
         merged_preferences,
     )
     print(f"[过滤后] {len(usable_flights)}个航班")
-    if not usable_flights:
+    if not usable_flights or (refund_required and isinstance(mixed_cabin_allocation, dict)
+                              and not local_low_price and not mixed_business_flights):
         return {
             "error": "no_flights", "all_flights": [], "roundtrip_candidate_flights": [], "recommendations": [],
             "recommended_plans": [], "economy_recommendations": [],
@@ -10319,6 +10492,8 @@ def analyze_all_flights(
             "user_preferences": merged_preferences,
             **early_low_price_fields(),
             **({"no_primary_reason": _NO_CONFIRMED_BAGGAGE} if is_checked_baggage_required(merged_preferences) and any(f.get("pending_baggage_confirmation") for f in detail_reference_flights)
+               else {"no_primary_reason": _NO_CONFIRMED_REFUND_CHANGE} if refund_required and any(
+                   f.get("pending_refund_change_confirmation") for f in detail_reference_flights)
                else {"no_primary_reason": "暂无满足当前要求的可执行方案"} if detail_reference_flights else {}),
         }
 
@@ -11860,6 +12035,21 @@ def analyze_round_trip(
         or return_analysis.get("route_type")
         or ""
     )
+    refund_required = is_refund_change_required(combined_preferences)
+    if refund_required:
+        # Same-day pairing also consults the unranked pools; filter those before constructing any pair.
+        def eligible_analysis(analysis):
+            copy_analysis = dict(analysis)
+            for key in ("roundtrip_candidate_flights", "all_flights", "same_day_base_flights", "raw_valid_flights",
+                        "raw_valid_outbound", "qualified_flights", "economy_recommendations", "business_flights",
+                        "next_day_flights"):
+                if isinstance(analysis.get(key), list):
+                    copy_analysis[key] = [f for f in analysis[key] if isinstance(f, dict)
+                                          and not f.get("reference_only") and evaluate_refund_change_eligibility(
+                                              f, passengers=pricing_passengers, route_type=pricing_route_type)["state"] == "eligible"]
+            return copy_analysis
+        outbound_analysis = eligible_analysis(outbound_analysis)
+        return_analysis = eligible_analysis(return_analysis)
     budget_scope, target_budget_scope = resolve_effective_budget_scopes(combined_preferences)
     mixed_cabin_allocation = combined_preferences.get("cabin_allocation")
     mixed_cabin_active = bool(
@@ -12251,6 +12441,9 @@ def analyze_round_trip(
             else None
         )
 
+    if refund_required and not combinations:
+        outbound_min = return_min = total_min = None
+        outbound_top, return_top = [], []
     insight = None
     if outbound_min is not None and return_min is not None:
         total = outbound_min + return_min
@@ -12329,6 +12522,8 @@ def analyze_round_trip(
         if compare_fee["calculable"]:
             budget_price_compare += compare_fee["amount"]
         budget_price = best_combo["selection_cost_all"]
+    if refund_required and not combinations:
+        budget_price = budget_price_compare = None
     ideal_pp = budget_limits.get("ideal_price_pp_oneway")
     same_axis_target = (price_in_scope(ideal_pp, pricing_passengers, scope=budget_compare_scope,
                         route_type=pricing_route_type, round_trip=True) if ideal_pp is not None else None)
