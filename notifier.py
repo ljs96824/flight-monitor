@@ -1550,20 +1550,23 @@ def _seat_selection_line(extra: dict) -> str:
 
 
 def _refund_change_lines(extra: dict) -> list[str]:
-    refund_change = extra.get("refund_change") or {}
-    changeable = refund_change.get("changeable", extra.get("changeable"))
-    refundable = refund_change.get("refundable", extra.get("refundable"))
-    change_fee = refund_change.get("change_fee")
-
-    if changeable:
-        if change_fee == "免费":
-            change_line = "🔄 改签：出发前免费改签"
+    detail = extra.get("refund_change") or {}
+    lines = []
+    for key, flag, label, prefix, before in (("change", "changeable", "改签", "🔄 改签：", "出发前"),
+                                            ("refund", "refundable", "退票", "💰 退票：", "")):
+        allowed = detail.get(flag, extra.get(flag))
+        fee = detail.get(key + "_fee", extra.get(key + "_fee"))
+        if allowed is False:
+            description = "不可" + label
+        elif allowed is not True:
+            description = label + "规则待确认"
+        elif not isinstance(fee, bool) and fee in (0, "免费"):
+            description = before + "免费" + label
         else:
-            change_line = "🔄 改签：出发前可改签"
-    else:
-        change_line = "🔄 改签：不可改签"
-    refund_line = "💰 退票：可退票" if refundable else "💰 退票：不可退票"
-    return [change_line, refund_line]
+            text = "退改费用待确认" if isinstance(fee, bool) or fee in (None, "") else str(fee)
+            description = f"{before}可{label}({text})"
+        lines.append(prefix + description)
+    return lines
 
 def _estimate_drop_probability(price_history, current_price) -> int | None:
     """估算接近当前价格时，下一次记录继续下降的比例。"""
@@ -1834,40 +1837,34 @@ def _compact_baggage_line(flight: dict) -> str:
 
 
 def _compact_refund_line(flight: dict) -> str:
-    fare_rules = flight.get("fare_rules") or {}
-    change_rules = fare_rules.get("change") or {}
-    refund_rules = fare_rules.get("refund") or {}
-    has_standard_rules = (
-        change_rules.get("allowed") is not None
-        or refund_rules.get("allowed") is not None
-        or change_rules.get("fee") is not None
-        or refund_rules.get("fee") is not None
-    )
-    if has_standard_rules:
-        if change_rules.get("allowed"):
-            change_fee = change_rules.get("fee")
-            change_text = "免费改签" if change_fee == 0 else "可改签"
+    pending = "🔄 退改：资格待确认(支付页核实)"
+    if (flight.get("pending_refund_change_confirmation") or flight.get("filter_reason_code") == "refund_change_pending_confirmation"
+            or (flight.get("refund_change_eligibility") or {}).get("state") == "pending_confirmation"):
+        return pending
+    rules = flight.get("fare_rules") or {}
+    terms = [((rules.get(k) or {}).get("allowed"), (rules.get(k) or {}).get("fee")) for k in ("change", "refund")]
+    standard = any(isinstance(allowed, bool) or fee is not None for allowed, fee in terms)
+    if not standard:
+        if not flight.get("has_baggage_info"):
+            return "🔄 退改：请查询航司官网"
+        extra = flight.get("extra") or {}
+        detail = extra.get("refund_change") or {}
+        terms = [(detail.get(flag, extra.get(flag)), detail.get(k + "_fee", extra.get(k + "_fee")))
+                 for k, flag in (("change", "changeable"), ("refund", "refundable"))]
+        if any(not isinstance(allowed, bool) for allowed, _ in terms):
+            return pending
+    labels = []
+    for label, (allowed, fee) in zip(("改签", "退票"), terms):
+        if allowed is True:
+            if not isinstance(fee, bool) and fee in (0, "免费"):
+                labels.append("免费" + label)
+            elif isinstance(fee, bool) or fee in (None, "", "退改费用待确认"):
+                labels.append(f"可{label}(退改费用待确认)")
+            else:
+                labels.append("可" + label if standard else f"可{label}({fee})")
         else:
-            change_text = "不可改签"
-        if refund_rules.get("allowed"):
-            refund_fee = refund_rules.get("fee")
-            refund_text = "免费退票" if refund_fee == 0 else "可退票"
-        else:
-            refund_text = "不可退票"
-        return f"🔄 退改：{change_text} · {refund_text}"
-
-    if not flight.get("has_baggage_info"):
-        return "🔄 退改：请查询航司官网"
-
-    extra = flight.get("extra") or {}
-    refund_change = extra.get("refund_change") or {}
-    changeable = refund_change.get("changeable", extra.get("changeable"))
-    refundable = refund_change.get("refundable", extra.get("refundable"))
-    change_text = "免费改签" if refund_change.get("change_fee") == "免费" else "可改签"
-    if not changeable:
-        change_text = "不可改签"
-    refund_text = "可退票" if refundable else "不可退票"
-    return f"🔄 退改：{change_text} · {refund_text}"
+            labels.append("不可" + label if allowed is False else label + "待确认")
+    return "🔄 退改：" + " · ".join(labels)
 
 def _flight_search_date(flight: dict, fallback_date: str | None = None) -> str:
     segments = flight.get("segments") or []
@@ -4774,6 +4771,9 @@ def _pushplus_baggage_line_for_flight(flight: dict | None) -> str:
 
 def _verification_refund_line_for_flight(flight: dict | None) -> str:
     flight = flight or {}
+    if (flight.get("pending_refund_change_confirmation") or flight.get("filter_reason_code") == "refund_change_pending_confirmation"
+            or (flight.get("refund_change_eligibility") or {}).get("state") == "pending_confirmation"):
+        return "退改:资格待确认(支付页核实)"
     fare_rules = flight.get("fare_rules") or {}
     refund = fare_rules.get("refund") or {}
     if isinstance(refund, dict):
@@ -7032,6 +7032,10 @@ def _no_result_candidate_flights(
         _extend(outbound_analysis, "outbound")
         if include_return:
             _extend(return_analysis, "return")
+        elif not (return_analysis or {}).get("all_flights") and any(
+                f.get("pending_refund_change_confirmation") or f.get("filter_reason_code") == "refund_change_pending_confirmation"
+                for f in (return_analysis or {}).get("reference_flights") or []):
+            _extend(return_analysis, "return", ("reference_flights",))
         _extend(analysis_result, "outbound")
         round_trip = (analysis_result or {}).get("round_trip_analysis") or {}
         _extend(round_trip, "outbound", ("closest_same_day_outbound_options", "outbound_top3"))
@@ -9517,6 +9521,10 @@ def _candidate_price_summary_text(payload: dict) -> str:
         price_text = _price_text_with_caliber(lowest, scope, passengers, route_type)
     else:
         price_text = _price_text(lowest)
+    if summary.get("pending_refund_change_confirmation"):
+        title = str(summary.get("reference_title") or "退改资格待确认的参考最低报价")
+        reason = f"{reason}；退改:资格待确认(支付页核实)"
+        return f"{title}{price_text}({reason},不可购)"
     reason_text = reason if "不可购" in reason else f"{reason},不可购"
     return f"候选中最低{price_text}({reason_text})"
 
@@ -9524,10 +9532,10 @@ def _candidate_price_summary_text(payload: dict) -> str:
 def _email_no_primary_candidate_reference_body(payload: dict) -> str:
     rows = []
     price_hint = _candidate_price_summary_text(payload)
-    if price_hint:
-        rows.append(("候选池最低", html.escape(price_hint)))
-
     candidate_summary = payload.get("candidate_price_summary") or {}
+    pending = candidate_summary.get("pending_refund_change_confirmation")
+    if price_hint:
+        rows.append(("退改资格待确认的参考最低报价" if pending else "候选池最低", html.escape(price_hint)))
     fallback_scope = (
         candidate_summary.get("max_budget_scope")
         or candidate_summary.get("price_scope")
@@ -9553,6 +9561,8 @@ def _email_no_primary_candidate_reference_body(payload: dict) -> str:
         rows.append(("最高可接受价", html.escape(max_text)))
 
     body = _email_table(rows) if rows else "<div style='color:#888;font-size:12px;'>候选池暂无有效报价。</div>"
+    if pending:
+        return body + "<div>参考最低报价仅用于了解当前价位；退改资格待支付页票规确认，未核实前不作为满足退改要求的主推荐方案。</div>"
     return body + "<div style='margin-top:8px;color:#666;font-size:12px;'>候选价格仅用于了解当前价位；因时间窗口或其他约束不符，不可直接购买。</div>"
 
 

@@ -1,6 +1,8 @@
 """Fare rule normalization helpers."""
 
 from __future__ import annotations
+import math
+
 
 
 def _normalize_cabin_class(value) -> str:
@@ -18,13 +20,17 @@ def _normalize_cabin_class(value) -> str:
 
 
 def _fee_value(value):
-    if value in (None, "", False):
+    if value is None or value == "" or isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
-        return value
-    text = str(value)
-    if text in {"免费", "free", "Free", "FREE"}:
+        if value < 0 or (isinstance(value, float) and not math.isfinite(value)):
+            return None
+        return 0 if value == 0 else value
+    text = str(value).strip()
+    if text.casefold() in {"免费", "free", "0", "0.0", "0.00"}:
         return 0
+    if not text:
+        return None
     return text
 
 
@@ -52,7 +58,8 @@ def _rule_block(source: dict, allowed_keys: list[str], fee_keys: list[str]) -> d
     allowed = None
     for key in allowed_keys:
         if key in source:
-            allowed = bool(source.get(key))
+            raw = source[key]
+            allowed = raw if isinstance(raw, bool) else None
             break
 
     fee = None

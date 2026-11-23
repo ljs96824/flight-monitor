@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 
 import httpx
 
@@ -13,6 +14,30 @@ from sources.base import FlightSource
 
 
 DUFFEL_URL = "https://api.duffel.com/air/offer_requests"
+
+
+def _parse_duffel_condition(condition):
+    if not isinstance(condition, dict) or not isinstance(condition.get("allowed"), bool):
+        return None, None
+    if not condition["allowed"]:
+        return False, None
+    unknown = "退改费用待确认"
+    try:
+        amount = Decimal(str(condition.get("penalty_amount")))
+    except InvalidOperation:
+        return True, unknown
+    if not amount.is_finite() or amount < 0:
+        return True, unknown
+    if not amount:
+        return True, "免费"
+    currency = str(condition.get("penalty_currency") or "").strip().upper()
+    if not currency:
+        return True, unknown
+    text = format(amount, "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return True, f"¥{text}" if currency in {"CNY", "RMB"} else f"{currency} {text}"
+
 
 
 def _format_time(value) -> str:
@@ -177,9 +202,10 @@ class DuffelSource(FlightSource):
         flight_nos = [
             segment.get("flight_no", "") for segment in segments if segment.get("flight_no")
         ]
-        conditions = offer.get("conditions") or {}
-        changeable = conditions.get("change_before_departure") is not None
-        refundable = conditions.get("refund_before_departure") is not None
+        conditions = offer.get("conditions")
+        conditions = conditions if isinstance(conditions, dict) else {}
+        changeable, change_fee = _parse_duffel_condition(conditions.get("change_before_departure"))
+        refundable, refund_fee = _parse_duffel_condition(conditions.get("refund_before_departure"))
         extra = {
             "baggage": self._baggage_info(slices),
             "baggage_detail": self._baggage_detail(slices),
@@ -187,8 +213,8 @@ class DuffelSource(FlightSource):
             "refund_change": {
                 "changeable": changeable,
                 "refundable": refundable,
-                "change_fee": "免费" if changeable else None,
-                "refund_fee": "免费" if refundable else None,
+                "change_fee": change_fee,
+                "refund_fee": refund_fee,
             },
             "changeable": changeable,
             "refundable": refundable,

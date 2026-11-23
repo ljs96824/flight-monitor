@@ -181,10 +181,16 @@ def _segment_score(segments) -> int:
 OFFER_PROOF_KEYS = frozenset({
     "baggage_applicability", "baggage_offer_matched", "quote_offer_id", "baggage_offer_id",
     "offer_id", "baggage_evidence_source", "baggage_enrichment_source",
+    "refund_change_applicability", "refund_change_offer_matched", "refund_change_offer_id",
+    "refund_change_evidence_source", "refund_change_enrichment_source", "applicable_to_current_quote",
 })
 BAGGAGE_EVIDENCE_KEYS = frozenset({
     "extra", "fare_rules", "has_baggage_info", "baggage", "baggage_detail", "baggage_services",
     "checked_baggage_fee", "checked_baggage_fee_spec", "extra_bag_price", "total_checked_baggage_fee",
+})
+REFUND_EVIDENCE_KEYS = frozenset({
+    "refund_change", "changeable", "refundable", "change_allowed", "refund_allowed",
+    "change_fee", "refund_fee", "refund", "change",
 })
 
 
@@ -206,9 +212,15 @@ def _unbound_baggage_copy(value):
 
 
 def _mark_unbound_baggage(flight, source):
-    flight["baggage_applicability"] = "flight_number_match_only"
-    flight["baggage_offer_matched"] = False
-    flight["baggage_enrichment_source"] = str(source or "unknown")
+    if flight.get("baggage_offer_matched") is not True:
+        flight["baggage_applicability"] = "flight_number_match_only"
+        flight["baggage_offer_matched"] = False
+        flight["baggage_enrichment_source"] = str(source or "unknown")
+    if flight.get("refund_change_offer_matched") is not True:
+        flight["refund_change_applicability"] = "flight_number_match_only"
+        flight["refund_change_offer_matched"] = False
+        flight["refund_change_enrichment_source"] = str(source or "unknown")
+
 
 def _merge_flight_fields(target: dict, source: dict) -> dict:
     """Merge duplicate flight records without letting sparse lower-price rows erase details."""
@@ -236,7 +248,7 @@ def _merge_flight_fields(target: dict, source: dict) -> dict:
         }:
             continue
         if not _non_empty(target.get(key)) and _non_empty(value):
-            if key in BAGGAGE_EVIDENCE_KEYS:
+            if key in BAGGAGE_EVIDENCE_KEYS or key in REFUND_EVIDENCE_KEYS:
                 target[key] = _unbound_baggage_copy(value)
                 _mark_unbound_baggage(target, source.get("price_source") or source.get("data_source") or source.get("source"))
             else:

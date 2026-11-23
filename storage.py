@@ -87,6 +87,13 @@ def _current_round_id() -> str | None:
 
 
 LOW_PRICE_ALERT_METHOD_VERSION = "low_price_alert_v1"
+LOW_PRICE_ALERT_REFUND_STRICT_METHOD_VERSION = "low_price_alert_v2_refund_strict"
+
+
+def resolve_low_price_method_version(refund_required: bool = False) -> str:
+    return LOW_PRICE_ALERT_REFUND_STRICT_METHOD_VERSION if refund_required else LOW_PRICE_ALERT_METHOD_VERSION
+
+
 _LP_OBS = "low_price_alert_observations_v1"
 _LP_CLAIMS = "low_price_alert_component_claims_v1"
 _LP_EVAL = "low_price_alert_evaluations_v1"
@@ -311,6 +318,8 @@ def _low_price_input(conn, bucket, method, eid, cutoff, slots, since, limit, as_
     frozen = conn.execute(f"SELECT * FROM {_LP_EVAL} WHERE bucket_key=? AND evidence_id=? AND since_utc=?",
                           (bucket, eid, since)).fetchone()
     if frozen:
+        if frozen["method_version"] != method:
+            raise LowPriceEvidenceConflictError("incompatible low-price method version")
         return {"snapshot_hit": True, "snapshot": dict(frozen), "prior_rows": []}
     prior = []
     for row in conn.execute(f"""SELECT * FROM {_LP_OBS}
