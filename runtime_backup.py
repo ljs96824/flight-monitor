@@ -68,6 +68,7 @@ RUNTIME_BACKUP_SPEC = {
         "form_normalization_baseline_before_ux31.json",
         "last_signals.json",
         "live_run_console.txt",
+        "monitor_stdout.log",
         "p7_form_capture_candidate.json",
         "page_results.json",
         "raw_responses.jsonl",
