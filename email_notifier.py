@@ -13,7 +13,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 
-from log_utils import safe_log
+from log_utils import redact_text, safe_log
 from notification_config import DEFAULT_NOTIFICATION_PRIVACY_LEVEL, resolve_notification_privacy_level
 
 try:
@@ -136,14 +136,38 @@ def build_trend_png(price_history, ideal_price=None, max_price=None, current_pri
     return buf.read()
 
 
+def _sanitize_smtp_error(exc: object, smtp_pass: str = "") -> str:
+    text = redact_text(str(exc))
+    password = smtp_pass or os.getenv("SMTP_PASS", "")
+    if password:
+        text = text.replace(password, "***").replace(redact_text(password), "***")
+    return text
+
+
+def _smtp_host(value: str, *, trim: bool = False) -> str:
+    if isinstance(value, str) and "\r" not in value and "\n" not in value:
+        host = value.strip() if trim else value
+        if host and not any(ch.isspace() for ch in host):
+            return host
+    raise ValueError("SMTP_HOST 配置无效")
+
+
+def _smtp_port(value: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 65535:
+        raise ValueError("SMTP_PORT 超出有效端口范围(1-65535)")
+    return value
+
+
 def _smtp_config() -> dict:
     """Resolve SMTP provider config, keeping SMTP_HOST/SMTP_PORT as overrides."""
     provider = os.getenv("SMTP_PROVIDER", "qq").strip().lower()
     config = dict(PROVIDERS.get(provider, PROVIDERS["qq"]))
-    if os.getenv("SMTP_HOST"):
-        config["host"] = os.getenv("SMTP_HOST", config["host"])
-    if os.getenv("SMTP_PORT"):
-        config["port"] = int(os.getenv("SMTP_PORT", str(config["port"])))
+    raw_host = os.getenv("SMTP_HOST")
+    if raw_host not in (None, ""):
+        config["host"] = _smtp_host(raw_host, trim=True)
+    raw_port = os.getenv("SMTP_PORT")
+    if raw_port not in (None, ""):
+        config["port"] = _smtp_port(int(raw_port.strip()))
     if os.getenv("SMTP_SSL"):
         config["ssl"] = os.getenv("SMTP_SSL", "true").strip().lower() not in {
             "0",
@@ -163,7 +187,19 @@ def send_email(to_email: str, subject: str, html_content: str, inline_images: di
         safe_log("[邮件] NO_LIVE_API=1，已阻止真实 SMTP 发送")
         return False
 
-    config = _smtp_config()
+    try:
+        config = _smtp_config()
+        if not isinstance(config, Mapping):
+            raise ValueError("SMTP 配置不是映射")
+        host = _smtp_host(config["host"])
+        port = _smtp_port(config["port"])
+        use_ssl = bool(config["ssl"])
+        provider = config["provider"]
+        if provider not in PROVIDERS:
+            raise ValueError("SMTP_PROVIDER 配置无效")
+    except Exception as exc:
+        safe_log(f"[邮件] SMTP配置无效: {_sanitize_smtp_error(exc)}")
+        return False
     smtp_user = os.getenv("SMTP_USER", "")
     smtp_pass = os.getenv("SMTP_PASS", "")
 
@@ -174,50 +210,63 @@ def send_email(to_email: str, subject: str, html_content: str, inline_images: di
     # - If this times out while using Gmail, it is usually a network access
     #   problem rather than an application bug.
 
-    if not to_email:
+    if not isinstance(to_email, str) or not to_email.strip():
         print("[邮件] 未提供收件邮箱")
+        return False
+    recipient = to_email.strip()
+    if "\r" in to_email or "\n" in to_email:
+        safe_log("[邮件] 收件邮箱包含换行，已取消发送")
         return False
     if not smtp_user or not smtp_pass:
         print("[邮件] SMTP_USER 或 SMTP_PASS 未配置")
         return False
 
-    msg = MIMEMultipart("related")
-    msg["Subject"] = str(Header(subject or "航班监控通知", "utf-8"))
-    msg["From"] = smtp_user
-    msg["To"] = to_email
-    alternative = MIMEMultipart("alternative")
-    alternative.attach(MIMEText(html_content or "", "html", "utf-8"))
-    msg.attach(alternative)
-    for cid, image_bytes in _filter_inline_images(html_content, inline_images, privacy_level=privacy_level).items():
-        img = MIMEImage(image_bytes)
-        img.add_header("Content-ID", f"<{cid}>")
-        img.add_header("Content-Disposition", "inline")
-        msg.attach(img)
+    if "\r" in smtp_user or "\n" in smtp_user:
+        safe_log("[邮件] 发件邮箱包含换行，已取消发送")
+        return False
+
+    try:
+        msg = MIMEMultipart("related")
+        msg["Subject"] = str(Header(subject or "航班监控通知", "utf-8"))
+        msg["From"] = smtp_user
+        msg["To"] = recipient
+        alternative = MIMEMultipart("alternative")
+        alternative.attach(MIMEText(html_content or "", "html", "utf-8"))
+        msg.attach(alternative)
+        for cid, image_bytes in _filter_inline_images(html_content, inline_images, privacy_level=privacy_level).items():
+            img = MIMEImage(image_bytes)
+            img.add_header("Content-ID", f"<{cid}>")
+            img.add_header("Content-Disposition", "inline")
+            msg.attach(img)
+        msg_string = msg.as_string()
+    except Exception as exc:
+        safe_log(f"[邮件] 邮件构造失败: {_sanitize_smtp_error(exc, smtp_pass)}")
+        return False
 
     server = None
     try:
-        if config["ssl"]:
-            server = smtplib.SMTP_SSL(config["host"], config["port"], timeout=30)
+        if use_ssl:
+            server = smtplib.SMTP_SSL(host, port, timeout=30)
         else:
-            server = smtplib.SMTP(config["host"], config["port"], timeout=30)
+            server = smtplib.SMTP(host, port, timeout=30)
             server.starttls()
         server.login(smtp_user, smtp_pass)
-        server.sendmail(smtp_user, [to_email], msg.as_string())
-        safe_log(f"[邮件] 发送成功 → {to_email}")
+        server.sendmail(smtp_user, [recipient], msg_string)
+        safe_log(f"[邮件] 发送成功 → {recipient}")
         return True
     except (socket.timeout, TimeoutError, ConnectionError):
         print("[邮件] 连接SMTP服务器超时。如使用Gmail，国内需代理访问")
         return False
     except OSError as exc:
-        print(f"[邮件] 连接SMTP服务器失败: {exc}")
-        if config["provider"] == "gmail":
+        safe_log(f"[邮件] 连接SMTP服务器失败: {_sanitize_smtp_error(exc, smtp_pass)}")
+        if provider == "gmail":
             print("[邮件] Gmail在国内网络通常无法直连，请使用代理或海外部署")
         return False
     except smtplib.SMTPAuthenticationError:
         print("[邮件] SMTP认证失败，请确认邮箱账号和授权码，不要使用登录密码")
         return False
     except Exception as exc:
-        print(f"[邮件] 发送失败: {exc}")
+        safe_log(f"[邮件] 发送失败: {_sanitize_smtp_error(exc, smtp_pass)}")
         return False
     finally:
         if server:
