@@ -6,6 +6,7 @@ import os
 import socket
 import smtplib
 import io
+from collections.abc import Mapping
 from email.header import Header
 from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
@@ -13,6 +14,7 @@ from email.mime.text import MIMEText
 from pathlib import Path
 
 from log_utils import safe_log
+from notification_config import DEFAULT_NOTIFICATION_PRIVACY_LEVEL, resolve_notification_privacy_level
 
 try:
     from dotenv import load_dotenv
@@ -32,11 +34,43 @@ PROVIDERS = {
 }
 
 
+def _payload_privacy_level(payload: Mapping | None) -> str:
+    if isinstance(payload, Mapping):
+        route = payload.get("route_info")
+        for scope in (payload, payload.get("notification_goals"),
+                      route.get("notification_goals") if isinstance(route, Mapping) else None):
+            if isinstance(scope, Mapping) and (scope.get("privacy_level") or scope.get("notification_privacy_level")):
+                return resolve_notification_privacy_level(scope)
+    return DEFAULT_NOTIFICATION_PRIVACY_LEVEL
+
+
+def _is_private_email_html(html_content: str | None) -> bool:
+    return any(marker in (html_content or "") for marker in (
+        "【航班监控·已脱敏】", "<b>航班监控有变动</b>", "乘客构成与精确金额已隐藏",
+        "乘客构成、精确金额与技术细节已隐藏",
+    ))
+
+
+def _filter_inline_images(html_content: str | None, inline_images: Mapping | None,
+                          *, privacy_level: str | None = None) -> dict:
+    level = resolve_notification_privacy_level({"privacy_level": privacy_level})
+    if level != DEFAULT_NOTIFICATION_PRIVACY_LEVEL or _is_private_email_html(html_content):
+        return {}
+    html = html_content or ""
+    return {cid: data for cid, data in (inline_images or {}).items() if data and f"cid:{cid}" in html}
+
+
 def render_email(payload: dict):
     """Render the full email HTML from the unified notification payload."""
     from notifier import render_email as _render_email
 
+    level = _payload_privacy_level(payload)
+    # The shared HTML renderer reads top-level goals; keep the caller's payload untouched.
+    if level != DEFAULT_NOTIFICATION_PRIVACY_LEVEL and resolve_notification_privacy_level(payload) != level:
+        payload = {**payload, "privacy_level": level}
     subject, html = _render_email(payload)
+    if level != DEFAULT_NOTIFICATION_PRIVACY_LEVEL or _is_private_email_html(html) or "cid:trendchart" not in (html or ""):
+        return subject, html, {}
     image = build_trend_png(
         payload.get("price_history") or [],
         payload.get("ideal_price"),
@@ -120,7 +154,8 @@ def _smtp_config() -> dict:
     return config
 
 
-def send_email(to_email: str, subject: str, html_content: str, inline_images: dict | None = None) -> bool:
+def send_email(to_email: str, subject: str, html_content: str, inline_images: dict | None = None,
+               *, privacy_level: str | None = None) -> bool:
     """Send one HTML email through the configured SMTP account."""
     # 本笔只保证 email_notifier.send_email() 在 effective NO_LIVE_API 精确等于 "1" 时拒绝 SMTP 发送。
     # 它不证明 PushPlus、PythonAnywhere Files、Juhe、SerpAPI、Duffel 或任何其他 sink 同样受该变量保护。
@@ -153,9 +188,7 @@ def send_email(to_email: str, subject: str, html_content: str, inline_images: di
     alternative = MIMEMultipart("alternative")
     alternative.attach(MIMEText(html_content or "", "html", "utf-8"))
     msg.attach(alternative)
-    for cid, image_bytes in (inline_images or {}).items():
-        if not image_bytes:
-            continue
+    for cid, image_bytes in _filter_inline_images(html_content, inline_images, privacy_level=privacy_level).items():
         img = MIMEImage(image_bytes)
         img.add_header("Content-ID", f"<{cid}>")
         img.add_header("Content-Disposition", "inline")
