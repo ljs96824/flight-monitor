@@ -43,6 +43,9 @@ from departure_guard import (
     UNKNOWN_NOTE as DEPARTURE_UNKNOWN_NOTE,
 )
 from analyzer import (
+    _baggage_payloads,
+    _positive_baggage_number,
+    evaluate_checked_baggage_eligibility,
     is_checked_baggage_required,
     resolve_effective_budget_scopes,
     resolve_checked_baggage_fee_in_scope,
@@ -809,9 +812,7 @@ def _should_disclose_source_price_gap(anomaly: dict | None) -> bool:
         if source and price is not None:
             source_prices[source] = price
 
-    google_price = source_prices.get("hasdata")
-    ota_price = source_prices.get("juhe")
-    return google_price is not None and ota_price is not None
+    return "juhe" in source_prices and any(name in source_prices for name in ("serpapi", "searchapi", "hasdata"))
 
 
 def _source_price_anomaly_map(anomalies: list[dict] | None) -> dict[str, dict]:
@@ -1406,18 +1407,25 @@ def format_baggage(extra):
     checked = bag.get("checked", {})
     carry_on = bag.get("carry_on", {})
 
-    if checked.get("quantity", 0) > 0:
-        text = f"🧳 托运行李：免费{checked['quantity']}件"
-        if checked.get("weight_kg"):
-            text += f"（每件≤{checked['weight_kg']}kg）"
+    quantity, weight = checked.get("quantity"), checked.get("weight_kg")
+    if _positive_baggage_number(quantity) or _positive_baggage_number(weight):
+        if _has_free_checked_baggage({"extra": extra}):
+            if _positive_baggage_number(quantity):
+                text = f"免费{quantity}件"
+                text += f"（每件≤{weight}kg）" if _positive_baggage_number(weight) else "（重量以航司规定为准）"
+            else:
+                text = f"免费{weight}kg"
+        elif checked.get("is_free") is False:
+            text = "不含免费托运，需另购"
         else:
-            text += "（重量以航司规定为准）"
-        lines.append(text)
+            text = "权益未确认（请以支付页票规为准）"
+        lines.append(f"🧳 托运行李：{text}")
     else:
         lines.append("🧳 托运行李：不含免费托运，需另购")
 
-    if carry_on.get("quantity", 0) > 0:
-        text = f"👜 手提行李：免费{carry_on['quantity']}件"
+    if _positive_baggage_number(carry_on.get("quantity")):
+        prefix = "需付费" if carry_on.get("is_free") is False else "免费"
+        text = f"👜 手提行李：{prefix}{carry_on['quantity']}件"
         if carry_on.get("weight_kg"):
             text += f"（每件≤{carry_on['weight_kg']}kg）"
         lines.append(text)
@@ -1807,6 +1815,17 @@ def _compact_cabin_rule_line(flight: dict) -> str:
     return f"💺 票规舱位：{_cabin_label(cabin_class)}"
 
 
+def _unverified_baggage_allowance(flight, rules, checked):
+    if any(_positive_baggage_number(value) for value in (
+        rules.get("checked_pieces"), rules.get("checked_kg"), checked.get("quantity"),
+        checked.get("weight_kg"), checked.get("weight"),
+    )):
+        return True
+    return any(node.get("source") == "国内标准规则推断" or node.get("baggage_offer_matched") is False
+               or node.get("baggage_applicability") in ("flight_number_match_only", "cross_offer", "unmatched", "inferred")
+               for node in _baggage_payloads(flight))
+
+
 def _compact_baggage_line(flight: dict) -> str:
     eligibility = flight.get("checked_baggage_eligibility") or {}
     if eligibility.get("state") == "pending_confirmation" or flight.get("pending_baggage_confirmation"):
@@ -1815,25 +1834,25 @@ def _compact_baggage_line(flight: dict) -> str:
         return "行李:允许付费托运(未含在票价内)"
     fare_rules = flight.get("fare_rules") or {}
     baggage_rules = fare_rules.get("baggage") or {}
-    checked_pieces = int(baggage_rules.get("checked_pieces") or 0)
-    if checked_pieces > 0 and _has_free_checked_baggage(flight):
-        checked_kg = baggage_rules.get("checked_kg")
-        if checked_kg:
-            return f"🧳 托运：免费{checked_pieces}件≤{checked_kg}kg"
-        return f"🧳 托运：免费{checked_pieces}件"
-
+    baggage = (flight.get("extra") or {}).get("baggage_detail") or flight.get("baggage_detail") or {}
+    checked = baggage.get("checked") or {}
+    if _has_free_checked_baggage(flight):
+        pieces = next((v for v in (baggage_rules.get("checked_pieces"), checked.get("quantity"))
+                       if _positive_baggage_number(v)), None)
+        weight = next((v for v in (baggage_rules.get("checked_kg"), checked.get("weight_kg"), checked.get("weight"))
+                       if _positive_baggage_number(v)), None)
+        if pieces:
+            return f"🧳 托运：免费{pieces}件" + (f"≤{weight}kg" if weight else "")
+        return f"🧳 托运：免费{weight}kg" if weight else "🧳 托运：免费"
+    if (baggage_rules.get("included") is False or baggage_rules.get("included_in_fare") is False
+            or checked.get("is_free") is False
+            or (flight.get("has_baggage_info") and checked and not _positive_baggage_number(checked.get("quantity")))):
+        return "🧳 托运：不含免费托运"
+    if _unverified_baggage_allowance(flight, baggage_rules, checked):
+        return "行李:权益未确认(支付页核实)"
     if not flight.get("has_baggage_info"):
         return "🧳 行李：请查询航司官网"
-
-    baggage = (flight.get("extra") or {}).get("baggage_detail") or {}
-    checked = baggage.get("checked") or {}
-    quantity = int(checked.get("quantity") or 0)
-    if quantity <= 0:
-        return "🧳 托运：不含免费托运"
-    weight = checked.get("weight_kg")
-    if weight:
-        return f"🧳 托运：免费{quantity}件≤{weight}kg"
-    return f"🧳 托运：免费{quantity}件"
+    return "🧳 托运：不含免费托运"
 
 
 def _compact_refund_line(flight: dict) -> str:
@@ -4723,10 +4742,11 @@ def _pushplus_baggage_line_for_flight(flight: dict | None) -> str:
     if eligibility.get("state") == "paid_allowed_known_fee":
         return "行李:允许付费托运(未含在票价内)"
     extra = flight.get("extra") or {}
-    detail = extra.get("baggage_detail") or {}
+    detail = extra.get("baggage_detail") or flight.get("baggage_detail") or {}
     checked = detail.get("checked") or {}
+    free = _has_free_checked_baggage(flight)
     if (flight.get("has_baggage_info") and checked and not checked.get("quantity")
-            and not _has_free_checked_baggage(flight)):
+            and not free):
         return "行李:不含免费托运(支付页核实)"
     estimate = flight.get("price_estimate") or {}
     for item in estimate.get("extra_items") or []:
@@ -4739,31 +4759,28 @@ def _pushplus_baggage_line_for_flight(flight: dict | None) -> str:
 
     fare_rules = flight.get("fare_rules") or {}
     baggage = fare_rules.get("baggage") or {}
-    if baggage.get("included") is False:
+    if baggage.get("included") is False or baggage.get("included_in_fare") is False:
         note = baggage.get("note") or "托运需另购"
         return f"行李:仅含手提,{note}"
-    if baggage.get("included") is True:
-        kg = baggage.get("checked_kg")
-        pieces = baggage.get("checked_pieces")
-        if kg:
-            return f"行李:已含托运{kg}kg"
-        if pieces:
-            return f"行李:已含{pieces}件托运"
+    if free:
+        for obj, key, by_weight in (
+            (baggage, "checked_kg", True), (baggage, "checked_pieces", False),
+            (checked, "quantity", False), (checked, "weight_kg", True), (checked, "weight", True),
+        ):
+            value = obj.get(key)
+            if _positive_baggage_number(value):
+                return f"行李:已含托运{value}kg" if by_weight else f"行李:已含{value}件托运"
         return "行李:已含托运"
-    pieces = baggage.get("checked_pieces") or 0
-    kg = baggage.get("checked_kg") or 0
-    if pieces:
-        return f"行李:已含{pieces}件托运"
-    if kg:
-        return f"行李:已含托运{kg}kg"
-
-    extra = flight.get("extra") or {}
-    detail = extra.get("baggage_detail") or {}
-    checked = detail.get("checked") or {}
-    if checked.get("quantity"):
-        return f"行李:已含{checked.get('quantity')}件托运"
-    if _has_free_checked_baggage(flight):
-        return "行李:已含托运"
+    if not eligibility and evaluate_checked_baggage_eligibility(flight)["state"] == "paid_allowed_known_fee":
+        return "行李:允许付费托运(未含在票价内)"
+    if checked.get("is_free") is False or any(
+        node.get("checked_baggage_allowed") is False or
+        (node.get("type") in ("checked", "hold", "checked_baggage") and node.get("is_free") is False)
+        for node in _baggage_payloads(flight)
+    ):
+        return "行李:不含免费托运(支付页核实)"
+    if _unverified_baggage_allowance(flight, baggage, checked):
+        return "行李:权益未确认(支付页核实)"
     if extra.get("baggage") or flight.get("has_baggage_info"):
         return "行李:不含免费托运(支付页核实)"
     return "行李:支付页需确认"
@@ -6406,8 +6423,16 @@ def _source_set_from_plan(plan: dict | None) -> set[str]:
     legs = []
     if plan.get("is_roundtrip"):
         legs.extend([plan.get("outbound_flight"), plan.get("return_flight")])
+        if plan.get("mixed_cabin"):
+            legs.extend([plan.get("business_outbound"), plan.get("business_return")])
     else:
-        legs.append(plan.get("flight"))
+        legs.append(plan.get("main_flight") or plan.get("outbound_flight") or plan.get("flight"))
+        if plan.get("mixed_cabin"):
+            legs.append(plan.get("business_flight") or plan.get("business_outbound"))
+    if plan.get("mixed_cabin") and any(isinstance(leg, dict) and _valid_price_float(leg.get("price"))
+                                       for leg in legs):
+        sources.update(part.strip().lower() for part in str(plan.get("business_price_source") or "").split("+")
+                       if part.strip())
     for leg in legs:
         if not isinstance(leg, dict):
             continue
@@ -6457,17 +6482,29 @@ def _source_error_text(source_errors: list[dict] | None, source_name: str) -> st
 
 _LISTING_SOURCE_LABELS = {
     "juhe": "OTA交叉源",
+    "serpapi": "Google数据源",
+    "searchapi": "Google数据源",
     "hasdata": "Google数据源",
 }
 _LISTING_SOURCE_TRACKING_LABELS = {
     "juhe": "OTA源",
+    "serpapi": "Google源",
+    "searchapi": "Google源",
     "hasdata": "Google源",
 }
 
 _LISTING_SOURCE_POOL_LABELS = {
     "juhe": "OTA",
+    "serpapi": "Google",
+    "searchapi": "Google",
     "hasdata": "Google",
 }
+_LISTING_SOURCE_PRIORITY = ("juhe", "serpapi", "searchapi", "hasdata")
+
+
+def _listing_pool_label(sources):
+    return "+".join(dict.fromkeys(_LISTING_SOURCE_POOL_LABELS[name] for name in _LISTING_SOURCE_PRIORITY
+                                  if name in sources))
 
 
 
@@ -6644,7 +6681,7 @@ def _build_source_degradation_context(
         and _source_stats_count(entry) > 0
     }
     if current_sources:
-        positive_sources.update(str(item).strip().lower() for item in current_sources if item)
+        positive_sources.update(_LISTING_SOURCE_LABELS.keys() & {str(item).strip().lower() for item in current_sources})
     retired_sources = {
         str(item).strip().lower()
         for item in (retired_sources or set())
@@ -6664,24 +6701,23 @@ def _build_source_degradation_context(
             continue
         if _source_stats_count(entry) == 0 and (normalized not in covered_empty or normalized in failed_sources):
             unavailable.append(normalized)
+    unavailable.extend(name for name in _LISTING_SOURCE_PRIORITY if name in failed_sources
+                       and name not in retired_sources and name not in positive_sources and name not in unavailable)
     first_candidates = [name for name in unavailable if name in previous_sources]
     continued = str((last_snapshot or {}).get("push_type") or "") == "数据源受限"
     source_name = next(
-        (name for name in ("juhe", "hasdata") if name in first_candidates),
+        (name for name in _LISTING_SOURCE_PRIORITY if name in first_candidates),
         "",
     )
     first_occurrence = bool(source_name)
     if not source_name and continued:
         source_name = next(
-            (name for name in ("juhe", "hasdata") if name in unavailable),
+            (name for name in _LISTING_SOURCE_PRIORITY if name in unavailable),
             "",
         )
     if not source_name:
         return {"active": False}
-    positive_label = "+".join(
-        _LISTING_SOURCE_POOL_LABELS.get(name, name)
-        for name in sorted(positive_sources)
-    ) or "其他可用源"
+    positive_label = _listing_pool_label(positive_sources) or "其他可用源"
     stat = source_stats.get(source_name) or {}
     detail = _source_degradation_detail(source_name, stat, source_errors)
     label = _LISTING_SOURCE_LABELS[source_name]
@@ -6859,6 +6895,7 @@ def _apply_source_degradation_to_push_meta(
     previous_sources: set[str],
     source_errors: list[dict] | None = None,
     degradation_context: dict | None = None,
+    retired_sources: set[str] | None = None,
 ) -> dict:
     result = dict(push_meta or {})
     if degradation_context is not None:
@@ -6881,21 +6918,20 @@ def _apply_source_degradation_to_push_meta(
         result["reasons"] = _payload_dedupe_text(reasons)[:4]
         return result
 
-    if not previous_sources or not current_sources:
+    prev_listing = previous_sources & _LISTING_SOURCE_LABELS.keys()
+    curr_listing = current_sources & _LISTING_SOURCE_LABELS.keys()
+    if not prev_listing or not curr_listing:
         return result
-    missing_sources = previous_sources - current_sources
-    if "juhe" not in missing_sources:
+    if retired_sources is None:
+        retired_sources = {item["name"] for rt in ("domestic", "international", "greater_china")
+                           for item in retired_listing_sources(rt)}
+    missing_sources = prev_listing - curr_listing - retired_sources
+    source_name = next((name for name in _LISTING_SOURCE_PRIORITY if name in missing_sources), None)
+    if not source_name:
         return result
-    juhe_error = _source_error_text(source_errors, "juhe")
-    if juhe_error and not any(marker in juhe_error for marker in ("配额", "112", "10012")):
-        return result
-    reason = "本轮OTA交叉源不可用"
-    if juhe_error:
-        if "配额" in juhe_error:
-            reason += "(配额不足)"
-        else:
-            reason += f"({juhe_error})"
-    reason += ",入池仅Google,与上次价格不可直接比"
+    error = _source_error_text(source_errors, source_name)
+    suffix = "(配额不足)" if "配额" in error else (f"({error})" if error else "")
+    reason = f"本轮{_LISTING_SOURCE_LABELS[source_name]}不可用{suffix},入池仅{_listing_pool_label(curr_listing)},与上次价格不可直接比"
     reasons = [
         str(item)
         for item in (result.get("reasons") or [])
@@ -6907,8 +6943,11 @@ def _apply_source_degradation_to_push_meta(
     result["type"] = "数据源受限"
     result["price_change"] = None
     result["source_degradation"] = {
-        "previous_sources": sorted(previous_sources),
-        "current_sources": sorted(current_sources),
+        "active": True,
+        "source": source_name,
+        "source_label": _LISTING_SOURCE_TRACKING_LABELS[source_name],
+        "previous_sources": sorted(prev_listing),
+        "current_sources": sorted(curr_listing),
         "missing_sources": sorted(missing_sources),
         "reason": reason,
     }
@@ -12745,10 +12784,14 @@ def _domestic_baggage_line(plan: dict) -> str:
     for flight in _plan_flights(plan):
         baggage = ((flight.get("fare_rules") or {}).get("baggage") or {})
         note = str(baggage.get("note") or "").strip()
-        if baggage.get("included") is True and baggage.get("checked_kg"):
-            note = note or f"含{baggage.get('checked_kg')}kg托运"
-        elif baggage.get("included") is False:
+        if baggage.get("included") is False or baggage.get("included_in_fare") is False:
             note = note or "托运需另购"
+        elif _has_free_checked_baggage(flight):
+            if _positive_baggage_number(baggage.get("checked_kg")):
+                note = note or f"含{baggage.get('checked_kg')}kg托运"
+        else:
+            detail = (flight.get("extra") or {}).get("baggage_detail") or flight.get("baggage_detail") or {}
+            note = "权益未确认(支付页核实)" if _unverified_baggage_allowance(flight, baggage, detail.get("checked") or {}) else ""
         if note and note not in parts:
             parts.append(note)
     return html.escape(" / ".join(parts) or "支付页需确认")
@@ -13116,6 +13159,8 @@ def _email_source_rows(payload: dict) -> list[str]:
 
     if route_type == "international" and retirement.get("active"):
         rows.append(f"<div>🔹 主源:聚合数据(OTA)—{juhe_count}个方案</div>")
+        if other_google_count > 0:
+            rows.append(f"<div>🔹 商务/交叉来源:Google Flights(SerpAPI)—{other_google_count}个方案</div>")
         rows.append(f"<div>🔹 入池价:按全局最低({html.escape(MERGE_PRICE_STRATEGY)})</div>")
         if duffel_count:
             rows.append(f"<div>🔹 行李/退改:Duffel 规则参考 — {duffel_count}条</div>")
