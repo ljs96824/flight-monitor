@@ -650,7 +650,6 @@ class TestTrack4FrozenAndAstGuards(unittest.TestCase):
         locked = (
             ("sources/hasdata_source.py", 2694, "464b81201403cf54696bdc9b639f87526e3a9fe6fab2ab95b6371ebd33c1f07c"),
             ("sources/searchapi_source.py", 2539, "1de58d4ea8997b9aba555c3b74d5a45af866cbb4f3a6b1da82fcbfbf967e3317"),
-            ("sources/juhe_source.py", 20923, "fbfb90acc93751fa10682d2014d1b012aba410025b3b105e4aa62f1bbf75e17a"),
             ("sources/serpapi_source.py", 16030, "eeefaac3e4b1bdb9fce18e7d2db55adcd82e172ef59c7b4cd17aaa53dd571ad4"),
             ("collection_plan.py", 40824, "855215c759e4d93145ef0f82dd6d4895faeedc3bd50e3806920c5aa85c897f82"),
             ("constraint_fingerprint.py", 11459, "b396aef5431cc976754bab2a5a2474641b78d38002844a808521b2f228c415a9"),

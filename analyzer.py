@@ -73,6 +73,7 @@ from mixed_cabin import (_business_price_map, _flight_key as _mixed_flight_key,
 from observations_store import get_current_round
 from storage import get_latest_alternatives, get_target_history
 from subscription_preflight import shanghai_today
+from project_time import SHANGHAI_TZ
 
 IATA_CITY_NAMES = {
     "PVG": "上海浦东",
@@ -5073,14 +5074,14 @@ def calculate_price_references(
     """计算五层历史最低价参考。"""
     result = {}
 
-    def timestamp_window(items):
+    def timestamp_window(items, tz=None):
         dates = []
         for item in items or []:
             value = item[0] if isinstance(item, (list, tuple)) and item else None
             if value is None:
                 continue
             try:
-                dates.append(datetime.fromtimestamp(float(value)).date().isoformat())
+                dates.append(datetime.fromtimestamp(float(value), tz=tz).date().isoformat())
             except (OSError, OverflowError, TypeError, ValueError):
                 continue
         return [min(dates), max(dates)] if dates else None
@@ -5100,7 +5101,10 @@ def calculate_price_references(
 
     if price_history:
         if isinstance(price_history[0], (list, tuple)):
-            all_prices = [price for _, price in price_history if price and price > 0]
+            all_prices = [item[1] for item in price_history
+                          if isinstance(item, (list, tuple)) and len(item) >= 2
+                          and isinstance(item[1], (int, float)) and not isinstance(item[1], bool)
+                          and math.isfinite(item[1]) and item[1] > 0]
         else:
             all_prices = [price for price in price_history if price and price > 0]
 
@@ -5113,18 +5117,27 @@ def calculate_price_references(
                 "window": timestamp_window(price_history),
             }
 
-    if price_history and isinstance(price_history[0], (list, tuple)):
+    if (price_history and isinstance(price_history[0], (list, tuple))
+            and days_to_dept is not None and not isinstance(days_to_dept, bool)):
+        target_days = int(days_to_dept)
+        depart_day = shanghai_today() + timedelta(days=target_days)
         relevant = []
         relevant_rows = []
-        for timestamp, price in price_history:
-            if price and price > 0 and timestamp:
-                try:
-                    hist_days = abs(timestamp - datetime.now().timestamp()) / 86400
-                    if abs(hist_days - days_to_dept) <= 7:
-                        relevant.append(price)
-                        relevant_rows.append((timestamp, price))
-                except Exception:
-                    pass
+        for item in price_history:
+            if not isinstance(item, (list, tuple)) or len(item) < 2:
+                continue
+            timestamp, price = item[:2]
+            if (isinstance(timestamp, bool) or not isinstance(price, (int, float))
+                    or isinstance(price, bool) or not math.isfinite(price) or price <= 0):
+                continue
+            try:
+                obs_day = datetime.fromtimestamp(float(timestamp), tz=SHANGHAI_TZ).date()
+            except (OSError, OverflowError, TypeError, ValueError):
+                continue
+            lead_days = (depart_day - obs_day).days
+            if lead_days >= 0 and abs(lead_days - target_days) <= 7:
+                relevant.append(price)
+                relevant_rows.append((timestamp, price))
 
         if len(relevant) >= 5:
             result["conditional_min"] = {
@@ -5132,7 +5145,7 @@ def calculate_price_references(
                 "label": f"同条件最低（提前{days_to_dept}天±7天）",
                 "note": "在类似购买时间点下的历史最低",
                 "sample_size": len(relevant),
-                "window": timestamp_window(relevant_rows),
+                "window": timestamp_window(relevant_rows, SHANGHAI_TZ),
             }
 
     if own_history:
@@ -11251,13 +11264,38 @@ def analyze_roundtrip_prices(
             "sample_size": len(totals[-14:]),
             "window": rows_window(chart_rows[-14:]),
         }
-    if totals and days_to_dept is not None:
-        references["conditional_min"] = {
-            "price": min(totals),
-            "label": f"同条件往返最低（提前{days_to_dept}天±7天）",
-            "sample_size": len(totals),
-            "window": rows_window(chart_rows),
-        }
+    if totals and days_to_dept is not None and not isinstance(days_to_dept, bool):
+        target_days = int(days_to_dept)
+        depart_day = shanghai_today() + timedelta(days=target_days)
+        conditional_rows = []
+        conditional_totals = []
+        for row in chart_rows:
+            val = _roundtrip_row_value(row, "total")
+            if val is None or not math.isfinite(val) or val <= 0:
+                continue
+            lead_days = next((float(v) for v in (row.get("days_to_dept"), row.get("days_to_departure"))
+                              if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)), None)
+            if lead_days is None:
+                observed = row.get("date") or row.get("observed_at") or row.get("timestamp")
+                try:
+                    obs_day = date.fromisoformat(str(observed)[:10])
+                except ValueError:
+                    continue
+                try:
+                    row_depart = date.fromisoformat(str(row.get("depart_date"))[:10])
+                except ValueError:
+                    row_depart = depart_day
+                lead_days = (row_depart - obs_day).days
+            if lead_days >= 0 and abs(lead_days - target_days) <= 7:
+                conditional_rows.append(row)
+                conditional_totals.append(val)
+        if conditional_totals:
+            references["conditional_min"] = {
+                "price": min(conditional_totals),
+                "label": f"同条件往返最低（提前{days_to_dept}天±7天）",
+                "sample_size": len(conditional_totals),
+                "window": rows_window(conditional_rows),
+            }
 
     short_term = {}
     recent = totals[-7:]

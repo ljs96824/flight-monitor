@@ -221,9 +221,9 @@ class JuheSource(FlightSource):
                 "source_status": "not_configured",
             }
 
-        collected_at = datetime.now().isoformat(timespec="seconds")
-        cached = self._read_cache(origin, dest, date_str, cabin_class)
-        if cached is not None:
+        entry = self._read_cache_entry(origin, dest, date_str, cabin_class)
+        if entry is not None:
+            cached, collected_at = entry
             parsed = self.parse(cached)
             flights = self.normalize(parsed, collected_at=collected_at)
             return {
@@ -235,6 +235,7 @@ class JuheSource(FlightSource):
                 "collected_at": collected_at,
             }
 
+        collected_at = datetime.now().isoformat(timespec="seconds")
         endpoint = os.getenv("JUHE_FLIGHT_ENDPOINT", "https://apis.juhe.cn/flight/query")
         import requests
 
@@ -308,7 +309,7 @@ class JuheSource(FlightSource):
                 "reason": reason,
                 "collected_at": collected_at,
             }
-        self._write_cache(origin, dest, date_str, cabin_class, raw)
+        self._write_cache(origin, dest, date_str, cabin_class, raw, fetched_at=collected_at)
         return {
             "flights": flights,
             "source": self.name,
@@ -452,6 +453,10 @@ class JuheSource(FlightSource):
         return _cache_dir() / f"juhe_{safe}.json"
 
     def _read_cache(self, origin: str, dest: str, date_str: str, cabin_class: str):
+        entry = self._read_cache_entry(origin, dest, date_str, cabin_class)
+        return entry[0] if entry is not None else None
+
+    def _read_cache_entry(self, origin: str, dest: str, date_str: str, cabin_class: str):
         path = self._cache_path(origin, dest, date_str, cabin_class)
         if not path.exists():
             return None
@@ -474,12 +479,13 @@ class JuheSource(FlightSource):
         if not _as_flight_items(raw):
             safe_log("[juhe] cached response is empty, ignoring cache")
             return None
-        return raw
+        return raw, str(payload["fetched_at"])
 
-    def _write_cache(self, origin: str, dest: str, date_str: str, cabin_class: str, raw) -> bool:
+    def _write_cache(self, origin: str, dest: str, date_str: str, cabin_class: str, raw,
+                     *, fetched_at: str | None = None) -> bool:
         path = self._cache_path(origin, dest, date_str, cabin_class)
         payload = {
-            "fetched_at": datetime.now().isoformat(timespec="seconds"),
+            "fetched_at": fetched_at or datetime.now().isoformat(timespec="seconds"),
             "raw": raw,
         }
         try:

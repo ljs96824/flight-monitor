@@ -12,7 +12,7 @@ import json
 import re
 import sqlite3
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from uuid import uuid4
 
@@ -714,13 +714,14 @@ def _write_persistent(
     cache_dir: Path | None = None,
     *,
     source=None,
+    fetched_at: str | None = None,
 ) -> None:
     path = _cache_path(key, cache_dir)
     disabled_key = str(path.parent)
     if disabled_key in _disabled_persistent_dirs:
         return
     payload = {
-        "fetched_at": datetime.now().isoformat(timespec="seconds"),
+        "fetched_at": fetched_at or datetime.now().isoformat(timespec="seconds"),
         "key": list(key),
         "producer_class": _source_producer(source) if source is not None else "",
         "result": result,
@@ -1129,15 +1130,17 @@ def cached_fetch(
         safe_log(f"[源熔断] 源={source_name} 原因={quota_reason} 生效范围=本进程")
         return returned(copy.deepcopy(result), "fresh")
     raw_collected_at = result.get("collected_at")
+    is_source_cache = str(result.get("source_status") or "").strip().lower() == "cache"
     collected_at = str(result.get("collected_at") or datetime.now().isoformat(timespec="seconds"))
     result["collected_at"] = collected_at
-    result["collection_state"] = "fresh"
-    result["collection_label"] = f"实时采集{_panel_label(collected_at).removeprefix('面板复用')}"
+    result["collection_state"] = "cache_reused" if is_source_cache else "fresh"
+    prefix = "缓存复用" if is_source_cache else "实时采集"
+    result["collection_label"] = prefix + _panel_label(collected_at).removeprefix("面板复用")
     for flight in result.get("flights") or []:
         if not isinstance(flight, dict):
             continue
         flight["collected_at"] = flight.get("collected_at") or collected_at
-        flight["collection_state"] = "fresh"
+        flight["collection_state"] = result["collection_state"]
         flight["collection_label"] = result["collection_label"]
     _record_equipment_summary(source_name, result)
     if result.get("source_status") == "success" and result.get("evidence_qualified") is not False:
@@ -1156,25 +1159,39 @@ def cached_fetch(
                     panel_snapshot_written=bool(receipt and positive_count and
                         receipt.get("written") == positive_count and receipt.get("skipped") == 0)))
     else:
-        _record_observations_after_fetch(source, key, result, cabin_class)
+        observed_at = None
+        if is_source_cache:
+            kind = timestamp_kind(raw_collected_at)
+            if kind == "aware":
+                observed_at = canonicalize_observed_at(raw_collected_at).observed_at_shanghai
+            elif kind == "naive":
+                # Juhe stores local wall time, which may be UTC on hosted runners.
+                offset = datetime.now().replace(tzinfo=timezone.utc) - datetime.now(timezone.utc)
+                local_tz = timezone(timedelta(minutes=round(offset.total_seconds() / 60)))
+                local_time = datetime.fromisoformat(str(raw_collected_at).strip()).replace(tzinfo=local_tz)
+                observed_at = canonicalize_observed_at(local_time).observed_at_shanghai
+        _record_observations_after_fetch(source, key, result, cabin_class, observed_at=observed_at)
         _stamp_event(result, _unknown_event("internal_source_cache_unverified" if
                      result.get("source_status") == "cache" else "source_event_unverified"))
     stored = copy.deepcopy(result)
     cache_status = _result_cache_status(stored)
     if cache_status == "persistent":
         _request_cache[key] = {
-            "fetched_at": datetime.now().isoformat(timespec="seconds"),
+            "fetched_at": collected_at if is_source_cache else datetime.now().isoformat(timespec="seconds"),
             "result": stored,
-            "cache_status": "fresh",
+            "cache_status": "cache" if is_source_cache else "fresh",
         }
         if _current_stats_round_id:
             _resolved_request_keys_this_round.add(key)
         if persist:
-            _write_persistent(key, stored, cache_dir, source=source)
+            _write_persistent(key, stored, cache_dir, source=source,
+                              fetched_at=collected_at if is_source_cache else None)
     else:
         _store_round_only_result(key, stored, cache_status)
     _archive_listing_result(source_name, key, stored)
     fresh_result = copy.deepcopy(result)
+    if is_source_cache:
+        return returned(fresh_result, "cache", "internal_source_cache")
     return returned(fresh_result, "fresh")
 
 
