@@ -5905,6 +5905,32 @@ def _connection_segment_airport(segment, arrival):
     return next((str(segment[k]).strip().upper() for k in keys if str(segment.get(k) or "").strip()), "")
 
 
+def _inspect_connection_waits(flight: dict) -> tuple[int, bool, float]:
+    """Keep known long waits even when another connection cannot be verified."""
+    flight = flight or {}
+    segments = [s for s in (flight.get("segments") or []) if isinstance(s, dict)]
+    required = max(_stops_count(flight, default=0), len(segments) - 1, 0)
+    raw = flight.get("layovers")
+    layovers = raw if isinstance(raw, list) else []
+    values = [_valid_wait_number(item) for item in layovers]
+    longest = max((v for v in values if v is not None and v > 0), default=0.0)
+    if required == 0:
+        return required, True, longest
+    if len(layovers) < required or any(v is None or v <= 0 for v in values):
+        return required, False, longest
+    if len(segments) > 1:
+        if len(layovers) != len(segments) - 1:
+            return required, False, longest
+        for prev, nxt, wait in zip(segments, segments[1:], layovers):
+            arrival = _connection_segment_airport(prev, True)
+            departure = _connection_segment_airport(nxt, False)
+            airport = str(wait.get("airport") or "").strip().upper()
+            next_airport = str(wait.get("next_airport") or "").strip().upper()
+            if (arrival and airport and arrival != airport) or (departure and next_airport and departure != next_airport):
+                return required, False, longest
+    return required, True, longest
+
+
 def evaluate_connection_safety(flight: dict, threshold: float) -> dict:
     segments = [s for s in (flight.get("segments") or []) if isinstance(s, dict)]
     required = max(_stops_count(flight, default=0), max(0, len(segments) - 1))
@@ -7400,7 +7426,8 @@ def make_domestic_tags(flight, profile, lowest_price=None):
             tags.append("白天到达")
         if baggage_included is not False:
             tags.append("行李明确")
-        if stops <= 1:
+        connections, waits_verified, _ = _inspect_connection_waits(flight)
+        if connections == 0 or (connections == 1 and waits_verified and calc_transfer_risk(flight).get("level") == "low"):
             tags.append("中转风险低")
     if stops == 0 and airline in FULL_SERVICE:
         tags.append("低风险")
@@ -9324,7 +9351,8 @@ def _apply_user_preferences(
         notes = list(flight.get("preference_notes") or [])
         penalties = list(flight.get("preference_penalties") or [])
         penalty = 0
-        stops = _stops_count(flight)
+        required_connections, waits_verified, verified_max_wait = _inspect_connection_waits(flight)
+        stops = max(_stops_count(flight), required_connections)
         price = _to_float(flight.get("price")) or 0
 
         if same_day_meeting_time_override:
@@ -9449,14 +9477,11 @@ def _apply_user_preferences(
                 penalty += 2
                 penalties.append("中转总时长偏长")
             else:
-                notes.append("合理中转可接受")
+                notes.append("合理中转可接受" if waits_verified else "中转衔接时间待确认，请核对航段详情")
         elif transfer_policy in {"price_first", "cheap_ok"} and stops > 0:
             notes.append("价格优先，保留中转方案")
 
-        safety_active = passenger_friendly_mode or (travel_profile.get("risk_averse") == "high" and transfer_policy != "price_first")
-        max_wait = (max((_valid_wait_number(l) or 0 for l in (flight.get("layovers") or []) if isinstance(l, dict)), default=0)
-                    if safety_active else _max_layover_minutes(flight))
-        if stops > 0 and not allow_overnight_transfer and max_wait > 480:
+        if stops > 0 and not allow_overnight_transfer and verified_max_wait > 480:
             excluded.append({**flight, "exclude_reason": "系统默认不推荐过夜中转"})
             continue
         if stops > 0 and not allow_self_transfer and _is_likely_self_transfer(flight):
@@ -9576,7 +9601,7 @@ def _apply_user_preferences(
                 penalty += 1
             if not same_day_meeting_time_override and _is_red_eye(flight):
                 penalty += 3
-            if _max_layover_minutes(flight) > 360:
+            if verified_max_wait > 360:
                 penalty += 2
                 penalties.append("长中转不适合家庭出行")
             if any(marker.lower() in airline_text.lower() for marker in low_cost_markers):
@@ -9604,7 +9629,7 @@ def _apply_user_preferences(
         if direct_preferred and stops > 0:
             penalty += 2
             penalties.append("同行约束：更偏好直飞")
-        if avoid_long_layover and _max_layover_minutes(flight) > 240:
+        if avoid_long_layover and verified_max_wait > 240:
             penalty += 3
             penalties.append("同行约束：中转等待偏长")
         if "need_baggage" in companion_constraints and not _has_free_checked_baggage(flight):
@@ -9632,7 +9657,7 @@ def _apply_user_preferences(
         if price_sensitivity == "low":
             if stops > 0:
                 penalty += 2
-            if (not same_day_meeting_time_override and _is_red_eye(flight)) or _max_layover_minutes(flight) > 360:
+            if (not same_day_meeting_time_override and _is_red_eye(flight)) or verified_max_wait > 360:
                 penalty += 2
             notes.append("便利稳定优先")
         elif price_sensitivity == "medium":
@@ -9663,7 +9688,7 @@ def _apply_user_preferences(
             penalty += 0
         elif trip_type == "family_elder":
             penalty += stops * 2
-            if _max_layover_minutes(flight) > 240:
+            if verified_max_wait > 240:
                 penalty += 2
 
         flight["preference_notes"] = notes
@@ -10200,17 +10225,19 @@ def _flight_time_score(flight: dict) -> float:
 
 def _flight_comfort_score(flight: dict) -> float:
     score = 45
-    stops = _stops_count(flight)
+    stops, verified, longest = _inspect_connection_waits(flight)
     if stops == 0:
         score += 30
     elif stops == 1:
         score += 10
     else:
         score -= 10
-    if _max_layover_minutes(flight) <= 180:
+    if stops == 0:
         score += 10
-    elif _max_layover_minutes(flight) > 480:
+    elif longest > 480:
         score -= 15
+    elif verified and longest <= 180:
+        score += 10
     if _contains_any_airline(flight, FULL_SERVICE_AIRLINES):
         score += 10
     if _is_red_eye(flight):
