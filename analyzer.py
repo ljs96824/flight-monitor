@@ -1043,20 +1043,71 @@ def _flight_arrival_datetime(flight: dict, default_date: str | None = None) -> d
     return arrival_dt
 
 
+def _finite_window_minutes(value) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        minutes = float(value)
+    except OverflowError:
+        return None
+    return minutes if math.isfinite(minutes) else None
+
+
+def _parse_window_text_minutes(value) -> int | None:
+    """Parse a whole meeting-window clock, relative to midnight on the meeting date."""
+    if value is None or isinstance(value, bool):
+        return None
+    text = str(value).strip()
+    match = re.fullmatch(
+        r"(?:(?P<prefix>前一日|前一晚|次日|前[1-9]\d?日|\+[1-9]\d?日)\s*)?"
+        r"(?P<hour>\d{1,2}):(?P<minute>\d{2})(?:\s*(?P<sign>[+-])(?P<days>\d{1,2}))?", text
+    )
+    if not match:
+        return None
+    prefix, sign = match["prefix"], match["sign"]
+    hour, minute = int(match["hour"]), int(match["minute"])
+    if hour > 23 or minute > 59 or (prefix and sign):
+        return None
+    days = 0
+    if sign:
+        days = int(match["days"])
+        if sign == "-":
+            if days == 0:
+                return None
+            days = -days
+    elif prefix in ("前一日", "前一晚"):
+        days = -1
+    elif prefix == "次日":
+        days = 1
+    elif prefix:
+        days = int(prefix[1:-1]) * (-1 if prefix.startswith("前") else 1)
+    return days * 1440 + hour * 60 + minute
+
+
 def _window_datetime_from_minutes_or_text(
     windows: dict,
     date_str: str | None,
     minutes_key: str,
     text_key: str,
 ) -> datetime | None:
+    windows = windows or {}
     minutes_value = windows.get(minutes_key)
-    dt = _minutes_datetime(date_str, minutes_value)
-    if dt is not None:
-        return dt
+    if minutes_value is not None:
+        minutes = _finite_window_minutes(minutes_value)
+        if minutes is None:
+            return None
+        try:
+            dt = _minutes_datetime(date_str, minutes)
+        except OverflowError:
+            return None
+        if dt is not None:
+            return dt
     text_value = str(windows.get(text_key) or "").strip()
-    if not text_value:
+    if re.search(r"\d{4}-\d{1,2}-\d{1,2}", text_value):
+        return parse_flight_time(text_value, date_str)
+    if minutes_value is not None:
         return None
-    return parse_flight_time(text_value, date_str)
+    return _minutes_datetime(date_str, _parse_window_text_minutes(text_value))
 
 
 def _same_day_window_datetimes(windows: dict | None, date_str: str | None) -> tuple[datetime | None, datetime | None]:
@@ -1297,10 +1348,16 @@ def _flight_arrival_minutes(flight: dict) -> int | None:
 
 
 def _minutes_to_text(minutes: int | float | None) -> str:
+    minutes = _finite_window_minutes(minutes)
     if minutes is None:
         return ""
-    total = int(round(minutes)) % (24 * 60)
-    return f"{total // 60:02d}:{total % 60:02d}"
+    days, clock = divmod(round(minutes), 1440)
+    text = f"{clock // 60:02d}:{clock % 60:02d}"
+    if not days:
+        return text
+    if days < 0:
+        return ("前一日" if days == -1 else f"前{-days}日") + text
+    return ("次日" if days == 1 else f"+{days}日") + text
 
 
 def _flight_airport(flight: dict, *keys: str) -> str:
@@ -1887,6 +1944,13 @@ def _time_text(dt: datetime | None) -> str:
     if not dt:
         return ""
     return dt.strftime("%H:%M")
+
+
+def _relative_time_text(dt: datetime | None, reference_date_str: str | None) -> str:
+    ref = _same_day_target_date(reference_date_str)
+    if dt is None or ref is None:
+        return _time_text(dt)
+    return _minutes_to_text((dt.date() - ref).days * 1440 + dt.hour * 60 + dt.minute)
 
 
 def _parse_set_off_datetime(value: str | None, date_str: str | None) -> datetime | None:
@@ -2524,9 +2588,10 @@ def _same_day_no_feasible_note(
             _same_day_relaxed_profile(normalized.get("day_trip_period"))["outbound_arrive_by"]
         )
         day = "次日" if target_date and (earliest.date() - target_date).days == 1 else earliest.strftime("%m-%d ")
+        limit_label = f"当日{limit}" if re.fullmatch(r"\d{2}:\d{2}", str(limit or "")) else limit
         return (
             f"本次无方案主因是【去程时间】：当天无当日到达去程航班"
-            f"（最早为{day}{_time_text(earliest)}到达，需当日{limit}前落地）。建议前一晚到达。"
+            f"（最早为{day}{_time_text(earliest)}到达，需{limit_label}前落地）。建议前一晚到达。"
         )
     if mode == "default_day_trip":
         stays = []
@@ -2604,7 +2669,7 @@ def _same_day_no_feasible_note(
         if earliest_meeting_arrival <= meeting_start:
             return ""
         meeting_text = _time_text(meeting_start)
-        feasible_meeting_text = _time_text(earliest_meeting_arrival)
+        feasible_meeting_text = _relative_time_text(earliest_meeting_arrival, date_str)
         arrival_text = _time_text(earliest_dt)
         return (
             f"\u6700\u65e9\u5230\u8fbe {arrival_text},\u843d\u5730\u5230\u4f1a\u573a\u6700\u5c11\u9700{minimum_passage}\u5206\u949f,"
@@ -2734,12 +2799,15 @@ def _closest_same_day_outbound_options(
         active_windows = _same_day_windows_for_airport(windows, constraints or {}, airport)
         arrive_by_dt, _ = _same_day_window_datetimes(active_windows or {}, date_str)
         arrive_by_minutes = (active_windows or {}).get("outbound_arrive_by_minutes")
+        if arrive_by_minutes is None:
+            arrive_by_minutes = _parse_window_text_minutes((active_windows or {}).get("outbound_arrive_by"))
         item = dict(flight)
         if arrival_dt is not None and arrive_by_dt is not None:
             delay = max(0, int(round((arrival_dt - arrive_by_dt).total_seconds() / 60)))
             sort_key = arrival_dt
         elif arrival_minutes is not None:
-            delay = max(0, int(arrival_minutes - (arrive_by_minutes or arrival_minutes)))
+            bound = _finite_window_minutes(arrive_by_minutes)
+            delay = max(0, round(arrival_minutes - bound)) if bound is not None else 0
             sort_key = _minutes_datetime(date_str, arrival_minutes) or datetime(1900, 1, 1) + timedelta(minutes=arrival_minutes)
         else:
             continue
@@ -2894,15 +2962,21 @@ def _same_day_window_return_candidates(
             _flight_airport(flight or {}, "departure_airport"),
         )
         depart_after = active_windows.get("return_depart_after_minutes")
+        if depart_after is None:
+            depart_after = _parse_window_text_minutes(active_windows.get("return_depart_after"))
         _, return_after_dt = _same_day_window_datetimes(active_windows, date_str)
         dep_dt = _flight_departure_datetime(flight or {}, date_str)
         if return_after_dt is not None and dep_dt is not None:
             if dep_dt < return_after_dt:
                 continue
         elif depart_after is not None:
+            if _finite_window_minutes(depart_after) is None:
+                continue
             dep_min = _flight_departure_minutes(flight or {})
             if dep_min is not None and dep_min < depart_after:
                 continue
+        elif active_windows.get("return_depart_after"):
+            continue
         item = dict(flight)
         item["same_day_windows"] = active_windows
         item["meeting_to_airport_min"] = _same_day_return_transport_minutes(active_windows)
@@ -3163,10 +3237,10 @@ def build_same_day_alternatives(
             if arrival and meeting_start and all(part is not None and part >= 0 for part in minutes):
                 meeting_arrival = arrival + timedelta(minutes=sum(minutes))
                 estimated_late = max(0, round((meeting_arrival - meeting_start).total_seconds() / 60))
-        meeting_time = _time_text(meeting_arrival) if meeting_arrival else ""
+        meeting_time = _relative_time_text(meeting_arrival, boundary_date) if meeting_arrival else ""
         if late_minutes and limit:
             window_type = "旧版预留窗口" if legacy else "最晚落地窗口"
-            excess = f"超出{window_type}({_time_text(limit)}){late_minutes}分钟"
+            excess = f"超出{window_type}({_relative_time_text(limit, boundary_date)}){late_minutes}分钟"
             if estimated_late is None:
                 note = f"{excess}，无法据此核实预计到会时间"
                 tradeoff = ("超出旧版预留窗口，仅在会议时间可弹性时考虑" if legacy
