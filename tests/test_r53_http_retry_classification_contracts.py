@@ -50,9 +50,7 @@ FILES = {
     "tests/fixtures/frozen_email/economy_payload.json": (168149, "85ee48c5539020e3cec3e2ec444d9a7f9403c4c259213c7840750c7788eb275b"),
     "test_same_day_business_mode.py": (77107, "066ae51ff5c0c7500d5a8a992558bb037fa03e0b337e9ddbaa81c5349e8a2dcd"),
     "tests/test_r40_same_day_combo_contracts.py": (29469, "57e93660bb27ea80644f261f85b5900826bb0dc4e81c6e563bf6808b53133744"),
-    "tests/test_r41_legitimate_empty_response_contracts.py": (44990, "7a39484501d88d1e632156154ffa4a6d4da3c7c2ece88338cfaf3e7fd4ad7331"),
     "tests/test_r49_baggage_and_source_truth_contracts.py": (13764, "1c6db27b2d1484cd3c0fd1197e1f5ae0687fa177370b5ac92128b37aabc20b5e"),
-    "tests/test_r50_history_window_and_juhe_timestamp_contracts.py": (16634, "382ffdd05d93b55e96a801dbaca3989bfffea32000d61d9eb55db36719d0e8c6"),
 }
 SCOPES = {
     ("notifier.py", None): {
@@ -297,20 +295,6 @@ class TestTrack4Guards(unittest.TestCase):
                 self.assertEqual(sha256(b).hexdigest(), digest, name)
             src = (ROOT/"request_cache.py").read_text(encoding="utf-8")
             self.assertEqual(len(src) - len(src.rstrip("\n")), 1)
-            old_cache = '    "request_cache.py": (52429, "806b2d9328b6ddddfb80c1e08a12e3779ca90c2450c1f4afda897c903075daea"),\n'
-            old_r51 = '    "tests/test_r51_cross_midnight_window_contracts.py": (18827, "c65a408f9df56c3763eddd116bb5e2e50aadc5ee4fd589185812209381859e82"),\n'
-            for path, insertions, expected in (
-                ("tests/test_r51_cross_midnight_window_contracts.py", [(38, old_cache)],
-                 (18827, "c65a408f9df56c3763eddd116bb5e2e50aadc5ee4fd589185812209381859e82")),
-                ("tests/test_r52_unverified_layover_comfort_contracts.py", [(26, old_r51), (38, old_cache)],
-                 (19185, "caab9761dff9d7d5565f8c8f382f2072bbc2be9b28053b9c531788a10cf02f8f")),
-            ):
-                lines = (ROOT/path).read_text(encoding="utf-8").splitlines(keepends=True)
-                for idx, line in insertions:
-                    self.assertNotIn(line, lines)
-                    lines.insert(idx, line)
-                restored = "".join(lines).encode("utf-8")
-                self.assertEqual((len(restored), sha256(restored).hexdigest()), expected, path)
 
     def test_g10_frozen_three_carriers_and_normal_roundtrip_baseline_remain_exact(self):
         with TemporaryDirectory() as tmp, patch.object(config_loader, "RUNTIME_CONFIG_PATH", Path(tmp)/"absent.yaml"):

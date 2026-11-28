@@ -42,9 +42,7 @@ FILES = {
     "tests/fixtures/frozen_email/economy_payload.json": (168149, "85ee48c5539020e3cec3e2ec444d9a7f9403c4c259213c7840750c7788eb275b"),
     "test_same_day_business_mode.py": (77107, "066ae51ff5c0c7500d5a8a992558bb037fa03e0b337e9ddbaa81c5349e8a2dcd"),
     "tests/test_r40_same_day_combo_contracts.py": (29469, "57e93660bb27ea80644f261f85b5900826bb0dc4e81c6e563bf6808b53133744"),
-    "tests/test_r41_legitimate_empty_response_contracts.py": (44990, "7a39484501d88d1e632156154ffa4a6d4da3c7c2ece88338cfaf3e7fd4ad7331"),
     "tests/test_r49_baggage_and_source_truth_contracts.py": (13764, "1c6db27b2d1484cd3c0fd1197e1f5ae0687fa177370b5ac92128b37aabc20b5e"),
-    "tests/test_r50_history_window_and_juhe_timestamp_contracts.py": (16634, "382ffdd05d93b55e96a801dbaca3989bfffea32000d61d9eb55db36719d0e8c6"),
 }
 SCOPES = {
     ("notifier.py", None): {

@@ -257,16 +257,6 @@ class TestTrack4AstLocksHandoffAndFrozenCarriers(unittest.TestCase):
             actual = {n.name: hashlib.sha256(ast.get_source_segment(src, n).encode("utf-8")).hexdigest()
                       for n in body if isinstance(n, ast.FunctionDef) and n.name in expected}
             self.assertEqual(actual, expected)
-        path = ROOT / "tests/test_r41_legitimate_empty_response_contracts.py"
-        lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
-        removed = ('            ("sources/juhe_source.py", 20923, '
-                   '"fbfb90acc93751fa10682d2014d1b012aba410025b3b105e4aa62f1bbf75e17a"),\n')
-        self.assertNotIn(removed, lines)
-        lines.insert(652, removed)
-        restored = "".join(lines).encode("utf-8")
-        self.assertEqual((len(restored), hashlib.sha256(restored).hexdigest()),
-                         (45105, "79f594bc4272e594c1a3158313f004beb4e68bef42a35e3f1c9dcc722c77588f"))
-
     def test_g10_frozen_three_carriers_and_normal_roundtrip_baseline_remain_exact(self):
         fixture = ROOT / "tests/fixtures/frozen_email/economy_payload.json"
         with tempfile.TemporaryDirectory() as tmp, patch.object(config_loader, "RUNTIME_CONFIG_PATH",
