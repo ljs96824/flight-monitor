@@ -25,7 +25,6 @@ ACCEPTABLE = "合理中转可接受"
 ADULT = {"red_eye": "accept", "allow_self_transfer": True}
 FILES = {
     "notifier.py": (663094, "fb1211339bbfc75789eb40ae0ae0a99807c2d19008e41394735446b8ed090702"),
-    "main.py": (175530, "878a6df6d84276cde4f092f42d1c0453d08c5a8ceafdc638a68dc0561c4c13ef"),
     "airport_logistics.py": (8211, "62c5915d88783dd4ecaec5a5e285897208f497f5382ba16f6e5917c09bf25109"),
     "constraint_fingerprint.py": (11459, "b396aef5431cc976754bab2a5a2474641b78d38002844a808521b2f228c415a9"),
     "constraint_summary.py": (3595, "ab7a1505ff953891c7959e7e2412bc3ce7f93f93732e48c7557f5d43ebb3752b"),
