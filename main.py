@@ -7,6 +7,7 @@ import math
 import os
 import re
 import traceback
+from contextvars import ContextVar
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -158,6 +159,9 @@ BASKET_STATE_PATH = DATA_DIR / "basket_state.json"
 ROUND_LOG_ROOT = DATA_DIR / "logs" / "rounds"
 PYTHONANYWHERE_PAYLOAD_PATH = "/home/{user}/flight-monitor/data/payloads/{filename}"
 AIRPORT_COMBINATION_MIN_OPTIONS = 5
+EXIT_OK = 0
+EXIT_BATCH_FAILED = 1
+EXIT_SINGLEFLIGHT_BUSY = 6
 
 _SOURCE_ENV_KEYS = {
     "hasdata": "HASDATA_KEY",
@@ -2482,6 +2486,51 @@ def _notification_provenance_context(route_info: dict) -> dict:
         return {}
 
 
+def _safe_system_health_check(
+    *,
+    source_stats,
+    flights,
+    analysis_result,
+    route_type,
+    cabin_class: str,
+    run_collected_at,
+) -> dict:
+    """只读执行系统健康检查；遥测异常不得中断订阅通知交付。"""
+    try:
+        observed_day = canonicalize_observed_at(
+            run_collected_at or None
+        ).observed_day_shanghai
+        result = system_health_check(
+            source_stats=source_stats,
+            flights=flights,
+            analysis_result=analysis_result,
+            route_type=route_type,
+            cabin_class=cabin_class,
+            observed_day=observed_day,
+        )
+        return result if isinstance(result, dict) else {}
+    except Exception as exc:
+        safe_log(
+            f"[健康检查] 执行失败 跳过附着 原因={type(exc).__name__}:{redact_text(str(exc))}"
+        )
+        return {}
+
+
+def _append_analysis_log_safely(analysis: dict) -> bool:
+    """追加分析遥测日志；兼容非JSON原生类型，IO/序列化失败不得中断订阅通知交付。"""
+    try:
+        log_entry = {**analysis, "logged_at": datetime.now().isoformat()}
+        serialized = json.dumps(log_entry, ensure_ascii=False, default=str)
+        with ANALYSIS_LOG.open("a", encoding="utf-8") as file:
+            file.write(serialized + "\n")
+        return True
+    except Exception as exc:
+        safe_log(
+            f"[分析日志] 写入失败 跳过落盘 原因={type(exc).__name__}:{redact_text(str(exc))}"
+        )
+        return False
+
+
 def _report_collection_startup(startup_callback, payload: dict) -> None:
     """Best-effort startup signal; diagnostics must not break collection."""
     if startup_callback is None:
@@ -3420,20 +3469,15 @@ def _process_subscription_locked(
             == "business_all"
             else "economy"
         )
-        analysis["system_health"] = system_health_check(
+        analysis["system_health"] = _safe_system_health_check(
             source_stats=data.get("source_stats", {}),
             flights=flights,
             analysis_result=analysis,
             route_type=route_type,
             cabin_class=health_cabin_class,
-            observed_day=canonicalize_observed_at(
-                run_collected_at or None
-            ).observed_day_shanghai,
+            run_collected_at=run_collected_at,
         )
-
-        log_entry = {**analysis, "logged_at": datetime.now().isoformat()}
-        with ANALYSIS_LOG.open("a", encoding="utf-8") as file:
-            file.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+        _append_analysis_log_safely(analysis)
 
         if _should_skip_low_price_alert(sub, analysis):
             if analysis.get("low_price_alert_state") == "unknown":
@@ -3587,14 +3631,21 @@ def _process_subscription_locked(
                 cleanup.raise_first_failure()
 
 
+_BATCH_OUTCOME_SINK: ContextVar[dict | None] = ContextVar("batch_outcome_sink", default=None)
+
+
 def run(sync_remote: bool = True):
     round_id = _make_collection_round_id()
     singleflight = acquire_collection_singleflight(round_id)
     if not singleflight.acquired:
         return collection_busy_status(singleflight, entrypoint="batch")
+    outcome: dict[str, object] = {}
+    sink_token = _BATCH_OUTCOME_SINK.set(outcome)
     try:
-        return _run_locked(sync_remote=sync_remote, round_id=round_id)
+        _run_locked(sync_remote=sync_remote, round_id=round_id)
+        return outcome or {"status": "ok", "round_id": round_id}
     finally:
+        _BATCH_OUTCOME_SINK.reset(sink_token)
         singleflight.release()
 
 
@@ -3676,13 +3727,26 @@ def _batch_result_line(success: int, failed: int, exceptions: int, skipped: int,
     )
 
 
+def _cli_exit_code_from_run_result(result) -> int:
+    if result is False:
+        return EXIT_BATCH_FAILED
+    if isinstance(result, dict):
+        status = str(result.get("status") or "").strip().lower()
+        if status == "busy":
+            return EXIT_SINGLEFLIGHT_BUSY
+        if status in {"failed", "partial"}:
+            return EXIT_BATCH_FAILED
+        return EXIT_OK
+    return EXIT_OK
+
+
 def run_cli(sync_remote: bool = True) -> int:
     """定时命令入口：同步与初始化之前先确认订阅文件存在；缺失时以 EXIT_SUBSCRIPTIONS_MISSING 结束(R9-1)，
     并经全局 PushPlus 尽力发一次运维告警(R9-2)；告警结果不改变退出码。
     """
     try:
         require_subscriptions_file(SUBSCRIPTIONS_PATH)
-        run(sync_remote=sync_remote)
+        result = run(sync_remote=sync_remote)
     except SubscriptionInputMissing as exc:
         safe_log(subscription_input_missing_line(exc))
         try:
@@ -3690,10 +3754,17 @@ def run_cli(sync_remote: bool = True) -> int:
         except Exception as alert_exc:  # 告警失败不改变缺失结论(R9-2)
             safe_log(f"[运维告警] 调用失败 原因={type(alert_exc).__name__}")
         return EXIT_SUBSCRIPTIONS_MISSING
-    return 0
+    exit_code = _cli_exit_code_from_run_result(result)
+    if exit_code == EXIT_SINGLEFLIGHT_BUSY:
+        safe_log(f"[计划任务] 本轮因单飞锁占用跳过 status=busy exit_code={exit_code}")
+    elif exit_code != EXIT_OK:
+        status = result.get("status") if isinstance(result, dict) else "failed"
+        safe_log(f"[计划任务] 批次未全部成功 status={status} exit_code={exit_code}")
+    return exit_code
 
 
 def _run_locked(*, sync_remote: bool, round_id: str):
+    outcome_sink = _BATCH_OUTCOME_SINK.get()
     if sync_remote:
         try:
             sync_subscriptions()
@@ -3712,6 +3783,9 @@ def _run_locked(*, sync_remote: bool, round_id: str):
         logging.info("暂无订阅，请通过表单添加")
         safe_log("[订阅前置校验] 本轮检查=0 跳过=0")
         _run_basket_sentinel_for_main([])
+        if outcome_sink is not None:
+            outcome_sink.update(status="ok", round_id=round_id, checked=0, skipped=0,
+                                preflight_failed=0, success=0, failed=0, exceptions=0)
         return
 
     # 本轮检查数 = 前置跳过 + 预检失败 + 进入处理；加载时规范化失败的订阅计入检查数与预检失败
@@ -3742,6 +3816,10 @@ def _run_locked(*, sync_remote: bool, round_id: str):
             safe_log(_batch_result_line(0, 0, 0, preflight_skipped, preflight_failed, "failed"))
         safe_log(_preflight_summary_line(preflight_checked, preflight_skipped, preflight_failed))
         _run_basket_sentinel_for_main(subscriptions)
+        if outcome_sink is not None:
+            outcome_sink.update(status="failed" if preflight_failed else "ok", round_id=round_id,
+                                checked=preflight_checked, skipped=preflight_skipped,
+                                preflight_failed=preflight_failed, success=0, failed=0, exceptions=0)
         return
 
     round_status = "failed"
@@ -3811,6 +3889,10 @@ def _run_locked(*, sync_remote: bool, round_id: str):
         )
         safe_log(_batch_result_line(processed_success, processed_failed, processing_exceptions,
                                     preflight_skipped, preflight_failed, round_status))
+        if outcome_sink is not None:
+            outcome_sink.update(status=round_status, round_id=round_id, checked=preflight_checked,
+                                skipped=preflight_skipped, preflight_failed=preflight_failed,
+                                success=processed_success, failed=processed_failed, exceptions=processing_exceptions)
     except BaseException:
         primary_failed = True
         raise
