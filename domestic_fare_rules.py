@@ -6,6 +6,8 @@ helpers provide conservative, clearly labeled standard-rule estimates.
 
 from __future__ import annotations
 
+import re
+
 LCC_AIRLINES = {
     "9C": "春秋航空",
     "HO": "吉祥航空",
@@ -134,19 +136,49 @@ def re_match_aircraft_code(value: str) -> bool:
     return all(ch.isalnum() for ch in value)
 
 
+_CODE_FIELDS = ("airline_code", "airlineCode", "carrier_code", "carrierCode",
+                "iata_code", "iataCode", "carrier", "airline")
+_NUMBER_FIELDS = ("flight_no", "flightNo", "flight_number", "flightNumber")
+_NAME_FIELDS = ("airline", "airline_name", "airlineName", "airline_summary")
+_DOMESTIC_NAME_CODES = {
+    **{name: code for code, name in LCC_AIRLINES.items()},
+    **{name: code for code, name in FULL_SERVICE.items()},
+    "中国联航": "KN", "中联航": "KN", "中国国际航空": "CA",
+    "东方航空": "MU", "南方航空": "CZ", "海南航空": "HU",
+    "厦门航空": "MF", "深圳航空": "ZH", "山东航空": "SC",
+    "四川航空": "3U", "上海航空": "FM", "成航": "EU",
+}
+
+
+def _first_carrier_code(row, fields):
+    for field in fields:
+        value = row.get(field)
+        if not isinstance(value, str):
+            continue
+        first_leg = re.split(r"[+/|,;]", value, maxsplit=1)[0]
+        token = re.sub(r"[\s_-]+", "", first_leg)
+        match = re.match(r"([A-Za-z0-9]{2})(?=[0-9]|$)", token)
+        if match and not match[1].isdigit():
+            return match[1].upper()
+    return ""
+
+
 def airline_code_from_flight(flight: dict | None) -> str:
     flight = flight or {}
-    for key in ("airline", "airline_code", "carrier"):
-        value = str(flight.get(key) or "").strip().upper()
-        if value:
-            return value[:2] if value[0].isdigit() else value[:2]
-    flight_no = str(
-        flight.get("flight_no")
-        or flight.get("flight_number")
-        or flight.get("flight_combo")
-        or ""
-    ).strip().upper()
-    return flight_no[:2] if flight_no else ""
+    segments = flight.get("segments")
+    first = segments[0] if isinstance(segments, (list, tuple)) and segments else None
+    first = first if isinstance(first, dict) else {}
+    for row, fields in ((flight, _CODE_FIELDS), (flight, (*_NUMBER_FIELDS, "flight_combo")),
+                        (first, _CODE_FIELDS), (first, _NUMBER_FIELDS)):
+        code = _first_carrier_code(row, fields)
+        if code:
+            return code
+
+    # A display name is weaker evidence than a flight number; mixed names are ambiguous.
+    names = [row.get(field) for row in (flight, first) for field in _NAME_FIELDS]
+    codes = {code for alias, code in _DOMESTIC_NAME_CODES.items()
+             if any(isinstance(name, str) and alias in name for name in names)}
+    return codes.pop() if len(codes) == 1 else ""
 
 
 def get_domestic_baggage(airline_code, cabin_code=None):
