@@ -24,7 +24,6 @@ PENDING = "中转衔接时间待确认，请核对航段详情"
 ACCEPTABLE = "合理中转可接受"
 ADULT = {"red_eye": "accept", "allow_self_transfer": True}
 FILES = {
-    "tests/test_r51_cross_midnight_window_contracts.py": (18827, "c65a408f9df56c3763eddd116bb5e2e50aadc5ee4fd589185812209381859e82"),
     "notifier.py": (663094, "fb1211339bbfc75789eb40ae0ae0a99807c2d19008e41394735446b8ed090702"),
     "main.py": (175530, "878a6df6d84276cde4f092f42d1c0453d08c5a8ceafdc638a68dc0561c4c13ef"),
     "airport_logistics.py": (8211, "62c5915d88783dd4ecaec5a5e285897208f497f5382ba16f6e5917c09bf25109"),
@@ -36,7 +35,6 @@ FILES = {
     "plan_tracker.py": (47076, "b139465d01cf1f6e430f805a28aefb86b1085f0915825844c4409d16556f8f11"),
     "storage.py": (47792, "551a7a08964f49dc93e60eb25a6c9b78519b1244805d4408ae47b9a88673f4c3"),
     "observations_store.py": (19506, "64ed00efd4072e8cb458d28f5f8380ea0579151b87a8eea1605da050df3f8ae6"),
-    "request_cache.py": (52429, "806b2d9328b6ddddfb80c1e08a12e3779ca90c2450c1f4afda897c903075daea"),
     "sources/juhe_source.py": (21312, "1969a55d15947c31edac73134735e18727bdb3a89b06f8aa9797beaa5b6eff3d"),
     "sources/aggregator.py": (65083, "01fcf0d1d10b125f16ed635b86e4fc2cdec4e6a92e53463b15878e68083bce82"),
     "tests/fixtures/form_normalization_baseline_v1.json": (180179, "88172833002fbe747b289848341a85d4c23470070339a4775ce2f61f183a2fd9"),

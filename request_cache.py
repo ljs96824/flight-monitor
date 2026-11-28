@@ -14,7 +14,10 @@ import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
+from urllib.error import HTTPError as UrllibHTTPError
 from uuid import uuid4
+
+from requests import exceptions as requests_exceptions
 
 from observation_time import canonicalize_observed_at, timestamp_kind
 from project_time import SHANGHAI_TZ
@@ -50,8 +53,20 @@ _equipment_summary: dict[tuple[str, str], dict] = {}
 _source_circuit_breakers: dict[str, str] = {}
 _round_only_result_keys: set[tuple] = set()
 _SECRET_VALUE_PATTERN = re.compile(
-    r"(?i)\b(api[_-]?key|access[_-]?token|token|authorization)=([^&\s]+)"
+    r"(?i)\b(api[_-]?key|access[_-]?token|token|authorization|key)=([^&\s]+)"
 )
+
+
+def _is_retryable_source_io_error(exc: BaseException) -> bool:
+    if not isinstance(exc, OSError) or isinstance(exc, UrllibHTTPError):
+        return False
+    if isinstance(exc, requests_exceptions.RequestException):
+        # Requests errors inherit OSError, including HTTP responses and configuration errors.
+        return not isinstance(exc, requests_exceptions.SSLError) and isinstance(
+            exc, (requests_exceptions.ConnectionError, requests_exceptions.Timeout,
+                  requests_exceptions.ChunkedEncodingError)
+        )
+    return True
 
 
 def _redact_error_text(value) -> str:
@@ -59,7 +74,7 @@ def _redact_error_text(value) -> str:
 
 
 def _redact_exception_path(value) -> str | None:
-    if not value:
+    if not value or str(value).strip().lower().startswith(("http://", "https://")):
         return None
     raw_path = Path(str(value))
     if not raw_path.is_absolute():
@@ -1073,6 +1088,8 @@ def cached_fetch(
                 source_name,
             )
         except OSError as first_error:
+            if not _is_retryable_source_io_error(first_error):
+                raise
             retry_count = 1
             first_metadata = _source_exception_metadata(first_error)
             safe_log(
