@@ -5,6 +5,7 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from log_utils import safe_log
+from source_profiles import ROUTE_TYPE_ALIASES
 
 
 LCC_BAG_FEES = {
@@ -109,13 +110,26 @@ PASSENGER_FARE_RATES = {
         "infant": 0.10,
         "note": "儿童票按国际航线常见约75折估算,婴儿票按约1折估算,实际以支付页为准",
     },
+    "greater_china": {
+        "adult": 1.0,
+        "elderly": 1.0,
+        "child": 0.75,
+        "infant": 0.10,
+        "note": "儿童票按港澳台航线常见约75折估算,婴儿票按约1折估算,实际以支付页为准",
+    },
+}
+
+_GREATER_CHINA_ROUTES = {"greater_china"} | {
+    alias for alias, route in ROUTE_TYPE_ALIASES.items() if route == "greater_china"
 }
 
 
 def _route_rate_key(route_type=None):
-    route = str(route_type or "").lower()
+    route = str(route_type or "").strip().lower()
     if route in {"international", "intl"}:
         return "international"
+    if route in _GREATER_CHINA_ROUTES:
+        return "greater_china"
     return "domestic"
 
 
